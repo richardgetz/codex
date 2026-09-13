@@ -6,6 +6,7 @@ use crate::config_manager::ConfigManager;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::plugin_config_reload::PluginStartupConfig;
+use crate::server_lifecycle::ServerLifecycle;
 use crate::transport::AppServerTransport;
 use anyhow::Result;
 use app_test_support::create_mock_responses_server_repeating_assistant;
@@ -268,6 +269,7 @@ async fn build_test_processor(
         auth_manager,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         code_mode_session_provider: None,
+        server_lifecycle: Arc::new(ServerLifecycle::new()),
         rpc_transport: AppServerRpcTransport::Stdio,
         remote_control_handle: None,
         plugin_startup_tasks: Some(PluginStartupConfig::Current),

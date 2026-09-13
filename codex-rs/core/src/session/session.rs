@@ -99,6 +99,11 @@ pub(crate) struct Session {
     pub(crate) usage_resume_waiting: AtomicBool,
     /// Number of model/tool operations currently in flight for activity reporting.
     pub(crate) activity_in_flight: AtomicU32,
+    /// Number of those operations currently streaming a model response. Handoff can cancel
+    /// this cooperative operation and recover the same turn; tool/MCP operations are blockers.
+    pub(crate) model_activity_in_flight: AtomicU32,
+    /// Number of turn completions still flushing final history and lifecycle events.
+    pub(crate) turn_finalization_in_flight: AtomicU32,
     /// Number of non-wait tool dispatches that have been spawned but not yet admitted or dropped.
     /// This is used only to keep dependency-free Worker handoffs behind pending sibling work; it
     /// does not contribute to the user-visible activity operation count.
@@ -1996,6 +2001,8 @@ impl Session {
                 usage_resume_check_notify: Notify::new(),
                 usage_resume_waiting: AtomicBool::new(false),
                 activity_in_flight: AtomicU32::new(0),
+                model_activity_in_flight: AtomicU32::new(0),
+                turn_finalization_in_flight: AtomicU32::new(0),
                 handoff_dispatches_pending: AtomicU32::new(0),
                 activity_operation_notify: Notify::new(),
                 scratchpad_loopback_limiter: std::sync::Mutex::new(

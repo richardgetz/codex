@@ -348,6 +348,7 @@ impl ChatWidget {
             | ServerNotification::EnvironmentConnected(_)
             | ServerNotification::EnvironmentDisconnected(_)
             | ServerNotification::RemoteControlStatusChanged(_)
+            | ServerNotification::ServerLifecycleUpdated(_)
             | ServerNotification::ExternalAgentConfigImportProgress(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)

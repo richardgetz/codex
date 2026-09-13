@@ -117,8 +117,8 @@ oversight_timeout_minutes = 30
 # Optional: show passive idle and parked-wait notices for debugging (default false).
 # Set true to enable these notices; actionable oversight-deadline warnings remain visible either way.
 show_idle_notifications = false
-# Optional: preflight substantial lookup work and let a Worker filter bulk
-# material before returning selected evidence. Defaults to false.
+# Optional: route routine lookup and execution work (including browser/UI/CLI
+# automation) to Workers with bounded evidence and Lead review. Defaults to false.
 dynamic_handoff = true
 
 [team.worker]
@@ -157,19 +157,31 @@ max_concurrent = 10
   Team routing does not add a separate tool sandbox or verify external skill
   completion.
 - `team.lead.dynamic_handoff` defaults to `false`. When enabled, the Lead makes
-  a quick preflight before reading a large source and delegates substantial log
-  or trace review, web or browser research, broad repository/code/docs search,
-  and similar bulk exploration when a Worker can filter irrelevant material
-  into a concise answer. Small targeted lookups and work that depends heavily
-  on the Lead's existing context stay direct when handoff overhead would
-  approach the lookup itself. Workers return selected code, log, or web
-  excerpts with file/line, time, or source pointers and enough context,
-  preserving contradictions and uncertainty without full dumps. The Lead does
-  not repeat a supported lookup automatically; it follows up only for concrete
-  missing or conflicting evidence, a blocked or incomplete Worker, or a narrow
-  excerpt request, reusing prior findings. This reduces Lead input but still
-  consumes Worker tokens. The choice is retained in the thread's team snapshot
-  across resume and fork; older snapshots default to `false`.
+  a quick preflight before a task and delegates bulk log or trace
+  review, web or browser research, browser or UI automation (including
+  Playwright, PinchTab, or CLI wrappers), MCP/Apps/connectors, skills and
+  artifact workflows, broad repository/code/docs search, file edits, docs/Git
+  or PR preparation, builds, tests, debugging, CI monitoring, authorized
+  release operations, and routine execution or verification loops by default
+  when a Worker can complete the scoped work independently; Workers provide a
+  bounded evidence report so Lead context stays manageable. The Lead
+  keeps human communication/alignment, planning/dispatch, coordination,
+  judgment/review, approval-sensitive tradeoffs, stop/redirect, and final
+  acceptance; any direct check must be bounded and necessary for those
+  decisions. Route execution by work type even when output is small or the Lead
+  knows the context. Workers return selected
+  code, log, web, or artifact evidence with file/line, time, or source pointers,
+  actions taken, status, blockers, and uncertainty without raw dumps. Existing
+  authentication, credential, user-approval, destructive-operation, AGENTS.md,
+  and skill boundaries remain in force; this guidance does not bypass them or
+  add a hard runtime routing guarantee. The Lead does not repeat supported work
+  automatically; it follows up only for concrete missing or conflicting
+  evidence, a blocked or incomplete Worker, or a narrow evidence request,
+  reusing prior findings. Lead balance changes only discretionary checkpoints:
+  higher balance adds targeted review and failure-mode checks after handoff,
+  while lower balance reduces optional checks without undoing dynamic execution
+  routing. The choice is retained in the thread's team snapshot across resume
+  and fork; older snapshots default to `false`.
 - Root Fast/service-tier changes are published to loaded direct and nested
   ThreadSpawn Workers, including their thread settings snapshots and client
   notifications. A turn that has already captured its request keeps its

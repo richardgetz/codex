@@ -130,6 +130,18 @@ impl ThreadGoalRequestProcessor {
         }
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
+        let _manager_handoff_admission = self
+            .thread_manager
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
+        let _thread_handoff_admission = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => Some(
+                thread
+                    .begin_handoff_admission()
+                    .map_err(|err| invalid_request(err.to_string()))?,
+            ),
+            Err(_) => None,
+        };
         let state_db = self
             .state_db_for_materialized_thread(thread_id, GoalAccess::Mutate)
             .await?;
@@ -252,6 +264,18 @@ impl ThreadGoalRequestProcessor {
         }
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
+        let _manager_handoff_admission = self
+            .thread_manager
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
+        let _thread_handoff_admission = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => Some(
+                thread
+                    .begin_handoff_admission()
+                    .map_err(|err| invalid_request(err.to_string()))?,
+            ),
+            Err(_) => None,
+        };
         let state_db = self
             .state_db_for_materialized_thread(thread_id, GoalAccess::Mutate)
             .await?;

@@ -35,6 +35,10 @@ impl AgentCommunicationContext {
             sender_thread_id,
         }
     }
+
+    pub(crate) fn sender_thread_id(&self) -> ThreadId {
+        self.sender_thread_id
+    }
 }
 
 pub(crate) fn logging_enabled() -> bool {

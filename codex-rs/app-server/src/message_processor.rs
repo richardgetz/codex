@@ -18,6 +18,7 @@ use crate::extensions::thread_extensions;
 use crate::external_agent_migration::ExternalAgentConfigRequestProcessor;
 use crate::external_agent_migration::ExternalAgentConfigRequestProcessorArgs;
 use crate::fs_watch::FsWatchManager;
+use crate::handoff_coordinator::HandoffCoordinator;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -52,6 +53,8 @@ use crate::request_processors::read_server_diagnostics;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
+use crate::server_lifecycle::NEW_WORK_REJECTED_MESSAGE;
+use crate::server_lifecycle::ServerLifecycle;
 use crate::skills_watcher::SkillsWatcher;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
@@ -136,6 +139,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    handoff_coordinator: HandoffCoordinator,
     models_refresh_worker: ModelsRefreshWorker,
     turn_cost_worker: Option<TurnCostWorker>,
     skills_watcher: Arc<SkillsWatcher>,
@@ -163,6 +167,7 @@ pub(crate) struct MessageProcessor {
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
+    server_lifecycle: Arc<ServerLifecycle>,
 }
 
 #[derive(Debug)]
@@ -258,6 +263,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) installation_id: String,
     pub(crate) code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>>,
+    pub(crate) server_lifecycle: Arc<ServerLifecycle>,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     /// `None` skips startup tasks; otherwise preserve the initial config-loading path.
@@ -283,6 +289,7 @@ impl MessageProcessor {
             auth_manager,
             installation_id,
             code_mode_session_provider,
+            server_lifecycle,
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
@@ -524,6 +531,13 @@ impl MessageProcessor {
             Arc::clone(&skills_watcher),
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
         );
+        let handoff_coordinator = HandoffCoordinator::new(
+            Arc::clone(&thread_manager),
+            Arc::clone(&config),
+            config_manager.codex_home().to_path_buf(),
+            env!("CARGO_PKG_VERSION").to_string(),
+            thread_processor.clone(),
+        );
         if let Some(startup_config) = plugin_startup_tasks {
             // Keep plugin startup warmups aligned at app-server startup.
             let reload_config = match startup_config {
@@ -570,6 +584,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            handoff_coordinator,
             models_refresh_worker,
             turn_cost_worker,
             skills_watcher,
@@ -597,6 +612,7 @@ impl MessageProcessor {
             turn_processor,
             windows_sandbox_processor,
             request_serialization_queues,
+            server_lifecycle,
         }
     }
 
@@ -624,6 +640,12 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id.clone(),
         };
+        if self.server_lifecycle.rejects_new_work(request_method) {
+            self.outgoing
+                .send_error(request_id, invalid_request(NEW_WORK_REJECTED_MESSAGE))
+                .await;
+            return;
+        }
         let request_span =
             crate::app_server_tracing::request_span(&request, transport, connection_id, &session);
         let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
@@ -676,6 +698,15 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id().clone(),
         };
+        if self
+            .server_lifecycle
+            .rejects_new_work(request.method_name())
+        {
+            self.outgoing
+                .send_error(request_id, invalid_request(NEW_WORK_REJECTED_MESSAGE))
+                .await;
+            return;
+        }
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
         let request_context =
@@ -918,6 +949,9 @@ impl MessageProcessor {
         {
             return Err(invalid_request(experimental_required_message(reason)));
         }
+        self.handoff_coordinator
+            .guard_request_method(codex_request.method_name())
+            .await?;
         let connection_id = connection_request_id.connection_id;
         self.initialize_processor.track_initialized_request(
             connection_id,
@@ -926,12 +960,26 @@ impl MessageProcessor {
         );
 
         let event_stream_ready = match &codex_request {
-            ClientRequest::McpServerEventStreamStart { params, .. } => Some(
-                session
-                    .mcp_event_streams
-                    .start(connection_id, params.clone(), self.mcp_processor.clone())
-                    .await?,
-            ),
+            ClientRequest::McpServerEventStreamStart { params, .. } => {
+                // Stream startup intentionally precedes the serialization queue so the caller
+                // can await activation. Retain manager admission in the stream task for its full
+                // lifetime so this bypass cannot race a process-wide handoff seal.
+                let manager_handoff_admission = self
+                    .mcp_processor
+                    .begin_handoff_admission()
+                    .map_err(|error| invalid_request(error.to_string()))?;
+                Some(
+                    session
+                        .mcp_event_streams
+                        .start(
+                            connection_id,
+                            params.clone(),
+                            self.mcp_processor.clone(),
+                            manager_handoff_admission,
+                        )
+                        .await?,
+                )
+            }
             _ => None,
         };
         let serialization_scope = codex_request.serialization_scope();
@@ -999,6 +1047,9 @@ impl MessageProcessor {
                 Err(crate::user_verification::unavailable())
             }
             ClientRequest::ServerDiagnostics { .. } => Ok(Some(read_server_diagnostics().into())),
+            ClientRequest::ServerLifecycleRead { .. } => {
+                Ok(Some(self.server_lifecycle.read().into()))
+            }
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)
@@ -1178,6 +1229,21 @@ impl MessageProcessor {
                     )
                     .await
             }
+            ClientRequest::ThreadHandoffPrepare { params, .. } => self
+                .handoff_coordinator
+                .prepare(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadHandoffStatus { params, .. } => self
+                .handoff_coordinator
+                .status(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::ThreadHandoffRecover { params, .. } => self
+                .handoff_coordinator
+                .recover(params, request_id.connection_id)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ThreadFork { params, .. } => {
                 self.thread_processor
                     .thread_fork(

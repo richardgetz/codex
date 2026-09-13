@@ -144,8 +144,8 @@ impl ToolCallRuntime {
             // V2 exposes the coordination wait as a plain tool name; V1 retains its
             // namespaced legacy surface. Neither call should count itself as pending work.
             (None, "wait_agent")
-            | (Some("collaboration") | Some("multi_agent_v1"), "wait_agent") => None,
-            _ => Some(session.begin_handoff_dispatch()),
+            | (Some("collaboration") | Some("multi_agent_v1"), "wait_agent") => Ok(None),
+            _ => session.begin_handoff_dispatch().map(Some),
         };
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
@@ -172,6 +172,10 @@ impl ToolCallRuntime {
 
         let mut dispatch_handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
+                let handoff_dispatch = match handoff_dispatch {
+                    Ok(handoff_dispatch) => handoff_dispatch,
+                    Err(err) => return Err(FunctionCallError::Fatal(err.to_string())),
+                };
                 let _handoff_dispatch = handoff_dispatch;
                 if let Err(err) = session
                     .wait_for_activity_resume(&invocation_cancellation_token)

@@ -286,11 +286,9 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     )
     .await;
     let mut expected_config = team_config(TeamMode::Off, LEAD_MODEL, WORKER_MODEL);
-    expected_config
-        .profiles
-        .as_mut()
-        .expect("team profiles")
-        .lead_dynamic_handoff = true;
+    let expected_profiles = expected_config.profiles.as_mut().expect("team profiles");
+    expected_profiles.lead_dynamic_handoff = true;
+    expected_profiles.lead_balance = 1;
     let mut builder = test_codex()
         .with_model_info_override(INITIAL_MODEL, |model_info| {
             model_info.comp_hash = Some(TEAM_TOGGLE_COMP_HASH.to_string());
@@ -392,7 +390,10 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     assert!(active_fragments[0].contains("You are the Lead"));
     assert!(active_fragments[0].contains("Team On is the user's opt-in authorization"));
     assert!(active_fragments[0].contains("delegate substantive in-scope work"));
-    assert!(active_fragments[0].contains("Dynamic lookup handoff is enabled"));
+    assert!(active_fragments[0].contains("Dynamic handoff is enabled"));
+    assert!(active_fragments[0].contains("browser/UI/CLI"));
+    assert!(active_fragments[0].contains("routine execution or verification loops"));
+    assert!(active_fragments[0].contains("Maximum savings"));
     assert_eq!(
         team_instruction_fragments(&requests[1]),
         active_fragments,
@@ -402,7 +403,7 @@ async fn team_toggle_pins_lead_and_restores_original_model() -> Result<()> {
     assert_eq!(disabled_fragments.len(), active_fragments.len() + 1);
     let disabled_fragment = disabled_fragments.last().expect("disabled team fragment");
     assert!(disabled_fragment.to_ascii_lowercase().contains("disabled"));
-    assert!(!disabled_fragment.contains("Dynamic lookup handoff"));
+    assert!(!disabled_fragment.contains("Dynamic handoff"));
     assert_ne!(
         disabled_fragment,
         active_fragments.last().expect("active team fragment")
@@ -834,12 +835,9 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
                 .disable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
-            config
-                .team
-                .profiles
-                .as_mut()
-                .expect("team profiles")
-                .lead_dynamic_handoff = true;
+            let profiles = config.team.profiles.as_mut().expect("team profiles");
+            profiles.lead_dynamic_handoff = true;
+            profiles.lead_balance = 5;
             config.team.worker_max_concurrent = Some(1);
             let role_path = config.codex_home.join("team-reviewer.toml");
             std::fs::write(
@@ -940,15 +938,37 @@ async fn team_spawn_uses_worker_despite_role_and_model_overrides(
     assert_request_assignment(&root_request, LEAD_MODEL, "max");
     assert_request_assignment(&child_request, WORKER_MODEL, "low");
     assert_request_assignment(&grandchild_request, WORKER_MODEL, "low");
+    let root_fragments = team_instruction_fragments(&root_request);
     assert!(
-        team_instruction_fragments(&root_request)
+        root_fragments
             .iter()
             .any(|fragment| fragment.contains("quick preflight judgment"))
     );
     assert!(
-        team_instruction_fragments(&child_request)
+        root_fragments
+            .iter()
+            .any(|fragment| fragment.contains("browser/UI/CLI"))
+    );
+    assert!(
+        root_fragments
+            .iter()
+            .any(|fragment| fragment.contains("Maximum confidence"))
+    );
+    let child_fragments = team_instruction_fragments(&child_request);
+    assert!(
+        child_fragments
             .iter()
             .any(|fragment| fragment.contains("filter irrelevant material"))
+    );
+    assert!(
+        child_fragments
+            .iter()
+            .any(|fragment| fragment.contains("complete the scoped work"))
+    );
+    assert!(
+        child_fragments
+            .iter()
+            .any(|fragment| fragment.contains("another CLI wrapper"))
     );
     child_completion_request.function_call_output(CHILD_SPAWN_CALL_ID);
 
@@ -1469,8 +1489,24 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
     let initial_request = initial_response.single_request();
     let resumed_request = resumed_response.single_request();
     assert_request_assignment(&initial_request, LEAD_MODEL, "max");
+    let initial_fragments = team_instruction_fragments(&initial_request);
     assert!(
-        !team_instruction_fragments(&initial_request)
+        initial_fragments
+            .iter()
+            .any(|fragment| fragment.contains("delegate substantive in-scope work"))
+    );
+    assert!(
+        !initial_fragments
+            .iter()
+            .any(|fragment| fragment.contains("Dynamic handoff"))
+    );
+    assert!(
+        !initial_fragments
+            .iter()
+            .any(|fragment| fragment.contains("browser/UI/CLI"))
+    );
+    assert!(
+        !initial_fragments
             .iter()
             .any(|fragment| fragment.contains("Lead usage/confidence balance"))
     );

@@ -860,9 +860,15 @@ mod tests {
     use codex_app_server_protocol::ModelVerificationNotification;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
+    use codex_app_server_protocol::ServerLifecyclePhase;
+    use codex_app_server_protocol::ServerLifecycleUpdatedNotification;
     use codex_app_server_protocol::ServerResponse;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnModerationMetadataNotification;
+    use codex_app_server_protocol::TurnStatus;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1334,6 +1340,91 @@ mod tests {
         });
 
         assert_eq!(timestamps[0], timestamps[1]);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_write_barrier_follows_terminal_notification() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+
+        outgoing
+            .send_server_notification_to_connections(
+                &[ConnectionId(42)],
+                ServerNotification::TurnCompleted(TurnCompletedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn: Turn {
+                        id: "turn-1".to_string(),
+                        items: Vec::new(),
+                        items_view: TurnItemsView::NotLoaded,
+                        error: None,
+                        status: TurnStatus::Completed,
+                        started_at: None,
+                        completed_at: Some(1),
+                        duration_ms: Some(1),
+                    },
+                }),
+            )
+            .await;
+
+        let lifecycle_task = tokio::spawn({
+            let outgoing = Arc::clone(&outgoing);
+            async move {
+                outgoing
+                    .send_server_notification_to_connection_and_wait(
+                        ConnectionId(42),
+                        ServerNotification::ServerLifecycleUpdated(
+                            ServerLifecycleUpdatedNotification {
+                                daemon_instance_id: "daemon-1".to_string(),
+                                phase: ServerLifecyclePhase::Draining,
+                                transition_id: Some("transition-1".to_string()),
+                                running_assistant_turns: 0,
+                            },
+                        ),
+                    )
+                    .await
+            }
+        });
+
+        let first = rx
+            .recv()
+            .await
+            .expect("terminal notification should be queued");
+        assert!(matches!(
+            first,
+            OutgoingEnvelope::ToConnection {
+                message: OutgoingMessage::AppServerNotification(envelope),
+                ..
+            } if matches!(envelope.notification, ServerNotification::TurnCompleted(_))
+        ));
+
+        let second = rx
+            .recv()
+            .await
+            .expect("lifecycle notification should follow terminal notification");
+        let OutgoingEnvelope::ToConnection {
+            message: OutgoingMessage::AppServerNotification(envelope),
+            write_complete_tx: Some(write_complete_tx),
+            ..
+        } = second
+        else {
+            panic!("expected lifecycle notification with write barrier");
+        };
+        assert!(matches!(
+            envelope.notification,
+            ServerNotification::ServerLifecycleUpdated(_)
+        ));
+        write_complete_tx
+            .send(())
+            .expect("lifecycle write waiter should still be active");
+        assert!(
+            timeout(Duration::from_secs(1), lifecycle_task)
+                .await
+                .expect("lifecycle task should finish after barrier")
+                .expect("lifecycle task should not panic")
+        );
     }
 
     #[tokio::test]

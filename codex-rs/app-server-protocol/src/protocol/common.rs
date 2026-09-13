@@ -518,6 +518,14 @@ client_request_definitions! {
         response: v2::ServerDiagnosticsResponse,
     },
 
+    #[experimental("server/lifecycle/read")]
+    /// Read the process-local lifecycle state of the shared app-server daemon.
+    ServerLifecycleRead => "server/lifecycle/read" {
+        params: v2::ServerLifecycleReadParams,
+        serialization: None,
+        response: v2::ServerLifecycleReadResponse,
+    },
+
     #[experimental("userVerification/status")]
     UserVerificationStatus => "userVerification/status" {
         params: v2::UserVerificationStatusParams,
@@ -560,6 +568,24 @@ client_request_definitions! {
         inspect_params: true,
         serialization: thread_or_path(params.thread_id, params.path),
         response: v2::ThreadResumeResponse,
+    },
+    #[experimental("thread/handoff/prepare")]
+    ThreadHandoffPrepare => "thread/handoff/prepare" {
+        params: #[serde(default)] v2::ThreadHandoffPrepareParams,
+        serialization: global("handoff"),
+        response: v2::ThreadHandoffPrepareResponse,
+    },
+    #[experimental("thread/handoff/status")]
+    ThreadHandoffStatus => "thread/handoff/status" {
+        params: v2::ThreadHandoffStatusParams,
+        serialization: global_shared_read("handoff"),
+        response: v2::ThreadHandoffStatusResponse,
+    },
+    #[experimental("thread/handoff/recover")]
+    ThreadHandoffRecover => "thread/handoff/recover" {
+        params: v2::ThreadHandoffRecoverParams,
+        serialization: global("handoff"),
+        response: v2::ThreadHandoffRecoverResponse,
     },
     ThreadFork => "thread/fork" {
         params: v2::ThreadForkParams,
@@ -2030,6 +2056,8 @@ server_notification_definitions! {
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
     RemoteControlStatusChanged => "remoteControl/status/changed" (v2::RemoteControlStatusChangedNotification),
+    #[experimental("server/lifecycle/updated")]
+    ServerLifecycleUpdated => "server/lifecycle/updated" (v2::ServerLifecycleUpdatedNotification),
     ExternalAgentConfigImportProgress => "externalAgentConfig/import/progress" (v2::ExternalAgentConfigImportProgressNotification),
     ExternalAgentConfigImportCompleted => "externalAgentConfig/import/completed" (v2::ExternalAgentConfigImportCompletedNotification),
     FsChanged => "fs/changed" (v2::FsChangedNotification),

@@ -700,7 +700,11 @@ impl TurnRequestProcessor {
                     .as_ref()
                     .map(PermissionProfile::from_legacy_sandbox_policy)
             });
-        let submission = thread
+        let thread_id_string = thread_id.to_string();
+        self.thread_watch_manager
+            .begin_turn_admission(&thread_id_string)
+            .await;
+        let submission = match thread
             .start_or_steer_turn(
                 TurnInputRequest::new(input)
                     .with_thread_settings(thread_settings)
@@ -716,15 +720,34 @@ impl TurnRequestProcessor {
                     .with_trace(self.request_trace_context(&request_id).await),
             )
             .await
-            .map_err(|err| {
+        {
+            Ok(submission) => submission,
+            Err(err) => {
+                self.thread_watch_manager
+                    .cancel_turn_admission(&thread_id_string)
+                    .await;
                 let error = internal_error(format!("failed to submit turn input: {err}"));
                 self.track_error_response(&request_id, &error, /*error_type*/ None);
-                error
-            })?;
+                return Err(error);
+            }
+        };
         let (turn_id, started) = match submission {
-            TurnInputSubmission::Started { turn_id } => (turn_id, true),
-            TurnInputSubmission::Steered { turn_id } => (turn_id, false),
+            TurnInputSubmission::Started { turn_id } => {
+                self.thread_watch_manager
+                    .accept_turn_admission(&thread_id_string, &turn_id)
+                    .await;
+                (turn_id, true)
+            }
+            TurnInputSubmission::Steered { turn_id } => {
+                self.thread_watch_manager
+                    .cancel_turn_admission(&thread_id_string)
+                    .await;
+                (turn_id, false)
+            }
             TurnInputSubmission::NotSubmitted { reason } => {
+                self.thread_watch_manager
+                    .cancel_turn_admission(&thread_id_string)
+                    .await;
                 let error = internal_error(format!("failed to submit turn input: {reason:?}"));
                 self.track_error_response(&request_id, &error, /*error_type*/ None);
                 return Err(error);
@@ -1624,14 +1647,32 @@ impl TurnRequestProcessor {
         display_text: &str,
         parent_thread_id: String,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        let turn_id = self
+        // Core's inline ReviewTask does not emit a parent TurnStarted event, so reserve the
+        // running-turn count around admission to keep graceful drain from disconnecting it.
+        self.thread_watch_manager
+            .begin_turn_admission(&parent_thread_id)
+            .await;
+        let turn_id = match self
             .submit_core_op(
                 request_id,
                 parent_thread.as_ref(),
                 Op::Review { review_request },
             )
             .await
-            .map_err(|err| internal_error(format!("failed to start review: {err}")))?;
+        {
+            Ok(turn_id) => {
+                self.thread_watch_manager
+                    .accept_turn_admission(&parent_thread_id, &turn_id)
+                    .await;
+                turn_id
+            }
+            Err(err) => {
+                self.thread_watch_manager
+                    .cancel_turn_admission(&parent_thread_id)
+                    .await;
+                return Err(internal_error(format!("failed to start review: {err}")));
+            }
+        };
         let turn = Self::build_review_turn(turn_id, display_text);
         self.emit_review_started(request_id, turn, parent_thread_id)
             .await;

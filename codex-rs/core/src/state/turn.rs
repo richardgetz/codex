@@ -148,6 +148,10 @@ impl TurnState {
         !self.pending_user_input.is_empty() || !self.pending_elicitations.is_empty()
     }
 
+    pub(crate) fn has_pending_dynamic_tools(&self) -> bool {
+        !self.pending_dynamic_tools.is_empty()
+    }
+
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,

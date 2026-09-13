@@ -44,13 +44,18 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadStatusChangedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::time::timeout;
 use uuid::Uuid;
+
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::test]
 async fn projects_list_by_recency_and_preserve_metadata_timestamps() -> Result<()> {
@@ -754,6 +759,29 @@ async fn project_import_is_atomic_and_notifies_after_commit_in_order() -> Result
             ..Default::default()
         })
         .await?;
+    // Turn completion is queued before the idle status update so graceful shutdown can
+    // guarantee delivery of the terminal event. Wait for this turn's expected status before
+    // clearing the local buffer; otherwise the status can arrive while project/import is being
+    // dispatched and make its commit-notification ordering assertion nondeterministic.
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        server.read_stream_until_matching_notification(
+            "thread/status/changed for completed project thread",
+            |notification| {
+                if notification.method != "thread/status/changed" {
+                    return false;
+                }
+                notification.params.as_ref().is_some_and(|params| {
+                    serde_json::from_value::<ThreadStatusChangedNotification>(params.clone())
+                        .is_ok_and(|status| {
+                            status.thread_id == started.thread.id
+                                && matches!(status.status, ThreadStatus::Idle)
+                        })
+                })
+            },
+        ),
+    )
+    .await??;
     server.clear_message_buffer();
     let import_id = server
         .send_project_import_request(ProjectImportParams {

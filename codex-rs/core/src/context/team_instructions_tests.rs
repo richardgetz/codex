@@ -26,25 +26,37 @@ fn dynamic_handoff_guidance_is_role_specific_and_opt_in() {
     let lead_body = TeamInstructions::new(TeamRole::Lead, None)
         .with_dynamic_handoff(true)
         .body();
-    assert!(lead_body.contains("Dynamic lookup handoff is enabled"));
+    assert!(lead_body.contains("Dynamic handoff is enabled"));
     assert!(lead_body.contains("quick preflight judgment"));
-    assert!(lead_body.contains("selected relevant code, log, or web excerpts"));
-    assert!(lead_body.contains("do not automatically repeat the lookup"));
-    assert!(lead_body.contains("less Lead input does not mean zero Worker token use"));
+    assert!(lead_body.contains("selected code/log/web/artifact evidence"));
+    assert!(lead_body.contains("browser/UI/CLI"));
+    assert!(lead_body.contains("code/docs/Git/PR work"));
+    assert!(lead_body.contains("MCP/Apps/connectors"));
+    assert!(lead_body.contains("CI monitoring"));
+    assert!(lead_body.contains("authorized release operations"));
+    assert!(lead_body.contains("Higher Lead balance adds targeted review/checkpoints"));
+    assert!(lead_body.contains("Workers obey existing auth"));
+    assert!(lead_body.contains("Reuse supported work"));
+    assert!(lead_body.contains("hard runtime or token-use guarantee"));
 
     let worker_body = TeamInstructions::new(TeamRole::Worker, None)
         .with_dynamic_handoff(true)
         .body();
     assert!(worker_body.contains("filter irrelevant material"));
-    assert!(worker_body.contains("selected evidence excerpts"));
+    assert!(worker_body.contains("complete the scoped work"));
+    assert!(worker_body.contains("another CLI wrapper"));
+    assert!(worker_body.contains("selected code, log, web, or artifact evidence"));
+    assert!(worker_body.contains("Do not dump raw logs"));
+    assert!(worker_body.contains("do not bypass a boundary"));
     assert!(!worker_body.contains("Before reading a large source"));
 
     let default_lead_body = TeamInstructions::new(TeamRole::Lead, None).body();
-    assert!(!default_lead_body.contains("Dynamic lookup handoff"));
+    assert!(!default_lead_body.contains("Dynamic handoff"));
+    assert!(!default_lead_body.contains("browser/UI/CLI"));
     let disabled_body = TeamInstructions::disabled()
         .with_dynamic_handoff(true)
         .body();
-    assert!(!disabled_body.contains("Dynamic lookup handoff"));
+    assert!(!disabled_body.contains("Dynamic handoff"));
 }
 
 #[test]
