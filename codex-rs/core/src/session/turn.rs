@@ -3036,7 +3036,9 @@ async fn try_run_sampling_request(
     // Count only the model stream as execution activity. Tool approval, user input, usage waits,
     // and agent waits are drained after the stream closes and remain quiescent until their own
     // operation is admitted.
-    let _activity_operation = sess.begin_activity_operation(&cancellation_token).await?;
+    let _activity_operation = sess
+        .begin_model_sampling_operation(&cancellation_token)
+        .await?;
     let mut stream = client_session
         .stream(
             prompt,

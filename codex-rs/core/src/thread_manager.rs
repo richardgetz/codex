@@ -18,6 +18,9 @@ use crate::session::SessionSpawnArgs;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::tasks::InterruptedTurnHistoryMarker;
+use crate::thread_manager_handoff::ThreadManagerHandoffAdmissionGuard;
+use crate::thread_manager_handoff::ThreadManagerHandoffGuard;
+use crate::thread_manager_handoff::ThreadManagerHandoffState;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
@@ -402,6 +405,8 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    /// Process-wide admission fence used while taking an all-root handoff snapshot.
+    handoff: Arc<ThreadManagerHandoffState>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
@@ -538,6 +543,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                handoff: Arc::new(ThreadManagerHandoffState::default()),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager,
@@ -686,6 +692,7 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
+                handoff: Arc::new(ThreadManagerHandoffState::default()),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
@@ -750,6 +757,9 @@ impl ThreadManager {
     /// Startup config handles the initial launch in [`thread_store_from_config`]. This covers
     /// clients that decide to enable background migration after constructing the app-server.
     pub fn start_background_rollout_migration(&self) {
+        let Ok(handoff_admission) = self.begin_handoff_admission() else {
+            return;
+        };
         let Some(store) = self
             .state
             .thread_store
@@ -760,6 +770,7 @@ impl ThreadManager {
         };
         let store = store.clone();
         tokio::spawn(async move {
+            let _handoff_admission = handoff_admission;
             if let Err(err) = store.migrate_rollouts_on_startup().await {
                 warn!("failed to migrate legacy rollouts on startup: {err}");
             }
@@ -768,6 +779,9 @@ impl ThreadManager {
 
     /// Refreshes every loaded thread and marks threads that are still being created.
     pub async fn invalidate_mcp_runtimes(&self) {
+        let Ok(_handoff_admission) = self.begin_handoff_admission() else {
+            return;
+        };
         self.invalidate_starting_mcp_runtimes();
         let threads = self
             .state
@@ -784,6 +798,9 @@ impl ThreadManager {
 
     /// Rebuilds loaded hook runtimes without reloading their session configurations.
     pub async fn refresh_hook_runtimes(&self) {
+        let Ok(_handoff_admission) = self.begin_handoff_admission() else {
+            return;
+        };
         let threads = self
             .state
             .threads
@@ -888,6 +905,25 @@ impl ThreadManager {
         self.state.list_thread_ids().await
     }
 
+    /// Seal every root and descendant creation path owned by this manager.
+    ///
+    /// Existing sessions continue until their per-tree handoff guards drain them. The returned
+    /// guard must stay alive until the coordinator has either completed replacement or recorded
+    /// a durable failure and intentionally aborted the attempt.
+    pub fn begin_handoff(&self) -> CodexResult<ThreadManagerHandoffGuard> {
+        self.state.begin_handoff()
+    }
+
+    /// Admit one manager-owned thread creation or load before the global handoff seal.
+    pub fn begin_handoff_admission(&self) -> CodexResult<ThreadManagerHandoffAdmissionGuard> {
+        self.state.begin_handoff_admission()
+    }
+
+    /// Returns true after this manager's all-root handoff gate has sealed.
+    pub fn handoff_admission_sealed(&self) -> bool {
+        self.state.handoff_admission_sealed()
+    }
+
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
         self.state.thread_created_tx.subscribe()
     }
@@ -908,6 +944,7 @@ impl ThreadManager {
         patch: ThreadMetadataPatch,
         include_archived: bool,
     ) -> CodexResult<StoredThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         if let Ok(thread) = self.get_thread(thread_id).await {
             if thread.config_snapshot().await.ephemeral {
                 return Err(CodexErr::InvalidRequest(format!(
@@ -956,6 +993,7 @@ impl ThreadManager {
         section: Option<&str>,
         before_thread_id: Option<ThreadId>,
     ) -> CodexResult<()> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         if let Ok(thread) = self.get_thread(thread_id).await {
             if thread.config_snapshot().await.ephemeral {
                 return Err(CodexErr::InvalidRequest(format!(
@@ -1200,6 +1238,7 @@ impl ThreadManager {
         mut options: StartThreadOptions,
         history: InitialHistory,
     ) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         if !matches!(options.session_source, Some(SessionSource::Internal(_))) {
             return Err(CodexErr::InvalidRequest(
                 "internal sessions require an internal session source".to_string(),
@@ -1238,6 +1277,7 @@ impl ThreadManager {
         forked_from_thread_id: Option<ThreadId>,
         thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let environments = options.environments.unwrap_or_else(|| {
             default_thread_environment_selections(
                 self.state.environment_manager.as_ref(),
@@ -1306,6 +1346,7 @@ impl ThreadManager {
         mut options: StartThreadOptions,
         session_source: Option<SessionSource>,
     ) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let fork_source = self.get_thread(forked_from_thread_id).await?;
         // Persist queued rollout updates before reading the fork snapshot.
         fork_source.ensure_rollout_materialized().await;
@@ -1366,6 +1407,7 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let initial_history = RolloutRecorder::get_rollout_history_with_options(
             &rollout_path,
             config.resume_load_options(),
@@ -1389,6 +1431,7 @@ impl ThreadManager {
         &self,
         child_thread_id: ThreadId,
     ) -> CodexResult<()> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let stored_thread = self
             .state
             .read_stored_thread(ReadThreadParams {
@@ -1446,6 +1489,7 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
         thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let agent_control = self.agent_control_for_config(&config);
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
@@ -1619,6 +1663,7 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let snapshot = snapshot.into();
         let history = self.initial_history_from_rollout_path(path).await?;
         self.fork_thread_from_history(
@@ -1807,6 +1852,7 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
         reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let ForkHistory {
             snapshot,
             initial_history: history,
@@ -1896,6 +1942,20 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) fn begin_handoff(&self) -> CodexResult<ThreadManagerHandoffGuard> {
+        self.handoff.begin()
+    }
+
+    pub(crate) fn begin_handoff_admission(
+        &self,
+    ) -> CodexResult<ThreadManagerHandoffAdmissionGuard> {
+        self.handoff.begin_admission()
+    }
+
+    pub(crate) fn handoff_admission_sealed(&self) -> bool {
+        self.handoff.sealed()
+    }
+
     pub(crate) fn agent_graph_store(&self) -> Option<Arc<dyn AgentGraphStore>> {
         self.agent_graph_store.clone()
     }
@@ -2367,6 +2427,7 @@ impl ThreadManagerState {
 
     /// Spawn a new thread with optional history and register it with the manager.
     async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
+        let _handoff_admission = self.begin_handoff_admission()?;
         let ThreadSpawnRequest {
             options,
             thread_settings_override_flags,

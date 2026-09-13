@@ -16,6 +16,13 @@ use std::sync::atomic::Ordering;
 use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 
+/// Whether an admitted activity operation is a model stream or a tool/MCP operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActivityOperationKind {
+    Model,
+    Tool,
+}
+
 /// Guard covering one model/tool operation for activity reporting.
 ///
 /// Dropping the guard never cancels the operation. It synchronously releases the in-flight slot
@@ -23,10 +30,19 @@ use tokio_util::sync::CancellationToken;
 /// request can transition from `Pausing` to `Paused` after the operation exits.
 pub(crate) struct ActivityOperationGuard {
     session: Arc<Session>,
+    kind: ActivityOperationKind,
 }
 
 impl Drop for ActivityOperationGuard {
     fn drop(&mut self) {
+        if self.kind == ActivityOperationKind::Model {
+            self.session
+                .model_activity_in_flight
+                .fetch_sub(1, Ordering::AcqRel);
+        }
+        // Publish the kind-specific counter first. A model and tool can finish concurrently;
+        // decrementing the shared counter first would transiently make a still-running tool
+        // look like a model-only operation to handoff preflight.
         self.session
             .activity_in_flight
             .fetch_sub(1, Ordering::AcqRel);
@@ -103,30 +119,82 @@ impl Session {
         self: &Arc<Self>,
         cancellation_token: &CancellationToken,
     ) -> CodexResult<ActivityOperationGuard> {
+        self.begin_activity_operation_with_kind(cancellation_token, ActivityOperationKind::Tool)
+            .await
+    }
+
+    /// Admit one model response stream. Model cancellation can be resumed by exact turn ID after
+    /// a handoff; tool and MCP operations remain blockers because shutdown would terminate them.
+    pub(crate) async fn begin_model_sampling_operation(
+        self: &Arc<Self>,
+        cancellation_token: &CancellationToken,
+    ) -> CodexResult<ActivityOperationGuard> {
+        self.begin_activity_operation_with_kind(cancellation_token, ActivityOperationKind::Model)
+            .await
+    }
+
+    async fn begin_activity_operation_with_kind(
+        self: &Arc<Self>,
+        cancellation_token: &CancellationToken,
+        kind: ActivityOperationKind,
+    ) -> CodexResult<ActivityOperationGuard> {
         loop {
-            if self
+            let _admission = self
+                .services
+                .agent_control
+                .begin_handoff_admission()?;
+            if kind == ActivityOperationKind::Model {
+                // Increment the model counter before the shared activity slot so a preflight
+                // cannot observe an admitted stream as an unknown tool operation between those
+                // two atomic updates. The handoff permit closes the admission race while both
+                // counters are updated.
+                self.model_activity_in_flight
+                    .fetch_add(1, Ordering::AcqRel);
+            }
+            let admitted = self
                 .services
                 .agent_control
                 .admit_activity_operation(&self.activity_in_flight)
-                .await
-            {
+                .await;
+            drop(_admission);
+            if admitted {
                 self.publish_activity_state().await;
                 return Ok(ActivityOperationGuard {
                     session: Arc::clone(self),
+                    kind,
                 });
+            }
+            if kind == ActivityOperationKind::Model {
+                self.model_activity_in_flight
+                    .fetch_sub(1, Ordering::AcqRel);
+            }
+            if self.services.agent_control.handoff_admission_sealed() {
+                return Err(CodexErr::TurnAborted);
             }
             self.wait_for_activity_resume(cancellation_token).await?;
         }
     }
 
+    pub(crate) fn non_model_activity_in_flight(&self) -> u32 {
+        self.activity_in_flight
+            .load(Ordering::Acquire)
+            .saturating_sub(self.model_activity_in_flight.load(Ordering::Acquire))
+    }
+
     /// Register a non-wait tool dispatch before its task is spawned so dependency-free handoffs
     /// observe siblings that are still waiting for readiness or the parallel execution gate.
-    pub(crate) fn begin_handoff_dispatch(self: &Arc<Self>) -> HandoffDispatchGuard {
+    pub(crate) fn begin_handoff_dispatch(
+        self: &Arc<Self>,
+    ) -> CodexResult<HandoffDispatchGuard> {
+        // Registration itself is a short admission boundary. The guard then remains alive until
+        // the sibling reaches a real activity operation or exits, so handoff can classify it as
+        // pending dispatch without waiting for the tool's full execution.
+        let _admission = self.services.agent_control.begin_handoff_admission()?;
         self.handoff_dispatches_pending
             .fetch_add(1, Ordering::AcqRel);
-        HandoffDispatchGuard {
+        Ok(HandoffDispatchGuard {
             session: Arc::clone(self),
-        }
+        })
     }
 
     pub(crate) fn pending_handoff_dispatches(&self) -> u32 {

@@ -320,7 +320,9 @@ impl AgentControl {
         thread_id: ThreadId,
         parent: Option<Arc<CodexThread>>,
     ) -> CodexResult<()> {
+        let _admission = self.begin_handoff_admission()?;
         let state = self.upgrade()?;
+        let _manager_handoff_admission = state.begin_handoff_admission()?;
         let parent = if let Some(parent) = parent {
             let parent_thread_id = parent.session.thread_id;
             let turn = parent.session.new_default_turn().await;
@@ -616,7 +618,11 @@ impl AgentControl {
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<LiveAgent> {
+        // Keep this permit through thread creation and its initial input submission so a
+        // handoff cannot snapshot a child that is only half-admitted.
+        let _admission = self.begin_handoff_admission()?;
         let state = self.upgrade()?;
+        let _manager_handoff_admission = state.begin_handoff_admission()?;
         let root_usage_auto_resume_at_spawn = self.root_usage_auto_resume();
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(

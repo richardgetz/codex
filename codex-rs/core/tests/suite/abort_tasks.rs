@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -69,6 +70,34 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
     // Expect TurnAborted soon after.
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
     codex.submit(Op::CleanBackgroundTerminals).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handoff_fence_rejects_new_turns_until_released() {
+    let server = start_mock_server().await;
+    let fixture = test_codex()
+        .with_model("gpt-5.4")
+        .build_with_auto_env(&server)
+        .await
+        .expect("start persistent root thread");
+    let guard = fixture.codex.begin_handoff().expect("seal handoff admission");
+
+    let error = fixture
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "must wait for handoff".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await
+        .expect_err("new turn should be rejected while handoff is sealed");
+    assert_matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(message) if message.contains("handoff")
+    );
+    assert!(fixture.codex.handoff_admission_sealed());
+
+    drop(guard);
+    assert!(!fixture.codex.handoff_admission_sealed());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

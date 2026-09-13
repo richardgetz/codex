@@ -80,6 +80,27 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+async fn admit_handoff_callback(
+    sess: &Arc<Session>,
+    callback_id: &str,
+) -> Option<crate::agent::control::HandoffAdmissionGuard> {
+    match sess.services.agent_control.begin_handoff_admission() {
+        Ok(admission) => Some(admission),
+        Err(error) => {
+            // Callback operations cannot be replayed from rollout history. Make a sealed-owner
+            // rejection observable so the client can retry after the handoff is released instead
+            // of acknowledging and silently losing an approval or input response.
+            debug!(%error, thread_id = %sess.thread_id(), callback_id, "rejecting callback while handoff is sealed");
+            sess.send_event_raw_ephemeral(Event {
+                id: callback_id.to_string(),
+                msg: error.to_error_event(/*message_prefix*/ None),
+            })
+            .await;
+            None
+        }
+    }
+}
+
 pub async fn interrupt(sess: &Arc<Session>) {
     sess.interrupt_task().await;
 }
@@ -189,6 +210,28 @@ pub async fn user_input_or_turn(
         .complete(&sub_id, admission);
 }
 
+/// Handles a UserInput submission whose caller already holds the final handoff admission permit.
+/// This avoids a second fence check between the submission loop and turn creation.
+pub(super) async fn user_input_or_turn_with_admission(
+    sess: &Arc<Session>,
+    sub_id: String,
+    op: Op,
+    client_user_message_id: Option<String>,
+    parent_turn_id: Option<String>,
+) {
+    let admission = user_input_or_turn_inner_with_reasoning_effort_admitted(
+        sess,
+        sub_id.clone(),
+        op,
+        TurnReasoningEffort::Persistent,
+        client_user_message_id,
+        parent_turn_id,
+    )
+    .await;
+    sess.pending_user_message_admissions
+        .complete(&sub_id, admission);
+}
+
 pub async fn update_thread_settings(
     sess: &Arc<Session>,
     sub_id: String,
@@ -272,6 +315,36 @@ enum TurnReasoningEffort {
 }
 
 async fn user_input_or_turn_inner_with_reasoning_effort(
+    sess: &Arc<Session>,
+    sub_id: String,
+    op: Op,
+    reasoning_effort: TurnReasoningEffort,
+    client_user_message_id: Option<String>,
+    parent_turn_id: Option<String>,
+) -> CodexResult<UserMessageAdmission> {
+    let _admission = match sess.services.agent_control.begin_handoff_admission() {
+        Ok(admission) => admission,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+            })
+            .await;
+            return Err(err);
+        }
+    };
+    user_input_or_turn_inner_with_reasoning_effort_admitted(
+        sess,
+        sub_id,
+        op,
+        reasoning_effort,
+        client_user_message_id,
+        parent_turn_id,
+    )
+    .await
+}
+
+async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
     sess: &Arc<Session>,
     sub_id: String,
     op: Op,
@@ -571,11 +644,17 @@ pub async fn run_user_shell_command(
     command: String,
     timeout_ms: Option<u64>,
 ) {
+    // Active-turn auxiliary shells outlive this handler call. Hold admission in the detached task
+    // until its output and persistence finish so a handoff cannot close the writer underneath it.
+    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+        return;
+    };
     if let Some((turn_context, cancellation_token)) =
         sess.active_turn_context_and_cancellation_token().await
     {
         let session = Arc::clone(sess);
         tokio::spawn(async move {
+            let _handoff_admission = handoff_admission;
             execute_user_shell_command(
                 session,
                 turn_context,
@@ -598,6 +677,7 @@ pub async fn run_user_shell_command(
         UserShellCommandTask::new(command, timeout_ms),
     )
     .await;
+    drop(handoff_admission);
 }
 
 pub async fn resolve_elicitation(
@@ -608,6 +688,13 @@ pub async fn resolve_elicitation(
     content: Option<Value>,
     meta: Option<Value>,
 ) {
+    let callback_id = match &request_id {
+        ProtocolRequestId::String(value) => value.as_str().to_string(),
+        ProtocolRequestId::Integer(value) => value.to_string(),
+    };
+    let Some(_handoff_admission) = admit_handoff_callback(sess, &callback_id).await else {
+        return;
+    };
     let action = match decision {
         codex_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
         codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
@@ -650,6 +737,9 @@ pub async fn exec_approval(
     decision: ReviewDecision,
 ) {
     let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
+    let Some(_handoff_admission) = admit_handoff_callback(sess, &event_turn_id).await else {
+        return;
+    };
     if let ReviewDecision::ApprovedExecpolicyAmendment {
         proposed_execpolicy_amendment,
     } = &decision
@@ -675,6 +765,9 @@ pub async fn exec_approval(
 }
 
 pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+    let Some(_handoff_admission) = admit_handoff_callback(sess, &id).await else {
+        return;
+    };
     match decision {
         ReviewDecision::Abort => {
             sess.interrupt_task().await;
@@ -688,6 +781,9 @@ pub async fn request_user_input_response(
     id: String,
     response: RequestUserInputResponse,
 ) {
+    let Some(_handoff_admission) = admit_handoff_callback(sess, &id).await else {
+        return;
+    };
     sess.notify_user_input_response(&id, response).await;
 }
 
@@ -696,11 +792,17 @@ pub async fn request_permissions_response(
     id: String,
     response: RequestPermissionsResponse,
 ) {
+    let Some(_handoff_admission) = admit_handoff_callback(sess, &id).await else {
+        return;
+    };
     sess.notify_request_permissions_response(&id, response)
         .await;
 }
 
 pub async fn dynamic_tool_response(sess: &Arc<Session>, id: String, response: DynamicToolResponse) {
+    let Some(_handoff_admission) = admit_handoff_callback(sess, &id).await else {
+        return;
+    };
     sess.notify_dynamic_tool_response(&id, response).await;
 }
 
@@ -789,9 +891,13 @@ pub async fn update_memories(sess: &Arc<Session>, _config: &Arc<Config>, sub_id:
 }
 
 pub fn consolidate_orchestrator_memory(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+        return;
+    };
     let sess = Arc::clone(sess);
     let config = Arc::clone(config);
     tokio::spawn(async move {
+        let _handoff_admission = handoff_admission;
         match crate::orchestrator_memory::run_cleanup_now_for_session(&sess, &config).await {
             Ok(result) => {
                 sess.send_event_raw(Event {
@@ -828,9 +934,13 @@ pub fn forget_orchestrator_memory(
     sub_id: String,
     needle: String,
 ) {
+    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+        return;
+    };
     let sess = Arc::clone(sess);
     let config = Arc::clone(config);
     tokio::spawn(async move {
+        let _handoff_admission = handoff_admission;
         let Some(_permit) = sess.memory_write_permit().await else {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -904,9 +1014,13 @@ pub fn forget_orchestrator_memory(
 }
 
 pub fn migrate_user_preferences_memory(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
+    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+        return;
+    };
     let sess = Arc::clone(sess);
     let config = Arc::clone(config);
     tokio::spawn(async move {
+        let _handoff_admission = handoff_admission;
         let Some(_permit) = sess.memory_write_permit().await else {
             sess.send_event_raw(Event {
                 id: sub_id,
@@ -1539,6 +1653,55 @@ pub async fn review(sess: &Arc<Session>, sub_id: String, review_request: ReviewR
     }
 }
 
+fn handoff_requires_session_exit(
+    result: &CodexResult<codex_protocol::turn_input::SuspendTurnOutcome>,
+) -> bool {
+    // Any blocker leaves the current owner alive. In particular, a forced-aborted task or a
+    // persistence failure must not make the replacement believe this node is recoverable; the
+    // coordinator records NeedsAttention and keeps the old daemon available for inspection.
+    matches!(
+        result,
+        Ok(codex_protocol::turn_input::SuspendTurnOutcome::Suspended { .. })
+    )
+}
+
+async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: CodexErr) {
+    let message = err.to_string();
+    let inbound_message_id = matches!(&sub.op, Op::UserInput { .. }).then(|| sub.id.clone());
+    if let Some(message_id) = inbound_message_id
+        && let Some(state_db) = sess.state_db()
+    {
+        if let Err(unclaim_error) = state_db.unclaim_thread_inbound_message(&message_id).await {
+            warn!(%message_id, %unclaim_error, "failed to return rejected inbound message to queue");
+        }
+    }
+    match sub.op {
+        Op::TurnInput { reply, .. } | Op::RecoverTurn { reply, .. } => {
+            let _ = reply.send(Err(err));
+        }
+        Op::TurnSettings { reply, .. } => {
+            let _ = reply.send(codex_protocol::protocol::TurnSettingsUpdateOutcome::Rejected {
+                reason: message,
+            });
+        }
+        Op::InterAgentCommunication { communication, start_options } => {
+            sess.input_queue.enqueue_mailbox_communication(communication, start_options).await;
+            debug!(submission_id = %sub.id, "retained inter-agent message during handoff");
+        }
+        Op::TeamLeadCompletion { communication, start_options } => {
+            sess.input_queue.enqueue_team_lead_mailbox_communication(communication, start_options).await;
+            debug!(submission_id = %sub.id, "retained Team Lead completion during handoff");
+        }
+        _ => {
+            sess.send_event_raw_ephemeral(Event {
+                id: sub.id,
+                msg: err.to_error_event(/*message_prefix*/ None),
+            })
+            .await;
+        }
+    }
+}
+
 pub(super) async fn submission_loop(
     sess: Arc<Session>,
     config: Arc<Config>,
@@ -1553,6 +1716,17 @@ pub(super) async fn submission_loop(
             debug!(?sub, "Submission");
         }
         let dispatch_span = submission_dispatch_span(&sub);
+        let _handoff_admission = if sub.op.requires_handoff_admission() {
+            match sess.services.agent_control.begin_handoff_admission() {
+                Ok(admission) => Some(admission),
+                Err(err) => {
+                    reject_handoff_submission(&sess, sub, err).await;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         let should_exit = async {
             match sub.op {
                 Op::Interrupt => {
@@ -1625,7 +1799,7 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. } => {
-                    user_input_or_turn(
+                    user_input_or_turn_with_admission(
                         &sess,
                         sub.id.clone(),
                         sub.op,
@@ -1665,10 +1839,29 @@ pub(super) async fn submission_loop(
                             .await;
                     // Exit only after history is durable and its writer has closed; an error
                     // must leave responsibility for the thread with the current worker.
-                    let should_exit = matches!(
-                        &result,
-                        Ok(codex_protocol::turn_input::SuspendTurnOutcome::Suspended { .. })
-                    );
+                    let should_exit = handoff_requires_session_exit(&result);
+                    let _ = reply.send(result);
+                    should_exit
+                }
+                Op::SuspendTurnAndShutdownForHandoff { reply } => {
+                    let result = super::turn_suspension::suspend_turn_and_shutdown_for_handoff(
+                        &sess,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    // A handoff worker may exit only after its receipt can identify a closed
+                    // writer. Blocked or failed nodes retain the current worker.
+                    let should_exit = handoff_requires_session_exit(&result);
+                    let _ = reply.send(result);
+                    should_exit
+                }
+                Op::SuspendTurnAndShutdownForHandoffAfterDescendants { reply } => {
+                    let result = super::turn_suspension::suspend_turn_and_shutdown_for_handoff_after_descendants(
+                        &sess,
+                        sub.id.clone(),
+                    )
+                    .await;
+                    let should_exit = handoff_requires_session_exit(&result);
                     let _ = reply.send(result);
                     should_exit
                 }

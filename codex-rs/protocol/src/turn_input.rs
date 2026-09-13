@@ -15,6 +15,51 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use ts_rs::TS;
 
+/// Why a turn cannot be handed off safely between daemon processes.
+///
+/// These blockers are deliberately limited to process-local state that cannot
+/// be reconstructed from a rollout without replaying a side effect or losing a
+/// host callback. A handoff coordinator should surface them as
+/// `needs_attention` and leave the owning daemon in place.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HandoffBlocker {
+    /// A review or compaction task has no exact turn recovery path.
+    UnsupportedTask,
+    /// A non-model operation is still admitted (for example a tool or MCP call).
+    ActiveOperation,
+    /// An approval or permission callback is waiting in process memory.
+    PendingApproval,
+    /// A user-input or MCP elicitation callback is waiting in process memory.
+    PendingUserInput,
+    /// A dynamic-tool response callback is waiting in process memory.
+    PendingDynamicToolResponse,
+    /// Accepted input is queued on the active turn and has no durable replay contract.
+    PendingInput,
+    /// Inter-agent mail is queued outside the rollout.
+    PendingMailbox,
+    /// A parallel dispatch is admitted but has not reached an activity operation yet.
+    PendingDispatch,
+    /// A unified-exec process would be terminated by session shutdown.
+    UnifiedExecProcess,
+    /// A loaded descendant still owns work when its parent is being suspended.
+    LiveDescendants,
+    /// A handoff receipt could not be made durable before changing execution state.
+    Persistence,
+    /// The replacement daemon cannot safely interpret the receipt's protocol/version.
+    VersionMismatch,
+    /// A parent required to restore a V2 child is not loaded or no longer owns it.
+    ParentUnavailable,
+    /// A realtime conversation transport is still active and cannot be transferred.
+    RealtimeConversation,
+    /// The regular turn task had to be aborted while draining.
+    SuspensionTimeout,
+    /// The regular turn task exited unexpectedly before the handoff boundary.
+    TaskExitedUnexpectedly,
+    /// A completed turn is still flushing final history and lifecycle events.
+    TurnFinalization,
+}
+
 /// Result of stopping an unfinished root turn so another worker can recover it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SuspendTurnOutcome {
@@ -24,6 +69,10 @@ pub enum SuspendTurnOutcome {
     NotActive,
     /// A currently loaded descendant would remain running after root handoff.
     HasLiveDescendants,
+    /// Handoff was refused because process-local state cannot be restored safely.
+    Blocked {
+        blockers: Vec<HandoffBlocker>,
+    },
     UnsupportedTask,
 }
 

@@ -781,7 +781,7 @@ impl Session {
         if self.is_activity_paused() {
             return;
         }
-        let (turn_state, team_worker_lease) = loop {
+        let (turn_state, team_worker_lease, admission) = loop {
             if !self.input_queue.has_pending_mailbox_items().await
                 || (!self.input_queue.has_trigger_turn_mailbox_items().await
                     && !self.has_outstanding_durable_sleep())
@@ -789,6 +789,13 @@ impl Session {
                 return;
             }
 
+            // Reserve the final automatic-turn admission only after confirming mailbox work.
+            // The permit is released before a capacity wait and reacquired on the next pass, so
+            // a sealed handoff is never held hostage by an unavailable Worker slot.
+            let admission = match self.services.agent_control.begin_handoff_admission() {
+                Ok(admission) => admission,
+                Err(_) => return,
+            };
             let turn_state = {
                 let mut active_turn = self.active_turn.lock().await;
                 if active_turn.is_some() {
@@ -804,9 +811,10 @@ impl Session {
                 &session_source,
                 self.thread_id,
             ) {
-                Ok(team_worker_lease) => break (turn_state, team_worker_lease),
+                Ok(team_worker_lease) => break (turn_state, team_worker_lease, admission),
                 Err(_) => {
                     self.clear_reserved_idle_turn(&turn_state).await;
+                    drop(admission);
                     tokio::select! {
                         _ = self.services.agent_control.wait_for_team_worker_capacity() => {},
                         _ = self.wait_for_shutdown() => return,
@@ -901,6 +909,7 @@ impl Session {
                 team_lead_trigger,
             )
             .await;
+        drop(admission);
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -1016,6 +1025,8 @@ impl Session {
                 .take()
                 .expect("active task was checked above");
             task.handle.detach();
+            self.turn_finalization_in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             Arc::clone(&active_turn.turn_state)
         };
         let (last_agent_message, abort_reason) = match task_result {
@@ -1282,6 +1293,8 @@ impl Session {
         if let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
         }
+        self.turn_finalization_in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         if cleared_active_turn {
             self.maybe_start_turn_for_pending_work().await;
         }

@@ -65,6 +65,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
 use std::sync::Weak;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -73,6 +75,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 pub(crate) use self::execution::AgentExecutionGuard;
+pub use self::handoff::HandoffAdmissionGuard;
+pub use self::handoff::HandoffGuard;
 use self::execution::AgentExecutionLimiter;
 use self::residency::V2Residency;
 pub(crate) use self::worker_limit::TeamWorkerLease;
@@ -80,6 +84,7 @@ use self::worker_limit::TeamWorkerLimiter;
 
 mod activity;
 mod execution;
+mod handoff;
 mod legacy;
 mod residency;
 mod service_tier;
@@ -162,6 +167,12 @@ pub(crate) struct AgentControl {
     root_usage_auto_resume_propagation: Arc<Mutex<()>>,
     /// Root-scoped process-local manual pause switch shared by every loaded descendant.
     root_activity_paused: Arc<std::sync::atomic::AtomicBool>,
+    /// Root-scoped process-local fence that rejects new work during daemon handoff.
+    pub(crate) handoff_admission_sealed: Arc<AtomicBool>,
+    /// Number of admissions that passed the handoff fence before it sealed.
+    pub(crate) handoff_admission_in_flight: Arc<AtomicU32>,
+    /// Wakes the handoff coordinator after a pre-seal admission finishes.
+    pub(crate) handoff_admission_notify: Arc<Notify>,
     /// Serializes manual pause publication with child startup reconciliation.
     root_activity_pause_update: Arc<Mutex<()>>,
     /// Serializes descendant activity state propagation and preserves toggle order.
@@ -205,6 +216,9 @@ impl AgentControl {
             root_usage_auto_resume_update: Arc::new(Mutex::new(())),
             root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
             root_activity_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            handoff_admission_sealed: Arc::new(AtomicBool::new(false)),
+            handoff_admission_in_flight: Arc::new(AtomicU32::new(0)),
+            handoff_admission_notify: Arc::new(Notify::new()),
             root_activity_pause_update: Arc::new(Mutex::new(())),
             root_activity_pause_propagation: Arc::new(Mutex::new(())),
             root_activity_resume_notify: Arc::new(Notify::new()),
@@ -317,7 +331,37 @@ impl AgentControl {
         start_options: TurnStartOptions,
         team_lead_completion: bool,
     ) -> CodexResult<String> {
+        // Queue-only mailbox mail is process-local too; admit its enqueue before a handoff seal
+        // so a late completion cannot be silently lost when the writer is replaced.
+        let _admission = match self.begin_handoff_admission() {
+            Ok(admission) => admission,
+            Err(err) => {
+                if let Ok(state) = self.upgrade()
+                    && let Ok(thread) = state.get_thread(agent_id).await
+                {
+                    if team_lead_completion {
+                        thread
+                            .session
+                            .input_queue
+                            .enqueue_team_lead_mailbox_communication(communication, start_options)
+                            .await;
+                    } else {
+                        thread
+                            .session
+                            .input_queue
+                            .enqueue_mailbox_communication(communication, start_options)
+                            .await;
+                    }
+                    tracing::debug!(
+                        agent_id = %agent_id,
+                        "retained inter-agent message after handoff admission was sealed"
+                    );
+                }
+                return Err(err);
+            }
+        };
         let state = self.upgrade()?;
+
         let _team_worker_lease = if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
             self.ensure_execution_capacity_for_turn_start(&thread)
@@ -345,6 +389,7 @@ impl AgentControl {
         turn_id: String,
         item: SubAgentActivityItem,
     ) -> CodexResult<()> {
+        let _admission = self.begin_handoff_admission()?;
         let state = self.upgrade()?;
         let thread = state.get_thread(thread_id).await?;
         let started_at_ms = now_unix_timestamp_ms();
@@ -789,6 +834,7 @@ impl AgentControl {
         &self,
         current_thread_id: ThreadId,
     ) -> CodexResult<PruneIdleAgentsReport> {
+        let _admission = self.begin_handoff_admission()?;
         let mut children_by_parent = self.live_thread_spawn_children().await?;
         for children in children_by_parent.values_mut() {
             children.sort_by_key(|left| left.0.to_string());
@@ -1044,6 +1090,25 @@ impl AgentControl {
                 if !parent_thread.session.is_team_lead().await {
                     return;
                 }
+                // The legacy completion path mutates the parent's rollout before waking its
+                // Lead. Keep that fragment, cancellation, and wake as one admitted handoff
+                // operation so a sealing coordinator cannot close the writer between them.
+                let Ok(_handoff_admission) = parent_thread
+                    .session
+                    .services
+                    .agent_control
+                    .begin_handoff_admission()
+                else {
+                    Self::retain_legacy_completion_after_handoff(
+                        &parent_thread,
+                        &child_reference,
+                        child_agent_path.as_ref(),
+                        &status,
+                        /*trigger_turn*/ true,
+                    )
+                    .await;
+                    return;
+                };
                 parent_thread
                     .inject_fragment_without_turn(SubagentNotification::new(
                         child_reference.as_str(),
@@ -1063,6 +1128,22 @@ impl AgentControl {
                     .await;
                 return;
             }
+            let Ok(_handoff_admission) = parent_thread
+                .session
+                .services
+                .agent_control
+                .begin_handoff_admission()
+            else {
+                Self::retain_legacy_completion_after_handoff(
+                    &parent_thread,
+                    &child_reference,
+                    child_agent_path.as_ref(),
+                    &status,
+                    /*trigger_turn*/ false,
+                )
+                .await;
+                return;
+            };
             parent_thread
                 .inject_fragment_without_turn(SubagentNotification::new(
                     child_reference.as_str(),
@@ -1070,6 +1151,53 @@ impl AgentControl {
                 ))
                 .await;
         });
+    }
+
+    /// Retains a V1 completion as mailbox mail when the parent handoff fence already won.
+    ///
+    /// V1 normally writes a context fragment directly to the parent rollout. That fragment has no
+    /// durable callback identity, so a sealed owner cannot safely append it. Queue a bounded
+    /// completion message instead; the old owner can deliver it after an aborted handoff and the
+    /// replacement coordinator will see the mailbox as a blocker.
+    async fn retain_legacy_completion_after_handoff(
+        parent_thread: &Arc<CodexThread>,
+        child_reference: &str,
+        child_agent_path: Option<&AgentPath>,
+        status: &AgentStatus,
+        trigger_turn: bool,
+    ) {
+        let author = child_agent_path
+            .cloned()
+            .or_else(|| AgentPath::try_from(child_reference).ok())
+            .unwrap_or_else(AgentPath::root);
+        let recipient = author
+            .as_str()
+            .rsplit_once('/')
+            .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+            .unwrap_or_else(AgentPath::root);
+        let communication = InterAgentCommunication::new(
+            author,
+            recipient,
+            Vec::new(),
+            format!("Worker {child_reference} completed with status {status:?}; review the result."),
+            trigger_turn,
+        );
+        if trigger_turn {
+            parent_thread
+                .session
+                .input_queue
+                .enqueue_team_lead_mailbox_communication(
+                    communication,
+                    TurnStartOptions::default(),
+                )
+                .await;
+        } else {
+            parent_thread
+                .session
+                .input_queue
+                .enqueue_mailbox_communication(communication, TurnStartOptions::default())
+                .await;
+        }
     }
 
     fn prepare_agent_metadata(

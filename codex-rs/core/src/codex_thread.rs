@@ -291,6 +291,11 @@ impl CodexThread {
         self.session.thread_id
     }
 
+    /// Returns the immutable source metadata used to reconstruct this thread's graph lineage.
+    pub fn session_source(&self) -> SessionSource {
+        self.session_source.clone()
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()
@@ -366,6 +371,10 @@ impl CodexThread {
         op: Op,
         trace: Option<W3cTraceContext>,
     ) -> CodexResult<String> {
+        let _handoff_admission = op
+            .requires_handoff_admission()
+            .then(|| self.session.services.agent_control.begin_handoff_admission())
+            .transpose()?;
         if matches!(
             &op,
             Op::SetMemoryAccessPolicy { .. }
@@ -389,6 +398,52 @@ impl CodexThread {
                 op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
             )
             .await
+    }
+
+    /// Seal this root agent tree against new user turns and descendant spawns.
+    ///
+    /// The returned guard must remain alive until a handoff coordinator has
+    /// persisted every node receipt and released or restored the tree. Recovery
+    /// submissions on this runtime also pass the fence, so a sealed old owner
+    /// cannot accept a stale exact-turn restart; a replacement runtime has a
+    /// new, unsealed control handle and still enters recovery behind its pause gate.
+    pub fn begin_handoff(&self) -> CodexResult<crate::HandoffGuard> {
+        self.session
+            .services
+            .agent_control
+            .begin_handoff()
+    }
+
+    /// Admit one direct app-server operation before a handoff seal.
+    ///
+    /// Keep the returned permit alive across the complete process-local mutation or remote
+    /// request. Exact-turn recovery also uses this boundary so stale requests from a sealed old
+    /// owner are rejected before they can enqueue model work.
+    pub fn begin_handoff_admission(&self) -> CodexResult<crate::HandoffAdmissionGuard> {
+        self.session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+    }
+
+    /// Inspect process-local callbacks, queues, tools, and task kind without changing execution.
+    pub async fn handoff_preflight(&self) -> crate::HandoffPreflight {
+        let mut preflight = self.session.handoff_preflight().await;
+        if self.out_of_band_elicitations.lock().await.count > 0 {
+            preflight
+                .blockers
+                .push(codex_protocol::turn_input::HandoffBlocker::PendingUserInput);
+        }
+        preflight
+    }
+
+    /// Returns whether new turn and spawn admission is currently sealed for
+    /// this root tree.
+    pub fn handoff_admission_sealed(&self) -> bool {
+        self.session
+            .services
+            .agent_control
+            .handoff_admission_sealed()
     }
 
     /// Submits turn input without requiring the caller to inspect thread state.
@@ -436,6 +491,10 @@ impl CodexThread {
         &self,
         request: RecoverTurnRequest,
     ) -> CodexResult<StartIfIdleSubmission> {
+        // Recovery is exact-turn and does not replay user input, but an old owner must not accept
+        // a stale recovery request after its handoff fence seals. Replacement runtimes have a new
+        // control handle and therefore pass this admission normally.
+        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
         self.session
             .services
             .agent_control
@@ -523,6 +582,66 @@ impl CodexThread {
         Ok(outcome)
     }
 
+    /// Stops an unfinished regular turn for a process handoff.
+    ///
+    /// Unlike the user-facing root-only suspension, this method is intended
+    /// for an owner that has already sealed the shared root admission fence and
+    /// drained descendants child-first. Core still refuses unsafe process-local
+    /// callbacks and external operations before cancellation.
+    pub async fn suspend_turn_and_shutdown_for_handoff(
+        &self,
+    ) -> CodexResult<SuspendTurnOutcome> {
+        let (reply, result) = oneshot::channel();
+        self.io
+            .tx_sub
+            .send(Submission {
+                id: new_submission_id(),
+                op: Op::SuspendTurnAndShutdownForHandoff { reply },
+                trace: current_span_w3c_trace_context(),
+                client_user_message_id: None,
+                parent_turn_id: None,
+                root_turn_id: None,
+            })
+            .await
+            .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
+        let outcome = result
+            .await
+            .map_err(|_| CodexErr::Fatal("thread suspension reply was lost".to_string()))??;
+        if matches!(&outcome, SuspendTurnOutcome::Suspended { .. }) {
+            self.io.session_loop_termination.clone().await;
+        }
+        Ok(outcome)
+    }
+
+    /// Stops an unfinished regular turn after all loaded descendants have been suspended.
+    ///
+    /// Parent graph edges remain live in process-local metadata after child writers close, so a
+    /// coordinator uses this explicit operation only after child receipts are durable.
+    pub async fn suspend_turn_and_shutdown_for_handoff_after_descendants(
+        &self,
+    ) -> CodexResult<SuspendTurnOutcome> {
+        let (reply, result) = oneshot::channel();
+        self.io
+            .tx_sub
+            .send(Submission {
+                id: new_submission_id(),
+                op: Op::SuspendTurnAndShutdownForHandoffAfterDescendants { reply },
+                trace: current_span_w3c_trace_context(),
+                client_user_message_id: None,
+                parent_turn_id: None,
+                root_turn_id: None,
+            })
+            .await
+            .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
+        let outcome = result
+            .await
+            .map_err(|_| CodexErr::Fatal("thread suspension reply was lost".to_string()))??;
+        if matches!(&outcome, SuspendTurnOutcome::Suspended { .. }) {
+            self.io.session_loop_termination.clone().await;
+        }
+        Ok(outcome)
+    }
+
     /// Steers only if `expected_turn_id` is still the active regular turn.
     pub async fn steer_turn(
         &self,
@@ -563,6 +682,14 @@ impl CodexThread {
             None
         };
 
+        // Hold the short handoff permit across the final queue submission. A handoff that seals
+        // concurrently either waits for this already-admitted request or rejects before it can
+        // enter the session loop.
+        let _admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()?;
         self.io.submit_turn_input(request, mode).await
     }
 
@@ -580,6 +707,11 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
+        let _handoff_admission = match self.session.services.agent_control.begin_handoff_admission()
+        {
+            Ok(admission) => admission,
+            Err(_) => return Err(items),
+        };
         self.session.inject_if_running(items).await
     }
 
@@ -681,6 +813,11 @@ impl CodexThread {
 
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
+        let _handoff_admission = sub
+            .op
+            .requires_handoff_admission()
+            .then(|| self.session.services.agent_control.begin_handoff_admission())
+            .transpose()?;
         if let Op::SetMemoryAccessPolicy { policy } = &sub.op {
             self.session
                 .update_settings(SessionSettingsUpdate {
@@ -785,6 +922,14 @@ impl CodexThread {
 
     /// Records a context fragment without creating a new user turn boundary.
     pub(crate) async fn inject_fragment_without_turn(&self, fragment: impl ContextualUserFragment) {
+        // Completion fragments mutate rollout/history without creating a turn. Keep them behind
+        // the same admission fence as ordinary submissions so a handoff cannot close the writer
+        // while this process-local notification is being appended.
+        let Ok(_handoff_admission) = self.session.services.agent_control.begin_handoff_admission()
+        else {
+            tracing::debug!(thread_id = %self.session.thread_id, "dropping completion fragment during handoff");
+            return;
+        };
         let item = ContextualUserFragment::into(fragment);
         self.session
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
@@ -793,6 +938,7 @@ impl CodexThread {
 
     /// Append raw Responses API items to the thread's model-visible history.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
+        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
         self.inject_response_items_for_turn(items).await?;
         self.session.flush_rollout().await?;
         Ok(())
@@ -807,6 +953,7 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> CodexResult<()> {
+        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
                 "items must not be empty".to_string(),
@@ -883,6 +1030,14 @@ impl CodexThread {
         patch: ThreadMetadataPatch,
         include_archived: bool,
     ) -> ThreadStoreResult<StoredThread> {
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
         let live_thread = self
             .session
             .live_thread_for_persistence("update thread metadata")
@@ -894,6 +1049,14 @@ impl CodexThread {
 
     /// Appends rollout items through the live thread so derived metadata stays in sync.
     pub async fn append_rollout_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+            .map_err(|err| ThreadStoreError::Internal {
+                message: err.to_string(),
+            })?;
         let live_thread = self
             .session
             .live_thread_for_persistence("append rollout items")
@@ -1080,6 +1243,12 @@ impl CodexThread {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> anyhow::Result<serde_json::Value> {
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         self.session.refresh_mcp_if_dirty().await;
         let result = self
             .session
@@ -1097,6 +1266,12 @@ impl CodexThread {
         call_id: &str,
         uri: &str,
     ) -> anyhow::Result<serde_json::Value> {
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         self.session.refresh_mcp_if_dirty().await;
         let result = self
             .session
@@ -1114,6 +1289,15 @@ impl CodexThread {
         arguments: serde_json::Value,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<codex_mcp::McpEventStream> {
+        // The stream task owns the subscription after this method returns; the app-server stream
+        // coordinator must retain its own admission/activity receipt for that lifetime. This
+        // guard still closes the race while opening the remote request.
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         let meta = match meta.as_ref() {
             Some(serde_json::Value::Object(meta)) => Some(meta),
             Some(other) => {
@@ -1135,6 +1319,12 @@ impl CodexThread {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
+            .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         self.session.refresh_mcp_if_dirty().await;
         self.session
             .services
@@ -1151,6 +1341,7 @@ impl CodexThread {
     }
 
     pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
+        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
         let mut elicitations = self.out_of_band_elicitations.lock().await;
         let incremented = elicitations.count.checked_add(1).ok_or_else(|| {
             CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())

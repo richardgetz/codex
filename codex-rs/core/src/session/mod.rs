@@ -257,6 +257,7 @@ mod environment;
 pub(crate) mod extension_metrics;
 mod git_intent_preflight;
 mod handlers;
+mod handoff_preflight;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;
 mod input_queue;
@@ -1168,7 +1169,12 @@ impl Session {
         }
         let thread_id = session.thread_id;
         if let Some(state_db) = session.state_db() {
-            start_thread_inbound_message_poller(thread_id, state_db, tx_sub.clone());
+            start_thread_inbound_message_poller(
+                thread_id,
+                state_db,
+                tx_sub.clone(),
+                session.services.agent_control.clone(),
+            );
         }
 
         // This task will run until Op::Shutdown is received.

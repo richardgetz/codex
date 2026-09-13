@@ -87,6 +87,23 @@ WHERE id = ?
         tx.commit().await?;
         Ok(messages)
     }
+
+    /// Return a claimed inbound message to the pending queue when admission fails before it can
+    /// be applied. The update is idempotent and affects only an already-delivered row.
+    pub async fn unclaim_thread_inbound_message(&self, message_id: &str) -> anyhow::Result<bool> {
+        let result = sqlx::query(
+            r#"
+UPDATE thread_inbound_messages
+SET delivered_at_ms = NULL
+WHERE id = ?
+  AND delivered_at_ms IS NOT NULL
+            "#,
+        )
+        .bind(message_id)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 #[cfg(test)]
@@ -180,4 +197,53 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
+
+    #[tokio::test]
+    async fn unclaim_returns_message_to_pending_queue() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("initialize runtime");
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000104").expect("thread");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                codex_home.as_path(),
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await
+            .expect("insert thread metadata");
+        let message_id = runtime
+            .enqueue_thread_inbound_message(thread_id, None, "[]".to_string())
+            .await
+            .expect("enqueue message");
+        let claimed = runtime
+            .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
+            .await
+            .expect("claim message");
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, message_id);
+
+        assert!(runtime
+            .unclaim_thread_inbound_message(&message_id)
+            .await
+            .expect("unclaim message"));
+        let reclaimed = runtime
+            .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
+            .await
+            .expect("reclaim message");
+        assert_eq!(reclaimed.len(), 1);
+        assert_eq!(reclaimed[0].id, message_id);
+        assert!(!runtime
+            .unclaim_thread_inbound_message(&message_id)
+            .await
+            .expect("unclaim delivered message"));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
 }
