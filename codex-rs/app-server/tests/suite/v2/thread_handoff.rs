@@ -149,7 +149,7 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
         .await?;
     let blocked_start_error: JSONRPCError = timeout(
         REQUEST_TIMEOUT,
-        replacement.read_response(blocked_start),
+        replacement.read_stream_until_error_message(RequestId::Integer(blocked_start)),
     )
     .await??;
     assert_eq!(blocked_start_error.error.code, -32600);
