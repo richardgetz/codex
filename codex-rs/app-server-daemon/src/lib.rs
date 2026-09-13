@@ -402,6 +402,15 @@ impl Daemon {
             return Ok(RestartIfRunningOutcome::Busy);
         }
         let settings = self.load_settings().await?;
+        // A predecessor updater may have captured the standalone path before a custom
+        // launcher was selected. Never let that stale path stop or replace the new backend.
+        if settings
+            .managed_codex_path
+            .as_deref()
+            .is_some_and(|configured| configured != managed_codex_bin)
+        {
+            return Ok(RestartIfRunningOutcome::NotRunning);
+        }
         let outcome = if let Some(backend) = self.running_backend_instance(&settings).await? {
             let info = client::probe(&self.socket_path).await.ok();
             let managed_version = if info.is_some() {
@@ -655,6 +664,17 @@ impl Daemon {
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
         self.ensure_managed_codex_bin(managed_codex_bin)?;
 
+        // Stop any predecessor updater before changing the selected launcher. An older
+        // updater may not know about managedCodexPath and could otherwise relaunch the
+        // standalone binary after this transition. `stop` confirms the pid record is gone
+        // (or returns an error) before settings or the app-server process changes.
+        let updater = backend::pid_update_loop_backend(self.backend_paths(&previous_settings));
+        if settings.managed_codex_path.is_some()
+            && updater.is_starting_or_running().await?
+        {
+            updater.stop().await?;
+        }
+
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
         {
@@ -719,6 +739,14 @@ impl Daemon {
         settings: &DaemonSettings,
         managed_codex_bin: &Path,
     ) -> Result<Option<u32>> {
+        if let Some(configured) = settings.managed_codex_path.as_deref()
+            && configured != managed_codex_bin
+        {
+            return Err(anyhow!(
+                "configured Codex launcher changed before app-server restart; refusing stale binary {}",
+                managed_codex_bin.display()
+            ));
+        }
         let backend =
             backend::pid_backend(self.backend_paths_with_bin(settings, managed_codex_bin));
         backend.start().await
@@ -946,8 +974,9 @@ fn try_lock_file(_file: &tokio::fs::File) -> Result<bool> {
 #[cfg(all(test, any(unix, windows)))]
 mod tests {
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
     use std::path::Path;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
 
     use super::BackendKind;
     use super::BootstrapOutput;
@@ -1104,6 +1133,14 @@ mod tests {
         );
     }
 
+    fn configured_launcher_path() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\Codex\codex.exe")
+        } else {
+            PathBuf::from("/opt/homebrew/bin/codex-rick")
+        }
+    }
+
     #[test]
     fn configured_launcher_overrides_standalone_path() {
         let daemon = Daemon {
@@ -1114,13 +1151,14 @@ mod tests {
             settings_file: "settings".into(),
             managed_codex_bin: "/codex/standalone".into(),
         };
+        let launcher = configured_launcher_path();
         let settings = DaemonSettings {
             remote_control_enabled: true,
-            managed_codex_path: Some("/opt/homebrew/bin/codex-rick".into()),
+            managed_codex_path: Some(launcher.clone()),
         };
         assert_eq!(
             daemon.configured_managed_codex_bin(&settings),
-            Path::new("/opt/homebrew/bin/codex-rick")
+            launcher.as_path()
         );
     }
 
@@ -1136,7 +1174,7 @@ mod tests {
         };
         let settings = DaemonSettings {
             remote_control_enabled: false,
-            managed_codex_path: Some("/opt/homebrew/bin/codex-rick".into()),
+            managed_codex_path: Some(configured_launcher_path()),
         };
 
         assert!(
@@ -1144,6 +1182,42 @@ mod tests {
                 .is_bootstrapped(&settings)
                 .await
                 .expect("configured launcher should count as bootstrapped")
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_updater_cannot_restart_after_custom_launcher_selection() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let daemon = Daemon {
+            socket_path: temp_dir.path().join("app-server-control.sock"),
+            pid_file: temp_dir.path().join("app-server.pid"),
+            update_pid_file: temp_dir.path().join("app-server-updater.pid"),
+            operation_lock_file: temp_dir.path().join("daemon.lock"),
+            settings_file: temp_dir.path().join("settings.json"),
+            managed_codex_bin: temp_dir.path().join("standalone-codex"),
+        };
+        DaemonSettings {
+            remote_control_enabled: false,
+            managed_codex_path: Some(configured_launcher_path()),
+        }
+        .save(&daemon.settings_file)
+        .await
+        .expect("save configured settings");
+
+        assert_eq!(
+            daemon
+                .try_restart_if_running(
+                    RestartMode::Always,
+                    UpdaterRefreshMode::None,
+                    if cfg!(windows) {
+                        Path::new(r"C:\Codex\standalone.exe")
+                    } else {
+                        Path::new("/codex/standalone")
+                    },
+                )
+                .await
+                .expect("stale updater should stop cleanly"),
+            RestartIfRunningOutcome::NotRunning
         );
     }
 

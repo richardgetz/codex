@@ -104,6 +104,11 @@ async fn update_once(
     running_updater_identity: &ExecutableIdentity,
     terminate: &mut Signal,
 ) -> Result<UpdateLoopControl> {
+    let daemon = Daemon::from_environment()?;
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok(UpdateLoopControl::Stop);
+    }
+
     #[cfg(unix)]
     install_latest_standalone(http).await?;
     #[cfg(windows)]
@@ -112,7 +117,11 @@ async fn update_once(
         _ = terminate.recv() => return Ok(UpdateLoopControl::Stop),
     }
 
-    let daemon = Daemon::from_environment()?;
+    // The launcher can change while the installer is running. Re-read settings before
+    // any restart so an in-flight predecessor cannot put the standalone binary back.
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok(UpdateLoopControl::Stop);
+    }
     let managed_codex_bin = resolved_managed_codex_bin(&daemon.managed_codex_bin).await?;
     let managed_identity = executable_identity(&managed_codex_bin).await?;
     let (restart_mode, updater_refresh_mode) =
@@ -122,10 +131,13 @@ async fn update_once(
         if terminate.recv().now_or_never().flatten().is_some() {
             return Ok(UpdateLoopControl::Stop);
         }
-        match daemon
+        let outcome = daemon
             .try_restart_if_running(restart_mode, updater_refresh_mode, &managed_codex_bin)
-            .await?
-        {
+            .await?;
+        if daemon.load_settings().await?.managed_codex_path.is_some() {
+            return Ok(UpdateLoopControl::Stop);
+        }
+        match outcome {
             RestartIfRunningOutcome::Busy => {
                 if sleep_or_terminate(RESTART_RETRY_INTERVAL, terminate).await {
                     return Ok(UpdateLoopControl::Stop);
