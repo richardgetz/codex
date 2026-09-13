@@ -106,9 +106,17 @@ async fn update_eta_tool_is_registered_and_records_explicit_lifecycle() -> Resul
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 4);
-    let registered = requests[0]
-        .tool_by_name("functions", "update_eta")
-        .expect("update_eta should be model-visible in the functions namespace");
+    let first_body = requests[0].body_json();
+    let registered = first_body
+        .get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools.iter().find(|tool| {
+                tool.get("type").and_then(Value::as_str) == Some("function")
+                    && tool.get("name").and_then(Value::as_str) == Some("update_eta")
+            })
+        })
+        .expect("update_eta should be model-visible as a function tool");
     assert_eq!(registered["name"], "update_eta");
     assert!(registered["description"]
         .as_str()
