@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-13/session-eta-tui#2d51ea41f0"
+  change_type: "feat"
+  scope: "tui"
+  summary: "Expose a read-only root-session ETA popup with stored Active and History task data."
+  decision: "Use existing app-server ETA snapshots and event notifications with bottom-pane navigation; map lifecycle, stale, accuracy, and explicit terminal states exactly and request bounded history only on explicit PageDown."
+  constraints:
+    - "Do not poll, infer completion, classify waiting or paused turns, or derive elapsed or finish values in the TUI."
+    - "Keep root and child rows root-scoped; history reads are bounded to 50 entries per page and preserve unknown, stale, and cancelled states."
+    - "Use private view modules and leave integrated Cargo and just validation to the designated main-checkout owner."
+    - "Render aggregate finish ranges from the stored generated timestamp with checked arithmetic; a single finish_at is only an upper bound."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+    - "codex-rs/tui/src/app/app_server_event_targets.rs"
+    - "codex-rs/tui/src/app/event_dispatch.rs"
+    - "codex-rs/tui/src/app_event.rs"
+    - "codex-rs/tui/src/chatwidget/slash_dispatch.rs"
+    - "codex-rs/tui/src/slash_command.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
