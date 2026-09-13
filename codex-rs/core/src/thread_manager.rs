@@ -18,11 +18,11 @@ use crate::session::SessionSpawnArgs;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::tasks::InterruptedTurnHistoryMarker;
+use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_manager_handoff::ThreadManagerHandoffAdmissionGuard;
 use crate::thread_manager_handoff::ThreadManagerHandoffGuard;
 use crate::thread_manager_handoff::ThreadManagerHandoffState;
 use crate::thread_manager_handoff::ThreadManagerRecoveryGuard;
-use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
@@ -1986,7 +1986,11 @@ impl ThreadManagerState {
     /// Completion watchers can outlive a cold or evicted target. Resolving the database from the
     /// manager-owned local store keeps their handoff fallback independent of the loaded-thread map.
     pub(crate) async fn state_db(&self) -> Option<StateDbHandle> {
-        let Some(store) = self.thread_store.as_any().downcast_ref::<LocalThreadStore>() else {
+        let Some(store) = self
+            .thread_store
+            .as_any()
+            .downcast_ref::<LocalThreadStore>()
+        else {
             return None;
         };
         store.state_db().await

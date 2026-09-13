@@ -40,7 +40,10 @@ impl AgentControl {
         let message = dependency_free_wait_handoff_message(child_source);
 
         if parent_role == Some(TeamRole::Lead) {
-            parent_thread.session.enqueue_lead_wakeup_with_admission(&message).await;
+            parent_thread
+                .session
+                .enqueue_lead_wakeup_with_admission(&message)
+                .await;
             drop(handoff_admission);
             parent_thread
                 .session

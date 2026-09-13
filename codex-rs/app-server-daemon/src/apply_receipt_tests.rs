@@ -8,13 +8,13 @@ use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
-use super::ensure_transferable_handoff;
-use super::parse_handoff_response;
-use super::sanitize_failure;
 use super::ApplyAttemptReceipt;
 use super::ApplyPhase;
 use super::ApplyStatus;
 use super::HandoffReceipt;
+use super::ensure_transferable_handoff;
+use super::parse_handoff_response;
+use super::sanitize_failure;
 
 fn receipt(state: &str, nodes: Vec<Value>) -> HandoffReceipt {
     HandoffReceipt {
@@ -46,7 +46,8 @@ fn transferability_requires_a_fully_suspended_graph() {
     assert!(ensure_transferable_handoff(&safe).is_ok());
 
     let partial = receipt("draining", vec![node("suspended", Some("turn-1"))]);
-    let error = ensure_transferable_handoff(&partial).expect_err("draining graph must not transfer");
+    let error =
+        ensure_transferable_handoff(&partial).expect_err("draining graph must not transfer");
     assert!(error.to_string().contains("not safely suspended"));
 
     let missing_turn = receipt("suspended", vec![node("suspended", None)]);
@@ -60,7 +61,7 @@ fn parses_wrapped_success_and_structured_error_receipts() {
     let handoff = receipt("needsAttention", vec![node("blocked", None)]);
     let success = JSONRPCMessage::Response(JSONRPCResponse {
         id: RequestId::Integer(2),
-        result: serde_json::json!({ "receipt": handoff.clone() }),
+        result: serde_json::json!({ "receipt": handoff }),
     });
     let parsed = parse_handoff_response(success, "thread/handoff/status").expect("receipt");
     assert_eq!(parsed, handoff);
@@ -71,7 +72,7 @@ fn parses_wrapped_success_and_structured_error_receipts() {
         error: JSONRPCErrorError {
             code: -32000,
             message: "handoff blocked".to_string(),
-            data: Some(serde_json::json!({ "receipt": error_receipt.clone() })),
+            data: Some(serde_json::json!({ "receipt": error_receipt })),
         },
     });
     let error = parse_handoff_response(error_message, "thread/handoff/prepare")

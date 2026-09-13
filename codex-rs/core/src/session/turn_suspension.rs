@@ -53,18 +53,16 @@ async fn suspend_turn_and_shutdown_for_handoff_with_descendants(
     submission_id: String,
     scope: SuspensionScope,
 ) -> CodexResult<SuspendTurnOutcome> {
-    if !session
-        .services
-        .agent_control
-        .handoff_admission_sealed()
-    {
+    if !session.services.agent_control.handoff_admission_sealed() {
         return Err(CodexErr::InvalidRequest(
             "handoff suspension requires a sealed agent tree".to_string(),
         ));
     }
     let preflight = match scope {
         SuspensionScope::Handoff => session.handoff_preflight().await,
-        SuspensionScope::HandoffAfterDescendants => session.handoff_preflight_after_descendants().await,
+        SuspensionScope::HandoffAfterDescendants => {
+            session.handoff_preflight_after_descendants().await
+        }
         SuspensionScope::Root => unreachable!("root suspension does not use handoff preflight"),
     };
     if !preflight.blockers.is_empty() {

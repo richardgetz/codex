@@ -5,15 +5,15 @@ use std::path::Path;
 use anyhow::Result;
 use anyhow::anyhow;
 
-use crate::apply_receipt::ensure_transferable_handoff;
-use crate::apply_receipt::parse_handoff_response;
-use crate::apply_receipt::sanitize_failure;
+use crate::Daemon;
 use crate::apply_receipt::ApplyAttemptReceipt;
 use crate::apply_receipt::ApplyOutput;
 use crate::apply_receipt::ApplyPhase;
-use crate::apply_receipt::HandoffRpcError;
 use crate::apply_receipt::HandoffReceipt;
-use crate::Daemon;
+use crate::apply_receipt::HandoffRpcError;
+use crate::apply_receipt::ensure_transferable_handoff;
+use crate::apply_receipt::parse_handoff_response;
+use crate::apply_receipt::sanitize_failure;
 use crate::client;
 use crate::settings::DaemonSettings;
 
@@ -55,7 +55,10 @@ impl Daemon {
         if attempt.is_resolved() {
             return Ok(attempt.output(
                 &self.socket_path,
-                client::probe(&self.socket_path).await.ok().map(|info| info.app_server_version),
+                client::probe(&self.socket_path)
+                    .await
+                    .ok()
+                    .map(|info| info.app_server_version),
                 None,
             ));
         }
@@ -69,9 +72,7 @@ impl Daemon {
                 attempt.managed_codex_path.display(),
                 managed_codex_bin.display()
             );
-            return self
-                .mark_needs_attention(&mut attempt, failure)
-                .await;
+            return self.mark_needs_attention(&mut attempt, failure).await;
         }
         self.ensure_managed_codex_bin(managed_codex_bin)?;
 
@@ -155,11 +156,12 @@ impl Daemon {
                     "app server is running but is not managed by codex app-server daemon"
                 ));
             }
-            return Err(anyhow!("app server is not running; start it before applying an update"));
+            return Err(anyhow!(
+                "app server is not running; start it before applying an update"
+            ));
         };
 
-        let message =
-            client::request(&self.socket_path, PREPARE_METHOD, None).await?;
+        let message = client::request(&self.socket_path, PREPARE_METHOD, None).await?;
         let handoff = match parse_handoff_response(message, PREPARE_METHOD) {
             Ok(receipt) => receipt,
             Err(error) => {
@@ -168,7 +170,8 @@ impl Daemon {
                     let mut attempt = ApplyAttemptReceipt::new(
                         receipt,
                         managed_codex_bin.to_path_buf(),
-                        self.managed_codex_version_best_effort(managed_codex_bin).await,
+                        self.managed_codex_version_best_effort(managed_codex_bin)
+                            .await,
                     );
                     return self.mark_needs_attention(&mut attempt, failure).await;
                 }
@@ -179,7 +182,8 @@ impl Daemon {
             let mut attempt = ApplyAttemptReceipt::new(
                 handoff,
                 managed_codex_bin.to_path_buf(),
-                self.managed_codex_version_best_effort(managed_codex_bin).await,
+                self.managed_codex_version_best_effort(managed_codex_bin)
+                    .await,
             );
             return self
                 .mark_needs_attention(&mut attempt, sanitize_failure(&error.to_string()))
@@ -189,11 +193,14 @@ impl Daemon {
         let mut attempt = ApplyAttemptReceipt::new(
             handoff,
             managed_codex_bin.to_path_buf(),
-            self.managed_codex_version_best_effort(managed_codex_bin).await,
+            self.managed_codex_version_best_effort(managed_codex_bin)
+                .await,
         );
         attempt.save(&self.apply_receipt_file).await?;
         if let Err(error) = backend.stop().await {
-            return self.mark_needs_attention(&mut attempt, error.to_string()).await;
+            return self
+                .mark_needs_attention(&mut attempt, error.to_string())
+                .await;
         }
 
         attempt.phase = ApplyPhase::Starting;
@@ -202,7 +209,9 @@ impl Daemon {
             .start_managed_backend_with_bin(&settings, managed_codex_bin)
             .await
         {
-            return self.mark_needs_attention(&mut attempt, error.to_string()).await;
+            return self
+                .mark_needs_attention(&mut attempt, error.to_string())
+                .await;
         }
         let info = match self.wait_until_ready(managed_codex_bin).await {
             Ok(info) => info,
@@ -252,7 +261,10 @@ impl Daemon {
                     "prepared" | "draining" | "suspended" | "restoring"
                 ) {
                     return self
-                        .mark_needs_attention(&mut attempt, "coordinator returned an unknown handoff state")
+                        .mark_needs_attention(
+                            &mut attempt,
+                            "coordinator returned an unknown handoff state",
+                        )
                         .await;
                 }
             }
@@ -273,14 +285,11 @@ impl Daemon {
                 attempt.handoff = receipt;
                 attempt.phase = ApplyPhase::Applied;
                 attempt.failure = None;
-                attempt.managed_codex_version =
-                    self.managed_codex_version_best_effort(managed_codex_bin).await;
+                attempt.managed_codex_version = self
+                    .managed_codex_version_best_effort(managed_codex_bin)
+                    .await;
                 attempt.save(&self.apply_receipt_file).await?;
-                Ok(attempt.output(
-                    &self.socket_path,
-                    Some(info.app_server_version),
-                    None,
-                ))
+                Ok(attempt.output(&self.socket_path, Some(info.app_server_version), None))
             }
             Ok(receipt) => {
                 attempt.handoff = receipt;
@@ -330,12 +339,14 @@ impl Daemon {
         attempt.save(&self.apply_receipt_file).await?;
         Ok(attempt.output(
             &self.socket_path,
-            client::probe(&self.socket_path).await.ok().map(|info| info.app_server_version),
+            client::probe(&self.socket_path)
+                .await
+                .ok()
+                .map(|info| info.app_server_version),
             Some(failure),
         ))
     }
 }
-
 
 #[cfg(test)]
 #[path = "apply_tests.rs"]

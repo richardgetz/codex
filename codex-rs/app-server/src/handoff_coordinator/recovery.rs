@@ -1,21 +1,31 @@
-use super::{HandoffCoordinator, core_error, ordered_indices, parse_thread_id, receipt_from_journal};
+use super::HandoffCoordinator;
+use super::core_error;
+use super::ordered_indices;
+use super::parse_thread_id;
+use super::receipt_from_journal;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::ConnectionId;
-use codex_app_server_protocol::{
-    JSONRPCErrorError, ThreadHandoffRecoverParams, ThreadHandoffRecoverResponse,
-};
-use codex_core::{
-    CodexThread, HandoffBlocker, HandoffJournal, HandoffJournalState, HandoffNode,
-    HandoffNodeState, RecoverTurnRequest, StartIfIdleSubmission,
-};
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ThreadHandoffRecoverParams;
+use codex_app_server_protocol::ThreadHandoffRecoverResponse;
+use codex_core::CodexThread;
+use codex_core::HandoffBlocker;
+use codex_core::HandoffJournal;
+use codex_core::HandoffJournalState;
+use codex_core::HandoffNode;
+use codex_core::HandoffNodeState;
+use codex_core::RecoverTurnRequest;
+use codex_core::StartIfIdleSubmission;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::{Op, ThreadPauseState};
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadPauseState;
 use codex_rollout::InitialHistory;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -208,7 +218,7 @@ impl HandoffCoordinator {
             let thread_id = parse_thread_id(&node.thread_id)?;
             if let Err(error) = self
                 .thread_processor
-                .attach_recovery_listener(thread_id, connection_id.clone())
+                .attach_recovery_listener(thread_id, connection_id)
                 .await
             {
                 all_listeners_attached = false;
@@ -238,12 +248,13 @@ impl HandoffCoordinator {
                 let pause_applied = pause_submitted
                     && timeout(RECOVERY_ADMISSION_TIMEOUT, async {
                         loop {
-                            let is_paused = loaded.thread.activity_snapshot().await.into_iter().any(
-                                |activity| {
-                                    activity.thread_id == thread_id
-                                        && activity.pause_state == ThreadPauseState::Paused
-                                },
-                            );
+                            let is_paused =
+                                loaded.thread.activity_snapshot().await.into_iter().any(
+                                    |activity| {
+                                        activity.thread_id == thread_id
+                                            && activity.pause_state == ThreadPauseState::Paused
+                                    },
+                                );
                             if is_paused {
                                 break true;
                             }
@@ -272,14 +283,12 @@ impl HandoffCoordinator {
                 journal.update_node(&node.thread_id, state, Vec::new(), None);
                 journal.clear_node_turn_id(&node.thread_id);
             } else if node.was_paused
-                && matches!(node.state, HandoffNodeState::Restored | HandoffNodeState::Paused)
+                && matches!(
+                    node.state,
+                    HandoffNodeState::Restored | HandoffNodeState::Paused
+                )
             {
-                journal.update_node(
-                    &node.thread_id,
-                    HandoffNodeState::Paused,
-                    Vec::new(),
-                    None,
-                );
+                journal.update_node(&node.thread_id, HandoffNodeState::Paused, Vec::new(), None);
             }
         }
         if !all_pauses_restored {
@@ -412,8 +421,9 @@ impl HandoffCoordinator {
         if thread_is_loaded && !matches!(node.state, HandoffNodeState::Suspended) {
             return loaded_thread.ok_or(HandoffBlocker::Persistence);
         }
-        let multi_agent_version = if let Some(version) =
-            loaded_thread.as_ref().and_then(|thread| thread.multi_agent_version())
+        let multi_agent_version = if let Some(version) = loaded_thread
+            .as_ref()
+            .and_then(|thread| thread.multi_agent_version())
         {
             Some(version)
         } else {

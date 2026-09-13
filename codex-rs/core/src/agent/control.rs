@@ -67,10 +67,10 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
-use std::sync::Weak;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::watch;
@@ -78,9 +78,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 pub(crate) use self::execution::AgentExecutionGuard;
+use self::execution::AgentExecutionLimiter;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
-use self::execution::AgentExecutionLimiter;
 use self::residency::V2Residency;
 pub(crate) use self::worker_limit::TeamWorkerLease;
 use self::worker_limit::TeamWorkerLimiter;
@@ -425,7 +425,10 @@ impl AgentControl {
                             thread
                                 .session
                                 .input_queue
-                                .enqueue_team_lead_mailbox_communication(communication, start_options)
+                                .enqueue_team_lead_mailbox_communication(
+                                    communication,
+                                    start_options,
+                                )
                                 .await;
                         } else {
                             thread
@@ -1254,10 +1257,7 @@ impl AgentControl {
                 };
                 parent_thread
                     .inject_fragment_without_turn(
-                        SubagentNotification::new(
-                            child_reference.as_str(),
-                            status.clone(),
-                        ),
+                        SubagentNotification::new(child_reference.as_str(), status.clone()),
                         &handoff_admission,
                     )
                     .await;
@@ -1296,10 +1296,7 @@ impl AgentControl {
             };
             parent_thread
                 .inject_fragment_without_turn(
-                    SubagentNotification::new(
-                        child_reference.as_str(),
-                        status,
-                    ),
+                    SubagentNotification::new(child_reference.as_str(), status),
                     &handoff_admission,
                 )
                 .await;
@@ -1331,7 +1328,9 @@ impl AgentControl {
             author,
             recipient,
             Vec::new(),
-            format!("Worker {child_reference} completed with status {status:?}; review the result."),
+            format!(
+                "Worker {child_reference} completed with status {status:?}; review the result."
+            ),
             trigger_turn,
         );
         crate::session::persist_handoff_inter_agent_communication(
@@ -1372,7 +1371,9 @@ impl AgentControl {
             author,
             recipient,
             Vec::new(),
-            format!("Worker {child_reference} completed with status {status:?}; review the result."),
+            format!(
+                "Worker {child_reference} completed with status {status:?}; review the result."
+            ),
             trigger_turn,
         );
         let start_options = TurnStartOptions::default();

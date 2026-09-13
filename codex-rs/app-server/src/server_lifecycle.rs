@@ -30,7 +30,7 @@ pub(crate) async fn send_lifecycle_notification_and_wait(
         .filter_map(|(connection_id, connection_state)| {
             (connection_state.session.initialized()
                 && connection_state.session.experimental_api_enabled())
-                .then_some(*connection_id)
+            .then_some(*connection_id)
         })
         .collect::<Vec<_>>();
 

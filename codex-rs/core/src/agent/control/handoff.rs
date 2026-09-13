@@ -10,9 +10,9 @@
 
 use super::AgentControl;
 use codex_protocol::ThreadId;
-use std::collections::HashSet;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
@@ -56,10 +56,8 @@ impl Drop for HandoffGuard {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
         }
-        self.delivery_state.fetch_and(
-            !HANDOFF_DELIVERY_REGISTRATION_CLOSED,
-            Ordering::Release,
-        );
+        self.delivery_state
+            .fetch_and(!HANDOFF_DELIVERY_REGISTRATION_CLOSED, Ordering::Release);
         self.sealed.store(false, Ordering::Release);
         self.notify.notify_waiters();
     }
@@ -141,8 +139,7 @@ fn watcher_count(state: u64) -> u64 {
 fn try_register(state: &AtomicU64, increment: u64, count_mask: u64) -> bool {
     let mut current = state.load(Ordering::Acquire);
     loop {
-        if current & HANDOFF_DELIVERY_REGISTRATION_CLOSED != 0
-            || current & count_mask == count_mask
+        if current & HANDOFF_DELIVERY_REGISTRATION_CLOSED != 0 || current & count_mask == count_mask
         {
             return false;
         }
@@ -215,10 +212,7 @@ impl Drop for HandoffAdmissionGuard {
 impl AgentControl {
     /// Seal this root tree against new turn and spawn admission.
     pub(crate) fn begin_handoff(&self) -> CodexResult<HandoffGuard> {
-        if self
-            .handoff_admission_sealed
-            .swap(true, Ordering::AcqRel)
-        {
+        if self.handoff_admission_sealed.swap(true, Ordering::AcqRel) {
             return Err(CodexErr::InvalidRequest(
                 "a handoff is already in progress for this agent tree".to_string(),
             ));
@@ -240,14 +234,11 @@ impl AgentControl {
     /// receive `None` must use the durable manager-owned state database path and mark the handoff
     /// unsafe if that write fails; they must not enqueue an old-runtime-only fallback as success.
     pub(crate) fn begin_handoff_delivery(&self) -> Option<HandoffDeliveryGuard> {
-        try_register(
-            &self.handoff_delivery_state,
-            1,
-            HANDOFF_DELIVERY_COUNT_MASK,
-        )
-        .then(|| HandoffDeliveryGuard {
-            delivery_state: Arc::clone(&self.handoff_delivery_state),
-            notify: Arc::clone(&self.handoff_admission_notify),
+        try_register(&self.handoff_delivery_state, 1, HANDOFF_DELIVERY_COUNT_MASK).then(|| {
+            HandoffDeliveryGuard {
+                delivery_state: Arc::clone(&self.handoff_delivery_state),
+                notify: Arc::clone(&self.handoff_admission_notify),
+            }
         })
     }
 
@@ -275,9 +266,7 @@ impl AgentControl {
     /// Spawn callers hold a normal admission permit through this call, so the coordinator first
     /// drains all such callers and then atomically closes watcher registration. A `None` result is
     /// a fail-closed setup error; the caller must not start an untracked watcher during handoff.
-    pub(crate) fn begin_handoff_completion_watcher(
-        &self,
-    ) -> Option<HandoffCompletionWatcherGuard> {
+    pub(crate) fn begin_handoff_completion_watcher(&self) -> Option<HandoffCompletionWatcherGuard> {
         try_register(
             &self.handoff_delivery_state,
             HANDOFF_WATCHER_COUNT_INCREMENT,

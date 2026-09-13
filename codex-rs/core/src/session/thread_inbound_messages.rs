@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use async_channel::Sender;
 use crate::agent::control::AgentControl;
+use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
@@ -84,9 +84,7 @@ fn decode_inbound_message(payload_json: &str) -> anyhow::Result<DecodedInboundMe
     }) = serde_json::from_str(payload_json)
     {
         if schema_version != HANDOFF_INBOUND_MESSAGE_SCHEMA_VERSION {
-            anyhow::bail!(
-                "unsupported handoff inbound message schema version {schema_version}"
-            );
+            anyhow::bail!("unsupported handoff inbound message schema version {schema_version}");
         }
         return Ok(DecodedInboundMessage::InterAgentCommunication {
             communication,
@@ -94,9 +92,9 @@ fn decode_inbound_message(payload_json: &str) -> anyhow::Result<DecodedInboundMe
             team_lead_completion,
         });
     }
-    Ok(DecodedInboundMessage::UserInput(
-        serde_json::from_str(payload_json)?,
-    ))
+    Ok(DecodedInboundMessage::UserInput(serde_json::from_str(
+        payload_json,
+    )?))
 }
 
 pub(super) fn start_thread_inbound_message_poller(
@@ -145,14 +143,8 @@ pub(super) fn start_thread_inbound_message_poller(
                     continue;
                 }
             };
-            if !enqueue_claimed_messages(
-                thread_id,
-                &messages,
-                &state_db,
-                &tx_sub,
-                &agent_control,
-            )
-            .await
+            if !enqueue_claimed_messages(thread_id, &messages, &state_db, &tx_sub, &agent_control)
+                .await
             {
                 return;
             }
@@ -426,14 +418,10 @@ mod tests {
             .expect("claim handoff communication");
         let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
         let control = AgentControl::default();
-        assert!(enqueue_claimed_messages(
-            target_thread_id,
-            &claimed,
-            &runtime,
-            &tx_sub,
-            &control,
-        )
-        .await);
+        assert!(
+            enqueue_claimed_messages(target_thread_id, &claimed, &runtime, &tx_sub, &control,)
+                .await
+        );
         let submission = rx_sub.recv().await.expect("receive handoff communication");
         assert_eq!(submission.id, message_id);
         match submission.op {
@@ -442,7 +430,10 @@ mod tests {
                 start_options: recovered_options,
             } => {
                 assert_eq!(recovered, communication);
-                assert_eq!(recovered_options.parent_turn_id, start_options.parent_turn_id);
+                assert_eq!(
+                    recovered_options.parent_turn_id,
+                    start_options.parent_turn_id
+                );
                 assert_eq!(recovered_options.root_turn_id, start_options.root_turn_id);
             }
             other => panic!("expected Team Lead completion, got {other:?}"),
@@ -470,14 +461,7 @@ mod tests {
             .expect("claim unsupported message");
         let (tx_sub, _rx_sub) = async_channel::bounded(/*cap*/ 1);
         let control = AgentControl::default();
-        assert!(enqueue_claimed_messages(
-            thread_id,
-            &claimed,
-            &runtime,
-            &tx_sub,
-            &control,
-        )
-        .await);
+        assert!(enqueue_claimed_messages(thread_id, &claimed, &runtime, &tx_sub, &control,).await);
         assert!(control.handoff_inbound_unsupported());
         let pending = runtime
             .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
@@ -590,14 +574,7 @@ mod tests {
             tokio::task::yield_now().await;
             drop(handoff);
         });
-        assert!(enqueue_claimed_messages(
-            thread_id,
-            &claimed,
-            &runtime,
-            &tx_sub,
-            &control,
-        )
-        .await);
+        assert!(enqueue_claimed_messages(thread_id, &claimed, &runtime, &tx_sub, &control,).await);
         release_handoff.await.expect("release handoff");
         assert!(rx_sub.try_recv().is_err());
 
@@ -637,12 +614,7 @@ mod tests {
             .begin_recovery_pending()
             .expect("begin failed recovery attempt");
         let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
-        start_thread_inbound_message_poller(
-            thread_id,
-            runtime.clone(),
-            tx_sub,
-            control,
-        );
+        start_thread_inbound_message_poller(thread_id, runtime.clone(), tx_sub, control);
 
         tokio::time::sleep(Duration::from_millis(2200)).await;
         let claimed = runtime
@@ -691,5 +663,4 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
-
 }

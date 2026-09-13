@@ -933,7 +933,9 @@ impl Session {
                 self.mark_interrupted();
             }
             let handoff_terminal_delivery = if has_task {
-                self.services.agent_control.begin_handoff_terminal_delivery()
+                self.services
+                    .agent_control
+                    .begin_handoff_terminal_delivery()
             } else {
                 None
             };
@@ -1052,7 +1054,11 @@ impl Session {
                 .as_ref()
                 .and_then(|active_turn| active_turn.task.as_ref())
                 .filter(|task| Arc::ptr_eq(&task.turn_context, &turn_context))
-                .and_then(|_| self.services.agent_control.begin_handoff_terminal_delivery())
+                .and_then(|_| {
+                    self.services
+                        .agent_control
+                        .begin_handoff_terminal_delivery()
+                })
         };
         if handoff_terminal_delivery.is_none()
             && self.services.agent_control.handoff_admission_sealed()
@@ -1353,7 +1359,6 @@ impl Session {
             self.maybe_start_turn_for_pending_work().await;
         }
     }
-
 
     pub(crate) async fn close_unified_exec_processes(&self) {
         self.services

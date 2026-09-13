@@ -139,17 +139,13 @@ impl Session {
         kind: ActivityOperationKind,
     ) -> CodexResult<ActivityOperationGuard> {
         loop {
-            let _admission = self
-                .services
-                .agent_control
-                .begin_handoff_admission()?;
+            let _admission = self.services.agent_control.begin_handoff_admission()?;
             if kind == ActivityOperationKind::Model {
                 // Increment the model counter before the shared activity slot so a preflight
                 // cannot observe an admitted stream as an unknown tool operation between those
                 // two atomic updates. The handoff permit closes the admission race while both
                 // counters are updated.
-                self.model_activity_in_flight
-                    .fetch_add(1, Ordering::AcqRel);
+                self.model_activity_in_flight.fetch_add(1, Ordering::AcqRel);
             }
             let admitted = self
                 .services
@@ -165,8 +161,7 @@ impl Session {
                 });
             }
             if kind == ActivityOperationKind::Model {
-                self.model_activity_in_flight
-                    .fetch_sub(1, Ordering::AcqRel);
+                self.model_activity_in_flight.fetch_sub(1, Ordering::AcqRel);
             }
             if self.services.agent_control.handoff_admission_sealed() {
                 return Err(CodexErr::TurnAborted);
@@ -183,9 +178,7 @@ impl Session {
 
     /// Register a non-wait tool dispatch before its task is spawned so dependency-free handoffs
     /// observe siblings that are still waiting for readiness or the parallel execution gate.
-    pub(crate) fn begin_handoff_dispatch(
-        self: &Arc<Self>,
-    ) -> CodexResult<HandoffDispatchGuard> {
+    pub(crate) fn begin_handoff_dispatch(self: &Arc<Self>) -> CodexResult<HandoffDispatchGuard> {
         // Registration itself is a short admission boundary. The guard then remains alive until
         // the sibling reaches a real activity operation or exits, so handoff can classify it as
         // pending dispatch without waiting for the tool's full execution.

@@ -1,5 +1,5 @@
-use super::rejects_new_work_method;
 use super::ServerLifecycle;
+use super::rejects_new_work_method;
 use codex_app_server_protocol::ServerLifecyclePhase;
 use pretty_assertions::assert_eq;
 
@@ -17,7 +17,9 @@ fn starts_ready_with_a_process_identity() {
 #[test]
 fn drain_and_force_share_one_transition_id() {
     let lifecycle = ServerLifecycle::new();
-    let draining = lifecycle.begin_drain().expect("first drain should transition");
+    let draining = lifecycle
+        .begin_drain()
+        .expect("first drain should transition");
     let duplicate = lifecycle.begin_drain();
     let forced = lifecycle.force_drain().expect("force should transition");
 
@@ -73,5 +75,7 @@ fn only_new_work_methods_are_rejected_during_drain() {
     assert!(rejects_new_work_method("mcpServer/tool/call"));
     assert!(!rejects_new_work_method("turn/interrupt"));
     assert!(!rejects_new_work_method("thread/read"));
-    assert!(!rejects_new_work_method("item/commandExecution/requestApproval"));
+    assert!(!rejects_new_work_method(
+        "item/commandExecution/requestApproval"
+    ));
 }

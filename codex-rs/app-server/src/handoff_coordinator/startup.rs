@@ -1,4 +1,6 @@
-use super::{HandoffCoordinator, HandoffJournal, HandoffJournalState};
+use super::HandoffCoordinator;
+use super::HandoffJournal;
+use super::HandoffJournalState;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::JSONRPCErrorError;
 use std::time::Duration;
@@ -20,10 +22,7 @@ impl HandoffCoordinator {
     /// The probe is cached after the first request so normal traffic does not turn journal
     /// inspection into a polling loop. Status, reads, and the explicit handoff recovery route
     /// remain available while the replacement graph is being restored.
-    pub(crate) async fn guard_request_method(
-        &self,
-        method: &str,
-    ) -> Result<(), JSONRPCErrorError> {
+    pub(crate) async fn guard_request_method(&self, method: &str) -> Result<(), JSONRPCErrorError> {
         if recovery_read_method(method) {
             return Ok(());
         }

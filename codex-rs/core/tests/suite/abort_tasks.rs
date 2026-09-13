@@ -6,8 +6,8 @@ use codex_history::RolloutItem;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -80,7 +80,10 @@ async fn handoff_fence_rejects_new_turns_until_released() {
         .build_with_auto_env(&server)
         .await
         .expect("start persistent root thread");
-    let guard = fixture.codex.begin_handoff().expect("seal handoff admission");
+    let guard = fixture
+        .codex
+        .begin_handoff()
+        .expect("seal handoff admission");
 
     let error = fixture
         .codex

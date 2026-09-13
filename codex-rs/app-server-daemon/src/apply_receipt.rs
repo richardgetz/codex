@@ -100,7 +100,10 @@ impl ApplyAttemptReceipt {
     pub(crate) async fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await.with_context(|| {
-                format!("failed to create apply receipt directory {}", parent.display())
+                format!(
+                    "failed to create apply receipt directory {}",
+                    parent.display()
+                )
             })?;
         }
         let contents =
@@ -134,12 +137,18 @@ impl ApplyAttemptReceipt {
             fs::File::open(parent)
                 .await
                 .with_context(|| {
-                    format!("failed to open apply receipt directory {}", parent.display())
+                    format!(
+                        "failed to open apply receipt directory {}",
+                        parent.display()
+                    )
                 })?
                 .sync_all()
                 .await
                 .with_context(|| {
-                    format!("failed to sync apply receipt directory {}", parent.display())
+                    format!(
+                        "failed to sync apply receipt directory {}",
+                        parent.display()
+                    )
                 })?;
         }
 
@@ -194,10 +203,7 @@ impl std::fmt::Display for HandoffRpcError {
 impl std::error::Error for HandoffRpcError {}
 
 fn parse_handoff_receipt(value: serde_json::Value) -> Result<HandoffReceipt> {
-    let value = value
-        .get("receipt")
-        .cloned()
-        .unwrap_or(value);
+    let value = value.get("receipt").cloned().unwrap_or(value);
     serde_json::from_value(value).context("handoff response omitted receipt")
 }
 
@@ -252,12 +258,12 @@ pub(crate) fn ensure_transferable_handoff(receipt: &HandoffReceipt) -> Result<()
         match state {
             "suspended" if turn_id.is_some_and(|turn_id| !turn_id.is_empty()) => {}
             "notActive" if turn_id.is_none() => {}
-            "suspended" => anyhow::bail!(
-                "handoff node {thread_id} is suspended without an exact turn id"
-            ),
-            "notActive" => anyhow::bail!(
-                "handoff node {thread_id} is notActive but still has a turn id"
-            ),
+            "suspended" => {
+                anyhow::bail!("handoff node {thread_id} is suspended without an exact turn id")
+            }
+            "notActive" => {
+                anyhow::bail!("handoff node {thread_id} is notActive but still has a turn id")
+            }
             _ => anyhow::bail!("handoff node {thread_id} has non-transferable state {state}"),
         }
     }
@@ -267,11 +273,16 @@ pub(crate) fn ensure_transferable_handoff(receipt: &HandoffReceipt) -> Result<()
 pub(crate) fn sanitize_failure(error: &str) -> String {
     error
         .chars()
-        .map(|character| if character.is_control() { ' ' } else { character })
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
         .take(512)
         .collect()
 }
-
 
 #[cfg(test)]
 #[path = "apply_receipt_tests.rs"]

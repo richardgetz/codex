@@ -316,8 +316,8 @@ enum LeadIdleRearm {
     None,
     AfterTeamEnable,
 }
-use self::thread_inbound_messages::start_thread_inbound_message_poller;
 pub(crate) use self::thread_inbound_messages::persist_handoff_inter_agent_communication;
+use self::thread_inbound_messages::start_thread_inbound_message_poller;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 use self::turn::agent_message_text;
@@ -3144,8 +3144,9 @@ impl Session {
             &legacy_source,
             EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
         ) {
-            let delivery = self.services.agent_control.begin_handoff_terminal_delivery();
-            delivery
+            self.services
+                .agent_control
+                .begin_handoff_terminal_delivery()
         } else {
             None
         };

@@ -1375,13 +1375,17 @@ impl ThreadRequestProcessor {
             .upsert_thread_silently(&conversation_id.to_string())
             .await;
         match self
-            .ensure_conversation_listener(conversation_id, connection_id, /*raw_events_enabled*/ false)
+            .ensure_conversation_listener(
+                conversation_id,
+                connection_id,
+                /*raw_events_enabled*/ false,
+            )
             .await?
         {
             EnsureConversationListenerResult::Attached => Ok(()),
-            EnsureConversationListenerResult::ConnectionClosed => Err(invalid_request(
-                format!("connection closed before recovered thread {conversation_id} could be attached"),
-            )),
+            EnsureConversationListenerResult::ConnectionClosed => Err(invalid_request(format!(
+                "connection closed before recovered thread {conversation_id} could be attached"
+            ))),
         }
     }
 

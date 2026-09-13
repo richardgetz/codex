@@ -1704,9 +1704,7 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
     let message = err.to_string();
     let inbound_message_id = matches!(
         &sub.op,
-        Op::UserInput { .. }
-            | Op::InterAgentCommunication { .. }
-            | Op::TeamLeadCompletion { .. }
+        Op::UserInput { .. } | Op::InterAgentCommunication { .. } | Op::TeamLeadCompletion { .. }
     )
     .then(|| sub.id.clone());
     let mut inbound_message_requeued = false;
@@ -1726,11 +1724,14 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
             let _ = reply.send(Err(err));
         }
         Op::TurnSettings { reply, .. } => {
-            let _ = reply.send(codex_protocol::protocol::TurnSettingsUpdateOutcome::Rejected {
-                reason: message,
-            });
+            let _ = reply.send(
+                codex_protocol::protocol::TurnSettingsUpdateOutcome::Rejected { reason: message },
+            );
         }
-        Op::InterAgentCommunication { communication, start_options } => {
+        Op::InterAgentCommunication {
+            communication,
+            start_options,
+        } => {
             if inbound_message_requeued
                 || persist_rejected_inter_agent_communication(
                     sess,
@@ -1748,7 +1749,10 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
                 debug!(submission_id = %sub.id, "retained inter-agent message in old mailbox after durable fallback failure");
             }
         }
-        Op::TeamLeadCompletion { communication, start_options } => {
+        Op::TeamLeadCompletion {
+            communication,
+            start_options,
+        } => {
             if inbound_message_requeued
                 || persist_rejected_inter_agent_communication(
                     sess,

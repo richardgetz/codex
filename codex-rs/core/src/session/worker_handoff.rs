@@ -122,7 +122,11 @@ impl Session {
         let child_thread_id = self.thread_id;
         tokio::spawn(async move {
             if let Err(err) = agent_control
-                .notify_parent_of_dependency_free_wait(child_thread_id, &session_source, handoff_admission)
+                .notify_parent_of_dependency_free_wait(
+                    child_thread_id,
+                    &session_source,
+                    handoff_admission,
+                )
                 .await
             {
                 tracing::warn!(

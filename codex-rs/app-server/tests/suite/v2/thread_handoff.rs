@@ -153,10 +153,12 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
     )
     .await??;
     assert_eq!(blocked_start_error.error.code, -32600);
-    assert!(blocked_start_error
-        .error
-        .message
-        .contains("recovery is pending"));
+    assert!(
+        blocked_start_error
+            .error
+            .message
+            .contains("recovery is pending")
+    );
 
     let recover_request = replacement
         .send_raw_request(

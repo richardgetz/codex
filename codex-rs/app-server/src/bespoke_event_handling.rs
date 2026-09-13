@@ -213,10 +213,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // queued. The shutdown loop uses this count to decide when it can disconnect
             // clients; updating it first could drop the queued `turn/completed` notification.
             thread_watch_manager
-                .note_turn_completed_for_turn(
-                    &conversation_id.to_string(),
-                    &completed_turn_id,
-                )
+                .note_turn_completed_for_turn(&conversation_id.to_string(), &completed_turn_id)
                 .await;
             clear_router_tick(&thread_state).await;
         }
@@ -1300,10 +1297,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // See the TurnComplete branch above: enqueue the terminal event before allowing
             // graceful shutdown to observe this thread as idle.
             thread_watch_manager
-                .note_turn_interrupted_for_turn(
-                    &conversation_id.to_string(),
-                    &interrupted_turn_id,
-                )
+                .note_turn_interrupted_for_turn(&conversation_id.to_string(), &interrupted_turn_id)
                 .await;
             clear_router_tick(&thread_state).await;
         }

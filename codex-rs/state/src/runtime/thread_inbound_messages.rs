@@ -250,20 +250,24 @@ mod tests {
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].id, message_id);
 
-        assert!(runtime
-            .unclaim_thread_inbound_message(&message_id)
-            .await
-            .expect("unclaim message"));
+        assert!(
+            runtime
+                .unclaim_thread_inbound_message(&message_id)
+                .await
+                .expect("unclaim message")
+        );
         let reclaimed = runtime
             .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
             .await
             .expect("reclaim message");
         assert_eq!(reclaimed.len(), 1);
         assert_eq!(reclaimed[0].id, message_id);
-        assert!(!runtime
-            .unclaim_thread_inbound_message(&message_id)
-            .await
-            .expect("unclaim delivered message"));
+        assert!(
+            !runtime
+                .unclaim_thread_inbound_message(&message_id)
+                .await
+                .expect("unclaim delivered message")
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -288,24 +292,28 @@ mod tests {
             .await
             .expect("insert thread metadata");
         let message_id = "handoff-message-105".to_string();
-        assert!(runtime
-            .enqueue_thread_inbound_message_with_id(
-                message_id.clone(),
-                thread_id,
-                None,
-                r#"{"type":"interAgentCommunication"}"#.to_string(),
-            )
-            .await
-            .expect("insert explicit message"));
-        assert!(!runtime
-            .enqueue_thread_inbound_message_with_id(
-                message_id.clone(),
-                thread_id,
-                None,
-                "different payload".to_string(),
-            )
-            .await
-            .expect("ignore duplicate explicit message"));
+        assert!(
+            runtime
+                .enqueue_thread_inbound_message_with_id(
+                    message_id.clone(),
+                    thread_id,
+                    None,
+                    r#"{"type":"interAgentCommunication"}"#.to_string(),
+                )
+                .await
+                .expect("insert explicit message")
+        );
+        assert!(
+            !runtime
+                .enqueue_thread_inbound_message_with_id(
+                    message_id.clone(),
+                    thread_id,
+                    None,
+                    "different payload".to_string(),
+                )
+                .await
+                .expect("ignore duplicate explicit message")
+        );
         let claimed = runtime
             .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
             .await
@@ -319,5 +327,4 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
-
 }

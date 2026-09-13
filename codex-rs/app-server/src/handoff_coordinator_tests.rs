@@ -3,7 +3,10 @@ use super::node_depth;
 use super::ordered_indices;
 use super::receipt_from_journal;
 use codex_app_server_protocol::ThreadHandoffNodeState;
-use codex_core::{HandoffJournal, HandoffJournalState, HandoffNode, HandoffNodeState};
+use codex_core::HandoffJournal;
+use codex_core::HandoffJournalState;
+use codex_core::HandoffNode;
+use codex_core::HandoffNodeState;
 use pretty_assertions::assert_eq;
 
 fn node(

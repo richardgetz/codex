@@ -12,7 +12,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::io;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
@@ -170,7 +171,11 @@ impl HandoffJournal {
         blockers: Vec<HandoffBlocker>,
         turn_id: Option<String>,
     ) -> bool {
-        let Some(node) = self.nodes.iter_mut().find(|node| node.thread_id == thread_id) else {
+        let Some(node) = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.thread_id == thread_id)
+        else {
             return false;
         };
         node.state = state;
@@ -187,7 +192,11 @@ impl HandoffJournal {
     /// callers update only state/blockers. Coordinators must call this explicit method after a
     /// `NotActive` result so a replacement never attempts to recover a completed turn.
     pub fn clear_node_turn_id(&mut self, thread_id: &str) -> bool {
-        let Some(node) = self.nodes.iter_mut().find(|node| node.thread_id == thread_id) else {
+        let Some(node) = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.thread_id == thread_id)
+        else {
             return false;
         };
         node.turn_id = None;
@@ -217,7 +226,8 @@ impl HandoffJournal {
         let mut journals = Vec::with_capacity(paths.len());
         for path in paths {
             let bytes = fs::read(path).await?;
-            let journal: HandoffJournal = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            let journal: HandoffJournal =
+                serde_json::from_slice(&bytes).map_err(io::Error::other)?;
             if journal.schema_version != HANDOFF_SCHEMA_VERSION {
                 return Err(io::Error::new(
                     ErrorKind::InvalidData,
@@ -381,7 +391,13 @@ mod tests {
         let mut journal = HandoffJournal::begin(home.path(), "test", vec![node("thread")])
             .await
             .expect("begin handoff");
-        assert_eq!(HandoffJournal::load_pending(home.path()).await.unwrap().len(), 1);
+        assert_eq!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(journal.update_node(
             "thread",
             HandoffNodeState::NeedsAttention,
@@ -404,10 +420,15 @@ mod tests {
             .await
             .expect("begin handoff");
         journal.set_state(HandoffJournalState::Completed);
-        journal.persist(home.path()).await.expect("persist complete");
-        assert!(HandoffJournal::load_pending(home.path())
+        journal
+            .persist(home.path())
             .await
-            .expect("load pending")
-            .is_empty());
+            .expect("persist complete");
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending")
+                .is_empty()
+        );
     }
 }

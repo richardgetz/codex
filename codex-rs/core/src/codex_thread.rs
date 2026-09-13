@@ -373,7 +373,12 @@ impl CodexThread {
     ) -> CodexResult<String> {
         let _handoff_admission = op
             .requires_handoff_admission()
-            .then(|| self.session.services.agent_control.begin_handoff_admission())
+            .then(|| {
+                self.session
+                    .services
+                    .agent_control
+                    .begin_handoff_admission()
+            })
             .transpose()?;
         if matches!(
             &op,
@@ -408,10 +413,7 @@ impl CodexThread {
     /// cannot accept a stale exact-turn restart; a replacement runtime has a
     /// new, unsealed control handle and still enters recovery behind its pause gate.
     pub fn begin_handoff(&self) -> CodexResult<crate::HandoffGuard> {
-        self.session
-            .services
-            .agent_control
-            .begin_handoff()
+        self.session.services.agent_control.begin_handoff()
     }
 
     /// Admit one direct app-server operation before a handoff seal.
@@ -494,7 +496,11 @@ impl CodexThread {
         // Recovery is exact-turn and does not replay user input, but an old owner must not accept
         // a stale recovery request after its handoff fence seals. Replacement runtimes have a new
         // control handle and therefore pass this admission normally.
-        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()?;
         self.session
             .services
             .agent_control
@@ -588,9 +594,7 @@ impl CodexThread {
     /// for an owner that has already sealed the shared root admission fence and
     /// drained descendants child-first. Core still refuses unsafe process-local
     /// callbacks and external operations before cancellation.
-    pub async fn suspend_turn_and_shutdown_for_handoff(
-        &self,
-    ) -> CodexResult<SuspendTurnOutcome> {
+    pub async fn suspend_turn_and_shutdown_for_handoff(&self) -> CodexResult<SuspendTurnOutcome> {
         let (reply, result) = oneshot::channel();
         self.io
             .tx_sub
@@ -707,7 +711,11 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
-        let _handoff_admission = match self.session.services.agent_control.begin_handoff_admission()
+        let _handoff_admission = match self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()
         {
             Ok(admission) => admission,
             Err(_) => return Err(items),
@@ -816,7 +824,12 @@ impl CodexThread {
         let _handoff_admission = sub
             .op
             .requires_handoff_admission()
-            .then(|| self.session.services.agent_control.begin_handoff_admission())
+            .then(|| {
+                self.session
+                    .services
+                    .agent_control
+                    .begin_handoff_admission()
+            })
             .transpose()?;
         if let Op::SetMemoryAccessPolicy { policy } = &sub.op {
             self.session
@@ -936,7 +949,11 @@ impl CodexThread {
 
     /// Append raw Responses API items to the thread's model-visible history.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
-        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()?;
         self.inject_response_items_for_turn(items).await?;
         self.session.flush_rollout().await?;
         Ok(())
@@ -951,7 +968,11 @@ impl CodexThread {
         &self,
         items: Vec<ResponseItem>,
     ) -> CodexResult<()> {
-        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()?;
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
                 "items must not be empty".to_string(),
@@ -1339,7 +1360,11 @@ impl CodexThread {
     }
 
     pub async fn increment_out_of_band_elicitation_count(&self) -> CodexResult<i64> {
-        let _handoff_admission = self.session.services.agent_control.begin_handoff_admission()?;
+        let _handoff_admission = self
+            .session
+            .services
+            .agent_control
+            .begin_handoff_admission()?;
         let mut elicitations = self.out_of_band_elicitations.lock().await;
         let incremented = elicitations.count.checked_add(1).ok_or_else(|| {
             CodexErr::Fatal("out-of-band elicitation count overflowed".to_string())

@@ -4,9 +4,9 @@ use super::connection_handling_websocket::DEFAULT_READ_TIMEOUT;
 use super::connection_handling_websocket::WsClient;
 use super::connection_handling_websocket::connect_websocket;
 use super::connection_handling_websocket::create_config_toml;
-use super::connection_handling_websocket::read_response_for_id;
 use super::connection_handling_websocket::read_error_for_id;
 use super::connection_handling_websocket::read_notification_for_method;
+use super::connection_handling_websocket::read_response_for_id;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
 use anyhow::Context;
@@ -259,8 +259,8 @@ async fn websocket_transport_delivers_forced_lifecycle_before_disconnect() -> Re
 
 #[cfg(unix)]
 #[tokio::test]
-async fn websocket_transport_reports_lifecycle_and_preserves_read_and_interrupt_during_drain(
-) -> Result<()> {
+async fn websocket_transport_reports_lifecycle_and_preserves_read_and_interrupt_during_drain()
+-> Result<()> {
     let GracefulCtrlCFixture {
         _codex_home,
         _server,

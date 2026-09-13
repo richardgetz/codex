@@ -1,17 +1,26 @@
-use super::{ActiveHandoff, HandoffCoordinator, core_error, ordered_indices, parse_thread_id};
-use crate::error_code::{internal_error, invalid_params};
-use codex_app_server_protocol::{
-    JSONRPCErrorError, ThreadHandoffPrepareParams, ThreadHandoffPrepareResponse,
-};
-use codex_core::{
-    CodexThread, HandoffBlocker, HandoffJournal, HandoffJournalState, HandoffNode,
-    HandoffNodeState, SuspendTurnOutcome,
-};
+use super::ActiveHandoff;
+use super::HandoffCoordinator;
+use super::core_error;
+use super::ordered_indices;
+use super::parse_thread_id;
+use crate::error_code::internal_error;
+use crate::error_code::invalid_params;
+use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::ThreadHandoffPrepareParams;
+use codex_app_server_protocol::ThreadHandoffPrepareResponse;
+use codex_core::CodexThread;
+use codex_core::HandoffBlocker;
+use codex_core::HandoffJournal;
+use codex_core::HandoffJournalState;
+use codex_core::HandoffNode;
+use codex_core::HandoffNodeState;
+use codex_core::SuspendTurnOutcome;
 use codex_protocol::ThreadId;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 const HANDOFF_BARRIER_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -166,7 +175,7 @@ impl HandoffCoordinator {
             };
             let thread = match self.thread_manager.get_thread(thread_id_value).await {
                 Ok(thread) => thread,
-                Err(error) => {
+                Err(_error) => {
                     journal.update_node(
                         &thread_id,
                         HandoffNodeState::NeedsAttention,
@@ -201,7 +210,7 @@ impl HandoffCoordinator {
                     );
                 }
                 Ok(SuspendTurnOutcome::NotActive) => {
-                    if let Err(error) = thread.shutdown_and_wait().await {
+                    if let Err(_error) = thread.shutdown_and_wait().await {
                         journal.update_node(
                             &thread_id,
                             HandoffNodeState::NeedsAttention,
@@ -520,10 +529,7 @@ impl HandoffCoordinator {
             {
                 blockers.push(HandoffBlocker::ParentUnavailable);
             }
-            let fallback_root = source
-                .parent_thread_id()
-                .unwrap_or(*thread_id)
-                .to_string();
+            let fallback_root = source.parent_thread_id().unwrap_or(*thread_id).to_string();
             nodes.push(HandoffNode {
                 thread_id: thread_id.to_string(),
                 root_thread_id: chain_root
@@ -554,12 +560,17 @@ impl HandoffCoordinator {
                 thread.id()
             ))
         })?;
-        let stored = thread.read_thread(/*include_archived*/ true, /*include_history*/ false).await.map_err(|error| {
-            internal_error(format!(
-                "could not read materialized rollout for {}: {error}",
-                thread.id()
-            ))
-        })?;
+        let stored = thread
+            .read_thread(
+                /*include_archived*/ true, /*include_history*/ false,
+            )
+            .await
+            .map_err(|error| {
+                internal_error(format!(
+                    "could not read materialized rollout for {}: {error}",
+                    thread.id()
+                ))
+            })?;
         let path = stored
             .rollout_path
             .or_else(|| thread.rollout_path())

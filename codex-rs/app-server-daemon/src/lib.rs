@@ -18,6 +18,8 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+pub use apply_receipt::ApplyOutput;
+pub use apply_receipt::ApplyStatus;
 pub use backend::BackendKind;
 use backend::BackendPaths;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
@@ -29,7 +31,6 @@ use managed_install::managed_codex_bin;
 use managed_install::managed_codex_version;
 use serde::Serialize;
 use settings::DaemonSettings;
-pub use apply_receipt::{ApplyOutput, ApplyStatus};
 use tokio::time::sleep;
 
 const START_POLL_INTERVAL: Duration = Duration::from_millis(50);

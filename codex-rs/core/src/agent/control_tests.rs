@@ -1250,10 +1250,9 @@ async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     assert_eq!(payload["type"], "interAgentCommunication");
     assert_eq!(payload["schema_version"], 1);
     assert_eq!(payload["team_lead_completion"], false);
-    let persisted_communication: InterAgentCommunication = serde_json::from_value(
-        payload["communication"].clone(),
-    )
-    .expect("durable envelope should preserve the communication");
+    let persisted_communication: InterAgentCommunication =
+        serde_json::from_value(payload["communication"].clone())
+            .expect("durable envelope should preserve the communication");
     assert_eq!(persisted_communication, communication);
 }
 
@@ -4014,19 +4013,21 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         .expect("tester thread should exist");
     let worker_path = AgentPath::root().join("worker_a").expect("worker path");
     let tester_path = worker_path.join("tester").expect("tester path");
-    harness.control.maybe_start_completion_watcher(
-        tester_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id: worker_thread_id,
-            depth: 2,
-            agent_path: Some(tester_path.clone()),
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        tester_path.to_string(),
-        Some(tester_path.clone()),
-    )
-    .await;
+    harness
+        .control
+        .maybe_start_completion_watcher(
+            tester_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(tester_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            tester_path.to_string(),
+            Some(tester_path.clone()),
+        )
+        .await;
     let tester_turn = tester_thread.session.new_default_turn().await;
     tester_thread
         .session
@@ -4100,13 +4101,15 @@ async fn memory_subagent_completion_does_not_notify_parent() {
     let (memory_thread_id, memory_thread) = harness.start_thread().await;
     let captured_before = harness.manager.captured_ops().len();
 
-    harness.control.maybe_start_completion_watcher(
-        memory_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::MemoryExtraction)),
-        "memory".to_string(),
-        Some(AgentPath::morpheus()),
-    )
-    .await;
+    harness
+        .control
+        .maybe_start_completion_watcher(
+            memory_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::MemoryExtraction)),
+            "memory".to_string(),
+            Some(AgentPath::morpheus()),
+        )
+        .await;
     let memory_turn = memory_thread.session.new_default_turn().await;
     memory_thread
         .session
@@ -4135,18 +4138,21 @@ async fn completion_watcher_ignores_handoff_shutdown() {
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let (child_thread_id, child_thread) = harness.start_thread().await;
 
-    harness.control.maybe_start_completion_watcher(
-        child_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 1,
-            agent_path: None,
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        child_thread_id.to_string(),
-        /*child_agent_path*/ None,
-    ).await;
+    harness
+        .control
+        .maybe_start_completion_watcher(
+            child_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            child_thread_id.to_string(),
+            /*child_agent_path*/ None,
+        )
+        .await;
     harness.control.mark_handoff_suspended(child_thread_id);
     send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
 
@@ -4164,18 +4170,21 @@ async fn completion_watcher_forwards_natural_shutdown() {
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let (child_thread_id, child_thread) = harness.start_thread().await;
 
-    harness.control.maybe_start_completion_watcher(
-        child_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 1,
-            agent_path: None,
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        child_thread_id.to_string(),
-        /*child_agent_path*/ None,
-    ).await;
+    harness
+        .control
+        .maybe_start_completion_watcher(
+            child_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            child_thread_id.to_string(),
+            /*child_agent_path*/ None,
+        )
+        .await;
     send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
 
     assert!(wait_for_subagent_notification(&parent_thread).await);
@@ -4187,19 +4196,21 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let child_thread_id = ThreadId::new();
 
-    harness.control.maybe_start_completion_watcher(
-        child_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 1,
-            agent_path: None,
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        child_thread_id.to_string(),
-        /*child_agent_path*/ None,
-    )
-    .await;
+    harness
+        .control
+        .maybe_start_completion_watcher(
+            child_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            child_thread_id.to_string(),
+            /*child_agent_path*/ None,
+        )
+        .await;
 
     assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
 

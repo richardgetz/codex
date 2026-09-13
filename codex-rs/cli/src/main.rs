@@ -1436,15 +1436,18 @@ async fn cli_main(
                         print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
                     }
                     AppServerDaemonSubcommand::Apply => {
-                        print_app_server_apply_output(codex_app_server_daemon::apply().await?).await?;
+                        print_app_server_apply_output(codex_app_server_daemon::apply().await?)
+                            .await?;
                     }
                     AppServerDaemonSubcommand::Recover => {
-                        print_app_server_apply_output(codex_app_server_daemon::recover().await?).await?;
+                        print_app_server_apply_output(codex_app_server_daemon::recover().await?)
+                            .await?;
                     }
                     AppServerDaemonSubcommand::ApplyStatus => {
                         print_app_server_apply_output(
                             codex_app_server_daemon::apply_status().await?,
-                        ).await?;
+                        )
+                        .await?;
                     }
                     AppServerDaemonSubcommand::EnableRemoteControl => {
                         print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
@@ -5132,10 +5135,8 @@ mod tests {
             }))
         ));
         assert!(matches!(
-            app_server_from_args(
-                ["codex", "app-server", "daemon", "apply-status"].as_ref()
-            )
-            .subcommand,
+            app_server_from_args(["codex", "app-server", "daemon", "apply-status"].as_ref())
+                .subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
                 subcommand: AppServerDaemonSubcommand::ApplyStatus
             }))

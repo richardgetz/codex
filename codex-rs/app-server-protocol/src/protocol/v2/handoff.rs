@@ -140,7 +140,9 @@ pub struct ThreadHandoffRecoverResponse {
 #[cfg(test)]
 mod tests {
     use super::ThreadHandoffPrepareParams;
-    use crate::{ClientRequest, JSONRPCRequest, RequestId};
+    use crate::ClientRequest;
+    use crate::JSONRPCRequest;
+    use crate::RequestId;
 
     #[test]
     fn prepare_request_defaults_when_params_are_omitted() {
