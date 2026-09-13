@@ -94,6 +94,31 @@ See [Fork npm releases](./fork-release.md) for the release workflow details.
   - `codex --disable enable_mcp_approvals`
 - `codex features list` marks Rick-owned features with `(rick)`.
 
+### Session ETA task estimates
+
+The fork includes a root-session task tree for bounded ETA estimates. In the
+TUI, `/eta` shows active tasks and a paginated History view. The model keeps
+the tree current with the `update_eta` tool when work is created or started,
+when its scope or estimate changes, when a blocker appears, and when the task
+is explicitly completed or cancelled. The app-server v2 surfaces are
+`thread/eta/read`, `thread/eta/update`, and the event-driven
+`thread/eta/updated` notification.
+
+Each estimate is an optional lower/upper duration range in seconds. The store
+retains the original range captured at start and a bounded revision list.
+History records harness timestamps, actual elapsed seconds, and early, within,
+or late classification against that original range. A first estimate published
+after work has already started has no prediction baseline and is classified as
+unknown. Cancelled tasks remain visible as cancelled history and have unknown
+accuracy; blocked tasks remain active until an explicit terminal update.
+
+The aggregate finish range follows task dependencies and parallel leaves. A
+missing, unestimated, stale, blocked, or cyclic dependency makes the affected
+aggregate unknown, and grouping parents are not double-counted with their
+executable children. Opening `/eta`, reading the API, idle activity, elapsed
+time, and turn completion do not infer progress or completion. Timestamps are
+server harness values and cannot be supplied or backdated by the model.
+
 ### Lead/Worker teams
 
 Team mode assigns one model and reasoning effort to the Lead and another to

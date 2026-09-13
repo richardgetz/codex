@@ -67,6 +67,7 @@ mod cyber_exec_policy;
 mod daybreak_access;
 mod decision_provenance;
 mod deprecation_notice;
+mod eta;
 mod exec;
 mod exec_policy;
 #[cfg(not(target_os = "windows"))]

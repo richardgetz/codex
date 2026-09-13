@@ -707,7 +707,8 @@ release or merge rules.
   Apple Silicon releases) and migration-number policy remain intact.
 - Verify session-scoped ETA tasks retain composite root/task identity keys,
   explicit terminal history, bounded revisions, dependency-aware unknown
-  aggregates, and app-server v2/update_eta wiring across upstream refreshes.
+  aggregates, app-server v2/update_eta wiring, and the no-inference boundary
+  across upstream refreshes.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
