@@ -257,7 +257,7 @@ mod environment;
 pub(crate) mod extension_metrics;
 mod git_intent_preflight;
 mod handlers;
-mod handoff_preflight;
+pub(crate) mod handoff_preflight;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;
 mod input_queue;

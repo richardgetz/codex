@@ -93,7 +93,7 @@ async fn admit_handoff_callback(
             debug!(%error, thread_id = %sess.thread_id(), callback_id, "rejecting callback while handoff is sealed");
             sess.send_event_raw_ephemeral(Event {
                 id: callback_id.to_string(),
-                msg: error.to_error_event(/*message_prefix*/ None),
+                msg: EventMsg::Error(error.to_error_event(/*message_prefix*/ None)),
             })
             .await;
             None
@@ -1713,7 +1713,7 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
         _ => {
             sess.send_event_raw_ephemeral(Event {
                 id: sub.id,
-                msg: err.to_error_event(/*message_prefix*/ None),
+                msg: EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
             })
             .await;
         }

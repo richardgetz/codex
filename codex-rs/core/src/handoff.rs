@@ -217,7 +217,7 @@ impl HandoffJournal {
         let mut journals = Vec::with_capacity(paths.len());
         for path in paths {
             let bytes = fs::read(path).await?;
-            let journal = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            let journal: HandoffJournal = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
             if journal.schema_version != HANDOFF_SCHEMA_VERSION {
                 return Err(io::Error::new(
                     ErrorKind::InvalidData,
