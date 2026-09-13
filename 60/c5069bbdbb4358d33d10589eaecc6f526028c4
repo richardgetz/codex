@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-13/eta-resume-root-validation#60c5069bb"
+  change_type: "fix"
+  scope: "app-server-eta"
+  summary: "Allow durable ETA reads after restart when SQLite metadata has no materialized rollout path."
+  decision: "Use the canonical ThreadStore read boundary to validate a pathless persisted root, while retaining the existing non-empty state metadata and non-ephemeral loaded-thread checks."
+  constraints:
+    - "Reject unknown UUIDs and ephemeral/pathless live threads."
+    - "Keep ETA updates root-scoped and avoid model turns or speculative inference."
+    - "Reuse existing persistence helpers and keep the source-only patch limited to app-server wiring."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+    - "codex-rs/app-server/src/message_processor.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5.6"
