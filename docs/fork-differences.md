@@ -304,6 +304,8 @@ navigation remain unchanged.
   enabled = true
   # Optional; defaults to <codex_home>/session-tmp.
   root = "/Users/me/.codex/session-tmp"
+  # Optional; defaults to <codex_home>/state/session-tmp.
+  state_root = "/Users/me/.codex/session-tmp-state"
   # Optional; defaults to 7. Set to 0 to disable stale-session cleanup.
   stale_after_days = 7
   ```
@@ -313,14 +315,18 @@ navigation remain unchanged.
   configured parent is treated as payload storage, not as a general deletion
   target; cleanup is restricted to state-validated session and agent paths.
   Ownership, metadata, leases, and locks live in the per-root state directory
-  `<codex_home>/state/session-tmp`, outside the disposable payload. Deleting a
-  payload root while Codex is running therefore recreates the same configured
-  path from its durable state without a recovery warning.
+  `<codex_home>/state/session-tmp`, outside the disposable payload, unless an
+  explicit `state_root` is configured. A per-root locator remembers the first
+  validated state location, so changing that setting does not relocate an
+  enrolled root or split its lease domain. Deleting a payload root while Codex
+  is running therefore recreates the same configured path from its durable state
+  without a recovery warning.
   If the configured root or its external control state is unsafe or unavailable,
   startup and resume continue for that runtime with session temporary storage
   disabled; unknown files are never adopted.
-- New roots enroll only when empty (or when a validated legacy migration has
-  supplied exact session records) and do not need a payload marker. Existing
+- New roots enroll an exact-owned hidden namespace even when the configured
+  payload directory is nonempty; unknown files remain outside managed cleanup
+  and do not need a payload marker. Existing
   `.codex-managed-session-tmp` roots are imported into external state; once old
   leases are inactive and any held legacy locks have drained, validated legacy
   control records and the marker are retired while payload agents and unknown
@@ -339,7 +345,8 @@ navigation remain unchanged.
   their original paths outside managed cleanup, so a recovery tree containing
   such files remains until it is empty. A small external source identity is
   retained as a durable migration tombstone so interrupted cleanup can resume
-  safely. A markerless nonempty custom root remains inert and is never adopted.
+  safely. A markerless nonempty custom root receives a fresh hidden namespace
+  while its existing files remain untouched.
 - Agents receive explicit guidance that every file under their managed agent
   directory is disposable, including untracked files created by shell commands.
   Source files, deliverables, checkpoints, credentials, and other durable data

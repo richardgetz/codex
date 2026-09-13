@@ -3,11 +3,9 @@
 use super::LEGACY_MARKER;
 use super::LEGACY_MARKER_CONTENT;
 use super::RootRecord;
-use super::STATE_DIR;
 use super::STATE_MARKER;
 use super::STATE_MARKER_CONTENT;
 use super::STATE_ROOT_RECORD;
-use super::STATE_SESSION_TMP_DIR;
 use super::SessionTmpError;
 use super::V2_PAYLOAD_NAMESPACE;
 use super::storage;
@@ -80,6 +78,35 @@ pub(super) fn ensure_payload_namespace(
     Ok(())
 }
 
+/// Reserve a fresh managed namespace below a markerless payload root. Existing
+/// hidden directories are untrusted payload and are never reused merely
+/// because their names match the current namespace convention.
+pub(super) fn create_fresh_payload_namespace(
+    payload_root: &Path,
+) -> Result<PathBuf, SessionTmpError> {
+    ensure_payload_root(payload_root)?;
+    for suffix in 0..64u32 {
+        let name = if suffix == 0 {
+            V2_PAYLOAD_NAMESPACE.to_string()
+        } else {
+            format!("{V2_PAYLOAD_NAMESPACE}-{suffix}")
+        };
+        let candidate = payload_root.join(name);
+        match fs::create_dir(&candidate) {
+            Ok(()) => {
+                storage::set_private_directory(&candidate)?;
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(SessionTmpError::Io(std::io::Error::new(
+        ErrorKind::AlreadyExists,
+        "no unused managed payload namespace is available",
+    )))
+}
+
 pub(super) fn inspect_state_root(
     state_root: &Path,
     root_id: &str,
@@ -125,7 +152,7 @@ pub(super) fn initialize_state_root(
     root_id: &str,
     payload_root: &Path,
     canonical_payload_root: &Path,
-    use_v2_namespace: bool,
+    payload_namespace: &Path,
 ) -> Result<(), SessionTmpError> {
     fs::create_dir_all(state_root)?;
     storage::ensure_directory_not_symlink(state_root)?;
@@ -154,11 +181,7 @@ pub(super) fn initialize_state_root(
         root_id: root_id.to_string(),
         payload_root: payload_root.to_path_buf(),
         canonical_payload_root: canonical_payload_root.to_path_buf(),
-        payload_namespace: if use_v2_namespace {
-            payload_root.join(V2_PAYLOAD_NAMESPACE)
-        } else {
-            payload_root.to_path_buf()
-        },
+        payload_namespace: payload_namespace.to_path_buf(),
     };
     let record_path = state_root.join(STATE_ROOT_RECORD);
     if record_path.exists() {

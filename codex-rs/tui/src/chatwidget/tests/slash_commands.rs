@@ -1807,6 +1807,7 @@ async fn session_tmp_clear_slash_command_force_cleans_current_session() {
     let config = codex_session_tmp::SessionTmpConfig {
         enabled: true,
         root: Some(managed_root.path().to_path_buf()),
+        state_root: None,
         stale_after: Duration::from_secs(60),
     };
     let manager = codex_session_tmp::SessionTmpManager::open_for_user(
@@ -1866,6 +1867,7 @@ async fn session_tmp_reap_force_slash_command_removes_recent_inactive_session() 
     let config = codex_session_tmp::SessionTmpConfig {
         enabled: true,
         root: Some(managed_root.path().to_path_buf()),
+        state_root: None,
         stale_after: Duration::from_secs(60 * 60 * 24 * 7),
     };
     let inactive_manager = codex_session_tmp::SessionTmpManager::open(

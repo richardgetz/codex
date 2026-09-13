@@ -9,6 +9,7 @@ fn config(root: &TempDir) -> SessionTmpConfig {
     SessionTmpConfig {
         enabled: true,
         root: Some(root.path().join("managed")),
+        state_root: None,
         stale_after: Duration::from_secs(60),
     }
 }
@@ -17,6 +18,7 @@ fn default_config() -> SessionTmpConfig {
     SessionTmpConfig {
         enabled: true,
         root: None,
+        state_root: None,
         stale_after: Duration::from_secs(60),
     }
 }
@@ -278,14 +280,64 @@ fn deleting_legacy_payload_does_not_resurrect_heartbeat_control_files() {
 }
 
 #[test]
-fn markerless_nonempty_custom_roots_are_not_adopted() {
+fn markerless_nonempty_custom_roots_use_a_hidden_namespace() {
     let root = tempfile::tempdir().unwrap();
     let configured_root = root.path().join("managed");
     fs::create_dir_all(&configured_root).unwrap();
     fs::write(configured_root.join("preserve.txt"), b"keep").unwrap();
 
-    let result = SessionTmpManager::open(
+    let manager = SessionTmpManager::open(
         &config(&root),
+        root.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(
+        manager.payload_namespace,
+        configured_root.join(crate::state::V2_PAYLOAD_NAMESPACE)
+    );
+    assert!(configured_root.join("preserve.txt").exists());
+    assert!(!configured_root.join(crate::state::LEGACY_MARKER).exists());
+}
+
+#[test]
+fn markerless_custom_root_does_not_reuse_a_foreign_hidden_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let configured_root = root.path().join("managed");
+    let foreign_namespace = configured_root.join(crate::state::V2_PAYLOAD_NAMESPACE);
+    fs::create_dir_all(&foreign_namespace).unwrap();
+    fs::write(foreign_namespace.join("foreign.txt"), b"keep").unwrap();
+
+    let manager = SessionTmpManager::open(
+        &config(&root),
+        root.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_ne!(manager.payload_namespace, foreign_namespace);
+    assert_eq!(
+        fs::read(foreign_namespace.join("foreign.txt")).unwrap(),
+        b"keep"
+    );
+}
+
+#[test]
+fn configured_state_root_must_not_overlap_payload_root() {
+    let root = tempfile::tempdir().unwrap();
+    let configured_root = root.path().join("managed");
+    let mut config = config(&root);
+    config.state_root = Some(configured_root.join("state"));
+
+    let result = SessionTmpManager::open(
+        &config,
         root.path(),
         "session-1",
         "thread-1",
@@ -294,14 +346,11 @@ fn markerless_nonempty_custom_roots_are_not_adopted() {
 
     assert!(matches!(
         result,
-        Err(SessionTmpError::RootNotManaged(path)) if path == configured_root
+        Err(SessionTmpError::UnsafeManagedPath(path)) if path == configured_root.join("state")
     ));
-    assert!(configured_root.join("preserve.txt").exists());
 }
 
-#[test]
-fn recovery_root_is_merged_into_a_hidden_default_namespace() {
-    let home = tempfile::tempdir().unwrap();
+fn setup_recovery_fixture(home: &TempDir) -> (PathBuf, PathBuf) {
     let normal_root = home.path().join("session-tmp");
     let recovery_root = home.path().join("session-tmp-recovery");
     fs::create_dir_all(&normal_root).unwrap();
@@ -328,6 +377,13 @@ fn recovery_root_is_merged_into_a_hidden_default_namespace() {
     )
     .unwrap();
     fs::write(recovery_agent.join("artifact.txt"), b"migrated").unwrap();
+    (normal_root, recovery_root)
+}
+
+#[test]
+fn recovery_root_is_merged_into_a_hidden_default_namespace() {
+    let home = tempfile::tempdir().unwrap();
+    let (normal_root, recovery_root) = setup_recovery_fixture(&home);
 
     let _manager = SessionTmpManager::open(
         &default_config(),
@@ -357,6 +413,167 @@ fn recovery_root_is_merged_into_a_hidden_default_namespace() {
         .unwrap(),
         b"migrated"
     );
+}
+
+#[test]
+fn explicit_default_root_is_treated_like_unset_for_recovery() {
+    let home = tempfile::tempdir().unwrap();
+    let (normal_root, recovery_root) = setup_recovery_fixture(&home);
+    let mut config = default_config();
+    config.root = Some(normal_root.clone());
+    let state_root = home.path().join("state-override");
+    config.state_root = Some(state_root.clone());
+
+    let manager = SessionTmpManager::open(
+        &config,
+        home.path(),
+        "new-session",
+        "new-thread",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(manager.state_session_dir.starts_with(state_root));
+    assert!(!recovery_root.exists());
+    assert_eq!(
+        fs::read(
+            normal_root
+                .join(crate::state::V2_PAYLOAD_NAMESPACE)
+                .join(SESSIONS_DIR)
+                .join("legacy-session")
+                .join(AGENTS_DIR)
+                .join("legacy-thread")
+                .join("artifact.txt")
+        )
+        .unwrap(),
+        b"migrated"
+    );
+    assert_eq!(
+        fs::read(normal_root.join("preserved.txt")).unwrap(),
+        b"keep"
+    );
+}
+
+#[test]
+fn configured_state_root_is_stable_when_the_override_changes() {
+    let home = tempfile::tempdir().unwrap();
+    let payload_root = home.path().join("payload");
+    let first_state_root = home.path().join("state-one");
+    let second_state_root = payload_root.join("state-two");
+    let config = SessionTmpConfig {
+        enabled: true,
+        root: Some(payload_root.clone()),
+        state_root: Some(first_state_root.clone()),
+        stale_after: Duration::from_secs(60),
+    };
+    let manager = SessionTmpManager::open(
+        &config,
+        home.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let state_session = manager.state_session_dir.clone();
+    drop(manager);
+
+    let mut changed = config;
+    changed.state_root = Some(second_state_root);
+    let reopened = SessionTmpManager::open(
+        &changed,
+        home.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert!(state_session.starts_with(first_state_root));
+    assert_eq!(reopened.state_session_dir, state_session);
+}
+
+#[test]
+fn pre_locator_default_state_wins_over_a_new_override() {
+    let home = tempfile::tempdir().unwrap();
+    let payload_root = home.path().join("payload");
+    let initial = SessionTmpConfig {
+        enabled: true,
+        root: Some(payload_root.clone()),
+        state_root: None,
+        stale_after: Duration::from_secs(60),
+    };
+    let manager = SessionTmpManager::open(
+        &initial,
+        home.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let state_session = manager.state_session_dir.clone();
+    let locator = manager
+        .state
+        .state_base()
+        .join(crate::state::STATE_LOCATORS_DIR)
+        .join(format!("{}.json", manager.state.root_id()));
+    drop(manager);
+    fs::remove_file(locator).unwrap();
+
+    let reopened = SessionTmpManager::open(
+        &SessionTmpConfig {
+            state_root: Some(home.path().join("new-state")),
+            ..initial
+        },
+        home.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reopened.state_session_dir, state_session);
+}
+
+#[test]
+fn configured_state_root_survives_payload_deletion() {
+    let home = tempfile::tempdir().unwrap();
+    let payload_root = home.path().join("payload");
+    let state_root = home.path().join("durable-state");
+    let config = SessionTmpConfig {
+        enabled: true,
+        root: Some(payload_root),
+        state_root: Some(state_root.clone()),
+        stale_after: Duration::from_secs(60),
+    };
+    let manager = SessionTmpManager::open(
+        &config,
+        home.path(),
+        "session-1",
+        "thread-1",
+        SessionTmpOwner::RootSession,
+    )
+    .unwrap()
+    .unwrap();
+    let payload_root = manager.root().to_path_buf();
+    let state_session = manager.state_session_dir.clone();
+    fs::remove_dir_all(payload_root).unwrap();
+
+    manager
+        .create(
+            None,
+            "recreate with configured state root",
+            Retention::Manual,
+            TempKind::File,
+        )
+        .unwrap();
+
+    assert!(state_session.starts_with(state_root));
+    assert!(state_session.join(LEASES_DIR).is_dir());
 }
 
 #[test]

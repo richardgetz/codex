@@ -286,6 +286,7 @@ fn session_tmp_defaults_off_without_changing_existing_temp_behavior() {
         SessionTmpConfig {
             enabled: false,
             root: None,
+            state_root: None,
             stale_after: Duration::from_secs(DEFAULT_SESSION_TMP_STALE_AFTER_DAYS * 24 * 60 * 60),
         }
     );
@@ -295,15 +296,19 @@ fn session_tmp_defaults_off_without_changing_existing_temp_behavior() {
 fn session_tmp_config_accepts_explicit_root_and_stale_age() {
     let root = AbsolutePathBuf::from_absolute_path("/tmp/codex-session-tmp")
         .expect("test root should be absolute");
+    let state_root = AbsolutePathBuf::from_absolute_path("/tmp/codex-session-state")
+        .expect("test state root should be absolute");
     assert_eq!(
         SessionTmpConfig::from(Some(SessionTmpToml {
             enabled: Some(true),
             root: Some(root.clone()),
+            state_root: Some(state_root.clone()),
             stale_after_days: Some(3),
         })),
         SessionTmpConfig {
             enabled: true,
             root: Some(root),
+            state_root: Some(state_root),
             stale_after: Duration::from_secs(3 * 24 * 60 * 60),
         }
     );

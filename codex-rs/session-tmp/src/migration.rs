@@ -136,7 +136,9 @@ pub(super) fn consolidate_recovery(
     target: &ControlState,
     default_root: &Path,
 ) -> Result<(), SessionTmpError> {
-    if target.payload_root != default_root.join("session-tmp") {
+    let canonical_default_root =
+        state::canonicalize_for_identity(&default_root.join("session-tmp"))?;
+    if target.canonical_payload_root() != canonical_default_root {
         return Ok(());
     }
     let recovery_root = default_root.join(state::LEGACY_RECOVERY_ROOT);
@@ -145,6 +147,9 @@ pub(super) fn consolidate_recovery(
     }
     let pending_manifest = pending_recovery_manifest(target, &recovery_root)?;
     if !recovery_root.exists() && pending_manifest.is_none() {
+        return Ok(());
+    }
+    if recovery_root.exists() && !recovery_is_enrolled(default_root) && pending_manifest.is_none() {
         return Ok(());
     }
     let source_payload_root = pending_manifest
@@ -156,6 +161,12 @@ pub(super) fn consolidate_recovery(
     if source_root_id == target.root_id() {
         return Ok(());
     }
+    let source_state_base = state::resolve_state_base(
+        default_root,
+        None,
+        &source_root_id,
+        &canonical_source_payload,
+    )?;
     // Acquire the per-root migration barriers before opening the source. This
     // closes the gap where a new manager could enroll a source root between
     // source discovery and lock creation. `open_for_migration` skips its
@@ -163,15 +174,15 @@ pub(super) fn consolidate_recovery(
     let (first_lock, second_lock) = if target.root_id() < source_root_id.as_str() {
         (
             lock_migration(target)?,
-            lock_migration_path(target.state_base(), &source_root_id)?,
+            lock_migration_path(&source_state_base, &source_root_id)?,
         )
     } else {
         (
-            lock_migration_path(target.state_base(), &source_root_id)?,
+            lock_migration_path(&source_state_base, &source_root_id)?,
             lock_migration(target)?,
         )
     };
-    let source_state_root = target.state_base().join(&source_root_id);
+    let source_state_root = source_state_base.join(&source_root_id);
     let _first_lock = first_lock;
     let _second_lock = second_lock;
     // Hold both historical barriers across source discovery and initialization
@@ -200,9 +211,6 @@ pub(super) fn consolidate_recovery(
         complete_manifest_without_source(&manifest_path, target, manifest)?;
         return Ok(());
     }
-    if recovery_root.exists() && !recovery_is_enrolled(default_root) && pending_manifest.is_none() {
-        return Ok(());
-    }
     let source = match ControlState::open_for_migration(default_root, &source_payload_root) {
         Ok(source) => source,
         Err(error) => {
@@ -214,6 +222,14 @@ pub(super) fn consolidate_recovery(
             return Ok(());
         }
     };
+    if source.state_base() != source_state_base.as_path() {
+        tracing::debug!(
+            expected = %source_state_base.display(),
+            actual = %source.state_base().display(),
+            "deferring recovery-root migration after state locator change"
+        );
+        return Ok(());
+    }
     if let Err(error) = source.import_legacy_control() {
         tracing::debug!(
             error = %error,

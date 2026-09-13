@@ -1211,6 +1211,11 @@ impl Session {
                 .root
                 .as_ref()
                 .map(AbsolutePathBuf::to_path_buf),
+            state_root: config
+                .session_tmp
+                .state_root
+                .as_ref()
+                .map(AbsolutePathBuf::to_path_buf),
             stale_after: config.session_tmp.stale_after,
         };
         let is_root_session = session_id == SessionId::from(thread_id);
@@ -1251,6 +1256,7 @@ impl Session {
                         codex_session_tmp::SessionTmpConfig {
                             enabled: false,
                             root: None,
+                            state_root: None,
                             stale_after: session_tmp_config.stale_after,
                         },
                         Some("Session temporary storage is unavailable; continuing without it for this runtime. Verify the configured root and external control state before enabling it again.".to_owned()),
@@ -1262,6 +1268,10 @@ impl Session {
             config.session_tmp.enabled = session_tmp_config.enabled;
             config.session_tmp.root = session_tmp_config
                 .root
+                .map(AbsolutePathBuf::from_absolute_path)
+                .transpose()?;
+            config.session_tmp.state_root = session_tmp_config
+                .state_root
                 .map(AbsolutePathBuf::from_absolute_path)
                 .transpose()?;
             config.startup_warnings.push(warning);
