@@ -1,11 +1,11 @@
-use super::{HandoffCoordinator, core_error, ordered_indices, parse_thread_id};
+use super::{ActiveHandoff, HandoffCoordinator, core_error, ordered_indices, parse_thread_id};
 use crate::error_code::{internal_error, invalid_params};
 use codex_app_server_protocol::{
     JSONRPCErrorError, ThreadHandoffPrepareParams, ThreadHandoffPrepareResponse,
 };
 use codex_core::{
     CodexThread, HandoffBlocker, HandoffJournal, HandoffJournalState, HandoffNode,
-    SuspendTurnOutcome,
+    HandoffNodeState, SuspendTurnOutcome,
 };
 use codex_protocol::ThreadId;
 use std::collections::HashSet;
@@ -33,7 +33,7 @@ impl HandoffCoordinator {
         {
             manager_guard.abort();
             return Err(internal_error(
-                "timed out waiting for thread-manager handoff admissions; an active app-server operation may still be draining",
+                "timed out waiting for thread-manager handoff admissions",
             ));
         }
 
@@ -68,12 +68,15 @@ impl HandoffCoordinator {
                 drop(tree_guards);
                 manager_guard.abort();
                 return Err(internal_error(format!(
-                    "timed out waiting for handoff admissions for root {root_id}; an active app-server operation may still be draining",
+                    "timed out waiting for handoff admissions for root {root_id}",
                 )));
             }
         }
 
-        let nodes = match self.snapshot_nodes(&roots, &loaded_thread_ids).await {
+        let nodes = match self
+            .snapshot_nodes(&roots, &loaded_thread_ids, requested_root)
+            .await
+        {
             Ok(nodes) => nodes,
             Err(error) => {
                 drop(tree_guards);
@@ -427,6 +430,7 @@ impl HandoffCoordinator {
         &self,
         roots: &[Arc<CodexThread>],
         loaded_ids: &HashSet<ThreadId>,
+        requested_root: Option<ThreadId>,
     ) -> Result<Vec<HandoffNode>, JSONRPCErrorError> {
         let mut nodes = Vec::new();
         let mut seen = HashSet::new();
@@ -474,7 +478,74 @@ impl HandoffCoordinator {
                 });
             }
         }
+
+        // Every loaded child is eligible for an all-roots handoff. If the graph query omitted a
+        // loaded node, its parent chain cannot be proven covered before side effects begin. Keep a
+        // node-level blocker in the durable receipt so prepare fails closed instead of publishing
+        // a partial transferable graph. A requested root may exclude a loaded, unrelated root when
+        // its parent chain is known; an unknown chain remains blocked conservatively.
+        for thread_id in loaded_ids {
+            if seen.contains(thread_id) {
+                continue;
+            }
+            let thread = self
+                .thread_manager
+                .get_thread(*thread_id)
+                .await
+                .map_err(core_error)?;
+            let source = thread.session_source();
+            let chain_root = self.loaded_chain_root(*thread_id).await;
+            if let (Some(requested_root), Some(chain_root)) = (requested_root, chain_root)
+                && requested_root != chain_root
+            {
+                continue;
+            }
+            let preflight = thread.handoff_preflight().await;
+            let mut blockers = preflight.blockers;
+            blockers.retain(|blocker| !matches!(blocker, HandoffBlocker::LiveDescendants));
+            if !blockers
+                .iter()
+                .any(|blocker| matches!(blocker, HandoffBlocker::ParentUnavailable))
+            {
+                blockers.push(HandoffBlocker::ParentUnavailable);
+            }
+            let fallback_root = source
+                .parent_thread_id()
+                .unwrap_or(*thread_id)
+                .to_string();
+            nodes.push(HandoffNode {
+                thread_id: thread_id.to_string(),
+                root_thread_id: chain_root
+                    .map(|root| root.to_string())
+                    .unwrap_or(fallback_root),
+                parent_thread_id: source.parent_thread_id().map(|id| id.to_string()),
+                agent_path: source.get_agent_path().map(|path| path.to_string()),
+                turn_id: preflight.turn_id,
+                rollout_path: thread
+                    .rollout_path()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                was_running: preflight.was_running,
+                was_paused: preflight.was_paused,
+                state: HandoffNodeState::Planned,
+                blockers,
+            });
+        }
         nodes.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
         Ok(nodes)
+    }
+
+    async fn loaded_chain_root(&self, thread_id: ThreadId) -> Option<ThreadId> {
+        let mut current = thread_id;
+        let mut visited = HashSet::new();
+        loop {
+            if !visited.insert(current) {
+                return None;
+            }
+            let thread = self.thread_manager.get_thread(current).await.ok()?;
+            let Some(parent_thread_id) = thread.session_source().parent_thread_id() else {
+                return Some(current);
+            };
+            current = parent_thread_id;
+        }
     }
 }

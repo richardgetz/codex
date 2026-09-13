@@ -6,6 +6,7 @@
 
 mod prepare;
 mod recovery;
+mod startup;
 
 use crate::error_code::{internal_error, invalid_params};
 use codex_app_server_protocol::{
@@ -37,6 +38,7 @@ pub(crate) struct HandoffCoordinator {
     runtime_version: String,
     operation: Mutex<()>,
     active: Mutex<HashMap<String, ActiveHandoff>>,
+    startup_recovery_state: Mutex<startup::StartupRecoveryState>,
 }
 
 impl HandoffCoordinator {
@@ -53,6 +55,7 @@ impl HandoffCoordinator {
             runtime_version,
             operation: Mutex::new(()),
             active: Mutex::new(HashMap::new()),
+            startup_recovery_state: Mutex::new(startup::StartupRecoveryState::Unknown),
         }
     }
 
@@ -154,7 +157,7 @@ fn node_depth(
 fn receipt_from_journal(journal: &HandoffJournal) -> ThreadHandoffReceipt {
     ThreadHandoffReceipt {
         handoff_id: journal.handoff_id.clone(),
-        state: journal.state.into(),
+        state: api_state_from_core(journal.state),
         runtime_version: journal.runtime_version.clone(),
         created_at: journal.created_at_ms.max(0).div_euclid(1000),
         nodes: journal.nodes.iter().map(api_node_from_core).collect(),
@@ -185,16 +188,14 @@ fn api_node_from_core(node: &HandoffNode) -> ThreadHandoffNode {
     }
 }
 
-impl From<HandoffJournalState> for ThreadHandoffState {
-    fn from(value: HandoffJournalState) -> Self {
-        match value {
-            HandoffJournalState::Prepared => Self::Prepared,
-            HandoffJournalState::Draining => Self::Draining,
-            HandoffJournalState::Suspended => Self::Suspended,
-            HandoffJournalState::Restoring => Self::Restoring,
-            HandoffJournalState::Completed => Self::Completed,
-            HandoffJournalState::NeedsAttention => Self::NeedsAttention,
-        }
+fn api_state_from_core(value: HandoffJournalState) -> ThreadHandoffState {
+    match value {
+        HandoffJournalState::Prepared => ThreadHandoffState::Prepared,
+        HandoffJournalState::Draining => ThreadHandoffState::Draining,
+        HandoffJournalState::Suspended => ThreadHandoffState::Suspended,
+        HandoffJournalState::Restoring => ThreadHandoffState::Restoring,
+        HandoffJournalState::Completed => ThreadHandoffState::Completed,
+        HandoffJournalState::NeedsAttention => ThreadHandoffState::NeedsAttention,
     }
 }
 

@@ -67,6 +67,9 @@ release or merge rules.
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
   targets/worktrees are preserved.
+- App-server v2 handoff recovery fences replacement writes until the durable
+  graph is loaded and pause state restored, while read/status/recover requests
+  remain available; exact turn admission occurs only after all receipt nodes load.
 - Fork-preserved update-plan surface:
   `[tools.update_plan].enabled` remains default-on for stable compatibility;
   explicit `false` still removes `update_plan` from registered and visible

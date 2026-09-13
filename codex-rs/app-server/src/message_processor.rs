@@ -948,6 +948,9 @@ impl MessageProcessor {
         {
             return Err(invalid_request(experimental_required_message(reason)));
         }
+        self.handoff_coordinator
+            .guard_request_method(codex_request.method_name())
+            .await?;
         let connection_id = connection_request_id.connection_id;
         self.initialize_processor.track_initialized_request(
             connection_id,

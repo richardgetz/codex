@@ -11,6 +11,7 @@ use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHandoffState;
 use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
@@ -156,6 +157,22 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(REQUEST_TIMEOUT)
         .await?;
+
+    // Replacement startup remains fenced until every receipt node has been loaded and recovered.
+    let blocked_start = replacement
+        .send_raw_request("thread/start", Some(json!({})))
+        .await?;
+    let blocked_start_error: JSONRPCError = timeout(
+        REQUEST_TIMEOUT,
+        replacement.read_response(blocked_start),
+    )
+    .await??;
+    assert_eq!(blocked_start_error.error.code, -32600);
+    assert!(blocked_start_error
+        .error
+        .message
+        .contains("recovery is pending"));
+
     let recover_request = replacement
         .send_raw_request(
             "thread/handoff/recover",
@@ -191,6 +208,9 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
     wait_for_pause_state(&mut replacement, &paused_idle.id).await?;
     assert_eq!(responses_server.requests().await.len(), 2);
 
+    let _: ThreadStartResponse = replacement
+        .start_thread(ThreadStartParams::default())
+        .await?;
     replacement.shutdown_gracefully().await?;
     responses_server.shutdown().await;
     Ok(())
