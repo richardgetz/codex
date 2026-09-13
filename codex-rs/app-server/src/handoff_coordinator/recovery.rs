@@ -11,6 +11,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
+use codex_rollout::InitialHistory;
 use std::path::PathBuf;
 use std::sync::Arc;
 
