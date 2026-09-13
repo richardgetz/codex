@@ -32,6 +32,8 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::plugin_config_reload::PluginStartupConfig;
+use crate::server_lifecycle::ServerLifecycle;
+use crate::server_lifecycle::send_lifecycle_notification_and_wait;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionOrigin;
 use crate::transport::ConnectionState;
@@ -115,6 +117,7 @@ mod external_auth;
 mod filters;
 mod fs_watch;
 mod fuzzy_file_search;
+mod handoff_coordinator;
 mod image_url;
 pub mod in_process;
 mod mcp_refresh;
@@ -128,6 +131,7 @@ mod plugin_config_reload;
 mod request_processors;
 mod request_serialization;
 mod server_request_error;
+mod server_lifecycle;
 mod skills_watcher;
 mod thread_control_runtime;
 mod thread_state;
@@ -259,7 +263,7 @@ impl ShutdownState {
         self.requested = true;
         self.last_logged_running_turn_count = None;
         info!(
-            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, requests still accepted until no assistant turns are running)",
+            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new work is rejected while assistant turns drain)",
             connection_count, running_turn_count,
         );
     }
@@ -917,8 +921,26 @@ pub async fn run_main_with_transport_options(
         info!("outbound router task exited (channel closed)");
     });
 
+    let server_lifecycle = Arc::new(ServerLifecycle::new());
+    let (shutdown_signal_tx, shutdown_signal_rx) = mpsc::channel(8);
+    let shutdown_signal_handle = graceful_signal_restart_enabled.then(|| {
+        let shutdown_token = transport_shutdown_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => break,
+                    signal = shutdown_signal() => {
+                        if shutdown_signal_tx.send(signal).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+    });
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
+        let server_lifecycle = Arc::clone(&server_lifecycle);
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
@@ -942,6 +964,7 @@ pub async fn run_main_with_transport_options(
             auth_manager,
             installation_id,
             code_mode_session_provider,
+            server_lifecycle: Arc::clone(&server_lifecycle),
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: matches!(
@@ -957,6 +980,7 @@ pub async fn run_main_with_transport_options(
         let mut remote_control_status_rx = remote_control_handle.status_receiver();
         let mut remote_control_status = remote_control_status_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
+        let mut shutdown_signal_rx = shutdown_signal_rx;
         async move {
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
@@ -965,6 +989,16 @@ pub async fn run_main_with_transport_options(
                     let running_turn_count = running_turn_count_rx.borrow();
                     *running_turn_count
                 };
+                if let Some(snapshot) =
+                    server_lifecycle.update_running_assistant_turns(running_turn_count)
+                {
+                    send_lifecycle_notification_and_wait(
+                        &initialize_notification_sender,
+                        &connections,
+                        snapshot.into_updated_notification(),
+                    )
+                    .await;
+                }
                 if matches!(
                     shutdown_state.update(running_turn_count, connections.len()),
                     ShutdownAction::Finish
@@ -977,7 +1011,10 @@ pub async fn run_main_with_transport_options(
                 }
 
                 tokio::select! {
-                    shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
+                    shutdown_signal_result = shutdown_signal_rx.recv(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
+                        let Some(shutdown_signal_result) = shutdown_signal_result else {
+                            break "shutdown_signal_listener_closed";
+                        };
                         let signal = match shutdown_signal_result {
                             Ok(signal) => signal,
                             Err(err) => {
@@ -986,7 +1023,26 @@ pub async fn run_main_with_transport_options(
                             }
                         };
                         let running_turn_count = *running_turn_count_rx.borrow();
+                        let was_requested = shutdown_state.requested();
+                        // Keep the transition snapshot aligned with the latest watcher value.
+                        let count_snapshot =
+                            server_lifecycle.update_running_assistant_turns(running_turn_count);
                         shutdown_state.on_signal(signal, connections.len(), running_turn_count);
+                        let lifecycle_snapshot = if !was_requested {
+                            server_lifecycle.begin_drain()
+                        } else if matches!(signal, ShutdownSignal::Forceable) {
+                            server_lifecycle.force_drain().or(count_snapshot)
+                        } else {
+                            count_snapshot
+                        };
+                        if let Some(snapshot) = lifecycle_snapshot {
+                            send_lifecycle_notification_and_wait(
+                                &initialize_notification_sender,
+                                &connections,
+                                snapshot.into_updated_notification(),
+                            )
+                            .await;
+                        }
                     }
                     changed = running_turn_count_rx.changed(), if shutdown_state.requested() => {
                         if changed.is_err() {
@@ -999,7 +1055,29 @@ pub async fn run_main_with_transport_options(
                         };
                         match event {
                             TransportEvent::DaemonShutdown => {
-                                shutdown_state.on_signal(ShutdownSignal::Forceable, connections.len(), *running_turn_count_rx.borrow());
+                                let running_turn_count = *running_turn_count_rx.borrow();
+                                let was_requested = shutdown_state.requested();
+                                // Keep the transition snapshot aligned with the latest watcher value.
+                                let count_snapshot =
+                                    server_lifecycle.update_running_assistant_turns(running_turn_count);
+                                shutdown_state.on_signal(
+                                    ShutdownSignal::Forceable,
+                                    connections.len(),
+                                    running_turn_count,
+                                );
+                                let lifecycle_snapshot = if !was_requested {
+                                    server_lifecycle.begin_drain()
+                                } else {
+                                    server_lifecycle.force_drain().or(count_snapshot)
+                                };
+                                if let Some(snapshot) = lifecycle_snapshot {
+                                    send_lifecycle_notification_and_wait(
+                                        &initialize_notification_sender,
+                                        &connections,
+                                        snapshot.into_updated_notification(),
+                                    )
+                                    .await;
+                                }
                             }
                             TransportEvent::ConnectionOpened {
                                 connection_id,
@@ -1231,6 +1309,9 @@ pub async fn run_main_with_transport_options(
     let _ = outbound_handle.await;
 
     transport_shutdown_token.cancel();
+    if let Some(handle) = shutdown_signal_handle {
+        let _ = handle.await;
+    }
     let _ = otel_reloader_handle.await;
     for handle in transport_accept_handles {
         let _ = handle.await;

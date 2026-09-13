@@ -170,7 +170,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             clear_router_tick(&thread_state).await;
             thread_watch_manager
-                .note_turn_started(&conversation_id.to_string())
+                .note_turn_started_with_id(&conversation_id.to_string(), &payload.turn_id)
                 .await;
             let turn = {
                 let state = thread_state.lock().await;
@@ -200,10 +200,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
-            let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
-            thread_watch_manager
-                .note_turn_completed(&conversation_id.to_string(), turn_failed)
-                .await;
+            let completed_turn_id = turn_complete_event.turn_id.clone();
             handle_turn_complete(
                 conversation_id,
                 event_turn_id,
@@ -212,6 +209,15 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+            // Keep the running-turn count non-zero until the terminal notification has been
+            // queued. The shutdown loop uses this count to decide when it can disconnect
+            // clients; updating it first could drop the queued `turn/completed` notification.
+            thread_watch_manager
+                .note_turn_completed_for_turn(
+                    &conversation_id.to_string(),
+                    &completed_turn_id,
+                )
+                .await;
             clear_router_tick(&thread_state).await;
         }
         EventMsg::McpStartupUpdate(update) => {
@@ -1071,7 +1077,7 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::Error(ev) => {
             thread_watch_manager
-                .note_system_error(&conversation_id.to_string())
+                .note_system_error_for_turn(&conversation_id.to_string(), &event_turn_id)
                 .await;
 
             let message = ev.message.clone();
@@ -1278,10 +1284,11 @@ pub(crate) async fn apply_bespoke_event_handling(
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
             respond_to_pending_interrupts(&thread_state, &outgoing).await;
+            let interrupted_turn_id = turn_aborted_event
+                .turn_id
+                .clone()
+                .unwrap_or_else(|| event_turn_id.clone());
 
-            thread_watch_manager
-                .note_turn_interrupted(&conversation_id.to_string())
-                .await;
             handle_turn_interrupted(
                 conversation_id,
                 event_turn_id,
@@ -1290,6 +1297,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &thread_state,
             )
             .await;
+            // See the TurnComplete branch above: enqueue the terminal event before allowing
+            // graceful shutdown to observe this thread as idle.
+            thread_watch_manager
+                .note_turn_interrupted_for_turn(
+                    &conversation_id.to_string(),
+                    &interrupted_turn_id,
+                )
+                .await;
             clear_router_tick(&thread_state).await;
         }
         EventMsg::ThreadRolledBack(_rollback_event) => {

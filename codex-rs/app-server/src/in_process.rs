@@ -64,6 +64,7 @@ use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::plugin_config_reload::PluginStartupConfig;
+use crate::server_lifecycle::ServerLifecycle;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
@@ -115,6 +116,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
             | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ThreadActivityUpdated(_)
+            | ServerNotification::ServerLifecycleUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::ItemCompleted(ItemCompletedNotification {
                 item: ThreadItem::AgentMessage {
@@ -460,6 +462,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         ));
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
+        let server_lifecycle = Arc::new(ServerLifecycle::new());
         let config_manager = ConfigManager::new(
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,
@@ -486,15 +489,20 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 auth_manager,
                 installation_id,
                 code_mode_session_provider: None,
+                server_lifecycle: Arc::clone(&server_lifecycle),
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: Some(PluginStartupConfig::Current),
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
+            let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
             let session = Arc::new(ConnectionSessionState::new());
             let mut listen_for_threads = true;
+            let mut listen_for_running_turns = true;
 
             loop {
+                let running_turn_count = *running_turn_count_rx.borrow();
+                let _ = server_lifecycle.update_running_assistant_turns(running_turn_count);
                 tokio::select! {
                     command = processor_rx.recv() => {
                         match command {
@@ -535,6 +543,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                             None => {
                                 break;
                             }
+                        }
+                    }
+                    changed = running_turn_count_rx.changed(), if listen_for_running_turns => {
+                        if changed.is_err() {
+                            listen_for_running_turns = false;
                         }
                     }
                     created = thread_created_rx.recv(), if listen_for_threads => {
@@ -1015,6 +1028,16 @@ mod tests {
             &ServerNotification::ThreadQueueChanged(ThreadQueueChangedNotification {
                 thread_id: "thread-1".to_string(),
             })
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::ServerLifecycleUpdated(
+                codex_app_server_protocol::ServerLifecycleUpdatedNotification {
+                    daemon_instance_id: "daemon".to_string(),
+                    phase: codex_app_server_protocol::ServerLifecyclePhase::Draining,
+                    transition_id: Some("transition".to_string()),
+                    running_assistant_turns: 1,
+                },
+            )
         ));
         assert!(server_notification_requires_delivery(
             &ServerNotification::ExternalAgentConfigImportCompleted(

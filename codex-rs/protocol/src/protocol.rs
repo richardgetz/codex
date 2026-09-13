@@ -796,6 +796,24 @@ pub enum Op {
         reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
     },
 
+    /// Stop an unfinished regular turn for a sealed cross-process handoff.
+    ///
+    /// Unlike the user-facing operation, this is allowed for a loaded
+    /// descendant after the owning root has sealed admission and coordinated
+    /// child-first draining.
+    SuspendTurnAndShutdownForHandoff {
+        reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
+    },
+
+    /// Stop an unfinished regular turn after the coordinator has drained all loaded descendants.
+    ///
+    /// This is separate from `SuspendTurnAndShutdownForHandoff` because a live graph edge remains
+    /// in process-local metadata after a child writer closes; the parent may use this operation
+    /// only after recording successful child receipts.
+    SuspendTurnAndShutdownForHandoffAfterDescendants {
+        reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
+    },
+
     /// Apply thread-settings overrides without starting a turn.
     ///
     /// This uses the same submission queue as turn starts so app-server can
@@ -1145,6 +1163,30 @@ impl InterAgentCommunication {
 }
 
 impl Op {
+    /// Returns whether this operation can create or mutate work that must be
+    /// admitted before a cross-process handoff seals the root tree.
+    ///
+    /// Explicit cancellation and handoff suspension controls remain usable while draining.
+    /// Callback responses are admitted only before the seal; once sealed they are rejected with
+    /// an observable error so pending process-local state remains a blocker. Unknown future
+    /// operations fail closed by requiring admission.
+    pub fn requires_handoff_admission(&self) -> bool {
+        match self {
+            Self::Interrupt
+            | Self::CleanBackgroundTerminals
+            | Self::ExecApproval { .. }
+            | Self::PatchApproval { .. }
+            | Self::ResolveElicitation { .. }
+            | Self::UserInputAnswer { .. }
+            | Self::RequestPermissionsResponse { .. }
+            | Self::DynamicToolResponse { .. }
+            | Self::SuspendTurnAndShutdownForHandoff { .. }
+            | Self::SuspendTurnAndShutdownForHandoffAfterDescendants { .. }
+            | Self::Shutdown => false,
+            _ => true,
+        }
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Interrupt => "interrupt",
@@ -1162,6 +1204,12 @@ impl Op {
             Self::TurnInput { .. } => "turn_input",
             Self::RecoverTurn { .. } => "recover_turn",
             Self::SuspendTurnAndShutdown { .. } => "suspend_turn_and_shutdown",
+            Self::SuspendTurnAndShutdownForHandoff { .. } => {
+                "suspend_turn_and_shutdown_for_handoff"
+            }
+            Self::SuspendTurnAndShutdownForHandoffAfterDescendants { .. } => {
+                "suspend_turn_and_shutdown_for_handoff_after_descendants"
+            }
             Self::ThreadSettings { .. } => "thread_settings",
             Self::TurnSettings { .. } => "turn_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",

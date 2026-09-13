@@ -29,6 +29,11 @@ release or merge rules.
   disabling the standalone updater for that selection; custom bootstrap stays on
   the local Unix socket unless existing remote-control behavior is explicitly
   requested.
+- App-server daemon apply/recover are gated to an explicitly configured local
+  launcher (the standalone updater remains on its existing lifecycle), then
+  checkpoint every loaded root before replacement, require a fully suspended
+  receipt, restore exact turn ids, and persist unresolved failures for explicit
+  recovery without enabling remote control.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
@@ -62,6 +67,9 @@ release or merge rules.
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
   targets/worktrees are preserved.
+- App-server v2 handoff recovery fences replacement writes until the durable
+  graph is loaded and pause state restored, while read/status/recover requests
+  remain available; exact turn admission occurs only after all receipt nodes load.
 - Fork-preserved update-plan surface:
   `[tools.update_plan].enabled` remains default-on for stable compatibility;
   explicit `false` still removes `update_plan` from registered and visible
@@ -248,6 +256,12 @@ release or merge rules.
     responses do not expose authoritative spend limits; local spend estimates
     remain informational.
 
+- Cross-process Codex daemon handoff:
+  - A manager-wide admission fence closes new roots/descendant loads while each selected root tree is preflighted and drained.
+  - Durable per-node handoff receipts preserve original unfinished turn IDs and manual pause state for exact recovery; process-local approvals, callbacks, pending input, and external operations are classified as `NeedsAttention` instead of replayed.
+  - Unsupported or persistence-failed nodes keep the old runtime owner alive, while successful replacement restores parent-first behind the existing pause gate. Fresh paused or idle nodes materialize durable rollout metadata before the receipt is published, so replacement can restore pause state without a synthetic turn.
+  - Sealed inter-agent and legacy completion callbacks persist idempotent state-database envelopes through the manager-owned store even when targets are cold; the replacement poller reconstructs them without synthetic user prompts or tool replay, while incompatible rows remain pending for a compatible runtime.
+  - The replacement inbound poller remains fenced while the coordinator loads the complete graph, restores manual pauses, admits exact turns, and persists the completed journal; durable rows stay pending through a failed guard drop and deliver only after explicit successful recovery.
 - Session-scoped cooperative activity pause:
   - `/pause` and `/continue` pause or release the current Lead tree, including
     loaded direct and nested ThreadSpawn Workers; a viewed Worker resolves to
@@ -305,6 +319,21 @@ release or merge rules.
     only while an active direct or nested Worker entry remains; idle or absent
     omitted edges are pruned without polling. This keeps unfinished direct and
     nested Workers visible when `ThreadStarted` metadata is delayed.
+
+- Shared app-server restart observability and admission fencing:
+  - App-server v2 exposes experimental `server/lifecycle/read` and
+    `server/lifecycle/updated` with a process-local daemon identity, drain
+    transition identity, lifecycle phase, and running assistant-turn count.
+  - Once graceful shutdown begins, new thread/turn, queued-turn, goal,
+    activity-continue, usage resume, response-item injection, review, realtime
+    start/input, MCP tool/event-stream start, compact, shell-command, Windows sandbox setup, and
+    standalone process/command
+    admission is rejected
+    across initialized connections while reads, interruption, approval, and
+    other resolution traffic remain available while the drain waits for turns
+    or until a forceable second signal. This is a
+    process-local fence only: it does not persist worker graphs or pause state,
+    suspend/replay external commands, or preserve pending client callbacks.
 
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
@@ -652,11 +681,17 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify daemon apply/recover remain restricted to explicitly configured launchers;
+  standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
   local launcher path, persists the selected path for start/restart, reports its
   actual path/version, keeps custom bootstrap local unless `--remote-control` is
   explicit, and does not start the standalone updater for configured npm
   launchers.
+- Verify app-server daemon apply prepares all loaded roots, replaces the
+  process only after a suspended all-node receipt, records start/recovery
+  failures durably, restores exact turn ids, and requires explicit recover
+  before retrying an unresolved attempt without enabling remote control.
 - Verify the macOS Seatbelt GPU/Metal base-policy allowances and focused
   regression tests survive upstream policy changes without wildcard access.
 - Verify `enable_mcp_approvals` remains a Rick-owned toggle and fork-only
@@ -690,6 +725,9 @@ release or merge rules.
   only the age cutoff, reports removed session/path counts, protects current
   and fresh-lease sessions, preserves unsafe state, and rejects an ambiguous
   age-plus-force form.
+- Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
+  Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
+  Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
   mutating global config. Verify Lead routing, Worker routing for all delegated
@@ -862,6 +900,19 @@ release or merge rules.
   and interval bounds,
   known-reset scheduling, hourly fallback account refresh, floor-paused work,
   `/continue` wake/report behavior, and cancellation/manual-stop preservation.
+- Verify `server/lifecycle/read` reports a process-local daemon identity and
+  truthful `ready`/`draining`/`forced` phase, `server/lifecycle/updated` attempts
+  delivery to opted-in clients for phase and running-turn changes before a
+  shutdown disconnect. A graceful drain rejects new thread/turn, queue, review,
+  realtime start/input, compact, goal, activity-continue, usage resume,
+  response-item injection, MCP tool/event-stream start, shell-command, Windows sandbox setup,
+  command, and process admission
+  while preserving read, interrupt, approval,
+  and response-resolution traffic. The stage fences app-server request ingress;
+  queued requests and Core-owned automatic continuations still require the
+  shared handoff coordinator to close their internal admission paths. Confirm
+  lifecycle identifiers are not treated as durable rollout or thread-resume
+  receipts.
 - Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
   newly loaded descendants, gate future model/tool starts and automatic Lead or
   usage wakes, preserve retained work without synthetic turns, and report

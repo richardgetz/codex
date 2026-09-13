@@ -103,6 +103,12 @@ impl McpRequestProcessor {
             .map_err(|err| internal_error(format!("failed to reload config: {err}")))
     }
 
+    pub(crate) fn begin_handoff_admission(
+        &self,
+    ) -> CodexResult<codex_core::ThreadManagerHandoffAdmissionGuard> {
+        self.thread_manager.begin_handoff_admission()
+    }
+
     pub(super) async fn load_thread(
         &self,
         thread_id: &str,

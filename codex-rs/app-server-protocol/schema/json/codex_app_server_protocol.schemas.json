@@ -5747,6 +5747,26 @@
           "properties": {
             "method": {
               "enum": [
+                "server/lifecycle/updated"
+              ],
+              "title": "Server/lifecycle/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ServerLifecycleUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Server/lifecycle/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "externalAgentConfig/import/progress"
               ],
               "title": "ExternalAgentConfig/import/progressNotificationMethod",
@@ -19954,6 +19974,48 @@
         ],
         "type": "object"
       },
+      "ServerLifecyclePhase": {
+        "description": "Process-local lifecycle phase for a shared app-server daemon.\n\n`Draining` means the server has begun a graceful restart and will reject new work admission while existing assistant turns drain. `Forced` means a second forceable shutdown signal arrived; the server may terminate before all work completes. Neither phase is a durable thread checkpoint.",
+        "enum": [
+          "ready",
+          "draining",
+          "forced"
+        ],
+        "type": "string"
+      },
+      "ServerLifecycleUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Emitted when the process lifecycle phase or draining turn count changes.",
+        "properties": {
+          "daemonInstanceId": {
+            "description": "UUID generated for this app-server process. It changes after restart.",
+            "type": "string"
+          },
+          "phase": {
+            "$ref": "#/definitions/v2/ServerLifecyclePhase"
+          },
+          "runningAssistantTurns": {
+            "description": "Number of assistant turns currently reported as running by this process.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "transitionId": {
+            "description": "UUID shared by lifecycle updates for one graceful drain attempt. It is absent while the process is ready.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "daemonInstanceId",
+          "phase",
+          "runningAssistantTurns"
+        ],
+        "title": "ServerLifecycleUpdatedNotification",
+        "type": "object"
+      },
       "ServerRequestResolvedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -21859,6 +21921,146 @@
         ],
         "title": "ThreadGoalUpdatedNotification",
         "type": "object"
+      },
+      "ThreadHandoffBlocker": {
+        "enum": [
+          "unsupportedTask",
+          "activeOperation",
+          "pendingApproval",
+          "pendingUserInput",
+          "pendingDynamicToolResponse",
+          "pendingInput",
+          "pendingMailbox",
+          "pendingDispatch",
+          "unifiedExecProcess",
+          "liveDescendants",
+          "persistence",
+          "versionMismatch",
+          "parentUnavailable",
+          "realtimeConversation",
+          "suspensionTimeout",
+          "taskExitedUnexpectedly",
+          "turnFinalization"
+        ],
+        "type": "string"
+      },
+      "ThreadHandoffNode": {
+        "description": "Stable thread identity and process-local state captured for recovery.",
+        "properties": {
+          "agentPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadHandoffBlocker"
+            },
+            "type": "array"
+          },
+          "parentThreadId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rolloutPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rootThreadId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/definitions/v2/ThreadHandoffNodeState"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wasPaused": {
+            "type": "boolean"
+          },
+          "wasRunning": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "blockers",
+          "rootThreadId",
+          "state",
+          "threadId",
+          "wasPaused",
+          "wasRunning"
+        ],
+        "type": "object"
+      },
+      "ThreadHandoffNodeState": {
+        "description": "Lifecycle state of one thread in a handoff receipt.",
+        "enum": [
+          "planned",
+          "suspending",
+          "suspended",
+          "notActive",
+          "recovering",
+          "restored",
+          "paused",
+          "needsAttention"
+        ],
+        "type": "string"
+      },
+      "ThreadHandoffReceipt": {
+        "description": "Durable receipt for a process handoff.",
+        "properties": {
+          "createdAt": {
+            "description": "Creation time as integer Unix seconds.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "handoffId": {
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadHandoffNode"
+            },
+            "type": "array"
+          },
+          "runtimeVersion": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/definitions/v2/ThreadHandoffState"
+          }
+        },
+        "required": [
+          "createdAt",
+          "handoffId",
+          "nodes",
+          "runtimeVersion",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ThreadHandoffState": {
+        "description": "Lifecycle state of a process handoff attempt.",
+        "enum": [
+          "prepared",
+          "draining",
+          "suspended",
+          "restoring",
+          "completed",
+          "needsAttention"
+        ],
+        "type": "string"
       },
       "ThreadHistoryMode": {
         "enum": [

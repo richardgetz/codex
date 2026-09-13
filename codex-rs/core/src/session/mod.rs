@@ -257,6 +257,7 @@ mod environment;
 pub(crate) mod extension_metrics;
 mod git_intent_preflight;
 mod handlers;
+pub(crate) mod handoff_preflight;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;
 mod input_queue;
@@ -316,6 +317,7 @@ enum LeadIdleRearm {
     AfterTeamEnable,
 }
 use self::thread_inbound_messages::start_thread_inbound_message_poller;
+pub(crate) use self::thread_inbound_messages::persist_handoff_inter_agent_communication;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
 use self::turn::agent_message_text;
@@ -1168,7 +1170,12 @@ impl Session {
         }
         let thread_id = session.thread_id;
         if let Some(state_db) = session.state_db() {
-            start_thread_inbound_message_poller(thread_id, state_db, tx_sub.clone());
+            start_thread_inbound_message_poller(
+                thread_id,
+                state_db,
+                tx_sub.clone(),
+                session.services.agent_control.clone(),
+            );
         }
 
         // This task will run until Op::Shutdown is received.
@@ -3130,6 +3137,18 @@ impl Session {
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
         let legacy_source = msg.clone();
+        // Terminal child callbacks can outlive the active task after it is detached. Count the
+        // whole event-to-parent-delivery window so handoff cannot publish a receipt while a
+        // direct V2 completion is still deciding whether to persist or enqueue its result.
+        let _handoff_terminal_delivery = if matches!(
+            &legacy_source,
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)
+        ) {
+            let delivery = self.services.agent_control.begin_handoff_terminal_delivery();
+            delivery
+        } else {
+            None
+        };
         if let EventMsg::Error(error) = &legacy_source
             && error
                 .codex_error_info

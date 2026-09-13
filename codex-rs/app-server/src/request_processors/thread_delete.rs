@@ -12,6 +12,10 @@ impl ThreadRequestProcessor {
         let mut deleted_thread_ids = Vec::new();
         let result = {
             let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+            let _manager_handoff_admission = self
+                .thread_manager
+                .begin_handoff_admission()
+                .map_err(|err| invalid_request(err.to_string()))?;
             self.thread_delete_response(params, &mut deleted_thread_ids)
                 .await
         };
@@ -41,7 +45,7 @@ impl ThreadRequestProcessor {
         self.validate_root_thread_delete(thread_id, thread_ids.len() > 1)
             .await?;
         for thread_id_to_delete in thread_ids.iter().copied() {
-            self.prepare_thread_for_delete(thread_id_to_delete).await;
+            self.prepare_thread_for_delete(thread_id_to_delete).await?;
         }
 
         let mut delete_order: Vec<_> = thread_ids.iter().skip(1).rev().copied().collect();
@@ -136,11 +140,15 @@ impl ThreadRequestProcessor {
         }
     }
 
-    async fn prepare_thread_for_delete(&self, thread_id: ThreadId) {
-        self.prepare_thread_for_removal(thread_id, "delete").await;
+    async fn prepare_thread_for_delete(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.prepare_thread_for_removal(thread_id, "delete").await?;
         if let Some(log_db) = self.log_db.as_ref() {
             log_db.flush().await;
         }
+        Ok(())
     }
 }
 

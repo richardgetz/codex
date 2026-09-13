@@ -23,6 +23,7 @@ use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Message;
 
 pub(crate) const CONTROL_SOCKET_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const COORDINATOR_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 const CLIENT_NAME: &str = "codex_app_server_daemon";
 const INITIALIZE_REQUEST_ID: RequestId = RequestId::Integer(1);
 
@@ -40,6 +41,66 @@ pub(crate) async fn probe(socket_path: &Path) -> Result<ProbeInfo> {
                 socket_path.display()
             )
         })?
+}
+
+/// Sends one experimental app-server request over the local control socket.
+///
+/// The daemon uses this for coordinator methods that are intentionally kept out
+/// of the daemon crate's protocol dependency. The response is returned to the
+/// caller so JSON-RPC errors can retain their structured journal data.
+pub(crate) async fn request(
+    socket_path: &Path,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<JSONRPCMessage> {
+    timeout(
+        COORDINATOR_RESPONSE_TIMEOUT,
+        request_inner(socket_path, method, params),
+    )
+    .await
+    .with_context(|| format!("timed out waiting for {method} response"))?
+}
+
+async fn request_inner(
+    socket_path: &Path,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<JSONRPCMessage> {
+    let mut websocket = connect(socket_path).await?;
+    initialize(&mut websocket, /*experimental_api*/ true).await?;
+    let initialized = JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "initialized".to_string(),
+        params: None,
+    });
+    send_message(&mut websocket, &initialized)
+        .await
+        .context("failed to send initialized notification")?;
+
+    let request_id = RequestId::Integer(2);
+    let request = JSONRPCMessage::Request(JSONRPCRequest {
+        id: request_id.clone(),
+        method: method.to_string(),
+        params,
+        trace: None,
+    });
+    send_message(&mut websocket, &request)
+        .await
+        .with_context(|| format!("failed to send {method} request"))?;
+
+    loop {
+        let message = read_message(&mut websocket).await?;
+        match &message {
+            JSONRPCMessage::Response(response) if response.id == request_id => {
+                websocket.close(None).await.ok();
+                return Ok(message);
+            }
+            JSONRPCMessage::Error(error) if error.id == request_id => {
+                websocket.close(None).await.ok();
+                return Ok(message);
+            }
+            _ => {}
+        }
+    }
 }
 
 async fn probe_inner(socket_path: &Path) -> Result<ProbeInfo> {

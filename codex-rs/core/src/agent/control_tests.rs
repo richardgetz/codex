@@ -1186,6 +1186,41 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 }
 
 #[tokio::test]
+async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
+    let harness = AgentControlHarness::new().await;
+    let (thread_id, thread) = harness.start_thread().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "retain this result".to_string(),
+        /*trigger_turn*/ false,
+    );
+    let _handoff = thread.begin_handoff().expect("seal handoff");
+
+    let error = harness
+        .control
+        .send_inter_agent_communication(
+            thread_id,
+            communication.clone(),
+            AgentCommunicationContext::new(AgentCommunicationKind::Result, ThreadId::new()),
+            Default::default(),
+        )
+        .await
+        .expect_err("sealed handoff should reject direct submission");
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(_)
+    ));
+
+    let (items, _) = thread.session.input_queue.drain_mailbox_input_items().await;
+    assert_eq!(
+        items,
+        vec![crate::session::TurnInput::InterAgentCommunication(communication)]
+    );
+}
+
+#[tokio::test]
 async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     check_v2_agent_reload(V2ReloadRoute::Sender).await;
 }
@@ -3953,7 +3988,8 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         })),
         tester_path.to_string(),
         Some(tester_path.clone()),
-    );
+    )
+    .await;
     let tester_turn = tester_thread.session.new_default_turn().await;
     tester_thread
         .session
@@ -4032,7 +4068,8 @@ async fn memory_subagent_completion_does_not_notify_parent() {
         Some(SessionSource::SubAgent(SubAgentSource::MemoryExtraction)),
         "memory".to_string(),
         Some(AgentPath::morpheus()),
-    );
+    )
+    .await;
     let memory_turn = memory_thread.session.new_default_turn().await;
     memory_thread
         .session
@@ -4056,6 +4093,58 @@ async fn memory_subagent_completion_does_not_notify_parent() {
 }
 
 #[tokio::test]
+async fn completion_watcher_ignores_handoff_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let (child_thread_id, child_thread) = harness.start_thread().await;
+
+    harness.control.maybe_start_completion_watcher(
+        child_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        child_thread_id.to_string(),
+        /*child_agent_path*/ None,
+    ).await;
+    harness.control.mark_handoff_suspended(child_thread_id);
+    send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
+
+    sleep(Duration::from_millis(100)).await;
+
+    assert!(!has_subagent_notification(
+        parent_thread.session.clone_history().await.raw_items(),
+    ));
+    assert!(!harness.control.take_handoff_suspended(child_thread_id));
+}
+
+#[tokio::test]
+async fn completion_watcher_forwards_natural_shutdown() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    let (child_thread_id, child_thread) = harness.start_thread().await;
+
+    harness.control.maybe_start_completion_watcher(
+        child_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        child_thread_id.to_string(),
+        /*child_agent_path*/ None,
+    ).await;
+    send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
+
+    assert!(wait_for_subagent_notification(&parent_thread).await);
+}
+
+#[tokio::test]
 async fn completion_watcher_notifies_parent_when_child_is_missing() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
@@ -4072,7 +4161,8 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
         })),
         child_thread_id.to_string(),
         /*child_agent_path*/ None,
-    );
+    )
+    .await;
 
     assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
 

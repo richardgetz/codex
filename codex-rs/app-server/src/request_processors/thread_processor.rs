@@ -1291,11 +1291,26 @@ impl ThreadRequestProcessor {
         Ok(ThreadUnsubscribeResponse { status })
     }
 
-    async fn prepare_thread_for_archive(&self, thread_id: ThreadId) {
-        self.prepare_thread_for_removal(thread_id, "archive").await;
+    async fn prepare_thread_for_archive(
+        &self,
+        thread_id: ThreadId,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.prepare_thread_for_removal(thread_id, "archive").await
     }
 
-    pub(super) async fn prepare_thread_for_removal(&self, thread_id: ThreadId, operation: &str) {
+    pub(super) async fn prepare_thread_for_removal(
+        &self,
+        thread_id: ThreadId,
+        operation: &str,
+    ) -> Result<(), JSONRPCErrorError> {
+        let _thread_handoff_admission = match self.thread_manager.get_thread(thread_id).await {
+            Ok(conversation) => Some(
+                conversation
+                    .begin_handoff_admission()
+                    .map_err(|err| invalid_request(err.to_string()))?,
+            ),
+            Err(_) => None,
+        };
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
         if let Some(conversation) = removed_conversation {
             info!("thread {thread_id} was active; shutting down");
@@ -1312,6 +1327,7 @@ impl ThreadRequestProcessor {
             }
         }
         self.finalize_thread_teardown(thread_id).await;
+        Ok(())
     }
 
     fn listener_task_context(&self) -> ListenerTaskContext {
@@ -1343,6 +1359,30 @@ impl ThreadRequestProcessor {
             raw_events_enabled,
         )
         .await
+    }
+
+    /// Attach the app-server event listener for a thread restored by handoff recovery.
+    ///
+    /// Recovery has no client connection to subscribe, but it must start the same listener task
+    /// used by ordinary resume before admitting an exact saved turn so completion and activity
+    /// events are buffered through the normal app-server channel.
+    pub(crate) async fn attach_recovery_listener(
+        &self,
+        conversation_id: ThreadId,
+        connection_id: ConnectionId,
+    ) -> Result<(), JSONRPCErrorError> {
+        self.thread_watch_manager
+            .upsert_thread_silently(&conversation_id.to_string())
+            .await;
+        match self
+            .ensure_conversation_listener(conversation_id, connection_id, /*raw_events_enabled*/ false)
+            .await?
+        {
+            EnsureConversationListenerResult::Attached => Ok(()),
+            EnsureConversationListenerResult::ConnectionClosed => Err(invalid_request(
+                format!("connection closed before recovered thread {conversation_id} could be attached"),
+            )),
+        }
     }
 
     async fn ensure_listener_task_running(
@@ -1934,6 +1974,10 @@ impl ThreadRequestProcessor {
         params: ThreadArchiveParams,
     ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _manager_handoff_admission = self
+            .thread_manager
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
         self.thread_archive_response(params).await
     }
 
@@ -1992,9 +2036,10 @@ impl ThreadRequestProcessor {
 
         archive_thread_ids[1..].reverse();
         // Collaboration may resume an archived descendant without unarchiving it.
-        self.prepare_thread_for_archive(thread_id).await;
+        self.prepare_thread_for_archive(thread_id).await?;
         for &descendant_thread_id in subtree_thread_ids.iter().skip(1).rev() {
-            self.prepare_thread_for_archive(descendant_thread_id).await;
+            self.prepare_thread_for_archive(descendant_thread_id)
+                .await?;
         }
 
         let archived_thread_ids = self
@@ -2317,6 +2362,10 @@ impl ThreadRequestProcessor {
         params: ThreadUnarchiveParams,
     ) -> Result<(ThreadUnarchiveResponse, ThreadUnarchivedNotification), JSONRPCErrorError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _manager_handoff_admission = self
+            .thread_manager
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let (response, thread_id) = self.thread_unarchive_response(params).await?;
         Ok((response, ThreadUnarchivedNotification { thread_id }))
     }
@@ -2327,6 +2376,14 @@ impl ThreadRequestProcessor {
     ) -> Result<(ThreadUnarchiveResponse, String), JSONRPCErrorError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
             .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
+        let _thread_handoff_admission = match self.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => Some(
+                thread
+                    .begin_handoff_admission()
+                    .map_err(|err| invalid_request(err.to_string()))?,
+            ),
+            Err(_) => None,
+        };
 
         let fallback_provider = self.config.model_provider_id.clone();
         let stored_thread = self
@@ -2368,11 +2425,18 @@ impl ThreadRequestProcessor {
         app_server_client_version: Option<String>,
     ) -> Result<(ThreadRevertResponse, String), JSONRPCErrorError> {
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _manager_handoff_admission = self
+            .thread_manager
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let ThreadRevertParams {
             thread_id,
             before_turn_id,
         } = params;
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        let _thread_handoff_admission = thread
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
         let config_snapshot = thread.config_snapshot().await;
         if !matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated) {
@@ -2592,7 +2656,14 @@ impl ThreadRequestProcessor {
             return Err(invalid_request("numTurns must be >= 1"));
         }
 
+        let _manager_handoff_admission = self
+            .thread_manager
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
         let (thread_id, thread) = self.load_thread(&thread_id).await?;
+        let _thread_handoff_admission = thread
+            .begin_handoff_admission()
+            .map_err(|err| invalid_request(err.to_string()))?;
         ensure_direct_input_allowed(thread.as_ref()).await?;
         if matches!(
             thread.config_snapshot().await.history_mode,
@@ -4648,6 +4719,13 @@ impl ThreadRequestProcessor {
                     // A loaded idle thread is only a cache entry. Shut it down
                     // before removing it so cold resume cannot duplicate a
                     // thread that timed out during shutdown.
+                    let _manager_handoff_admission = self
+                        .thread_manager
+                        .begin_handoff_admission()
+                        .map_err(|err| invalid_request(err.to_string()))?;
+                    let _thread_handoff_admission = existing_thread
+                        .begin_handoff_admission()
+                        .map_err(|err| invalid_request(err.to_string()))?;
                     match wait_for_thread_shutdown(&existing_thread).await {
                         ThreadShutdownResult::Complete => {
                             self.thread_manager.remove_thread(&existing_thread_id).await;
