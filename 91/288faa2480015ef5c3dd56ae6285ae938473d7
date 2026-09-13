@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-13/session-eta#91288faa2480"
+  change_type: "feat"
+  scope: "eta"
+  summary: "Persist root-session task estimates with explicit history and bounded app-server projections."
+  decision: "Use a SQLite root-scoped task and revision store, trusted actor/root derivation, explicit lifecycle operations, dependency-aware deterministic aggregation, and app-server v2 read/update notifications."
+  constraints:
+    - "Task IDs are namespaced by root session and worker mutations are limited to owned descendant tasks."
+    - "Original estimates and harness completion timing are immutable; idle, turn end, and elapsed ETA never infer completion."
+    - "Bounds, revisions, snapshots, history pages, and model tool output remain bounded; unknown, stale, and cancelled states stay explicit."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimates.rs::TaskEstimateStore"
+    - "codex-rs/state/src/runtime/task_estimate_math.rs::compute_overall"
+    - "codex-rs/core/src/tools/handlers/eta.rs::EtaHandler"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs::ThreadEtaRequestProcessor"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread_eta.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
