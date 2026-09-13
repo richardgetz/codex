@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-13/eta-tui-columns#02ddc82582"
+  change_type: "fix"
+  scope: "codex-rs/tui"
+  summary: "Keep ETA timing visible and compute active remaining ranges from stored snapshot anchors."
+  decision: "Reserve fixed task-table columns for timing at normal widths, derive active labels from generatedAt and startedAt with checked arithmetic, preserve stale/overdue/unknown labels, and omit internal sequence from the summary."
+  constraints:
+    - "Keep /eta read-only and event-driven; do not infer completion from idle, waiting, turn end, or wall-clock polling."
+    - "Preserve existing Active/History navigation, status labels, and root-scoped task projection."
+    - "Leave integrated Cargo, formatting, snapshot acceptance, and validation to the main build owner."
+  intent_priority: "normal"
+  code_locations:
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6-luna"
