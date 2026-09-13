@@ -39,6 +39,9 @@ impl App {
                     | AppEvent::BeginInitialHistoryReplayBuffer
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
                     | AppEvent::EndInitialHistoryReplayBuffer
+                    | AppEvent::OpenEta
+                    | AppEvent::ThreadEtaSnapshotLoaded { .. }
+                    | AppEvent::LoadEtaHistory { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -2881,6 +2884,23 @@ impl App {
             }
             AppEvent::OpenAgentsOverview => {
                 self.open_agents_overview(app_server);
+            }
+            AppEvent::OpenEta => {
+                self.open_eta(app_server);
+            }
+            AppEvent::ThreadEtaSnapshotLoaded {
+                root_thread_id,
+                request_id,
+                cursor,
+                result,
+            } => {
+                self.apply_eta_snapshot(root_thread_id, request_id, cursor, result);
+            }
+            AppEvent::LoadEtaHistory {
+                root_thread_id,
+                cursor,
+            } => {
+                self.refresh_eta(app_server, root_thread_id, Some(cursor));
             }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);

@@ -271,6 +271,14 @@ mod tests {
     }
 
     #[test]
+    fn eta_command_resolves_for_dispatch() {
+        assert_eq!(
+            find_builtin_command("eta", all_enabled_flags()),
+            Some(SlashCommand::Eta)
+        );
+    }
+
+    #[test]
     fn clean_command_alias_resolves_for_dispatch() {
         assert_eq!(
             find_builtin_command("clean", all_enabled_flags()),

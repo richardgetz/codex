@@ -362,6 +362,20 @@ pub(crate) enum AppEvent {
     },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
+    /// Open the read-only, root-scoped task estimate view.
+    OpenEta,
+    /// Merge a stored ETA snapshot fetched for the selected root session.
+    ThreadEtaSnapshotLoaded {
+        root_thread_id: ThreadId,
+        request_id: Uuid,
+        cursor: Option<String>,
+        result: Result<codex_app_server_protocol::ThreadEtaReadResponse, String>,
+    },
+    /// Load the next explicitly requested history page for the ETA view.
+    LoadEtaHistory {
+        root_thread_id: ThreadId,
+        cursor: String,
+    },
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.
     AgentPickerThreadsLoaded {
         primary_thread_id: ThreadId,

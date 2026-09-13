@@ -225,6 +225,8 @@ mod agents_overview_details;
 mod agents_overview_threads;
 mod agents_overview_view;
 pub(crate) use agents_overview::AGENTS_OVERVIEW_VIEW_ID;
+mod eta;
+mod eta_view;
 mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
@@ -671,6 +673,7 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     agents_overview: agents_overview::AgentsOverviewState,
+    eta: eta::EtaState,
     team_activity: team_activity::TeamActivityProjection,
     side_threads: HashMap<ThreadId, SideThreadState>,
     abandoned_side_threads: HashSet<ThreadId>,

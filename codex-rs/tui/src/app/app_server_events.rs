@@ -154,6 +154,11 @@ impl App {
             return;
         }
 
+        if let ServerNotification::ThreadEtaUpdated(eta) = &notification {
+            self.apply_eta_notification(eta);
+            return;
+        }
+
         if let ServerNotification::ThreadStarted(started) = &notification
             && started.thread.ephemeral
             && matches!(
