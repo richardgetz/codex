@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-09-13/session-eta-and-temp-enrollment#2e189bc75ff1"
+  change_type: feat
+  scope: "session ETA and temporary storage enrollment"
+  summary: "Keep configured temporary roots usable and expose durable session task estimates with completion history."
+  decision: "Resolve payload identity independently of explicit configuration, retain durable external state through a validated locator, and expose a bounded root-scoped ETA ledger through model updates and a read-only TUI."
+  constraints:
+    - "Preserve unknown payload data and existing live lock ownership; unavailable control state must not block session startup."
+    - "Do not infer task completion from idle state, elapsed estimates, or a completed model turn."
+    - "Keep original started estimates immutable, timestamps host-owned, history paginated, and model-facing updates bounded."
+    - "Reading ETA must not trigger inference; worker mutations remain scoped to owned tasks."
+    - "Merge through the stable pull request after checks pass; do not monitor after merge."
+  intent_priority: must
+  code_locations:
+    - codex-rs/session-tmp/src/state_locator.rs
+    - codex-rs/session-tmp/src/lib.rs
+    - codex-rs/state/src/runtime/task_estimates.rs
+    - codex-rs/state/src/runtime/task_estimate_math.rs
+    - codex-rs/core/src/tools/handlers/eta.rs
+    - codex-rs/app-server/src/request_processors/thread_eta_processor.rs
+    - codex-rs/tui/src/app/eta_view.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: codex
+    model: gpt-6
