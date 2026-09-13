@@ -99,10 +99,10 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
     let prepare_request = old_server
         .send_raw_request("thread/handoff/prepare", None)
         .await?;
-    drop(release_running_turn);
     let prepared: ThreadHandoffPrepareResponse =
         timeout(REQUEST_TIMEOUT, old_server.read_response(prepare_request)).await??;
     assert_eq!(prepared.receipt.state, ThreadHandoffState::Suspended);
+    drop(release_running_turn);
 
     // A successful prepare retains the manager/root fences in the coordinator's active map. The
     // archive request now has a deterministic post-seal rejection before any store mutation.
