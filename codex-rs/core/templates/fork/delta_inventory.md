@@ -107,17 +107,29 @@ release or merge rules.
   - Routing enforces the selected catalog model and effort. It does not provide
     a hard tool sandbox or attest that an external skill completed.
   - `[team.lead].dynamic_handoff` defaults to `false`. When true, the Lead
-    preflights before bulk log/trace, web/browser, or broad code/docs/repo
-    lookup and routes only work where Worker filtering reduces Lead context;
-    small or Lead-context-heavy lookups stay direct. Worker reports include
-    concise answers, selected evidence excerpts, and file/line/time/source
-    pointers, preserve uncertainty, and avoid full dumps. The Lead does not
-    repeat supported findings automatically; follow-up is limited to concrete
-    gaps or conflicts, blocked or incomplete Workers, or narrow excerpt
-    requests, reusing prior findings. The choice persists in thread team
-    snapshots; legacy snapshots default to false. This guidance is advisory,
-    retains normal delegation limits, and Worker processing still consumes
-    tokens.
+    preflights work and routes bulk investigation plus execution:
+    browser/UI automation (including Playwright, PinchTab, and CLI wrappers),
+    MCP/Apps/connectors, skills and artifact workflows, broad code/docs/repo
+    lookup, file edits, docs/Git or PR preparation, builds, tests, debugging,
+    CI monitoring, authorized release operations, and routine verification
+    loops by default when a Worker can complete the scoped work independently;
+    Workers provide bounded evidence so Lead context stays manageable. The Lead
+    retains planning, human alignment,
+    approval-sensitive decisions, and final acceptance; Workers receive bounded
+    scope and success criteria and return selected evidence, actions, status,
+    blockers, and uncertainty. Existing authentication, credential, approval,
+    destructive-operation, AGENTS.md, and skill boundaries remain in force.
+    The Lead retains human communication/alignment, planning/dispatch,
+    coordination, judgment/review, approval-sensitive tradeoffs, stop/redirect,
+    and final acceptance; any direct check must be bounded and necessary for
+    those decisions. Route execution by work type even when output is small or
+    the Lead knows the context. Higher
+    Lead balance adds
+    targeted review and failure-mode checkpoints after handoff without undoing
+    dynamic execution routing; lower balance reduces optional checks. This
+    guidance is advisory, keeps normal delegation limits, and makes no hard
+    runtime routing or token-use guarantee. The choice persists in thread team
+    snapshots; legacy snapshots default to false.
   - Root Fast/service-tier changes propagate to loaded direct and nested
     ThreadSpawn Workers' settings snapshots and client notifications. In-flight
     turns keep their captured request tier, while later and newly spawned turns
@@ -754,12 +766,20 @@ release or merge rules.
   unchanged. Verify balance remains independent of `dynamic_handoff`, leaves
   `oversight_timeout_minutes` unchanged, and adds no polling loop.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
-  `[team.lead]`, injects bounded role-specific Lead/Worker guidance when true,
-  keeps small or Lead-context-heavy lookups direct, requests concise selected
-  evidence with pointers and uncertainty, and avoids routine duplicate
-  lookups. Verify the setting persists through resume/fork snapshots, legacy
-  snapshots default to `false`, and existing delegation authorization,
-  concurrency, depth, and tool behavior remain unchanged.
+  `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
+  true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,
+  MCP/Apps/connectors, skills/artifact workflows, file edits, docs/Git/PR
+  preparation, builds/tests, debugging, CI monitoring, authorized release
+  operations, routine execution, and broad lookup; keeps direct checks bounded
+  and necessary for Lead decisions; preserves existing auth,
+  approval, destructive-operation, AGENTS.md, skill, concurrency, and depth
+  boundaries; requests concise selected evidence with pointers and uncertainty;
+  and avoids routine duplicate work. Verify dynamic-off Team behavior remains
+  unchanged, dynamic-on guidance is present at low and high Lead balance without
+  moving execution back to the Lead, Worker guidance is emitted, the setting
+  persists through resume/fork snapshots, and legacy snapshots default to
+  `false`. The guidance remains advisory and makes no hard runtime routing or
+  token-use guarantee.
 - Verify optional `[team.worker].max_concurrent` accepts only positive values,
   is rejected under `[team.lead]`, atomically limits pending starts and active
   followups across both backends, releases on completion/abort/shutdown, leaves
