@@ -1789,6 +1789,35 @@ pub(super) async fn submission_loop(
         } else {
             debug!(?sub, "Submission");
         }
+        // Durable inbound submissions are the handoff boundary between the state database and
+        // this session loop. Hold a manager recovery admission through dispatch so a recovery
+        // coordinator either waits for the item to be consumed or rejects it while it can still
+        // be unclaimed. Ordinary recovery controls (pause/recover) remain usable while this
+        // narrow guard protects only poller-delivered input and agent mail.
+        let durable_inbound = matches!(
+            &sub.op,
+            Op::UserInput { .. }
+                | Op::InterAgentCommunication { .. }
+                | Op::TeamLeadCompletion { .. }
+        );
+        let _recovery_admission = if durable_inbound {
+            let admission = sess.services.agent_control.begin_recovery_admission();
+            if admission.is_none() && sess.services.agent_control.recovery_pending() {
+                reject_handoff_submission(
+                    &sess,
+                    sub,
+                    CodexErr::InvalidRequest(
+                        "thread manager recovery is loading; durable inbound work remains queued"
+                            .to_string(),
+                    ),
+                )
+                .await;
+                continue;
+            }
+            admission
+        } else {
+            None
+        };
         let dispatch_span = submission_dispatch_span(&sub);
         let mut handoff_admission = if sub.op.requires_handoff_admission() {
             match sess.services.agent_control.begin_handoff_admission() {

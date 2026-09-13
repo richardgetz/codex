@@ -607,5 +607,88 @@ mod tests {
         assert_eq!(reclaimed.len(), 2);
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
+    #[tokio::test]
+    async fn recovery_gate_keeps_poller_rows_pending_until_success() {
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000207").expect("thread id");
+        let (runtime, codex_home) = create_poller_fixture(thread_id).await;
+        let input = vec![UserInput::Text {
+            text: "deliver after recovery".to_string(),
+            text_elements: Vec::new(),
+        }];
+        runtime
+            .enqueue_thread_inbound_message(
+                thread_id,
+                /*source_thread_id*/ None,
+                serde_json::to_string(&input).expect("serialize input"),
+            )
+            .await
+            .expect("enqueue inbound message");
+
+        let manager = crate::ThreadManager::with_models_provider_for_tests(
+            codex_login::CodexAuth::from_api_key("dummy"),
+            codex_model_provider_info::ModelProviderInfo::create_openai_provider(
+                /*base_url*/ None,
+            ),
+        );
+        let control = manager.agent_control();
+        let failed_recovery = manager
+            .begin_recovery_pending()
+            .expect("begin failed recovery attempt");
+        let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
+        start_thread_inbound_message_poller(
+            thread_id,
+            runtime.clone(),
+            tx_sub,
+            control,
+        );
+
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        let claimed = runtime
+            .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
+            .await
+            .expect("inspect pending row during recovery");
+        assert_eq!(claimed.len(), 1);
+        let message_id = claimed[0].id.clone();
+        assert!(
+            runtime
+                .unclaim_thread_inbound_message(&message_id)
+                .await
+                .expect("requeue pending row")
+        );
+        assert!(rx_sub.try_recv().is_err());
+
+        drop(failed_recovery);
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        let claimed_after_failed_drop = runtime
+            .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
+            .await
+            .expect("inspect row after failed recovery");
+        assert_eq!(claimed_after_failed_drop.len(), 1);
+        assert!(
+            runtime
+                .unclaim_thread_inbound_message(&claimed_after_failed_drop[0].id)
+                .await
+                .expect("requeue row after failed recovery")
+        );
+        assert!(rx_sub.try_recv().is_err());
+
+        let successful_recovery = manager
+            .begin_recovery_pending()
+            .expect("begin successful recovery attempt");
+        successful_recovery.wait_for_admissions().await;
+        successful_recovery.complete();
+
+        let submission = timeout(Duration::from_secs(/*secs*/ 4), rx_sub.recv())
+            .await
+            .expect("receive after recovery completes")
+            .expect("submission channel open");
+        match submission.op {
+            Op::UserInput { items, .. } => assert_eq!(items, input),
+            other => panic!("expected user input submission, got {other:?}"),
+        }
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
 
 }
