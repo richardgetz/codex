@@ -361,6 +361,23 @@ impl AgentControl {
     pub(crate) fn handoff_admission_sealed(&self) -> bool {
         self.handoff_admission_sealed.load(Ordering::Acquire)
     }
+
+    /// Returns true while the replacement manager is loading and admitting a recovered graph.
+    pub(crate) fn recovery_pending(&self) -> bool {
+        self.manager
+            .upgrade()
+            .map(|state| state.recovery_pending())
+            .unwrap_or(false)
+    }
+
+    /// Admit one durable inbound poller claim while replacement recovery is idle.
+    pub(crate) fn begin_recovery_admission(
+        &self,
+    ) -> Option<crate::thread_manager_handoff::ThreadManagerRecoveryAdmissionGuard> {
+        self.manager
+            .upgrade()
+            .and_then(|state| state.begin_recovery_admission())
+    }
 }
 
 #[cfg(test)]

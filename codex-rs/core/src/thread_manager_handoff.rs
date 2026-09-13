@@ -27,6 +27,11 @@ pub(crate) struct ThreadManagerHandoffState {
     sealed: AtomicBool,
     in_flight: AtomicU32,
     notify: Notify,
+    /// Keeps replacement sessions from claiming durable inbound work until the recovery
+    /// coordinator has loaded the complete graph and admitted its exact turns.
+    recovery_pending: AtomicBool,
+    recovery_in_flight: AtomicU32,
+    recovery_notify: Notify,
 }
 
 impl Default for ThreadManagerHandoffState {
@@ -35,6 +40,9 @@ impl Default for ThreadManagerHandoffState {
             sealed: AtomicBool::new(false),
             in_flight: AtomicU32::new(0),
             notify: Notify::new(),
+            recovery_pending: AtomicBool::new(false),
+            recovery_in_flight: AtomicU32::new(0),
+            recovery_notify: Notify::new(),
         }
     }
 }
@@ -70,6 +78,47 @@ impl ThreadManagerHandoffState {
 
     pub(crate) fn sealed(&self) -> bool {
         self.sealed.load(Ordering::Acquire)
+    }
+
+    /// Mark this manager as recovering before loading any replacement sessions.
+    ///
+    /// The guard is intentionally fail-closed: dropping it without calling
+    /// [`ThreadManagerRecoveryGuard::complete`] leaves the bit set so a failed or interrupted
+    /// recovery cannot consume durable inbound work from a partially restored graph. A later
+    /// explicit recovery attempt may acquire another guard and clear the bit only after it has
+    /// completed successfully.
+    pub(crate) fn begin_recovery_pending(self: &Arc<Self>) -> ThreadManagerRecoveryGuard {
+        self.recovery_pending.store(true, Ordering::Release);
+        ThreadManagerRecoveryGuard {
+            state: Arc::clone(self),
+            completed: false,
+        }
+    }
+
+    /// Admit one short durable-inbound poller claim while recovery is not pending.
+    ///
+    /// The second bit check closes the race where recovery starts after the first check but before
+    /// the poller claims a row. The coordinator waits for these permits before loading nodes, so a
+    /// claim that crossed the boundary finishes its unclaim/enqueue work before recovery proceeds.
+    pub(crate) fn begin_recovery_admission(
+        self: &Arc<Self>,
+    ) -> Option<ThreadManagerRecoveryAdmissionGuard> {
+        if self.recovery_pending.load(Ordering::Acquire) {
+            return None;
+        }
+        self.recovery_in_flight.fetch_add(1, Ordering::AcqRel);
+        if self.recovery_pending.load(Ordering::Acquire) {
+            self.recovery_in_flight.fetch_sub(1, Ordering::AcqRel);
+            self.recovery_notify.notify_waiters();
+            return None;
+        }
+        Some(ThreadManagerRecoveryAdmissionGuard {
+            state: Arc::clone(self),
+        })
+    }
+
+    pub(crate) fn recovery_pending(&self) -> bool {
+        self.recovery_pending.load(Ordering::Acquire)
     }
 }
 
@@ -132,6 +181,61 @@ impl Drop for ThreadManagerHandoffAdmissionGuard {
     }
 }
 
+/// RAII owner of the manager-wide replacement recovery fence.
+///
+/// Dropping this guard before [`Self::complete`] keeps recovery pending, so a failed or
+/// interrupted replacement cannot consume durable inbound work from a partially restored graph.
+#[derive(Debug)]
+pub struct ThreadManagerRecoveryGuard {
+    state: Arc<ThreadManagerHandoffState>,
+    completed: bool,
+}
+
+impl ThreadManagerRecoveryGuard {
+    /// Wait for durable inbound claims that crossed the recovery boundary to finish.
+    pub async fn wait_for_admissions(&self) {
+        loop {
+            let notified = self.state.recovery_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.state.recovery_in_flight.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Mark replacement recovery complete and reopen durable inbound polling.
+    pub fn complete(mut self) {
+        self.state.recovery_pending.store(false, Ordering::Release);
+        self.state.recovery_notify.notify_waiters();
+        self.completed = true;
+    }
+}
+
+impl Drop for ThreadManagerRecoveryGuard {
+    fn drop(&mut self) {
+        // Keep failed or interrupted recovery fail-closed. A later explicit recovery operation
+        // may acquire another guard and call complete after it has restored the graph safely.
+        if !self.completed {
+            self.state.recovery_notify.notify_waiters();
+        }
+    }
+}
+
+/// RAII permit for one durable inbound poller claim during normal runtime.
+#[derive(Debug)]
+pub(crate) struct ThreadManagerRecoveryAdmissionGuard {
+    state: Arc<ThreadManagerHandoffState>,
+}
+
+impl Drop for ThreadManagerRecoveryAdmissionGuard {
+    fn drop(&mut self) {
+        self.state.recovery_in_flight.fetch_sub(1, Ordering::AcqRel);
+        self.state.recovery_notify.notify_waiters();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ThreadManagerHandoffState;
@@ -165,5 +269,40 @@ mod tests {
         assert!(!waiter.is_finished());
         drop(admission);
         waiter.await.expect("waiter");
+    }
+
+    #[test]
+    fn failed_recovery_stays_pending_until_explicit_success() {
+        let state = Arc::new(ThreadManagerHandoffState::default());
+        let guard = state.begin_recovery_pending();
+        assert!(state.recovery_pending());
+        assert!(state.begin_recovery_admission().is_none());
+
+        drop(guard);
+        assert!(state.recovery_pending());
+
+        let guard = state.begin_recovery_pending();
+        guard.complete();
+        assert!(!state.recovery_pending());
+        assert!(state.begin_recovery_admission().is_some());
+    }
+
+    #[tokio::test]
+    async fn recovery_wait_drains_claims_before_completion() {
+        let state = Arc::new(ThreadManagerHandoffState::default());
+        let admission = state
+            .begin_recovery_admission()
+            .expect("normal poller admission");
+        let guard = state.begin_recovery_pending();
+        let state_for_assertion = Arc::clone(&state);
+        let waiter = tokio::spawn(async move {
+            guard.wait_for_admissions().await;
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        drop(admission);
+        waiter.await.expect("recovery admission waiter");
+        assert!(state_for_assertion.recovery_pending());
     }
 }

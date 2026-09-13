@@ -21,6 +21,7 @@ use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::thread_manager_handoff::ThreadManagerHandoffAdmissionGuard;
 use crate::thread_manager_handoff::ThreadManagerHandoffGuard;
 use crate::thread_manager_handoff::ThreadManagerHandoffState;
+use crate::thread_manager_handoff::ThreadManagerRecoveryGuard;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
@@ -922,6 +923,16 @@ impl ThreadManager {
     /// Returns true after this manager's all-root handoff gate has sealed.
     pub fn handoff_admission_sealed(&self) -> bool {
         self.state.handoff_admission_sealed()
+    }
+
+    /// Defer durable inbound polling while replacement recovery loads and admits this manager's
+    /// complete thread graph.
+    ///
+    /// The returned guard remains fail-closed when dropped. Call
+    /// [`ThreadManagerRecoveryGuard::complete`] only after a successful recovery journal has been
+    /// persisted.
+    pub fn begin_recovery_pending(&self) -> ThreadManagerRecoveryGuard {
+        self.state.begin_recovery_pending()
     }
 
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
@@ -1954,6 +1965,20 @@ impl ThreadManagerState {
 
     pub(crate) fn handoff_admission_sealed(&self) -> bool {
         self.handoff.sealed()
+    }
+
+    pub(crate) fn begin_recovery_pending(&self) -> ThreadManagerRecoveryGuard {
+        self.handoff.begin_recovery_pending()
+    }
+
+    pub(crate) fn begin_recovery_admission(
+        &self,
+    ) -> Option<crate::thread_manager_handoff::ThreadManagerRecoveryAdmissionGuard> {
+        self.handoff.begin_recovery_admission()
+    }
+
+    pub(crate) fn recovery_pending(&self) -> bool {
+        self.handoff.recovery_pending()
     }
 
     /// Return the manager's durable state database even when a target thread is not loaded.

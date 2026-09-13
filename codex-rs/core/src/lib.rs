@@ -146,6 +146,7 @@ pub use thread_manager::StartThreadOptions;
 pub use thread_manager::ThreadManager;
 pub use thread_manager_handoff::ThreadManagerHandoffAdmissionGuard;
 pub use thread_manager_handoff::ThreadManagerHandoffGuard;
+pub use thread_manager_handoff::ThreadManagerRecoveryGuard;
 pub use thread_manager::ThreadSettingsOverrideFlags;
 pub use thread_manager::ThreadShutdownReport;
 pub use thread_manager::build_models_manager;

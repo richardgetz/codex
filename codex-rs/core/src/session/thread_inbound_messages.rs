@@ -108,6 +108,19 @@ pub(super) fn start_thread_inbound_message_poller(
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(THREAD_INBOUND_MESSAGE_POLL_INTERVAL).await;
+            if agent_control.recovery_pending() {
+                // Replacement recovery owns the graph while it loads every node, restores pause
+                // state, and admits exact turns. Leave durable rows pending until that boundary is
+                // complete; claiming here would make a process-local submission invisible to the
+                // recovery journal.
+                continue;
+            }
+            let _recovery_admission = agent_control.begin_recovery_admission();
+            if agent_control.recovery_pending() {
+                // If recovery sealed after the first check, the manager admission guard either
+                // rejected this claim or keeps the coordinator waiting until this iteration ends.
+                continue;
+            }
             if agent_control.handoff_inbound_unsupported() {
                 // Leave the row pending but avoid reclaiming it every second. A replacement with a
                 // compatible schema gets a fresh control handle and retries it from the database.
