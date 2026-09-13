@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::anyhow;
 use codex_app_server_protocol::JSONRPCMessage;
 use serde::Deserialize;
 use serde::Serialize;

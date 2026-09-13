@@ -64,15 +64,13 @@ impl Daemon {
         ensure_apply_launcher(&settings)?;
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
         if managed_codex_bin != attempt.managed_codex_path {
+            let failure = format!(
+                "configured Codex launcher changed from {} to {}; refusing recovery",
+                attempt.managed_codex_path.display(),
+                managed_codex_bin.display()
+            );
             return self
-                .mark_needs_attention(
-                    &mut attempt,
-                    format!(
-                        "configured Codex launcher changed from {} to {}; refusing recovery",
-                        attempt.managed_codex_path.display(),
-                        managed_codex_bin.display()
-                    ),
-                )
+                .mark_needs_attention(&mut attempt, failure)
                 .await;
         }
         self.ensure_managed_codex_bin(managed_codex_bin)?;
