@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-13/eta-final-format#c5c36bd356"
+  change_type: chore
+  scope: eta
+  summary: Apply repository formatting and lint-safe rewrites across the ETA implementation and tests.
+  decision: Keep generated and source files synchronized with the repository formatter and apply only diagnostics emitted by the scoped clippy pass.
+  constraints:
+    - Limit formatting changes to files participating in the ETA feature and its focused tests.
+    - Do not alter behavior after the validated source and schema checkpoints.
+    - Preserve the required no-tests-after-format boundary.
+  intent_priority: must
+  code_locations:
+    - codex-rs/app-server
+    - codex-rs/app-server-protocol
+    - codex-rs/config
+    - codex-rs/core
+    - codex-rs/session-tmp
+    - codex-rs/state
+    - codex-rs/tui
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
