@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
 use codex_app_server_protocol::ThreadHandoffNodeState;
@@ -111,7 +112,7 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
         .await?;
     let fenced_archive_error: JSONRPCError = timeout(
         REQUEST_TIMEOUT,
-        old_server.read_response(fenced_archive_request),
+        old_server.read_stream_until_error_message(RequestId::Integer(fenced_archive_request)),
     )
     .await??;
     assert_eq!(fenced_archive_error.error.code, -32600);
