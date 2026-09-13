@@ -518,6 +518,14 @@ client_request_definitions! {
         response: v2::ServerDiagnosticsResponse,
     },
 
+    #[experimental("server/lifecycle/read")]
+    /// Read the process-local lifecycle state of the shared app-server daemon.
+    ServerLifecycleRead => "server/lifecycle/read" {
+        params: v2::ServerLifecycleReadParams,
+        serialization: None,
+        response: v2::ServerLifecycleReadResponse,
+    },
+
     #[experimental("userVerification/status")]
     UserVerificationStatus => "userVerification/status" {
         params: v2::UserVerificationStatusParams,
@@ -2030,6 +2038,8 @@ server_notification_definitions! {
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
     RemoteControlStatusChanged => "remoteControl/status/changed" (v2::RemoteControlStatusChangedNotification),
+    #[experimental("server/lifecycle/updated")]
+    ServerLifecycleUpdated => "server/lifecycle/updated" (v2::ServerLifecycleUpdatedNotification),
     ExternalAgentConfigImportProgress => "externalAgentConfig/import/progress" (v2::ExternalAgentConfigImportProgressNotification),
     ExternalAgentConfigImportCompleted => "externalAgentConfig/import/completed" (v2::ExternalAgentConfigImportCompletedNotification),
     FsChanged => "fs/changed" (v2::FsChangedNotification),

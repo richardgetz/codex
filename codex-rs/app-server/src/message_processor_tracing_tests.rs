@@ -1,6 +1,7 @@
 use super::ConnectionSessionState;
 use super::MessageProcessor;
 use super::MessageProcessorArgs;
+use super::server_lifecycle::ServerLifecycle;
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::outgoing_message::ConnectionId;
@@ -268,6 +269,7 @@ async fn build_test_processor(
         auth_manager,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         code_mode_session_provider: None,
+        server_lifecycle: Arc::new(ServerLifecycle::new()),
         rpc_transport: AppServerRpcTransport::Stdio,
         remote_control_handle: None,
         plugin_startup_tasks: Some(PluginStartupConfig::Current),

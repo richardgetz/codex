@@ -52,6 +52,8 @@ use crate::request_processors::read_server_diagnostics;
 use crate::request_serialization::QueuedInitializedRequest;
 use crate::request_serialization::RequestSerializationQueueKey;
 use crate::request_serialization::RequestSerializationQueues;
+use crate::server_lifecycle::NEW_WORK_REJECTED_MESSAGE;
+use crate::server_lifecycle::ServerLifecycle;
 use crate::skills_watcher::SkillsWatcher;
 use crate::thread_state::ConnectionCapabilities;
 use crate::thread_state::ThreadStateManager;
@@ -163,6 +165,7 @@ pub(crate) struct MessageProcessor {
     turn_processor: TurnRequestProcessor,
     windows_sandbox_processor: WindowsSandboxRequestProcessor,
     request_serialization_queues: RequestSerializationQueues,
+    server_lifecycle: Arc<ServerLifecycle>,
 }
 
 #[derive(Debug)]
@@ -258,6 +261,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) installation_id: String,
     pub(crate) code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>>,
+    pub(crate) server_lifecycle: Arc<ServerLifecycle>,
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     /// `None` skips startup tasks; otherwise preserve the initial config-loading path.
@@ -283,6 +287,7 @@ impl MessageProcessor {
             auth_manager,
             installation_id,
             code_mode_session_provider,
+            server_lifecycle,
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
@@ -597,6 +602,7 @@ impl MessageProcessor {
             turn_processor,
             windows_sandbox_processor,
             request_serialization_queues,
+            server_lifecycle,
         }
     }
 
@@ -624,6 +630,12 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id.clone(),
         };
+        if self.server_lifecycle.rejects_new_work(request_method) {
+            self.outgoing
+                .send_error(request_id, invalid_request(NEW_WORK_REJECTED_MESSAGE))
+                .await;
+            return;
+        }
         let request_span =
             crate::app_server_tracing::request_span(&request, transport, connection_id, &session);
         let request_trace = request.trace.as_ref().map(|trace| W3cTraceContext {
@@ -676,6 +688,15 @@ impl MessageProcessor {
             connection_id,
             request_id: request.id().clone(),
         };
+        if self
+            .server_lifecycle
+            .rejects_new_work(request.method_name())
+        {
+            self.outgoing
+                .send_error(request_id, invalid_request(NEW_WORK_REJECTED_MESSAGE))
+                .await;
+            return;
+        }
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
         let request_context =
@@ -999,6 +1020,9 @@ impl MessageProcessor {
                 Err(crate::user_verification::unavailable())
             }
             ClientRequest::ServerDiagnostics { .. } => Ok(Some(read_server_diagnostics().into())),
+            ClientRequest::ServerLifecycleRead { .. } => {
+                Ok(Some(self.server_lifecycle.read().into()))
+            }
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)

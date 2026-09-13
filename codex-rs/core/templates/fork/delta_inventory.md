@@ -306,6 +306,21 @@ release or merge rules.
     omitted edges are pruned without polling. This keeps unfinished direct and
     nested Workers visible when `ThreadStarted` metadata is delayed.
 
+- Shared app-server restart observability and admission fencing:
+  - App-server v2 exposes experimental `server/lifecycle/read` and
+    `server/lifecycle/updated` with a process-local daemon identity, drain
+    transition identity, lifecycle phase, and running assistant-turn count.
+  - Once graceful shutdown begins, new thread/turn, queued-turn, goal,
+    activity-continue, usage resume, response-item injection, review, realtime
+    start/input, MCP tool/event-stream start, compact, shell-command, Windows sandbox setup, and
+    standalone process/command
+    admission is rejected
+    across initialized connections while reads, interruption, approval, and
+    other resolution traffic remain available while the drain waits for turns
+    or until a forceable second signal. This is a
+    process-local fence only: it does not persist worker graphs or pause state,
+    suspend/replay external commands, or preserve pending client callbacks.
+
 - Recursive per-response usage accounting:
   - App-server v2 sends the legacy context-window counters through
     `thread/tokenUsage/updated` and a separate complete billing baseline through
@@ -862,6 +877,19 @@ release or merge rules.
   and interval bounds,
   known-reset scheduling, hourly fallback account refresh, floor-paused work,
   `/continue` wake/report behavior, and cancellation/manual-stop preservation.
+- Verify `server/lifecycle/read` reports a process-local daemon identity and
+  truthful `ready`/`draining`/`forced` phase, `server/lifecycle/updated` attempts
+  delivery to opted-in clients for phase and running-turn changes before a
+  shutdown disconnect. A graceful drain rejects new thread/turn, queue, review,
+  realtime start/input, compact, goal, activity-continue, usage resume,
+  response-item injection, MCP tool/event-stream start, shell-command, Windows sandbox setup,
+  command, and process admission
+  while preserving read, interrupt, approval,
+  and response-resolution traffic. The stage fences app-server request ingress;
+  queued requests and Core-owned automatic continuations still require the
+  shared handoff coordinator to close their internal admission paths. Confirm
+  lifecycle identifiers are not treated as durable rollout or thread-resume
+  receipts.
 - Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
   newly loaded descendants, gate future model/tool starts and automatic Lead or
   usage wakes, preserve retained work without synthetic turns, and report
