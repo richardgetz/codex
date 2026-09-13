@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-13/eta-protocol-schema#dd33748dcd"
+  change_type: fix
+  scope: app-server-protocol
+  summary: Publish stable and experimental ETA protocol schema fixtures with valid nested optional field typing.
+  decision: Keep nullable operation fields represented as nullable values in the nested operation type, while reserving optional-nullable TypeScript properties for top-level request parameter structs.
+  constraints:
+    - Preserve the JSON-RPC ETA request and notification wire shapes.
+    - Keep generated JSON and TypeScript fixtures synchronized with protocol derives.
+    - Do not change unrelated app-server protocol schemas.
+  intent_priority: must
+  code_locations:
+    - codex-rs/app-server-protocol/src/protocol/v2/thread_eta.rs
+    - codex-rs/app-server-protocol/schema
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
