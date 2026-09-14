@@ -14,6 +14,7 @@ mod decision_provenance_advisory;
 mod developer_instructions;
 mod environment_context;
 mod environments_instructions;
+mod eta_reminder_message;
 mod fork_help_instructions;
 mod git_intent_notes_instructions;
 mod guardian_approved_action;
@@ -93,6 +94,9 @@ pub(crate) use conventional_commits_instructions::ConventionalCommitsInstruction
 pub(crate) use current_time_reminder::CurrentTimeReminder;
 pub(crate) use decision_provenance_advisory::DecisionProvenanceAdvisory;
 pub(crate) use developer_instructions::DeveloperInstructions;
+pub(crate) use eta_reminder_message::EtaReminderMessage;
+pub(crate) use eta_reminder_message::ReminderTrigger;
+pub(crate) use eta_reminder_message::format_reminder;
 pub(crate) use environments_instructions::EnvironmentsInstructions;
 pub(crate) use fork_help_instructions::ForkHelpInstructions;
 pub(crate) use git_intent_notes_instructions::GitIntentNotesInstructions;
