@@ -178,10 +178,25 @@ pub struct OrchestratorFeatureToml {
     pub enabled: Option<bool>,
 }
 
+/// Event-driven ETA reminder settings.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct EtaConfigToml {
+    /// Minimum age of an unchanged estimate before the owning agent receives a freshness
+    /// reminder. A known upper estimate may extend this to one quarter of that estimate.
+    /// Defaults to 15 minutes.
+    #[schemars(range(min = 1, max = 52560000))]
+    pub freshness_minimum_minutes: Option<u64>,
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
+    /// Event-driven freshness and overdue reminders for explicit task estimates.
+    #[serde(default)]
+    pub eta: Option<EtaConfigToml>,
+
     /// Optional override of model selection.
     pub model: Option<String>,
     /// Review model override used by the `/review` feature.

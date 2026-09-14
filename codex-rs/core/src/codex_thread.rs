@@ -1101,6 +1101,16 @@ impl CodexThread {
         self.session.thread_config_snapshot().await
     }
 
+    /// Returns the configured ETA freshness age for this thread's root session.
+    pub async fn eta_freshness_minimum_seconds(&self) -> u64 {
+        self.session
+            .get_config()
+            .await
+            .eta
+            .freshness_minimum_minutes
+            .saturating_mul(60)
+    }
+
     pub async fn memory_write_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
         self.session.memory_write_permit().await
     }

@@ -1415,6 +1415,8 @@ pub struct Config {
     pub rollout_budget: Option<RolloutBudgetConfig>,
     /// Current-time reminder and clock tool configuration, when enabled.
     pub current_time_reminder: Option<CurrentTimeReminderConfig>,
+    /// Event-driven ETA freshness reminder configuration.
+    pub eta: EtaConfig,
     /// How the sleep tool is selected when its feature gate is enabled.
     pub sleep_tool_mode: SleepToolMode,
 
@@ -1614,6 +1616,24 @@ pub struct CurrentTimeReminderConfig {
     pub delivery_mode: CurrentTimeReminderDeliveryMode,
     /// Whether to expose the input-interruptible `clock.sleep` tool.
     pub sleep_tool: bool,
+}
+
+/// Event-driven ETA reminder settings shared by a root session and its workers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct EtaConfig {
+    /// Minimum age of an unchanged estimate before a freshness reminder is delivered. A known
+    /// upper estimate may extend this to one quarter of that estimate.
+    pub freshness_minimum_minutes: u64,
+}
+
+pub const DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES: u64 = 15;
+
+impl Default for EtaConfig {
+    fn default() -> Self {
+        Self {
+            freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
+        }
+    }
 }
 
 impl Default for CurrentTimeReminderConfig {
@@ -3380,6 +3400,23 @@ fn resolve_current_time_reminder_config(
     }))
 }
 
+fn resolve_eta_config(config_toml: &ConfigToml) -> std::io::Result<EtaConfig> {
+    let freshness_minimum_minutes = config_toml
+        .eta
+        .as_ref()
+        .and_then(|config| config.freshness_minimum_minutes)
+        .unwrap_or(DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES);
+    if freshness_minimum_minutes == 0 || freshness_minimum_minutes > 52_560_000 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "eta.freshness_minimum_minutes must be between 1 and 52560000 minutes",
+        ));
+    }
+    Ok(EtaConfig {
+        freshness_minimum_minutes,
+    })
+}
+
 fn resolve_terminal_resize_reflow_config(config_toml: &ConfigToml) -> TerminalResizeReflowConfig {
     let Some(tui) = config_toml.tui.as_ref() else {
         return TerminalResizeReflowConfig::default();
@@ -4337,6 +4374,7 @@ impl Config {
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
         let current_time_reminder = resolve_current_time_reminder_config(&cfg, &features)?;
+        let eta = resolve_eta_config(&cfg)?;
         let sleep_tool_mode = cfg
             .features
             .as_ref()
@@ -5159,6 +5197,7 @@ impl Config {
             token_budget_startup_config: None,
             rollout_budget,
             current_time_reminder,
+            eta,
             sleep_tool_mode,
             features,
             suppress_unstable_features_warning: cfg

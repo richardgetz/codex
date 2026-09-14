@@ -1301,6 +1301,20 @@
       },
       "type": "object"
     },
+    "EtaConfigToml": {
+      "additionalProperties": false,
+      "description": "Event-driven ETA reminder settings.",
+      "properties": {
+        "freshness_minimum_minutes": {
+          "description": "Minimum age of an unchanged estimate before the owning agent receives a freshness reminder; a known upper estimate may extend this to one quarter. Defaults to 15 minutes.",
+          "format": "uint64",
+          "maximum": 52560000.0,
+          "minimum": 1.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "EnablementConfig": {
       "additionalProperties": false,
       "properties": {
@@ -7761,6 +7775,14 @@
         }
       },
       "type": "object"
+    },
+    "eta": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/EtaConfigToml"
+        }
+      ],
+      "description": "Event-driven freshness and overdue reminders for explicit task estimates."
     },
     "feedback": {
       "allOf": [

@@ -4,6 +4,7 @@ use codex_config::TeamToml;
 use codex_config::TeamWorkerProfileToml;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::EtaConfigToml;
 use codex_config::config_toml::OrchestratorFeatureToml;
 use codex_config::config_toml::OrchestratorToml;
 use codex_config::types::DecisionProvenanceToml;
@@ -130,6 +131,13 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
     lock_config.personality = sc.step_settings.personality;
     lock_config.approval_policy = Some(sc.step_settings.approval_policy.value());
     lock_config.approvals_reviewer = Some(sc.step_settings.approvals_reviewer);
+    lock_config.eta = Some(EtaConfigToml {
+        freshness_minimum_minutes: Some(
+            sc.original_config_do_not_use
+                .eta
+                .freshness_minimum_minutes,
+        ),
+    });
 }
 
 /// Saves values stored on `Config` after higher-level resolution,

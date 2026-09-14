@@ -112,6 +112,20 @@ after work has already started has no prediction baseline and is classified as
 unknown. Cancelled tasks remain visible as cancelled history and have unknown
 accuracy; blocked tasks remain active until an explicit terminal update.
 
+Saved estimates remain visible after they age past the freshness window. The
+`/eta` view marks an aged row with a warning icon and explains that the saved
+range may be outdated; it never replaces the range with a `stale` label. The
+default freshness minimum is 15 minutes and can be changed with
+`[eta].freshness_minimum_minutes` in `config.toml`. For each task,
+the actual freshness delay is the greater of that minimum and one quarter of
+the latest saved upper estimate (rounded up); an unknown upper bound uses the
+configured minimum.
+
+This stage defines the saved-range projection and adaptive freshness policy;
+the owner-routed reminder scheduler is delivered by a dependent stage. Child
+revisions synchronously recompute dependency and parallel aggregates while
+grouping parents remain excluded from double counting.
+
 The model-facing tool accepts at most eight operations per call so its response
 remains bounded and returns every changed task summary. The public app-server
 update may batch more operations. The unfinished-task cap applies only to

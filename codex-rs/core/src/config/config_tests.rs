@@ -1792,6 +1792,35 @@ sleep_tool = true
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
+    let default_config = load_current_time_reminder_config("\n").await?;
+    assert_eq!(
+        default_config.eta,
+        EtaConfig {
+            freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
+        }
+    );
+
+    let configured =
+        load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 45\n").await?;
+    assert_eq!(
+        configured.eta,
+        EtaConfig {
+            freshness_minimum_minutes: 45,
+        }
+    );
+
+    let error = load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 0\n")
+        .await
+        .expect_err("zero freshness window should be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error
+        .to_string()
+        .contains("eta.freshness_minimum_minutes must be between 1"));
+    Ok(())
+}
+
 async fn load_current_time_reminder_config(config_toml: &str) -> std::io::Result<Config> {
     let codex_home = tempdir()?;
     let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
