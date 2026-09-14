@@ -80,24 +80,51 @@ impl ThreadEtaRequestProcessor {
         if !self.root_exists(state_db, root_thread_id).await? {
             return Err(invalid_request("ETA root thread was not found"));
         }
-        let freshness_minimum_seconds = self
-            .freshness_minimum_seconds(state_db, root_thread_id)
-            .await;
-        let snapshot = state_db
-            .read_task_estimate_snapshot_with_freshness_minimum(
-                root_thread_id,
-                Utc::now(),
-                params.cursor.as_deref(),
-                Some(
-                    params
-                        .limit
-                        .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
-                        .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
-                ),
-                freshness_minimum_seconds,
-            )
-            .await
-            .map_err(|err| internal_error(format!("failed to read ETA snapshot: {err}")))?;
+        let root_thread = self.thread_manager.get_thread(root_thread_id).await.ok();
+        let (snapshot, freshness_minimum_seconds) = if let Some(thread) = root_thread.as_ref() {
+            let _eta_dispatch = thread.lock_eta_reminders().await;
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id)
+                .await;
+            let snapshot = state_db
+                .read_task_estimate_snapshot_with_freshness_minimum(
+                    root_thread_id,
+                    Utc::now(),
+                    params.cursor.as_deref(),
+                    Some(
+                        params
+                            .limit
+                            .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
+                            .clamp(1, MAX_HISTORY_LIMIT as u32)
+                            as usize,
+                    ),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| internal_error(format!("failed to read ETA snapshot: {err}")))?;
+            (snapshot, freshness_minimum_seconds)
+        } else {
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id)
+                .await;
+            let snapshot = state_db
+                .read_task_estimate_snapshot_with_freshness_minimum(
+                    root_thread_id,
+                    Utc::now(),
+                    params.cursor.as_deref(),
+                    Some(
+                        params
+                            .limit
+                            .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
+                            .clamp(1, MAX_HISTORY_LIMIT as u32)
+                            as usize,
+                    ),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| internal_error(format!("failed to read ETA snapshot: {err}")))?;
+            (snapshot, freshness_minimum_seconds)
+        };
         Ok(Some(
             ThreadEtaReadResponse {
                 snapshot: api_snapshot_with_freshness_minimum(snapshot, freshness_minimum_seconds),
@@ -208,28 +235,43 @@ impl ThreadEtaRequestProcessor {
         {
             return seconds.clamp(0, i64::MAX);
         }
-        let freshness_minimum_seconds = if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
-            thread
+        if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
+            let freshness_minimum_seconds = thread
                 .eta_freshness_minimum_seconds()
                 .await
-        } else {
-            self.config_manager
-                .load_latest_config(/*fallback_cwd*/ None)
+                .min(i64::MAX as u64) as i64;
+            if let Err(error) = state_db
+                .set_eta_freshness_minimum_seconds(root_thread_id, freshness_minimum_seconds)
                 .await
-                .map(|config| config.eta.freshness_minimum_minutes.saturating_mul(60))
-                .unwrap_or_else(|error| {
-                    warn!(%error, %root_thread_id, "failed to load ETA freshness policy");
-                    DEFAULT_FRESHNESS_MINIMUM_SECONDS as u64
-                })
+            {
+                warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
+            }
+            return freshness_minimum_seconds;
         }
-        .min(i64::MAX as u64) as i64;
-        if let Err(error) = state_db
-            .set_eta_freshness_minimum_seconds(root_thread_id, freshness_minimum_seconds)
+        let configured_freshness_minimum_seconds = match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
             .await
         {
-            warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
+            Ok(config) => config.eta.freshness_minimum_minutes.saturating_mul(60),
+            Err(error) => {
+                warn!(%error, %root_thread_id, "failed to load ETA freshness policy");
+                return DEFAULT_FRESHNESS_MINIMUM_SECONDS;
+            }
+        };
+        match state_db
+            .initialize_eta_freshness_minimum_seconds(
+                root_thread_id,
+                configured_freshness_minimum_seconds.min(i64::MAX as u64) as i64,
+            )
+            .await
+        {
+            Ok(persisted) => persisted.clamp(0, i64::MAX),
+            Err(error) => {
+                warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
+                configured_freshness_minimum_seconds.min(i64::MAX as u64) as i64
+            }
         }
-        freshness_minimum_seconds
     }
 
     async fn ensure_root_persisted(

@@ -378,6 +378,38 @@ async fn thread_eta_first_cold_root_read_seeds_configured_freshness_policy() -> 
     state_db
         .upsert_thread(&metadata.build("mock_provider"))
         .await?;
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Create,
+                    task_id: Some("cold-root".to_string()),
+                    title: Some("Cold root task".to_string()),
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(20),
+                        upper_seconds: Some(30),
+                    }),
+                    reason: None,
+                    owner_thread_id: None,
+                },
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Start,
+                    task_id: Some("cold-root".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+            ],
+            Utc::now() - ChronoDuration::seconds(61),
+        )
+        .await?;
     assert_eq!(
         state_db
             .eta_freshness_minimum_seconds(root_thread_id)
@@ -391,8 +423,12 @@ async fn thread_eta_first_cold_root_read_seeds_configured_freshness_policy() -> 
         .build_initialized()
         .await?;
     let snapshot = read(&mut app, &root_thread_id.to_string()).await?.snapshot;
-    assert!(snapshot.active.is_empty());
-    assert_eq!(snapshot.overall.unknown_reason, None);
+    assert_eq!(snapshot.active.len(), 1);
+    assert!(snapshot.active[0].is_stale);
+    assert_eq!(
+        snapshot.overall.unknown_reason.as_deref(),
+        Some("stale task update")
+    );
 
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),

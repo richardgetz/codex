@@ -36,10 +36,20 @@ async fn eta_freshness_minimum_is_root_owned_and_persistent() {
             .expect("read missing ETA root policy"),
         None
     );
-    runtime
-        .set_eta_freshness_minimum_seconds(root, 45 * 60)
-        .await
-        .expect("persist ETA root policy");
+    assert_eq!(
+        runtime
+            .initialize_eta_freshness_minimum_seconds(root, 45 * 60)
+            .await
+            .expect("initialize ETA root policy"),
+        45 * 60
+    );
+    assert_eq!(
+        runtime
+            .initialize_eta_freshness_minimum_seconds(root, 30 * 60)
+            .await
+            .expect("preserve initialized ETA root policy"),
+        45 * 60
+    );
     assert_eq!(
         runtime
             .eta_freshness_minimum_seconds(root)

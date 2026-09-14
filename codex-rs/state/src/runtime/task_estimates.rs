@@ -714,17 +714,43 @@ impl StateRuntime {
         Ok(())
     }
 
+    /// Initialize a missing root-owned freshness minimum without replacing a concurrent policy.
+    pub async fn initialize_eta_freshness_minimum_seconds(
+        &self,
+        root_thread_id: ThreadId,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO eta_roots (root_thread_id, sequence, freshness_minimum_seconds) VALUES (?, 0, ?) ON CONFLICT(root_thread_id) DO UPDATE SET freshness_minimum_seconds = COALESCE(eta_roots.freshness_minimum_seconds, excluded.freshness_minimum_seconds)",
+        )
+        .bind(root_thread_id.to_string())
+        .bind(freshness_minimum_seconds.max(0))
+        .execute(&mut *tx)
+        .await?;
+        let persisted = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT freshness_minimum_seconds FROM eta_roots WHERE root_thread_id = ?",
+        )
+        .bind(root_thread_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("ETA freshness policy initialization returned NULL"))?;
+        tx.commit().await?;
+        Ok(persisted)
+    }
+
     /// Read the persisted root-owned freshness minimum, if the ETA root exists.
     pub async fn eta_freshness_minimum_seconds(
         &self,
         root_thread_id: ThreadId,
     ) -> anyhow::Result<Option<i64>> {
-        Ok(sqlx::query_scalar::<_, i64>(
+        Ok(sqlx::query_scalar::<_, Option<i64>>(
             "SELECT freshness_minimum_seconds FROM eta_roots WHERE root_thread_id = ?",
         )
         .bind(root_thread_id.to_string())
         .fetch_optional(self.pool.as_ref())
-        .await?)
+        .await?
+        .flatten())
     }
 
     pub async fn read_task_estimate_snapshot(
