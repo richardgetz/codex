@@ -1,8 +1,7 @@
 //! One-shot, owner-routed ETA freshness and overdue reminders.
 //!
-//! Reminder timers are armed only after a durable ETA mutation and are invalidated by the next
-//! mutation, terminal lifecycle transition, reassignment, configuration refresh, or shutdown.
-//! They never infer completion and never poll task state.
+//! Durable updates arm timers; lifecycle, configuration, and shutdown changes invalidate them.
+//! They never infer completion or poll task state.
 
 use super::AgentControl;
 use crate::TurnStartOptions;
@@ -80,9 +79,7 @@ impl EtaReminderController {
         tasks: &[TaskEstimate],
         freshness_minimum: Duration,
     ) {
-        // The mutation response contains only explicitly changed rows. Read the active projection
-        // once so grouping suppression still sees unchanged executable children and a child
-        // revision cannot accidentally arm its placeholder parent.
+        // Read the active projection so grouping suppression sees unchanged executable children.
         let freshness_minimum_seconds =
             i64::try_from(freshness_minimum.as_secs()).unwrap_or(i64::MAX);
         let scheduling_tasks = state_db
@@ -101,9 +98,8 @@ impl EtaReminderController {
             .filter(|task| !task.status.is_terminal())
             .map(|task| task.task_id.as_str())
             .collect::<HashSet<_>>();
-        // A parent may have been scheduled before a child was attached. The child mutation only
-        // appears in `tasks`, so cancel every currently grouped parent from the full projection
-        // before replacing the explicitly changed rows.
+        // A parent may predate its child; cancel every grouped parent from the full projection
+        // before replacing changed rows.
         let grouping_parent_ids = scheduling_tasks
             .iter()
             .filter(|task| {
@@ -123,16 +119,14 @@ impl EtaReminderController {
             }
         }
         for task in tasks {
-            // Pending work has no truthful elapsed baseline yet. Wait for its explicit `start`
-            // transition before asking the owner to reassess; this also avoids waking owners for
-            // dependency placeholders that cannot execute until another task finishes.
+            // Pending work has no elapsed baseline; wait for explicit `start` and avoid dependency
+            // placeholders that cannot execute until another task finishes.
             if task.status == TaskEstimateStatus::Pending {
                 self.cancel_task_locked(&task.task_id).await;
                 continue;
             }
-            // A grouping parent represents its active children and has no independent clock while
-            // those children are unfinished. Leave it available for explicit completion after
-            // the children finish, but avoid duplicate reminders for the same executable work.
+            // Grouping parents have no independent clock while active children are unfinished;
+            // leave them for explicit completion without duplicate executable-work reminders.
             if scheduling_tasks.iter().any(|child| {
                 child.parent_task_id.as_deref() == Some(task.task_id.as_str())
                     && active_task_ids.contains(child.task_id.as_str())
@@ -189,7 +183,7 @@ impl EtaReminderController {
         self.cancel_all_locked().await;
     }
 
-    async fn cancel_all_locked(&self) {
+    pub(crate) async fn cancel_all_locked(&self) {
         let mut state = self.state.lock().await;
         for (_, entry) in state.tasks.drain() {
             abort_entry(entry);
@@ -202,7 +196,7 @@ impl EtaReminderController {
         self.cancel_owner_locked(owner_thread_id).await;
     }
 
-    async fn cancel_owner_locked(&self, owner_thread_id: ThreadId) {
+    pub(crate) async fn cancel_owner_locked(&self, owner_thread_id: ThreadId) {
         let mut state = self.state.lock().await;
         let task_ids = state
             .tasks
@@ -352,8 +346,13 @@ impl EtaReminderController {
             return;
         }
         if control.root_activity_paused() {
-            // Explicit pause owns the boundary. The resume path reconfigures from durable state,
-            // so this claimed callback cannot leak a model wake while work is paused.
+            return;
+        }
+        if matches!(
+            control.get_status(task.owner_thread_id).await,
+            crate::agent::AgentStatus::NotFound | crate::agent::AgentStatus::Shutdown
+        ) {
+            self.cancel_task_locked(&task_id).await;
             return;
         }
         if task.status.is_terminal() || task.status == TaskEstimateStatus::Blocked {
@@ -365,8 +364,6 @@ impl EtaReminderController {
             .await
             .unwrap_or(false)
         {
-            // Closed or deleted owners are never redirected through the Lead. The lifecycle
-            // path cancels this owner too, while this durable check closes the callback race.
             self.cancel_task_locked(&task_id).await;
             return;
         }
@@ -386,7 +383,6 @@ impl EtaReminderController {
                 .and_then(|path| AgentPath::try_from(path).ok())
         };
         let Some(owner_path) = owner_path else {
-            // An unloaded or deleted owner is not silently redirected to the Lead.
             self.cancel_task_locked(&task_id).await;
             return;
         };

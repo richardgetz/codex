@@ -1303,15 +1303,41 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
         operation: &str,
     ) -> Result<(), JSONRPCErrorError> {
-        let _thread_handoff_admission = match self.thread_manager.get_thread(thread_id).await {
-            Ok(conversation) => Some(
+        let conversation = self.thread_manager.get_thread(thread_id).await.ok();
+        // Fence timer delivery before removing the runtime. The shutdown handler also cancels,
+        // but taking the shared dispatch here closes the edge-check/send race with thread delete
+        // and archive requests.
+        let eta_dispatch = if let Some(conversation) = conversation.as_ref() {
+            Some(conversation.lock_eta_reminders().await)
+        } else {
+            None
+        };
+        if let (Some(conversation), Some(eta_dispatch)) =
+            (conversation.as_ref(), eta_dispatch.as_ref())
+        {
+            if conversation.session_source().is_non_root_agent() {
+                conversation
+                    .cancel_eta_reminders_for_owner_locked(eta_dispatch)
+                    .await;
+            } else {
+                conversation.cancel_eta_reminders_locked(eta_dispatch).await;
+            }
+        }
+        let _thread_handoff_admission = if let Some(conversation) = conversation.as_ref() {
+            Some(
                 conversation
                     .begin_handoff_admission()
                     .map_err(|err| invalid_request(err.to_string()))?,
-            ),
-            Err(_) => None,
+            )
+        } else {
+            None
         };
         let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
+        // Keep the shared dispatch fence through runtime removal. An ETA update that already
+        // captured this runtime may otherwise re-arm a timer after cancellation but before the
+        // owner disappears from the manager; the callback's live-owner check must observe the
+        // removal before the fence is released.
+        drop(eta_dispatch);
         if let Some(conversation) = removed_conversation {
             info!("thread {thread_id} was active; shutting down");
             match wait_for_thread_shutdown(&conversation).await {

@@ -35,7 +35,9 @@ release or merge rules.
   truthful from-now `update_eta` revision. Revision, reassignment, lifecycle,
   configuration, pause, shutdown, and owner-lifecycle events invalidate stale
   callbacks; pending dependency rows and grouping parents stay quiet, and child
-  revisions recompute serial/parallel aggregates without double-counting.
+  revisions recompute serial/parallel aggregates without double-counting. Runtime
+  removal holds the shared dispatch fence through manager removal and rejects
+  absent owners so concurrent updates cannot re-arm deleted-owner callbacks.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
