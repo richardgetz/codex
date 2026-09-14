@@ -3002,6 +3002,10 @@ impl Session {
         self.services.agent_control.cancel_eta_reminders().await;
     }
 
+    pub(crate) async fn suspend_eta_reminders(&self) {
+        self.services.agent_control.suspend_eta_reminders().await;
+    }
+
     pub(crate) async fn cancel_eta_reminders_locked(
         &self,
         eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
@@ -3016,6 +3020,13 @@ impl Session {
         self.services
             .agent_control
             .cancel_eta_reminders_for_owner(self.thread_id)
+            .await;
+    }
+
+    pub(crate) async fn suspend_eta_reminders_for_owner(&self) {
+        self.services
+            .agent_control
+            .suspend_eta_reminders_for_owner(self.thread_id)
             .await;
     }
 

@@ -1387,6 +1387,14 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
         .iter()
         .any(|message| message.contains("ETA reminder (freshness)")));
 
+    // Both trigger latches survive an explicit pause and resume; no overdue or freshness
+    // reminder is emitted again for the unchanged task revision.
+    harness.control.pause_activity_for_subtree().await;
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    harness.control.continue_activity_for_subtree().await;
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(30)).await;
     tokio::task::yield_now().await;
     let reminder_count = harness
@@ -1665,6 +1673,142 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
             .await,
         Some((true, false, false, false))
     );
+
+    // A delivered freshness reminder stays latched across an explicit pause and resume. The
+    // pause invalidates timer handles without discarding the durable task identity or sent state.
+    tokio::time::pause();
+    harness.control.pause_activity_for_subtree().await;
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+    tokio::time::resume();
+    harness.control.continue_activity_for_subtree().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+
+    // An unsent reminder is rearmed by resume and remains suppressed for the entire paused
+    // interval. Use a separate task so the delivered latch above cannot satisfy this assertion.
+    tokio::time::resume();
+    let pending_now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-pause-pending".to_string()),
+                title: Some("Pause pending reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: None,
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            pending_now,
+        )
+        .await
+        .expect("create pause-pending ETA task");
+    let pending_result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-pause-pending".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            pending_now,
+        )
+        .await
+        .expect("start pause-pending ETA task");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &pending_result.changed_tasks)
+        .await;
+    tokio::time::pause();
+    harness.control.pause_activity_for_subtree().await;
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-pause-pending")
+        )
+    }));
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-pause-pending")
+            .await,
+        Some((false, false, false, false))
+    );
+    tokio::time::resume();
+    harness.control.continue_activity_for_subtree().await;
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-pause-pending")
+            .await,
+        Some((false, false, true, false))
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-pause-pending",
+        /*expected_count*/ 1,
+    )
+    .await;
 
     let mut updated_config = config;
     updated_config.eta.freshness_minimum_minutes = 2;

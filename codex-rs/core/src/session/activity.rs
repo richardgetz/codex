@@ -109,12 +109,13 @@ impl Session {
         if paused {
             // Invalidate automatic Lead deadlines and their generated wake messages. Queue-only
             // communication remains retained for the resumed turn. ETA callbacks use the same
-            // explicit pause boundary and are rearmed only after the root resumes.
+            // explicit pause boundary and are rearmed only after the root resumes. Preserve
+            // delivered trigger latches so an unchanged task cannot be nudged twice after resume.
             self.cancel_lead_oversight().await;
             if is_non_root_agent {
-                self.cancel_eta_reminders_for_owner().await;
+                self.suspend_eta_reminders_for_owner().await;
             } else {
-                self.cancel_eta_reminders().await;
+                self.suspend_eta_reminders().await;
             }
         } else if !is_non_root_agent {
             self.reconfigure_eta_reminders().await;

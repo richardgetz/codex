@@ -211,6 +211,31 @@ impl EtaReminderController {
         root_thread_id: ThreadId,
         freshness_minimum: Duration,
     ) {
+        // A configuration refresh may race an explicit root pause. The pause path owns the
+        // dispatch boundary and will reconfigure again after `/continue`; leave the suspended
+        // entries intact while the tree remains paused.
+        if control.root_activity_paused() {
+            return;
+        }
+        let freshness_minimum_seconds =
+            i64::try_from(freshness_minimum.as_secs()).unwrap_or(i64::MAX);
+        let Ok(snapshot) = state_db
+            .read_task_estimate_snapshot_with_freshness_minimum(
+                root_thread_id,
+                Utc::now(),
+                None,
+                None,
+                freshness_minimum_seconds,
+            )
+            .await
+        else {
+            return;
+        };
+        // Keep the suspended state if a pause began while the durable snapshot was loading. The
+        // pause path will acquire dispatch next and invalidate its timer handles.
+        if control.root_activity_paused() {
+            return;
+        }
         let previous = {
             let mut state = self.state.lock().await;
             let previous = state
@@ -231,26 +256,6 @@ impl EtaReminderController {
             state.next_generation = state.next_generation.wrapping_add(1);
             previous
         };
-        let freshness_minimum_seconds =
-            i64::try_from(freshness_minimum.as_secs()).unwrap_or(i64::MAX);
-        let Ok(snapshot) = state_db
-            .read_task_estimate_snapshot_with_freshness_minimum(
-                root_thread_id,
-                Utc::now(),
-                None,
-                None,
-                freshness_minimum_seconds,
-            )
-            .await
-        else {
-            return;
-        };
-        // A configuration refresh may race an explicit root pause. The pause path owns the
-        // dispatch boundary and will reconfigure again after `/continue`; do not arm timers
-        // while the tree remains paused.
-        if control.root_activity_paused() {
-            return;
-        }
         self.schedule_locked_with_previous(
             control,
             state_db,
@@ -275,6 +280,18 @@ impl EtaReminderController {
         state.next_generation = state.next_generation.wrapping_add(1);
     }
 
+    /// Suspend all reminders at an explicit pause boundary while retaining delivery latches and
+    /// durable task identity for the resume reconfiguration.
+    pub(crate) async fn suspend_all(&self) {
+        let _dispatch = self.lock_dispatch().await;
+        let mut state = self.state.lock().await;
+        state.next_generation = state.next_generation.wrapping_add(1);
+        let generation = state.next_generation;
+        for entry in state.tasks.values_mut() {
+            suspend_entry(entry, generation);
+        }
+    }
+
     pub(crate) async fn cancel_owner(&self, owner_thread_id: ThreadId) {
         let _dispatch = self.lock_dispatch().await;
         self.cancel_owner_locked(owner_thread_id).await;
@@ -294,6 +311,19 @@ impl EtaReminderController {
             }
         }
         state.next_generation = state.next_generation.wrapping_add(1);
+    }
+
+    /// Suspend reminders owned by one Worker while retaining their delivery latches for resume.
+    pub(crate) async fn suspend_owner(&self, owner_thread_id: ThreadId) {
+        let _dispatch = self.lock_dispatch().await;
+        let mut state = self.state.lock().await;
+        state.next_generation = state.next_generation.wrapping_add(1);
+        let generation = state.next_generation;
+        for entry in state.tasks.values_mut() {
+            if entry.task.owner_thread_id == owner_thread_id {
+                suspend_entry(entry, generation);
+            }
+        }
     }
 
     async fn schedule_task_locked(
@@ -567,13 +597,22 @@ impl EtaReminderController {
     }
 }
 
-fn abort_entry(mut entry: EtaReminderEntry) {
+fn suspend_entry(entry: &mut EtaReminderEntry, generation: u64) {
+    abort_timers(entry);
+    entry.generation = generation;
+}
+
+fn abort_timers(entry: &mut EtaReminderEntry) {
     if let Some(timer) = entry.freshness_timer.take() {
         timer.abort();
     }
     if let Some(timer) = entry.overdue_timer.take() {
         timer.abort();
     }
+}
+
+fn abort_entry(mut entry: EtaReminderEntry) {
+    abort_timers(&mut entry);
 }
 
 fn deadline_to_instant(deadline: DateTime<Utc>) -> Instant {

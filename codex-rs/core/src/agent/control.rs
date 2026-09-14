@@ -798,6 +798,10 @@ impl AgentControl {
         self.eta_reminders.cancel_all().await;
     }
 
+    pub(crate) async fn suspend_eta_reminders(&self) {
+        self.eta_reminders.suspend_all().await;
+    }
+
     pub(crate) async fn cancel_eta_reminders_locked(
         &self,
         _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
@@ -807,6 +811,10 @@ impl AgentControl {
 
     pub(crate) async fn cancel_eta_reminders_for_owner(&self, owner_thread_id: ThreadId) {
         self.eta_reminders.cancel_owner(owner_thread_id).await;
+    }
+
+    pub(crate) async fn suspend_eta_reminders_for_owner(&self, owner_thread_id: ThreadId) {
+        self.eta_reminders.suspend_owner(owner_thread_id).await;
     }
 
     pub(crate) async fn cancel_eta_reminders_for_owner_locked(
