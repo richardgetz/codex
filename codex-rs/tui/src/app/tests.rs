@@ -215,12 +215,88 @@ async fn startup_session_override_replaces_existing_account_alias() {
         .expect("config should build");
     config.accounts.active = Some("personal".to_string());
 
-    let startup = config_for_startup_account_alias(&config, Some("work"));
+    let startup = config_for_startup_account_alias(&config, Some("work"))
+        .expect("valid startup account alias should apply");
 
     assert_eq!(startup.accounts.active.as_deref(), Some("work"));
     assert_eq!(
         startup.auth_storage_home(),
         config.codex_home.join("accounts/work").to_path_buf()
+    );
+}
+
+#[tokio::test]
+async fn startup_without_account_alias_preserves_configured_default() {
+    let codex_home = tempdir().expect("tempdir");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+    config.accounts.active = Some("personal".to_string());
+
+    let startup = config_for_startup_account_alias(&config, None)
+        .expect("omitted startup account alias should preserve config");
+
+    assert_eq!(startup.accounts, config.accounts);
+    assert_eq!(startup.auth_storage_home(), config.auth_storage_home());
+}
+
+#[tokio::test]
+async fn startup_default_account_alias_overrides_configured_default() {
+    let codex_home = tempdir().expect("tempdir");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+    config.accounts.active = Some("personal".to_string());
+
+    let startup = config_for_startup_account_alias(&config, Some("default"))
+        .expect("default startup account alias should apply");
+
+    assert_eq!(startup.accounts.active, None);
+    assert_eq!(startup.auth_storage_home(), config.codex_home.to_path_buf());
+}
+
+#[tokio::test]
+async fn startup_account_alias_rejects_invalid_alias() {
+    let codex_home = tempdir().expect("tempdir");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should build");
+
+    let error = config_for_startup_account_alias(&config, Some("../personal"))
+        .expect_err("path aliases must be rejected before startup");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("invalid --account alias"));
+}
+
+#[test]
+fn startup_account_alias_override_is_transient_and_explicit() {
+    let mut overrides = vec![(
+        "accounts.active".to_string(),
+        toml::Value::String("configured".to_string()),
+    )];
+
+    apply_startup_account_alias_override(&mut overrides, Some("work"))
+        .expect("valid startup account alias should become a config override");
+
+    assert_eq!(
+        overrides,
+        vec![
+            (
+                "accounts.active".to_string(),
+                toml::Value::String("configured".to_string()),
+            ),
+            (
+                "accounts.active".to_string(),
+                toml::Value::String("work".to_string()),
+            ),
+        ]
     );
 }
 

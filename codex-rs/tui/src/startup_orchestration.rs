@@ -51,7 +51,7 @@ pub(super) async fn run_main_inner(
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     // `oss` model provider.
     let overrides_cli = codex_utils_cli::CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = match overrides_cli.parse_overrides() {
+    let mut cli_kv_overrides = match overrides_cli.parse_overrides() {
         // Parse `-c` overrides from the CLI.
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
@@ -60,6 +60,11 @@ pub(super) async fn run_main_inner(
             std::process::exit(1);
         }
     };
+    let daemon_cli_kv_overrides = cli_kv_overrides.clone();
+    crate::app::apply_startup_account_alias_override(
+        &mut cli_kv_overrides,
+        cli.startup_account_alias.as_deref(),
+    )?;
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
@@ -153,7 +158,7 @@ pub(super) async fn run_main_inner(
         && !workload_identity_selected
         && (cli.agents_overview
             || can_reuse_implicit_local_daemon(
-                &cli_kv_overrides,
+                &daemon_cli_kv_overrides,
                 &launch_loader_overrides,
                 strict_config,
                 cli.bypass_hook_trust,
@@ -372,8 +377,10 @@ pub(super) async fn run_main_inner(
         .await?;
     // Apply the CLI account selection before starting the app server or reading login state.
     // The final startup path reapplies this after any onboarding/resume config reload.
-    config =
-        crate::app::config_for_startup_account_alias(&config, cli.startup_account_alias.as_deref());
+    config = crate::app::config_for_startup_account_alias(
+        &config,
+        cli.startup_account_alias.as_deref(),
+    )?;
     startup_draft.apply_config(&config);
 
     let mut cloud_config_bundle = if workload_identity_selected {

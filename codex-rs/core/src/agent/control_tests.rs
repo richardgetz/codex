@@ -67,6 +67,9 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_state::TaskEstimateAction;
+use codex_state::TaskEstimateMutation;
+use codex_state::TaskEstimateRange;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
@@ -101,6 +104,16 @@ async fn test_config_with_cli_overrides(
 
 async fn test_config() -> (TempDir, Config) {
     test_config_with_cli_overrides(Vec::new()).await
+}
+
+async fn test_sqlite_config() -> (TempDir, Config) {
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("enable SQLite for ETA test harness");
+    config.sqlite = codex_state::SqliteConfig::new_for_testing(config.codex_home.clone());
+    (home, config)
 }
 
 fn text_input(text: &str) -> Vec<UserInput> {
@@ -192,8 +205,31 @@ impl AgentControlHarness {
         Self::new_with_config(home, config).await
     }
 
+    async fn new_with_sqlite() -> Self {
+        let (home, config) = test_sqlite_config().await;
+        Self::new_with_config_and_state_db(home, config).await
+    }
+
     async fn new_with_config(home: TempDir, config: Config) -> Self {
         let state_db = init_state_db(&config).await;
+        Self::from_parts(home, config, state_db)
+    }
+
+    async fn new_with_config_and_state_db(home: TempDir, config: Config) -> Self {
+        let state_db = codex_rollout::state_db::try_init(&config)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "initialize test state database at {}: {err:#}",
+                    config.sqlite.home().display()
+                )
+            });
+        // Initialize SQLite while the runtime uses wall-clock time. ETA tests pause the clock
+        // below so scheduling assertions remain deterministic without blocking DB startup.
+        Self::from_parts(home, config, Some(state_db))
+    }
+
+    fn from_parts(home: TempDir, config: Config, state_db: Option<StateDbHandle>) -> Self {
         let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
@@ -352,6 +388,36 @@ async fn wait_for_recorded_user_message(thread: &CodexThread, needle: &str) {
     })
     .await
     .expect("timed out waiting for user message recording");
+}
+
+async fn wait_for_captured_eta_reminders(
+    manager: &ThreadManager,
+    thread_id: ThreadId,
+    task_id: &str,
+    expected_count: usize,
+) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let count = manager
+                .captured_ops()
+                .into_iter()
+                .filter(|(captured_thread_id, op)| {
+                    *captured_thread_id == thread_id
+                        && matches!(
+                            op,
+                            Op::InterAgentCommunication { communication, .. }
+                                if communication.content.contains(task_id)
+                        )
+                })
+                .count();
+            if count >= expected_count {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for ETA reminder delivery");
 }
 
 async fn wait_for_thread_settings_event(thread: &CodexThread) -> ThreadSettingsSnapshot {
@@ -1183,6 +1249,987 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
         history.raw_items(),
         &communication
     ));
+}
+
+#[tokio::test]
+async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
+    let harness = AgentControlHarness::new_with_sqlite().await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    // Use the loaded root's shared control so pause/continue reaches the controller that owns
+    // the Worker reminder timers.
+    let root_control = root_thread.session.services.agent_control.clone();
+    let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
+    let worker_thread_id = root_control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-owner-overdue".to_string()),
+                title: Some("Overdue reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: Some(1),
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create ETA task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-owner-overdue".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start ETA task");
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-pending-dependency".to_string()),
+                title: Some("Waiting dependency".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: Some(vec!["eta-owner-overdue".to_string()]),
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(5),
+                    upper_seconds: Some(10),
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create pending dependency ETA task");
+    root_control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    // Let the timer callback complete its SQLite snapshot, owner admission, and captured
+    // delivery on wall-clock time before inspecting the manager's operation log.
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-owner-overdue",
+        /*expected_count*/ 2,
+    )
+    .await;
+    tokio::time::pause();
+    let reminder_messages = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter_map(|(thread_id, op)| {
+            (thread_id == worker_thread_id)
+                .then_some(op)
+                .and_then(|op| {
+                    let Op::InterAgentCommunication { communication, .. } = op else {
+                        return None;
+                    };
+                    communication
+                        .content
+                        .contains("Task: eta-owner-overdue")
+                        .then_some(communication.content)
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reminder_messages.len(), 2);
+    assert!(
+        reminder_messages
+            .iter()
+            .any(|message| message.contains("ETA reminder (overdue)"))
+    );
+    assert!(
+        reminder_messages
+            .iter()
+            .any(|message| message.contains("ETA reminder (freshness)"))
+    );
+
+    // Both trigger latches survive an explicit pause and resume; no overdue or freshness
+    // reminder is emitted again for the unchanged task revision.
+    root_control.pause_activity_for_subtree().await;
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    root_control.continue_activity_for_subtree().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(thread_id, op)| {
+            *thread_id == worker_thread_id
+                && matches!(
+                    op,
+                    Op::InterAgentCommunication { communication, .. }
+                        if communication.content.contains("Task: eta-owner-overdue")
+                )
+        })
+        .count();
+    assert_eq!(reminder_count, 2);
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-pending-dependency")
+        )
+    }));
+}
+
+#[tokio::test]
+async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
+    let (home, mut config) = test_sqlite_config().await;
+    config.eta.freshness_minimum_minutes = 1;
+    let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    // Spawn through the loaded root's control so root reconfiguration fences the same controller
+    // that owns the Worker's reminder timers.
+    let root_control = root_thread.session.services.agent_control.clone();
+    let worker_config = {
+        let mut config = config.clone();
+        config.eta.freshness_minimum_minutes = 10;
+        config
+    };
+    let worker_thread_id = root_control
+        .spawn_agent(
+            worker_config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(
+                    AgentPath::root()
+                        .join("eta_policy_worker")
+                        .expect("worker path"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let worker_thread = harness
+        .manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker should remain loaded");
+    worker_thread.refresh_runtime_config(worker_config).await;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+            .expect("read root freshness policy after worker start"),
+        Some(60)
+    );
+
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-root-policy".to_string()),
+                title: Some("Root policy deadline".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: None,
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create root policy task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-root-policy".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start root policy task");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
+        .await;
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(59)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-root-policy")
+        )
+    }));
+
+    let mut updated_root_config = config;
+    updated_root_config.eta.freshness_minimum_minutes = 2;
+    // Reconfiguration persists the root policy and reads it back through SQLite. Let that
+    // operation finish on wall-clock time before resuming deterministic timer advancement.
+    tokio::time::resume();
+    root_thread
+        .refresh_runtime_config(updated_root_config)
+        .await;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+            .expect("read updated root freshness policy"),
+        Some(120)
+    );
+    tokio::time::pause();
+    // Tokio resumes from the 59-second virtual clock position reached before the wall-clock
+    // reconfiguration above. Advance the full 120-second timer delay from that position and
+    // keep the final second as the delivery boundary assertion.
+    tokio::time::advance(Duration::from_secs(119)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-root-policy")
+        )
+    }));
+    tokio::time::advance(Duration::from_secs(1)).await;
+    // Let the timer callback complete its SQLite snapshot, owner admission, and captured
+    // delivery on wall-clock time before inspecting the manager's operation log.
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-root-policy",
+        /*expected_count*/ 1,
+    )
+    .await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-root-policy")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+}
+
+#[tokio::test]
+async fn eta_reconfigure_preserves_delivered_trigger_state() {
+    let (home, mut config) = test_sqlite_config().await;
+    config.eta.freshness_minimum_minutes = 1;
+    let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    // Spawn through the loaded root's control so pause/continue reaches the same ETA controller
+    // that owns the Worker's timers.
+    let root_control = root_thread.session.services.agent_control.clone();
+    let worker_thread_id = root_control
+        .spawn_agent(
+            config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(
+                    AgentPath::root()
+                        .join("eta_reconfigure_worker")
+                        .expect("worker path"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-reconfigure-latch".to_string()),
+                title: Some("Reconfigure latch reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: None,
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create ETA task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-reconfigure-latch".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start ETA task");
+    let worker_thread = harness
+        .manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker should remain loaded");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
+        .await;
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-reconfigure-latch",
+        /*expected_count*/ 1,
+    )
+    .await;
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+
+    // A delivered freshness reminder stays latched across an explicit pause and resume. The
+    // pause invalidates timer handles without discarding the durable task identity or sent state.
+    tokio::time::pause();
+    root_control.pause_activity_for_subtree().await;
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+    tokio::time::resume();
+    root_control.continue_activity_for_subtree().await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+
+    // An unsent reminder is rearmed by resume and remains suppressed for the entire paused
+    // interval. Use a separate task so the delivered latch above cannot satisfy this assertion.
+    tokio::time::resume();
+    let pending_now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-pause-pending".to_string()),
+                title: Some("Pause pending reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: None,
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            pending_now,
+        )
+        .await
+        .expect("create pause-pending ETA task");
+    let pending_result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-pause-pending".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            pending_now,
+        )
+        .await
+        .expect("start pause-pending ETA task");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &pending_result.changed_tasks)
+        .await;
+    tokio::time::pause();
+    root_control.pause_activity_for_subtree().await;
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-pause-pending")
+        )
+    }));
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-pause-pending")
+            .await,
+        Some((false, false, false, false))
+    );
+    tokio::time::resume();
+    root_control.continue_activity_for_subtree().await;
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-pause-pending")
+            .await,
+        Some((false, false, true, false))
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-pause-pending",
+        /*expected_count*/ 1,
+    )
+    .await;
+
+    let mut updated_config = config;
+    updated_config.eta.freshness_minimum_minutes = 2;
+    root_thread.refresh_runtime_config(updated_config).await;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+            .expect("read updated root freshness policy"),
+        Some(120)
+    );
+    // The task revision is unchanged, so policy reconfiguration must retain the delivered
+    // freshness latch and avoid arming a replacement timer.
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::time::resume();
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+
+    let revised = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Revise,
+                task_id: Some("eta-reconfigure-latch".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(2),
+                    upper_seconds: None,
+                }),
+                reason: Some("meaningful revision".to_string()),
+                owner_thread_id: None,
+            }],
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("revise ETA task");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &revised.changed_tasks)
+        .await;
+    assert_eq!(
+        root_control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((false, false, true, false))
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-reconfigure-latch",
+        /*expected_count*/ 2,
+    )
+    .await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 2);
+}
+
+#[tokio::test]
+async fn eta_reminder_routes_nested_owner_without_lead_relay() {
+    let harness = AgentControlHarness::new_with_sqlite().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let nested_path = worker_path.join("nested").expect("nested path");
+    let nested_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("nested worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(nested_path),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("nested worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Create,
+                    task_id: Some("eta-root-owner".to_string()),
+                    title: Some("Lead-owned reminder".to_string()),
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(1),
+                        upper_seconds: Some(1),
+                    }),
+                    reason: None,
+                    owner_thread_id: Some(root_thread_id),
+                },
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Create,
+                    task_id: Some("eta-nested-owner".to_string()),
+                    title: Some("Nested worker reminder".to_string()),
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(1),
+                        upper_seconds: Some(1),
+                    }),
+                    reason: None,
+                    owner_thread_id: Some(nested_thread_id),
+                },
+            ],
+            now,
+        )
+        .await
+        .expect("create owner-routed tasks");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Start,
+                    task_id: Some("eta-root-owner".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Start,
+                    task_id: Some("eta-nested-owner".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+            ],
+            now,
+        )
+        .await
+        .expect("start owner-routed tasks");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        root_thread_id,
+        "eta-root-owner",
+        /*expected_count*/ 1,
+    )
+    .await;
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        nested_thread_id,
+        "eta-nested-owner",
+        /*expected_count*/ 1,
+    )
+    .await;
+    let messages_for = |thread_id, task_id: &str| {
+        harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(captured_thread_id, op)| {
+                *captured_thread_id == thread_id
+                    && matches!(
+                        op,
+                        Op::InterAgentCommunication { communication, .. }
+                            if communication.content.contains(task_id)
+                    )
+            })
+            .count()
+    };
+    assert_eq!(messages_for(root_thread_id, "eta-root-owner"), 1);
+    assert_eq!(messages_for(nested_thread_id, "eta-nested-owner"), 1);
+    assert_eq!(messages_for(root_thread_id, "eta-nested-owner"), 0);
+    assert_eq!(messages_for(nested_thread_id, "eta-root-owner"), 0);
+}
+
+#[tokio::test]
+async fn eta_reminder_is_suppressed_after_owner_close() {
+    let harness = AgentControlHarness::new_with_sqlite().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::root().join("eta_worker").expect("worker path")),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-closed-owner".to_string()),
+                title: Some("Closed owner reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: Some(1),
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create closed-owner task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-closed-owner".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start closed-owner task");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+    harness
+        .control
+        .close_agent(worker_thread_id)
+        .await
+        .expect("close owner");
+
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-closed-owner")
+        )
+    }));
+}
+
+#[tokio::test]
+async fn eta_reminder_is_suppressed_after_owner_runtime_removal() {
+    let harness = AgentControlHarness::new_with_sqlite().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-removed-runtime".to_string()),
+                title: Some("Removed runtime reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: Some(1),
+                }),
+                reason: None,
+                owner_thread_id: Some(root_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create removed-runtime task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-removed-runtime".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start removed-runtime task");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+    harness
+        .manager
+        .remove_thread(&root_thread_id)
+        .await
+        .expect("remove owner runtime");
+
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-removed-runtime")
+        )
+    }));
 }
 
 #[tokio::test]

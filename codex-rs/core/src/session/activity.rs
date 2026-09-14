@@ -105,10 +105,20 @@ impl Session {
 
     /// Update this session's process-local pause state and publish its ephemeral snapshot.
     pub(crate) async fn set_activity_pause_requested(&self, paused: bool) {
+        let is_non_root_agent = self.session_source().await.is_non_root_agent();
         if paused {
             // Invalidate automatic Lead deadlines and their generated wake messages. Queue-only
-            // communication remains retained for the resumed turn.
+            // communication remains retained for the resumed turn. ETA callbacks use the same
+            // explicit pause boundary and are rearmed only after the root resumes. Preserve
+            // delivered trigger latches so an unchanged task cannot be nudged twice after resume.
             self.cancel_lead_oversight().await;
+            if is_non_root_agent {
+                self.suspend_eta_reminders_for_owner().await;
+            } else {
+                self.suspend_eta_reminders().await;
+            }
+        } else if !is_non_root_agent {
+            self.reconfigure_eta_reminders().await;
         }
         self.publish_activity_state().await;
     }

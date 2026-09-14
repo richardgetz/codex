@@ -140,6 +140,8 @@ pub struct ThreadEtaUpdateOperation {
     pub estimate_lower_seconds: Option<i64>,
     pub estimate_upper_seconds: Option<i64>,
     pub reason: Option<String>,
+    /// Root Lead only: persisted agent thread that owns this task and receives reminders.
+    pub owner_thread_id: Option<String>,
 }
 
 /// Parameters for mutating tasks owned by the selected root session.

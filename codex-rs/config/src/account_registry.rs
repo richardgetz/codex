@@ -26,6 +26,40 @@ const ACCOUNT_REGISTRY_LOCK_FILE: &str = "registry.lock";
 static REGISTRY_PROCESS_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug)]
+struct InvalidConfiguredAccountAlias {
+    alias: String,
+}
+
+impl std::fmt::Display for InvalidConfiguredAccountAlias {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let alias = self.alias.escape_debug();
+        write!(
+            formatter,
+            "invalid configured account alias `{alias}` in `[accounts].active`: account alias must be a single safe path component without separators"
+        )
+    }
+}
+
+impl std::error::Error for InvalidConfiguredAccountAlias {}
+
+/// Construct the fatal configuration error for an invalid `[accounts].active` alias.
+pub fn invalid_configured_account_alias_error(alias: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        InvalidConfiguredAccountAlias {
+            alias: alias.to_string(),
+        },
+    )
+}
+
+/// Return whether a configuration error was caused by an invalid `[accounts].active` alias.
+pub fn is_invalid_configured_account_alias_error(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(
+        <dyn std::error::Error + Send + Sync + 'static>::is::<InvalidConfiguredAccountAlias>,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountRegistry {
     pub version: u32,

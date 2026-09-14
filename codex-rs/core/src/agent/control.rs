@@ -84,6 +84,7 @@ pub use self::handoff::HandoffGuard;
 use self::residency::V2Residency;
 pub(crate) use self::worker_limit::TeamWorkerLease;
 use self::worker_limit::TeamWorkerLimiter;
+use crate::agent::eta_reminders::EtaReminderController;
 
 mod activity;
 mod execution;
@@ -204,6 +205,8 @@ pub(crate) struct AgentControl {
     root_service_tier_update: Arc<Mutex<()>>,
     /// Serializes settings events sent while a root routing tier changes, preserving toggle order.
     root_service_tier_propagation: Arc<Mutex<()>>,
+    /// One-shot freshness and overdue reminders shared by the root and all descendant sessions.
+    eta_reminders: Arc<EtaReminderController>,
 }
 
 impl Default for AgentControl {
@@ -249,6 +252,7 @@ impl AgentControl {
             root_activity_resume_notify: Arc::new(Notify::new()),
             root_service_tier_update: Arc::new(Mutex::new(())),
             root_service_tier_propagation: Arc::new(Mutex::new(())),
+            eta_reminders: Arc::new(EtaReminderController::default()),
         };
         if let Some(rollout_budget) = rollout_budget {
             control.rollout_budget.configure(rollout_budget);
@@ -715,6 +719,107 @@ impl AgentControl {
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
         self.state.agent_metadata_for_thread(agent_id)
+    }
+
+    /// Arm one-shot ETA reminders for changed tasks. The controller is shared by the entire root
+    /// tree, so a Worker mutation replaces the previous owner/timer generation atomically.
+    pub(crate) async fn schedule_eta_reminders(
+        &self,
+        state_db: codex_rollout::StateDbHandle,
+        root_thread_id: ThreadId,
+        tasks: &[codex_state::TaskEstimate],
+        freshness_after: std::time::Duration,
+    ) {
+        if tasks.is_empty() {
+            return;
+        }
+        self.eta_reminders
+            .schedule(
+                self.clone(),
+                state_db,
+                root_thread_id,
+                tasks,
+                freshness_after,
+            )
+            .await;
+    }
+
+    pub(crate) async fn lock_eta_reminders(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.eta_reminders.lock_dispatch().await
+    }
+
+    pub(crate) async fn schedule_eta_reminders_locked(
+        &self,
+        state_db: codex_rollout::StateDbHandle,
+        root_thread_id: ThreadId,
+        tasks: &[codex_state::TaskEstimate],
+        freshness_after: std::time::Duration,
+    ) {
+        if tasks.is_empty() {
+            return;
+        }
+        self.eta_reminders
+            .schedule_locked(
+                self.clone(),
+                state_db,
+                root_thread_id,
+                tasks,
+                freshness_after,
+            )
+            .await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn eta_reminder_state_for_tests(
+        &self,
+        task_id: &str,
+    ) -> Option<(bool, bool, bool, bool)> {
+        self.eta_reminders.state_for_tests(task_id).await
+    }
+
+    pub(crate) async fn reconfigure_eta_reminders_locked(
+        &self,
+        state_db: codex_rollout::StateDbHandle,
+        root_thread_id: ThreadId,
+        freshness_after: std::time::Duration,
+        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.eta_reminders
+            .reconfigure_locked(self.clone(), state_db, root_thread_id, freshness_after)
+            .await;
+    }
+
+    pub(crate) async fn cancel_eta_reminders(&self) {
+        self.eta_reminders.cancel_all().await;
+    }
+
+    pub(crate) async fn suspend_eta_reminders(&self) {
+        self.eta_reminders.suspend_all().await;
+    }
+
+    pub(crate) async fn cancel_eta_reminders_locked(
+        &self,
+        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.eta_reminders.cancel_all_locked().await;
+    }
+
+    pub(crate) async fn cancel_eta_reminders_for_owner(&self, owner_thread_id: ThreadId) {
+        self.eta_reminders.cancel_owner(owner_thread_id).await;
+    }
+
+    pub(crate) async fn suspend_eta_reminders_for_owner(&self, owner_thread_id: ThreadId) {
+        self.eta_reminders.suspend_owner(owner_thread_id).await;
+    }
+
+    pub(crate) async fn cancel_eta_reminders_for_owner_locked(
+        &self,
+        owner_thread_id: ThreadId,
+        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.eta_reminders
+            .cancel_owner_locked(owner_thread_id)
+            .await;
     }
 
     pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {

@@ -49,6 +49,43 @@ SELECT EXISTS(
         != 0)
 }
 
+/// Return whether a thread is the requested root or a persisted descendant of it.
+///
+/// Owner assignments are validated against the open durable spawn graph so a caller cannot route
+/// an ETA reminder to an unrelated or already-closed thread that merely happens to be loaded in
+/// the process.
+pub(super) async fn thread_is_in_root(
+    tx: &mut Transaction<'_, Sqlite>,
+    root_thread_id: ThreadId,
+    thread_id: ThreadId,
+) -> anyhow::Result<bool> {
+    if root_thread_id == thread_id {
+        return Ok(true);
+    }
+    Ok(sqlx::query_scalar::<_, i64>(
+        r#"
+SELECT EXISTS(
+    WITH RECURSIVE subtree(thread_id) AS (
+        SELECT child_thread_id
+        FROM thread_spawn_edges
+        WHERE parent_thread_id = ? AND status = 'open'
+        UNION
+        SELECT edge.child_thread_id
+        FROM thread_spawn_edges edge
+        JOIN subtree ON edge.parent_thread_id = subtree.thread_id
+        WHERE edge.status = 'open'
+    )
+    SELECT 1 FROM subtree WHERE thread_id = ?
+)
+        "#,
+    )
+    .bind(root_thread_id.to_string())
+    .bind(thread_id.to_string())
+    .fetch_one(&mut **tx)
+    .await?
+        != 0)
+}
+
 pub(super) async fn ensure_related_tasks_exist(
     tx: &mut Transaction<'_, Sqlite>,
     root_thread_id: ThreadId,

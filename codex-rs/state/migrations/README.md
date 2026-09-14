@@ -90,3 +90,8 @@ so they are appended as:
 
 Session-scoped ETA task estimates and bounded revision history are appended as
 `0059_rick_task_estimates.sql`.
+
+The authoritative per-root ETA freshness minimum is appended as
+`0060_rick_eta_root_freshness.sql` so cold API reads and Worker mutations keep
+using the Lead's persisted policy. The column remains nullable for legacy roots
+until the first authoritative root/config read resolves and persists it.

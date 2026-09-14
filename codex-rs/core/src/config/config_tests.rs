@@ -1792,6 +1792,37 @@ sleep_tool = true
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
+    let default_config = load_current_time_reminder_config("\n").await?;
+    assert_eq!(
+        default_config.eta,
+        EtaConfig {
+            freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
+        }
+    );
+
+    let configured =
+        load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 45\n").await?;
+    assert_eq!(
+        configured.eta,
+        EtaConfig {
+            freshness_minimum_minutes: 45,
+        }
+    );
+
+    let error = load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 0\n")
+        .await
+        .expect_err("zero freshness window should be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error
+            .to_string()
+            .contains("eta.freshness_minimum_minutes must be between 1")
+    );
+    Ok(())
+}
+
 async fn load_current_time_reminder_config(config_toml: &str) -> std::io::Result<Config> {
     let codex_home = tempdir()?;
     let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
@@ -7101,6 +7132,59 @@ async fn managed_account_alias_defaults_cli_auth_store_to_auto() -> std::io::Res
 }
 
 #[tokio::test]
+async fn invalid_configured_account_alias_is_rejected() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        accounts: Some(codex_config::types::AccountsToml {
+            active: Some("../work".to_string()),
+            rotation: None,
+        }),
+        ..Default::default()
+    };
+
+    let error = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("invalid configured account aliases must fail startup");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error
+            .to_string()
+            .contains("invalid configured account alias `../work` in `[accounts].active`")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_cli_account_alias_overrides_invalid_configured_alias() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        "[accounts]\nactive = \"../work\"\n",
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![(
+            "accounts.active".to_string(),
+            toml::Value::String("personal".to_string()),
+        )])
+        .build()
+        .await?;
+
+    assert_eq!(config.active_account_alias(), Some("personal"));
+    assert_eq!(
+        config.auth_storage_home(),
+        codex_home.path().join("accounts/personal")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn default_account_keeps_file_cli_auth_store_for_mainline_compat() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml::default();
@@ -7116,6 +7200,7 @@ async fn default_account_keeps_file_cli_auth_store_for_mainline_compat() -> std:
         config.effective_cli_auth_credentials_store_mode(),
         AuthCredentialsStoreMode::File,
     );
+    assert_eq!(config.auth_storage_home(), codex_home.path());
     Ok(())
 }
 

@@ -23,12 +23,28 @@ release or merge rules.
 - Session-scoped `/eta` task estimates persist root/worker ownership, explicit
   lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
   aggregate finish ranges, and paginated history through app-server v2 and the
-  model-facing `update_eta` tool. The model tool caps each call at eight
-  operations and returns all changed summaries; History does not consume the
-  unfinished-task cap. Root deletion removes the ledger, while worker deletion
-  preserves terminal History and blocks unfinished owned tasks. Existing thread
-  activity remains observational; no idle, elapsed ETA, or UI read infers
-  completion.
+  model-facing `update_eta` tool. Each model call remains capped at eight
+  operations, changed summaries are returned, terminal History is preserved, and
+  activity remains observational: no idle, elapsed ETA, or UI read infers
+  completion. Root Lead mutations may assign a verified persisted Worker owner;
+  revisions are measured from the latest saved update so reassignment alone does
+  not reset the estimate clock. The adaptive freshness minimum and saved range
+  warning are projected through `/eta` and config. Event-driven one-shot
+  freshness and overdue reminders are sent directly to the persisted owner with a
+  bounded `ContextualUserFragment` that identifies the trigger and asks for a
+  truthful from-now `update_eta` revision. Revision, reassignment, lifecycle,
+  configuration, pause, shutdown, and owner-lifecycle events invalidate stale
+  callbacks; unchanged task revisions retain delivered trigger latches across
+  policy reconfiguration, while paused callbacks rearm after `/continue`;
+  pending dependency rows and grouping parents stay quiet, and child revisions
+  recompute serial/parallel aggregates without double-counting. Runtime
+  removal holds the shared dispatch fence through manager removal and rejects
+  absent owners so concurrent updates cannot re-arm deleted-owner callbacks. The
+  root-owned freshness minimum is persisted with the ETA ledger (migration
+  `0060_rick_eta_root_freshness.sql`), so cold app-server reads and Worker
+  mutations use the Lead policy; a Worker config refresh cannot replace it. A
+  first cold API read with no policy row seeds the persisted value from the
+  authoritative server configuration before projecting or updating ETA.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -60,6 +76,13 @@ release or merge rules.
   `/orchestrator-memory-forget <needle>` command index ahead of the
   8,000-token middle-truncated inventory so essential fork commands remain
   discoverable while the full inventory stays the source of truth.
+- Configured account defaults honor `[accounts].active` when `--account` is
+  omitted, let an explicit `--account` (including `default`) win over user and
+  project defaults, preserve the root auth fallback when no default is
+  configured, and reject invalid effective aliases before auth selection. A
+  valid explicit alias overrides a malformed user-configured default while
+  higher-precedence managed policy remains authoritative. Existing `/account`
+  switching and already-running daemon behavior remain unchanged.
 - Initial developer context keeps extension Skills world-state sections ahead of
   Apps and Plugins usage guidance, while preserving the existing App enablement,
   model-capability, and connector filtering rules.
@@ -713,7 +736,21 @@ release or merge rules.
   explicit terminal history, bounded revisions, dependency-aware unknown
   aggregates, app-server v2/update_eta wiring, the model batch/output bounds,
   deletion cleanup semantics, and the no-inference boundary across upstream
-  refreshes.
+  refreshes. Verify `/eta` keeps saved ranges visible with an accessible stale
+  warning, `[eta].freshness_minimum_minutes` defaults to 15 minutes and is
+  configurable as a minimum, and one-shot freshness/overdue events route to the persisted
+  owner without polling or Lead relays. Verify revision, reassignment,
+  completion, pause, shutdown, and config changes deduplicate/cancel stale
+  callbacks, preserve delivered trigger latches for unchanged revisions, and
+  rearm undelivered work after resume; pending dependency placeholders and
+  grouping parents do not wake owners; owner reminders request from-now
+  remaining estimates and explicit lifecycle/blocker status; and child
+  revisions recompute serial/parallel aggregates without double-counting
+  grouping parents.
+- Verify the persisted root freshness policy survives cold reads, seeds a
+  missing cold-root row from the current server configuration, remains
+  authoritative for Worker mutations, and is updated/rearmed only by the root
+  Lead configuration path.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
@@ -900,6 +937,13 @@ release or merge rules.
   collaboration-mode values map to Default.
 - Verify `codex --account ...` and `/account ...` still switch auth stores
   without breaking the default root auth location.
+- Verify `[accounts].active` selects the startup auth store only when
+  `--account` is omitted, explicit aliases (including `default`) override user
+  and project defaults, invalid effective configured or CLI aliases fail
+  clearly, a valid explicit alias overrides malformed user-configured input,
+  managed policy precedence remains intact, and an unset default keeps the root
+  auth fallback. Existing `/account` switching and daemon launcher propagation
+  must remain intact; do not infer a restart of an already-running daemon.
 - Verify `/orchestrator-memory-forget <needle>` still prunes and reconsolidates
   orchestrator memory, including bucket mirror files.
 - Verify `/orchestrator-memory-consolidate` still triggers a manual

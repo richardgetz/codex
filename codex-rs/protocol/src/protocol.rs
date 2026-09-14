@@ -4543,6 +4543,9 @@ pub struct ThreadEtaTaskUpdatedEvent {
     pub terminal_at: Option<i64>,
     pub actual_elapsed_seconds: Option<i64>,
     pub updated_at: i64,
+    /// Whether the saved range has reached its configured freshness age. The event keeps the
+    /// saved range alongside this marker so clients never lose the last truthful estimate.
+    pub is_stale: bool,
     pub revisions: Vec<ThreadEtaRevisionUpdatedEvent>,
 }
 

@@ -1530,6 +1530,11 @@ async fn clear_memory_root_contents(memory_root: &std::path::Path) -> std::io::R
 
 pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.mcp_prewarm_shutdown.cancel();
+    if sess.session_source().await.is_non_root_agent() {
+        sess.cancel_eta_reminders_for_owner().await;
+    } else {
+        sess.cancel_eta_reminders().await;
+    }
     if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
         startup_prewarm.abort().await;
     }

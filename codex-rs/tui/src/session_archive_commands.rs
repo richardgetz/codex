@@ -232,9 +232,14 @@ pub(super) async fn start_app_server_for_session_command(
     let strict_config = cli.strict_config;
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = overrides_cli
+    let mut cli_kv_overrides = overrides_cli
         .parse_overrides()
         .map_err(|err| eyre!("failed to parse -c overrides: {err}"))?;
+    let daemon_cli_kv_overrides = cli_kv_overrides.clone();
+    crate::app::apply_startup_account_alias_override(
+        &mut cli_kv_overrides,
+        cli.startup_account_alias.as_deref(),
+    )?;
     let mut launch_loader_overrides = loader_overrides.clone();
     if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
         launch_loader_overrides.user_config_path = Some(resolve_profile_v2_config_path(
@@ -247,7 +252,7 @@ pub(super) async fn start_app_server_for_session_command(
     let workload_identity_selected = codex_login::is_workload_identity_selected();
     let reuse_implicit_local_daemon = !workload_identity_selected
         && super::can_reuse_implicit_local_daemon(
-            &cli_kv_overrides,
+            &daemon_cli_kv_overrides,
             &launch_loader_overrides,
             strict_config,
             cli.bypass_hook_trust,
@@ -371,10 +376,20 @@ pub(super) async fn start_app_server_for_session_command(
         environment_manager,
     )
     .await?;
-    Ok(
-        AppServerSession::new(app_server, app_server_target.thread_params_mode())
-            .with_remote_cwd_override(remote_cwd_override),
-    )
+    let mut app_server = AppServerSession::new(app_server, app_server_target.thread_params_mode())
+        .with_remote_cwd_override(remote_cwd_override);
+    if let Some(alias) = cli
+        .startup_account_alias
+        .as_deref()
+        .map(crate::app::normalized_startup_account_alias)
+        .transpose()?
+    {
+        app_server
+            .switch_account(Some(alias))
+            .await
+            .wrap_err("failed to apply the startup account alias")?;
+    }
+    Ok(app_server)
 }
 
 #[cfg(test)]

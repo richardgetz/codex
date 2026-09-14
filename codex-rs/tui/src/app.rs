@@ -298,12 +298,47 @@ enum ThreadInteractiveRequest {
     McpServerElicitation(McpServerElicitationFormRequest),
 }
 
-pub(crate) fn config_for_startup_account_alias(config: &Config, alias: Option<&str>) -> Config {
+/// Normalize and validate an explicit startup account alias.
+pub(crate) fn normalized_startup_account_alias(alias: &str) -> std::io::Result<String> {
+    codex_config::account_registry::normalize_account_alias(alias).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid --account alias: account alias must be a single safe path component without separators",
+        )
+    })
+}
+
+/// Add the explicit startup account as a transient config override so it wins over user and
+/// project config layers, including an invalid user-configured default alias. Higher-precedence
+/// managed policy layers retain their existing precedence.
+pub(crate) fn apply_startup_account_alias_override(
+    cli_kv_overrides: &mut Vec<(String, TomlValue)>,
+    alias: Option<&str>,
+) -> std::io::Result<()> {
+    let Some(alias) = alias else {
+        return Ok(());
+    };
+    cli_kv_overrides.push((
+        "accounts.active".to_string(),
+        TomlValue::String(normalized_startup_account_alias(alias)?),
+    ));
+    Ok(())
+}
+
+/// Apply an explicit startup account selection while preserving a configured default when the
+/// CLI did not provide `--account`.
+pub(crate) fn config_for_startup_account_alias(
+    config: &Config,
+    alias: Option<&str>,
+) -> std::io::Result<Config> {
     let mut startup_config = config.clone();
-    startup_config.accounts.active = alias
-        .and_then(codex_config::account_registry::normalize_account_alias)
-        .filter(|value| !value.eq_ignore_ascii_case("default"));
-    startup_config
+    let Some(alias) = alias else {
+        return Ok(startup_config);
+    };
+    let normalized_alias = normalized_startup_account_alias(alias)?;
+    startup_config.accounts.active =
+        (!normalized_alias.eq_ignore_ascii_case("default")).then_some(normalized_alias);
+    Ok(startup_config)
 }
 
 /// Extracts `receiver_thread_ids` from collab agent tool-call notifications.

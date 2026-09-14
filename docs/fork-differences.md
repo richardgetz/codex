@@ -112,6 +112,33 @@ after work has already started has no prediction baseline and is classified as
 unknown. Cancelled tasks remain visible as cancelled history and have unknown
 accuracy; blocked tasks remain active until an explicit terminal update.
 
+Saved estimates remain visible after they age past the freshness window. The
+`/eta` view marks an aged row with a warning icon and explains that the saved
+range may be outdated; it never replaces the range with a `stale` label. The
+default freshness minimum is 15 minutes and can be changed with
+`[eta].freshness_minimum_minutes` in `config.toml`. For each task,
+the actual freshness delay is the greater of that minimum and one quarter of
+the latest saved upper estimate (rounded up); an unknown upper bound uses the
+configured minimum.
+
+The resolved root minimum is persisted with the ETA ledger. Cold
+`thread/eta/read` and `thread/eta/update` requests use that persisted value, and
+Worker configuration refreshes cannot replace the Lead-owned timer policy. If a
+cold root predates its policy row, the first API read seeds it from the current
+server configuration before computing the projection.
+
+Freshness and overdue reminders are event-driven one-shot messages sent directly
+to the persisted task owner (Lead or Worker). The freshness delay is the greater
+of the configured minimum and one quarter of the latest saved upper estimate,
+rounded up; the upper estimate separately arms the overdue event. Each reminder
+identifies the task, owner, trigger, saved range, and remaining range from now,
+then asks the owner to call `update_eta` with a truthful range and change or
+blocker reason. Explicit revision, reassignment, lifecycle, configuration, pause,
+shutdown, and owner-lifecycle events cancel or rearm stale callbacks; timers do
+not poll and never infer completion or cancellation. Pending dependency rows and
+grouping parents stay quiet, while child revisions synchronously recompute
+dependency and parallel aggregates without double counting.
+
 The model-facing tool accepts at most eight operations per call so its response
 remains bounded and returns every changed task summary. The public app-server
 update may batch more operations. The unfinished-task cap applies only to
@@ -1215,6 +1242,10 @@ details.
 ### Account aliases
 
 - `--account <alias>` starts a session using a managed account alias.
+- When `--account` is omitted, `[accounts].active` selects the startup alias;
+  an explicit alias (including `default`) overrides user and project defaults.
+  Invalid effective aliases fail before auth selection, while an unset default
+  keeps the root auth store.
 - `/account <alias>` switches the current session to a managed alias.
 - `/account default` returns the session to the original root auth store.
 - `/status` displays managed aliases as `<alias> - <email> (<account type>)`

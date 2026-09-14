@@ -10,6 +10,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use similar::TextDiff;
 
+use crate::config::DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES;
+
 pub(crate) const CONFIG_LOCK_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -136,6 +138,14 @@ fn config_lock_for_comparison(
         .is_some_and(|provenance| provenance.enabled != Some(true))
     {
         lockfile.config.decision_provenance = None;
+    }
+    // ETA freshness defaults to fifteen minutes and was added after older lockfile shapes.
+    // Treat an explicit default as the same effective setting as a legacy omission.
+    if lockfile.config.eta.as_ref().is_some_and(|eta| {
+        eta.freshness_minimum_minutes
+            .is_none_or(|minutes| minutes == DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES)
+    }) {
+        lockfile.config.eta = None;
     }
     // `team.lead.dynamic_handoff` is opt-in and historically absent from
     // lockfiles. Treat an explicit false value as the same effective setting

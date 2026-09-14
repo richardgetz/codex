@@ -26,6 +26,51 @@ async fn runtime() -> (Arc<StateRuntime>, ThreadId) {
     (runtime, ThreadId::new())
 }
 
+#[tokio::test]
+async fn eta_freshness_minimum_is_root_owned_and_persistent() {
+    let (runtime, root) = runtime().await;
+    assert_eq!(
+        runtime
+            .eta_freshness_minimum_seconds(root)
+            .await
+            .expect("read missing ETA root policy"),
+        None
+    );
+    assert_eq!(
+        runtime
+            .initialize_eta_freshness_minimum_seconds(root, 45 * 60)
+            .await
+            .expect("initialize ETA root policy"),
+        45 * 60
+    );
+    assert_eq!(
+        runtime
+            .initialize_eta_freshness_minimum_seconds(root, 30 * 60)
+            .await
+            .expect("preserve initialized ETA root policy"),
+        45 * 60
+    );
+    assert_eq!(
+        runtime
+            .eta_freshness_minimum_seconds(root)
+            .await
+            .expect("read ETA root policy"),
+        Some(45 * 60)
+    );
+    runtime
+        .set_eta_freshness_minimum_seconds(root, 30 * 60)
+        .await
+        .expect("update ETA root policy");
+    assert_eq!(
+        runtime
+            .eta_freshness_minimum_seconds(root)
+            .await
+            .expect("read updated ETA root policy"),
+        Some(30 * 60)
+    );
+    runtime.close().await;
+}
+
 fn create(task_id: &str, title: &str, estimate: Option<(i64, i64)>) -> TaskEstimateMutation {
     TaskEstimateMutation {
         action: TaskEstimateAction::Create,
@@ -38,6 +83,7 @@ fn create(task_id: &str, title: &str, estimate: Option<(i64, i64)>) -> TaskEstim
             upper_seconds: Some(upper_seconds),
         }),
         reason: None,
+        owner_thread_id: None,
     }
 }
 
@@ -50,6 +96,7 @@ fn transition(action: TaskEstimateAction, task_id: &str) -> TaskEstimateMutation
         depends_on_task_ids: None,
         estimate: None,
         reason: None,
+        owner_thread_id: None,
     }
 }
 
@@ -176,6 +223,46 @@ async fn stale_unrelated_work_keeps_update_aggregate_unknown() {
 }
 
 #[tokio::test]
+async fn long_estimate_extends_freshness_to_one_quarter() {
+    let (runtime, root) = runtime().await;
+    let started_at = at(1_700_000_000);
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("long", "Long task", Some((60, 2 * 60 * 60)))],
+            started_at,
+        )
+        .await
+        .expect("create long task");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Start, "long")],
+            started_at,
+        )
+        .await
+        .expect("start long task");
+
+    let before_quarter = runtime
+        .read_task_estimate_snapshot(root, started_at + Duration::minutes(29), None, None)
+        .await
+        .expect("fresh long snapshot");
+    assert_eq!(before_quarter.overall.unknown_reason, None);
+
+    let at_quarter = runtime
+        .read_task_estimate_snapshot(root, started_at + Duration::minutes(30), None, None)
+        .await
+        .expect("stale long snapshot");
+    assert_eq!(
+        at_quarter.overall,
+        TaskEstimateOverall::unknown("stale task update")
+    );
+    runtime.close().await;
+}
+
+#[tokio::test]
 async fn repeated_start_does_not_rewrite_original_baseline() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
@@ -194,6 +281,7 @@ async fn repeated_start_does_not_rewrite_original_baseline() {
             upper_seconds: Some(20),
         }),
         reason: Some("initial estimate".to_string()),
+        owner_thread_id: None,
     };
     runtime
         .apply_task_estimate_mutations(root, root, &[first_start], now)
@@ -210,6 +298,7 @@ async fn repeated_start_does_not_rewrite_original_baseline() {
             upper_seconds: Some(40),
         }),
         reason: Some("late estimate".to_string()),
+        owner_thread_id: None,
     };
     let update = runtime
         .apply_task_estimate_mutations(root, root, &[repeated_start], now + Duration::seconds(1))
@@ -412,6 +501,7 @@ async fn grouping_dependency_on_descendant_is_unknown_instead_of_silent() {
                         upper_seconds: Some(1),
                     }),
                     reason: Some("invalid grouping dependency".to_string()),
+                    owner_thread_id: None,
                 },
             ],
             now,
@@ -454,6 +544,7 @@ async fn revisions_are_bounded_and_history_is_cursor_paginated() {
                         upper_seconds: Some(seconds + 1),
                     }),
                     reason: Some("scope update".to_string()),
+                    owner_thread_id: None,
                 }],
                 now,
             )
@@ -581,5 +672,142 @@ async fn worker_updates_are_root_scoped_and_owner_checked() {
             .expect("closed child root"),
         root
     );
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn root_can_assign_persisted_worker_and_reassign_without_resetting_estimate() {
+    let (runtime, root) = runtime().await;
+    let worker = ThreadId::new();
+    let unrelated = ThreadId::new();
+    runtime
+        .upsert_thread_spawn_edge(root, worker, DirectionalThreadSpawnEdgeStatus::Open)
+        .await
+        .expect("spawn edge");
+    let now = at(1_700_000_000);
+    let mut create_task = create("owned", "Owned task", Some((10, 20)));
+    create_task.owner_thread_id = Some(worker);
+    runtime
+        .apply_task_estimate_mutations(root, root, &[create_task], now)
+        .await
+        .expect("root assigns worker");
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now, None, None)
+        .await
+        .expect("snapshot");
+    assert_eq!(snapshot.active[0].owner_thread_id, worker);
+
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Start, "owned")],
+            now,
+        )
+        .await
+        .expect("start assigned task");
+    let mut reassign = transition(TaskEstimateAction::Revise, "owned");
+    reassign.owner_thread_id = Some(root);
+    reassign.reason = Some("Lead resumed ownership".to_string());
+    runtime
+        .apply_task_estimate_mutations(root, root, &[reassign], now + Duration::seconds(60))
+        .await
+        .expect("root reassigns task");
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now + Duration::seconds(60), None, None)
+        .await
+        .expect("snapshot after reassignment");
+    assert_eq!(snapshot.active[0].owner_thread_id, root);
+    assert_eq!(snapshot.active[0].updated_at, now);
+    assert_eq!(
+        snapshot.active[0].current_range(),
+        TaskEstimateRange {
+            lower_seconds: Some(10),
+            upper_seconds: Some(20),
+        }
+    );
+
+    runtime
+        .set_thread_spawn_edge_status(worker, DirectionalThreadSpawnEdgeStatus::Closed)
+        .await
+        .expect("close worker edge");
+    let mut closed_owner = transition(TaskEstimateAction::Revise, "owned");
+    closed_owner.owner_thread_id = Some(worker);
+    let error = runtime
+        .apply_task_estimate_mutations(root, root, &[closed_owner], now)
+        .await
+        .expect_err("closed owner is rejected");
+    assert!(error.to_string().contains("not part of the requested root"));
+
+    let mut invalid = transition(TaskEstimateAction::Revise, "owned");
+    invalid.owner_thread_id = Some(unrelated);
+    let error = runtime
+        .apply_task_estimate_mutations(root, root, &[invalid], now)
+        .await
+        .expect_err("unrelated owner is rejected");
+    assert!(error.to_string().contains("not part of the requested root"));
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn revision_range_is_measured_from_revision_time_and_refreshes_group_aggregate() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    let mut child = create("child", "Child", Some((10, 30)));
+    child.parent_task_id = Some("group".to_string());
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("group", "Group", Some((1, 1))), child],
+            now,
+        )
+        .await
+        .expect("create group and child");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[
+                transition(TaskEstimateAction::Start, "group"),
+                transition(TaskEstimateAction::Start, "child"),
+            ],
+            now,
+        )
+        .await
+        .expect("start group and child");
+
+    let mut revision = transition(TaskEstimateAction::Revise, "child");
+    revision.estimate = Some(TaskEstimateRange {
+        lower_seconds: Some(4),
+        upper_seconds: Some(8),
+    });
+    revision.reason = Some("remaining work measured from reminder".to_string());
+    let revision_at = now + Duration::seconds(10);
+    let update = runtime
+        .apply_task_estimate_mutations(root, root, &[revision], revision_at)
+        .await
+        .expect("revise child");
+    assert_eq!(update.overall.remaining_lower_seconds, Some(4));
+    assert_eq!(update.overall.remaining_upper_seconds, Some(8));
+
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, revision_at + Duration::seconds(2), None, None)
+        .await
+        .expect("snapshot after revision");
+    let child = snapshot
+        .active
+        .iter()
+        .find(|task| task.task_id == "child")
+        .expect("child snapshot");
+    assert_eq!(
+        child.remaining_range(revision_at + Duration::seconds(2)),
+        TaskEstimateRange {
+            lower_seconds: Some(2),
+            upper_seconds: Some(6),
+        }
+    );
+    assert_eq!(snapshot.overall.remaining_lower_seconds, Some(2));
+    assert_eq!(snapshot.overall.remaining_upper_seconds, Some(6));
     runtime.close().await;
 }

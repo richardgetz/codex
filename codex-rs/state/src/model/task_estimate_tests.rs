@@ -38,6 +38,28 @@ fn remaining_range_clamps_overdue_estimates_to_zero() {
 }
 
 #[test]
+fn freshness_delay_uses_configured_minimum_or_rounded_quarter() {
+    let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+    let mut estimate = task(now);
+
+    // 45 minutes / 4 is 11m15s, so the 15-minute minimum wins.
+    estimate.current_upper_seconds = Some(45 * 60);
+    assert_eq!(estimate.freshness_delay_seconds(15 * 60), 15 * 60);
+
+    // A two-hour estimate extends the freshness delay to 30 minutes.
+    estimate.current_upper_seconds = Some(2 * 60 * 60);
+    assert_eq!(estimate.freshness_delay_seconds(15 * 60), 30 * 60);
+
+    // Round a fractional quarter upward so a 5-second upper bound cannot wake at 1 second.
+    estimate.current_upper_seconds = Some(5);
+    assert_eq!(estimate.freshness_delay_seconds(0), 2);
+
+    // Unknown upper bounds use only the configured minimum.
+    estimate.current_upper_seconds = None;
+    assert_eq!(estimate.freshness_delay_seconds(15 * 60), 15 * 60);
+}
+
+#[test]
 fn duration_validation_rejects_values_beyond_supported_horizon() {
     let result = TaskEstimateRange {
         lower_seconds: Some(0),

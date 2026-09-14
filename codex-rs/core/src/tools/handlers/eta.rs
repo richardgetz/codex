@@ -7,6 +7,7 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
@@ -46,6 +47,7 @@ struct EtaOperationArgs {
     estimate_lower_seconds: Option<i64>,
     estimate_upper_seconds: Option<i64>,
     reason: Option<String>,
+    owner_thread_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,10 +135,17 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
                     "Short reason for a revision or scope change.".to_string(),
                 )),
             ),
+            (
+                "owner_thread_id".to_string(),
+                JsonSchema::string(Some(
+                    "Root Lead only: persisted agent thread that owns this task and receives reminders."
+                        .to_string(),
+                )),
+            ),
         ]);
         ToolSpec::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
-            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Keep estimates current when work starts, scope changes, blockers appear, and work completes. Completion is explicit; idle or elapsed ETA never completes a task. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
+            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Register each task to the agent actually doing the work; the root Lead may assign a persisted Worker with owner_thread_id, and reminders go directly to that owner. Keep estimates current when work starts, scope changes, blockers appear, and work completes. When a reminder arrives, reassess from now and revise with the truthful remaining range plus a short change or blocker reason; do not reset the original duration. Completion or cancellation is explicit; idle or elapsed time never completes a task. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(
@@ -206,22 +215,46 @@ impl EtaHandler {
             .iter()
             .map(mutation_from_args)
             .collect::<Result<Vec<_>, _>>()?;
-        let result = state_db
-            .apply_task_estimate_mutations(
-                root_thread_id,
-                actor_thread_id,
-                &mutations,
-                chrono::Utc::now(),
-            )
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("ETA update failed: {err}"))
-            })?;
+        let (result, freshness_minimum_seconds) = {
+            // Fence durable mutation and timer replacement against a callback that is already
+            // resolving the same task. A callback either delivers before this update commits or
+            // observes the replacement generation after the lock is released.
+            let eta_dispatch = session.lock_eta_reminders().await;
+            let freshness_minimum_seconds = session
+                .eta_freshness_minimum_seconds_for_root(root_thread_id)
+                .await
+                .min(i64::MAX as u64) as i64;
+            let result = state_db
+                .apply_task_estimate_mutations_with_freshness_minimum(
+                    root_thread_id,
+                    actor_thread_id,
+                    &mutations,
+                    chrono::Utc::now(),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!("ETA update failed: {err}"))
+                })?;
+            if !result.changed_tasks.is_empty() {
+                session
+                    .schedule_eta_reminders_locked(
+                        result.root_thread_id,
+                        &result.changed_tasks,
+                        &eta_dispatch,
+                    )
+                    .await;
+            }
+            (result, freshness_minimum_seconds)
+        };
         if !result.changed_tasks.is_empty() {
             session
                 .send_event_raw_ephemeral(Event {
                     id: new_submission_id(),
-                    msg: EventMsg::ThreadEtaUpdated(event_from_result(&result)),
+                    msg: EventMsg::ThreadEtaUpdated(event_from_result(
+                        &result,
+                        freshness_minimum_seconds,
+                    )),
                 })
                 .await;
         }
@@ -277,6 +310,14 @@ fn mutation_from_args(
             upper_seconds,
         }),
     };
+    let owner_thread_id = operation
+        .owner_thread_id
+        .as_deref()
+        .map(ThreadId::from_string)
+        .transpose()
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("invalid owner_thread_id: {err}"))
+        })?;
     Ok(TaskEstimateMutation {
         action: operation.action,
         task_id: operation.task_id.clone(),
@@ -285,10 +326,14 @@ fn mutation_from_args(
         depends_on_task_ids: operation.depends_on_task_ids.clone(),
         estimate,
         reason: operation.reason.clone(),
+        owner_thread_id,
     })
 }
 
-fn event_from_result(result: &codex_state::TaskEstimateUpdateResult) -> ThreadEtaUpdatedEvent {
+fn event_from_result(
+    result: &codex_state::TaskEstimateUpdateResult,
+    freshness_minimum_seconds: i64,
+) -> ThreadEtaUpdatedEvent {
     ThreadEtaUpdatedEvent {
         root_thread_id: result.root_thread_id,
         generated_at: result.generated_at.timestamp(),
@@ -296,44 +341,51 @@ fn event_from_result(result: &codex_state::TaskEstimateUpdateResult) -> ThreadEt
         changed_tasks: result
             .changed_tasks
             .iter()
-            .map(|task| ThreadEtaTaskUpdatedEvent {
-                // Active task estimates are exposed as remaining durations. History retains the
-                // original/current values captured at the terminal harness timestamp.
-                current_lower_seconds: if task.status.is_terminal() {
-                    task.current_lower_seconds
+            .map(|task| {
+                let is_stale = !task.status.is_terminal()
+                    && task.started_at.is_some()
+                    && result
+                        .generated_at
+                        .timestamp()
+                        .saturating_sub(task.updated_at.timestamp())
+                        >= task.freshness_delay_seconds(freshness_minimum_seconds);
+                let current_range = if task.status.is_terminal() || is_stale {
+                    // Preserve the saved range after freshness expires; clients receive the
+                    // marker and can explain that the owner must reassess it.
+                    task.current_range()
                 } else {
-                    task.remaining_range(result.generated_at).lower_seconds
-                },
-                current_upper_seconds: if task.status.is_terminal() {
-                    task.current_upper_seconds
-                } else {
-                    task.remaining_range(result.generated_at).upper_seconds
-                },
-                task_id: task.task_id.clone(),
-                root_thread_id: task.root_thread_id,
-                owner_thread_id: task.owner_thread_id,
-                parent_task_id: task.parent_task_id.clone(),
-                depends_on_task_ids: task.depends_on_task_ids.clone(),
-                title: task.title.clone(),
-                status: task.status.as_str().to_string(),
-                original_lower_seconds: task.original_lower_seconds,
-                original_upper_seconds: task.original_upper_seconds,
-                created_at: task.created_at.timestamp(),
-                started_at: task.started_at.map(|value| value.timestamp()),
-                terminal_at: task.terminal_at.map(|value| value.timestamp()),
-                actual_elapsed_seconds: task.actual_elapsed_seconds,
-                updated_at: task.updated_at.timestamp(),
-                revisions: task
-                    .revisions
-                    .iter()
-                    .map(|revision| ThreadEtaRevisionUpdatedEvent {
-                        lower_seconds: revision.lower_seconds,
-                        upper_seconds: revision.upper_seconds,
-                        reason: revision.reason.clone(),
-                        updated_at: revision.updated_at.timestamp(),
-                        actor_thread_id: revision.actor_thread_id,
-                    })
-                    .collect(),
+                    task.remaining_range(result.generated_at)
+                };
+                ThreadEtaTaskUpdatedEvent {
+                    current_lower_seconds: current_range.lower_seconds,
+                    current_upper_seconds: current_range.upper_seconds,
+                    task_id: task.task_id.clone(),
+                    root_thread_id: task.root_thread_id,
+                    owner_thread_id: task.owner_thread_id,
+                    parent_task_id: task.parent_task_id.clone(),
+                    depends_on_task_ids: task.depends_on_task_ids.clone(),
+                    title: task.title.clone(),
+                    status: task.status.as_str().to_string(),
+                    original_lower_seconds: task.original_lower_seconds,
+                    original_upper_seconds: task.original_upper_seconds,
+                    created_at: task.created_at.timestamp(),
+                    started_at: task.started_at.map(|value| value.timestamp()),
+                    terminal_at: task.terminal_at.map(|value| value.timestamp()),
+                    actual_elapsed_seconds: task.actual_elapsed_seconds,
+                    updated_at: task.updated_at.timestamp(),
+                    is_stale,
+                    revisions: task
+                        .revisions
+                        .iter()
+                        .map(|revision| ThreadEtaRevisionUpdatedEvent {
+                            lower_seconds: revision.lower_seconds,
+                            upper_seconds: revision.upper_seconds,
+                            reason: revision.reason.clone(),
+                            updated_at: revision.updated_at.timestamp(),
+                            actor_thread_id: revision.actor_thread_id,
+                        })
+                        .collect(),
+                }
             })
             .collect(),
         overall: ThreadEtaOverallUpdatedEvent {

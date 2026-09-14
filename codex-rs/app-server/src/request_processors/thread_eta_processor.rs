@@ -1,3 +1,4 @@
+use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -18,6 +19,7 @@ use codex_app_server_protocol::ThreadEtaUpdateOperation;
 use codex_app_server_protocol::ThreadEtaUpdateParams;
 use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
+use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
@@ -34,15 +36,17 @@ use codex_state::TaskEstimateUpdateResult;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadStore;
 use std::sync::Arc;
+use tracing::warn;
 
 const DEFAULT_HISTORY_LIMIT: usize = 50;
 const MAX_HISTORY_LIMIT: usize = 100;
-const STALE_AFTER_SECONDS: i64 = 15 * 60;
+const DEFAULT_FRESHNESS_MINIMUM_SECONDS: i64 = 15 * 60;
 
 #[derive(Clone)]
 pub(crate) struct ThreadEtaRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     state_db: Option<StateDbHandle>,
+    config_manager: ConfigManager,
     thread_manager: Arc<ThreadManager>,
     thread_store: Arc<dyn ThreadStore>,
 }
@@ -51,12 +55,14 @@ impl ThreadEtaRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         state_db: Option<StateDbHandle>,
+        config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
         thread_store: Arc<dyn ThreadStore>,
     ) -> Self {
         Self {
             outgoing,
             state_db,
+            config_manager,
             thread_manager,
             thread_store,
         }
@@ -75,23 +81,52 @@ impl ThreadEtaRequestProcessor {
         if !self.root_exists(state_db, root_thread_id).await? {
             return Err(invalid_request("ETA root thread was not found"));
         }
-        let snapshot = state_db
-            .read_task_estimate_snapshot(
-                root_thread_id,
-                Utc::now(),
-                params.cursor.as_deref(),
-                Some(
-                    params
-                        .limit
-                        .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
-                        .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
-                ),
-            )
-            .await
-            .map_err(|err| internal_error(format!("failed to read ETA snapshot: {err}")))?;
+        let root_thread = self.thread_manager.get_thread(root_thread_id).await.ok();
+        let (snapshot, freshness_minimum_seconds) = if let Some(thread) = root_thread.as_ref() {
+            let _eta_dispatch = thread.lock_eta_reminders().await;
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id, Some(thread))
+                .await;
+            let snapshot = state_db
+                .read_task_estimate_snapshot_with_freshness_minimum(
+                    root_thread_id,
+                    Utc::now(),
+                    params.cursor.as_deref(),
+                    Some(
+                        params
+                            .limit
+                            .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
+                            .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
+                    ),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| internal_error(format!("failed to read ETA snapshot: {err}")))?;
+            (snapshot, freshness_minimum_seconds)
+        } else {
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id, None)
+                .await;
+            let snapshot = state_db
+                .read_task_estimate_snapshot_with_freshness_minimum(
+                    root_thread_id,
+                    Utc::now(),
+                    params.cursor.as_deref(),
+                    Some(
+                        params
+                            .limit
+                            .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
+                            .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
+                    ),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| internal_error(format!("failed to read ETA snapshot: {err}")))?;
+            (snapshot, freshness_minimum_seconds)
+        };
         Ok(Some(
             ThreadEtaReadResponse {
-                snapshot: api_snapshot(snapshot),
+                snapshot: api_snapshot_with_freshness_minimum(snapshot, freshness_minimum_seconds),
             }
             .into(),
         ))
@@ -121,11 +156,50 @@ impl ThreadEtaRequestProcessor {
             .map(mutation_from_api)
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_root_persisted(root_thread_id).await?;
-        let result = state_db
-            .apply_task_estimate_mutations(root_thread_id, root_thread_id, &mutations, Utc::now())
-            .await
-            .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?;
-        let response = api_update_response(&result);
+        let root_thread = self.thread_manager.get_thread(root_thread_id).await.ok();
+        let (result, freshness_minimum_seconds) = if let Some(thread) = root_thread.as_ref() {
+            let eta_dispatch = thread.lock_eta_reminders().await;
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id, Some(thread))
+                .await;
+            let result = state_db
+                .apply_task_estimate_mutations_with_freshness_minimum(
+                    root_thread_id,
+                    root_thread_id,
+                    &mutations,
+                    Utc::now(),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?;
+            if !result.changed_tasks.is_empty() {
+                thread
+                    .schedule_eta_reminders_locked(
+                        result.root_thread_id,
+                        &result.changed_tasks,
+                        &eta_dispatch,
+                    )
+                    .await;
+            }
+            (result, freshness_minimum_seconds)
+        } else {
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id, None)
+                .await;
+            state_db
+                .apply_task_estimate_mutations_with_freshness_minimum(
+                    root_thread_id,
+                    root_thread_id,
+                    &mutations,
+                    Utc::now(),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map(|result| (result, freshness_minimum_seconds))
+                .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?
+        };
+        let response =
+            api_update_response_with_freshness_minimum(&result, freshness_minimum_seconds);
         if !response.changed_tasks.is_empty() {
             self.outgoing
                 .send_server_notification(ServerNotification::ThreadEtaUpdated(
@@ -148,6 +222,54 @@ impl ThreadEtaRequestProcessor {
         self.state_db
             .as_ref()
             .ok_or_else(|| internal_error("sqlite state db unavailable for ETA"))
+    }
+
+    async fn freshness_minimum_seconds(
+        &self,
+        state_db: &StateDbHandle,
+        root_thread_id: ThreadId,
+        root_thread: Option<&CodexThread>,
+    ) -> i64 {
+        if let Ok(Some(seconds)) = state_db.eta_freshness_minimum_seconds(root_thread_id).await {
+            return seconds.clamp(0, i64::MAX);
+        }
+        if let Some(thread) = root_thread {
+            let freshness_minimum_seconds = thread
+                .eta_freshness_minimum_seconds()
+                .await
+                .min(i64::MAX as u64) as i64;
+            if let Err(error) = state_db
+                .set_eta_freshness_minimum_seconds(root_thread_id, freshness_minimum_seconds)
+                .await
+            {
+                warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
+            }
+            return freshness_minimum_seconds;
+        }
+        let configured_freshness_minimum_seconds = match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => config.eta.freshness_minimum_minutes.saturating_mul(60),
+            Err(error) => {
+                warn!(%error, %root_thread_id, "failed to load ETA freshness policy");
+                return DEFAULT_FRESHNESS_MINIMUM_SECONDS;
+            }
+        };
+        match state_db
+            .initialize_eta_freshness_minimum_seconds(
+                root_thread_id,
+                configured_freshness_minimum_seconds.min(i64::MAX as u64) as i64,
+            )
+            .await
+        {
+            Ok(persisted) => persisted.clamp(0, i64::MAX),
+            Err(error) => {
+                warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
+                configured_freshness_minimum_seconds.min(i64::MAX as u64) as i64
+            }
+        }
     }
 
     async fn ensure_root_persisted(
@@ -214,14 +336,32 @@ impl ThreadEtaRequestProcessor {
 }
 
 pub(crate) fn api_snapshot(snapshot: codex_state::TaskEstimateSnapshot) -> ThreadEtaSnapshot {
+    api_snapshot_with_freshness_minimum(snapshot, DEFAULT_FRESHNESS_MINIMUM_SECONDS)
+}
+
+fn api_snapshot_with_freshness_minimum(
+    snapshot: codex_state::TaskEstimateSnapshot,
+    freshness_minimum_seconds: i64,
+) -> ThreadEtaSnapshot {
     let now = snapshot.generated_at;
     let active = snapshot
         .active
         .iter()
-        .map(|task| api_task(task, now))
+        .map(|task| api_task_with_freshness_minimum(task, now, freshness_minimum_seconds))
         .collect::<Vec<_>>();
     let mut overall = api_overall(snapshot.overall);
-    if active.iter().any(|task| task.is_stale) {
+    // Grouping rows inherit the freshness of their executable children. A stale parent with a
+    // fresh active child must not hide a valid aggregate or produce a duplicate warning.
+    if active.iter().any(|task| {
+        task.is_stale
+            && !active.iter().any(|child| {
+                child.parent_task_id.as_deref() == Some(task.task_id.as_str())
+                    && !matches!(
+                        child.status,
+                        ThreadEtaStatus::Completed | ThreadEtaStatus::Cancelled
+                    )
+            })
+    }) {
         overall = ThreadEtaOverall {
             finish_at: None,
             remaining_lower_seconds: None,
@@ -237,7 +377,7 @@ pub(crate) fn api_snapshot(snapshot: codex_state::TaskEstimateSnapshot) -> Threa
         history: snapshot
             .history
             .iter()
-            .map(|task| api_task(task, now))
+            .map(|task| api_task_with_freshness_minimum(task, now, freshness_minimum_seconds))
             .collect(),
         next_cursor: snapshot.next_cursor,
         overall,
@@ -245,7 +385,22 @@ pub(crate) fn api_snapshot(snapshot: codex_state::TaskEstimateSnapshot) -> Threa
 }
 
 pub(crate) fn api_task(task: &TaskEstimate, now: DateTime<Utc>) -> ThreadEtaTask {
-    let current_range = if task.status.is_terminal() {
+    api_task_with_freshness_minimum(task, now, DEFAULT_FRESHNESS_MINIMUM_SECONDS)
+}
+
+fn api_task_with_freshness_minimum(
+    task: &TaskEstimate,
+    now: DateTime<Utc>,
+    freshness_minimum_seconds: i64,
+) -> ThreadEtaTask {
+    let is_stale = !task.status.is_terminal()
+        && task.started_at.is_some()
+        && now.timestamp().saturating_sub(task.updated_at.timestamp())
+            >= task.freshness_delay_seconds(freshness_minimum_seconds);
+    let current_range = if task.status.is_terminal() || is_stale {
+        // Preserve the saved estimate once freshness expires. Consumers can show the warning
+        // marker and explain that this range needs owner reassessment instead of losing it to a
+        // synthetic "stale" value.
         task.current_range()
     } else {
         task.remaining_range(now)
@@ -267,8 +422,7 @@ pub(crate) fn api_task(task: &TaskEstimate, now: DateTime<Utc>) -> ThreadEtaTask
         terminal_at: task.terminal_at.map(|value| value.timestamp()),
         actual_elapsed_seconds: task.actual_elapsed_seconds,
         updated_at: task.updated_at.timestamp(),
-        is_stale: !task.status.is_terminal()
-            && now.timestamp().saturating_sub(task.updated_at.timestamp()) > STALE_AFTER_SECONDS,
+        is_stale,
         accuracy: accuracy(task),
         revisions: task.revisions.iter().map(api_revision).collect(),
     }
@@ -324,6 +478,13 @@ fn api_overall(overall: TaskEstimateOverall) -> ThreadEtaOverall {
 }
 
 fn api_update_response(result: &TaskEstimateUpdateResult) -> ThreadEtaUpdateResponse {
+    api_update_response_with_freshness_minimum(result, DEFAULT_FRESHNESS_MINIMUM_SECONDS)
+}
+
+fn api_update_response_with_freshness_minimum(
+    result: &TaskEstimateUpdateResult,
+    freshness_minimum_seconds: i64,
+) -> ThreadEtaUpdateResponse {
     ThreadEtaUpdateResponse {
         root_thread_id: result.root_thread_id.to_string(),
         generated_at: result.generated_at.timestamp(),
@@ -331,7 +492,13 @@ fn api_update_response(result: &TaskEstimateUpdateResult) -> ThreadEtaUpdateResp
         changed_tasks: result
             .changed_tasks
             .iter()
-            .map(|task| api_task(task, result.generated_at))
+            .map(|task| {
+                api_task_with_freshness_minimum(
+                    task,
+                    result.generated_at,
+                    freshness_minimum_seconds,
+                )
+            })
             .collect(),
         overall: api_overall(result.overall.clone()),
     }
@@ -350,6 +517,11 @@ fn mutation_from_api(
             upper_seconds,
         }),
     };
+    let owner_thread_id = operation
+        .owner_thread_id
+        .as_deref()
+        .map(parse_thread_id)
+        .transpose()?;
     Ok(TaskEstimateMutation {
         action: match operation.action {
             ThreadEtaAction::Create => TaskEstimateAction::Create,
@@ -365,6 +537,7 @@ fn mutation_from_api(
         depends_on_task_ids: operation.depends_on_task_ids.clone(),
         estimate,
         reason: operation.reason.clone(),
+        owner_thread_id,
     })
 }
 
@@ -419,7 +592,7 @@ fn api_task_from_event(task: ThreadEtaTaskUpdatedEvent) -> ThreadEtaTask {
         terminal_at: task.terminal_at,
         actual_elapsed_seconds: task.actual_elapsed_seconds,
         updated_at: task.updated_at,
-        is_stale: false,
+        is_stale: task.is_stale,
         accuracy,
         revisions: task
             .revisions

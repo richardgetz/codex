@@ -46,9 +46,13 @@ impl AgentControl {
     /// Mark `agent_id` as explicitly closed in persisted spawn-edge state, then shut down the
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+        // Close the durable owner edge and invalidate its reminders under the same dispatch fence
+        // used by delivery. A callback that already owns the fence finishes before close; later
+        // callbacks observe the closed edge and cannot send to the removed owner.
+        let eta_dispatch = self.lock_eta_reminders().await;
         let state = self.upgrade()?;
         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
-        match state.get_thread(agent_id).await {
+        let close_result: CodexResult<()> = match state.get_thread(agent_id).await {
             Ok(thread) => {
                 if !thread.config_snapshot().await.ephemeral
                     && let Some(agent_graph_store) = state.agent_graph_store()
@@ -61,6 +65,9 @@ impl AgentControl {
                 {
                     warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
                 }
+                self.cancel_eta_reminders_for_owner_locked(agent_id, &eta_dispatch)
+                    .await;
+                Ok(())
             }
             Err(err)
                 if known_agent && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
@@ -77,12 +84,24 @@ impl AgentControl {
                         "failed to persist stale thread-spawn edge status for {agent_id}: {err}"
                     )));
                 }
+                self.cancel_eta_reminders_for_owner_locked(agent_id, &eta_dispatch)
+                    .await;
+                Ok(())
             }
-            Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {}
+            Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {
+                self.cancel_eta_reminders_for_owner_locked(agent_id, &eta_dispatch)
+                    .await;
+                Ok(())
+            }
             Err(err) => {
                 warn!("failed to inspect agent before close {agent_id}: {err}");
+                self.cancel_eta_reminders_for_owner_locked(agent_id, &eta_dispatch)
+                    .await;
+                Ok(())
             }
-        }
+        };
+        drop(eta_dispatch);
+        close_result?;
         match Box::pin(self.shutdown_agent_tree(agent_id)).await {
             Err(err)
                 if known_agent

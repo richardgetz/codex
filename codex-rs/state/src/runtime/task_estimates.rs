@@ -27,7 +27,8 @@ use uuid::Uuid;
 
 #[path = "task_estimate_math.rs"]
 mod task_estimate_math;
-use self::task_estimate_math::compute_overall;
+use self::task_estimate_math::DEFAULT_FRESHNESS_MINIMUM_SECONDS;
+use self::task_estimate_math::compute_overall_with_freshness_minimum;
 
 pub(super) const MAX_TASKS_PER_ROOT: usize = 256;
 pub(super) const MAX_REVISIONS_PER_TASK: usize = 32;
@@ -119,6 +120,25 @@ impl TaskEstimateStore {
         cursor: Option<&str>,
         limit: Option<usize>,
     ) -> anyhow::Result<TaskEstimateSnapshot> {
+        self.read_snapshot_with_freshness_minimum(
+            root_thread_id,
+            now,
+            cursor,
+            limit,
+            DEFAULT_FRESHNESS_MINIMUM_SECONDS,
+        )
+        .await
+    }
+
+    /// Read a snapshot using a caller-selected freshness minimum for aggregate stale detection.
+    pub async fn read_snapshot_with_freshness_minimum(
+        &self,
+        root_thread_id: ThreadId,
+        now: DateTime<Utc>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<TaskEstimateSnapshot> {
         let limit = limit
             .unwrap_or(DEFAULT_HISTORY_LIMIT)
             .clamp(1, MAX_HISTORY_LIMIT);
@@ -204,7 +224,11 @@ LIMIT ?
             root_thread_id,
             generated_at: now,
             sequence,
-            overall: compute_overall(&all_tasks.values().cloned().collect::<Vec<_>>(), now),
+            overall: compute_overall_with_freshness_minimum(
+                &all_tasks.values().cloned().collect::<Vec<_>>(),
+                now,
+                freshness_minimum_seconds,
+            ),
             active,
             history,
             next_cursor,
@@ -239,9 +263,34 @@ LIMIT ?
         mutations: &[TaskEstimateMutation],
         now: DateTime<Utc>,
     ) -> anyhow::Result<TaskEstimateUpdateResult> {
+        self.apply_mutations_with_freshness_minimum(
+            root_thread_id,
+            actor_thread_id,
+            mutations,
+            now,
+            DEFAULT_FRESHNESS_MINIMUM_SECONDS,
+        )
+        .await
+    }
+
+    /// Apply mutations while using a caller-selected freshness minimum for aggregate stale detection.
+    pub async fn apply_mutations_with_freshness_minimum(
+        &self,
+        root_thread_id: ThreadId,
+        actor_thread_id: ThreadId,
+        mutations: &[TaskEstimateMutation],
+        now: DateTime<Utc>,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<TaskEstimateUpdateResult> {
         if mutations.is_empty() {
             let snapshot = self
-                .read_snapshot(root_thread_id, now, None, Some(DEFAULT_HISTORY_LIMIT))
+                .read_snapshot_with_freshness_minimum(
+                    root_thread_id,
+                    now,
+                    None,
+                    Some(DEFAULT_HISTORY_LIMIT),
+                    freshness_minimum_seconds,
+                )
                 .await?;
             return Ok(TaskEstimateUpdateResult {
                 root_thread_id,
@@ -270,6 +319,15 @@ LIMIT ?
         {
             return Err(anyhow::anyhow!(
                 "task estimate actor is not part of the requested root session"
+            ));
+        }
+        if mutations
+            .iter()
+            .any(|mutation| mutation.owner_thread_id.is_some())
+            && actor_thread_id != root_thread_id
+        {
+            return Err(anyhow::anyhow!(
+                "only the root Lead may assign an ETA task owner"
             ));
         }
         let previous_sequence =
@@ -309,7 +367,11 @@ LIMIT ?
             task_estimate_storage::load_relevant_task_map(&mut tx, root_thread_id, &changed_ids)
                 .await?;
         if changed_ids.is_empty() {
-            let overall = compute_overall(&all_tasks.values().cloned().collect::<Vec<_>>(), now);
+            let overall = compute_overall_with_freshness_minimum(
+                &all_tasks.values().cloned().collect::<Vec<_>>(),
+                now,
+                freshness_minimum_seconds,
+            );
             tx.commit().await?;
             return Ok(TaskEstimateUpdateResult {
                 root_thread_id,
@@ -333,7 +395,11 @@ LIMIT ?
                 task_estimate_storage::load_revisions(&mut tx, root_thread_id, &task_id).await?;
             changed_tasks.push(TaskEstimate { revisions, ..task });
         }
-        let overall = compute_overall(&all_tasks.values().cloned().collect::<Vec<_>>(), now);
+        let overall = compute_overall_with_freshness_minimum(
+            &all_tasks.values().cloned().collect::<Vec<_>>(),
+            now,
+            freshness_minimum_seconds,
+        );
         tx.commit().await?;
 
         Ok(TaskEstimateUpdateResult {
@@ -357,6 +423,14 @@ LIMIT ?
         validate_task_reason(mutation.reason.as_deref())?;
         if let Some(estimate) = mutation.estimate {
             estimate.validate()?;
+        }
+        if let Some(owner_thread_id) = mutation.owner_thread_id
+            && !task_estimate_storage::thread_is_in_root(tx, root_thread_id, owner_thread_id)
+                .await?
+        {
+            return Err(anyhow::anyhow!(
+                "ETA task owner is not part of the requested root session"
+            ));
         }
         match mutation.action {
             TaskEstimateAction::Create => {
@@ -408,7 +482,12 @@ INSERT INTO eta_tasks (
                 )
                 .bind(&task_id)
                 .bind(root_thread_id.to_string())
-                .bind(actor_thread_id.to_string())
+                .bind(
+                    mutation
+                        .owner_thread_id
+                        .unwrap_or(actor_thread_id)
+                        .to_string(),
+                )
                 .bind(parent_task_id)
                 .bind(serde_json::to_string(&depends_on_task_ids)?)
                 .bind(title.trim())
@@ -486,6 +565,7 @@ INSERT INTO eta_tasks (
                     TaskEstimateAction::Start | TaskEstimateAction::Revise => {
                         if matches!(action, TaskEstimateAction::Revise)
                             && mutation.estimate.is_none()
+                            && mutation.owner_thread_id.is_none()
                         {
                             return Err(anyhow::anyhow!(
                                 "revising a task requires an estimate range"
@@ -536,12 +616,27 @@ INSERT INTO eta_tasks (
                         })
                     })
                     .flatten();
+                // Reassignment changes the reminder recipient, not the estimate itself. Keep the
+                // saved update timestamp so an already-aged task is re-armed for its new owner
+                // at the same freshness/overdue deadlines instead of receiving a free extension.
+                let owner_only_reassignment = matches!(action, TaskEstimateAction::Revise)
+                    && mutation.owner_thread_id.is_some()
+                    && mutation.estimate.is_none()
+                    && mutation.title.is_none()
+                    && mutation.parent_task_id.is_none()
+                    && mutation.depends_on_task_ids.is_none();
+                let updated_at = if owner_only_reassignment {
+                    existing.updated_at
+                } else {
+                    now
+                };
                 sqlx::query(
                     r#"
 UPDATE eta_tasks
 SET parent_task_id = COALESCE(?, parent_task_id),
     depends_on_task_ids = COALESCE(?, depends_on_task_ids),
     title = COALESCE(?, title),
+    owner_thread_id = COALESCE(?, owner_thread_id),
     status = ?,
     current_lower_seconds = ?,
     current_upper_seconds = ?,
@@ -564,6 +659,7 @@ WHERE task_id = ? AND root_thread_id = ?
                         .transpose()?,
                 )
                 .bind(mutation.title.as_deref().map(str::trim))
+                .bind(mutation.owner_thread_id.map(|owner| owner.to_string()))
                 .bind(status.as_str())
                 .bind(current_range.lower_seconds)
                 .bind(current_range.upper_seconds)
@@ -572,7 +668,7 @@ WHERE task_id = ? AND root_thread_id = ?
                 .bind(started_at.map(datetime_to_epoch_seconds))
                 .bind(terminal_at.map(datetime_to_epoch_seconds))
                 .bind(actual_elapsed_seconds)
-                .bind(datetime_to_epoch_seconds(now))
+                .bind(datetime_to_epoch_seconds(updated_at))
                 .bind(sequence)
                 .bind(task_id)
                 .bind(root_thread_id.to_string())
@@ -598,6 +694,67 @@ WHERE task_id = ? AND root_thread_id = ?
 }
 
 impl StateRuntime {
+    /// Persist the root-owned freshness minimum used by ETA projections and reminders.
+    pub async fn set_eta_freshness_minimum_seconds(
+        &self,
+        root_thread_id: ThreadId,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO eta_roots (root_thread_id, sequence) VALUES (?, 0) ON CONFLICT(root_thread_id) DO NOTHING",
+        )
+        .bind(root_thread_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE eta_roots SET freshness_minimum_seconds = ? WHERE root_thread_id = ?")
+            .bind(freshness_minimum_seconds.max(0))
+            .bind(root_thread_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Initialize a missing root-owned freshness minimum without replacing a concurrent policy.
+    pub async fn initialize_eta_freshness_minimum_seconds(
+        &self,
+        root_thread_id: ThreadId,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO eta_roots (root_thread_id, sequence, freshness_minimum_seconds) VALUES (?, 0, ?) ON CONFLICT(root_thread_id) DO UPDATE SET freshness_minimum_seconds = COALESCE(eta_roots.freshness_minimum_seconds, excluded.freshness_minimum_seconds)",
+        )
+        .bind(root_thread_id.to_string())
+        .bind(freshness_minimum_seconds.max(0))
+        .execute(&mut *tx)
+        .await?;
+        let persisted = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT freshness_minimum_seconds FROM eta_roots WHERE root_thread_id = ?",
+        )
+        .bind(root_thread_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("ETA freshness policy initialization returned NULL"))?;
+        tx.commit().await?;
+        Ok(persisted)
+    }
+
+    /// Read the persisted root-owned freshness minimum, if the ETA root exists.
+    pub async fn eta_freshness_minimum_seconds(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<Option<i64>> {
+        Ok(sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT freshness_minimum_seconds FROM eta_roots WHERE root_thread_id = ?",
+        )
+        .bind(root_thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?
+        .flatten())
+    }
+
     pub async fn read_task_estimate_snapshot(
         &self,
         root_thread_id: ThreadId,
@@ -605,8 +762,32 @@ impl StateRuntime {
         cursor: Option<&str>,
         limit: Option<usize>,
     ) -> anyhow::Result<TaskEstimateSnapshot> {
+        self.read_task_estimate_snapshot_with_freshness_minimum(
+            root_thread_id,
+            now,
+            cursor,
+            limit,
+            DEFAULT_FRESHNESS_MINIMUM_SECONDS,
+        )
+        .await
+    }
+
+    pub async fn read_task_estimate_snapshot_with_freshness_minimum(
+        &self,
+        root_thread_id: ThreadId,
+        now: DateTime<Utc>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<TaskEstimateSnapshot> {
         self.task_estimates()
-            .read_snapshot(root_thread_id, now, cursor, limit)
+            .read_snapshot_with_freshness_minimum(
+                root_thread_id,
+                now,
+                cursor,
+                limit,
+                freshness_minimum_seconds,
+            )
             .await
     }
 
@@ -617,8 +798,32 @@ impl StateRuntime {
         mutations: &[TaskEstimateMutation],
         now: DateTime<Utc>,
     ) -> anyhow::Result<TaskEstimateUpdateResult> {
+        self.apply_task_estimate_mutations_with_freshness_minimum(
+            root_thread_id,
+            actor_thread_id,
+            mutations,
+            now,
+            DEFAULT_FRESHNESS_MINIMUM_SECONDS,
+        )
+        .await
+    }
+
+    pub async fn apply_task_estimate_mutations_with_freshness_minimum(
+        &self,
+        root_thread_id: ThreadId,
+        actor_thread_id: ThreadId,
+        mutations: &[TaskEstimateMutation],
+        now: DateTime<Utc>,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<TaskEstimateUpdateResult> {
         self.task_estimates()
-            .apply_mutations(root_thread_id, actor_thread_id, mutations, now)
+            .apply_mutations_with_freshness_minimum(
+                root_thread_id,
+                actor_thread_id,
+                mutations,
+                now,
+                freshness_minimum_seconds,
+            )
             .await
     }
 }

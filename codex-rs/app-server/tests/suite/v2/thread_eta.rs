@@ -2,6 +2,8 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
+use chrono::Duration as ChronoDuration;
+use chrono::Utc;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadEtaAccuracy;
@@ -17,6 +19,14 @@ use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_features::Feature;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_state::StateRuntime;
+use codex_state::TaskEstimateAction;
+use codex_state::TaskEstimateMutation;
+use codex_state::TaskEstimateRange;
+use codex_state::ThreadMetadataBuilder;
+use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -40,6 +50,7 @@ fn operation(
         estimate_lower_seconds: lower_seconds,
         estimate_upper_seconds: upper_seconds,
         reason: reason.map(str::to_string),
+        owner_thread_id: None,
     }
 }
 
@@ -227,5 +238,208 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
         .expect("mock response server should expose requests");
     assert!(requests.is_empty(), "ETA RPCs must not start a model turn");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_eta_cold_root_read_uses_persisted_freshness_policy() -> Result<()> {
+    let responses_server = create_mock_responses_server_repeating_assistant("unused").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config(
+            "suppress_unstable_features_warning = true\n[eta]\nfreshness_minimum_minutes = 1",
+        )
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.start_thread(ThreadStartParams::default()).await?;
+    let thread_id = thread.id.clone();
+    let root_thread_id = ThreadId::from_string(&thread_id)?;
+    update(
+        &mut app,
+        &thread_id,
+        operation(
+            ThreadEtaAction::Create,
+            Some("cold-root"),
+            Some("Cold root task"),
+            Some(10),
+            Some(20),
+            None,
+        ),
+    )
+    .await?;
+    let _: ThreadEtaUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_notification("thread/eta/updated"),
+    )
+    .await??;
+    update(
+        &mut app,
+        &thread_id,
+        operation(
+            ThreadEtaAction::Start,
+            Some("cold-root"),
+            None,
+            None,
+            None,
+            None,
+        ),
+    )
+    .await?;
+    let _: ThreadEtaUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_notification("thread/eta/updated"),
+    )
+    .await??;
+
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await?,
+        Some(60)
+    );
+    drop(app);
+
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Revise,
+                task_id: Some("cold-root".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(20),
+                    upper_seconds: Some(30),
+                }),
+                reason: Some("backdated cold-root regression".to_string()),
+                owner_thread_id: None,
+            }],
+            Utc::now() - ChronoDuration::seconds(61),
+        )
+        .await?;
+    state_db.close().await;
+
+    let mut cold_app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let snapshot = read(&mut cold_app, &thread_id).await?.snapshot;
+    assert!(snapshot.active[0].is_stale);
+    assert_eq!(
+        (
+            snapshot.active[0].current_lower_seconds,
+            snapshot.active[0].current_upper_seconds,
+        ),
+        (Some(20), Some(30))
+    );
+    assert_eq!(
+        snapshot.overall.unknown_reason.as_deref(),
+        Some("stale task update")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_eta_first_cold_root_read_seeds_configured_freshness_policy() -> Result<()> {
+    let responses_server = create_mock_responses_server_repeating_assistant("unused").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config(
+            "suppress_unstable_features_warning = true\n[eta]\nfreshness_minimum_minutes = 1",
+        )
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+
+    let root_thread_id = ThreadId::new();
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    let mut metadata = ThreadMetadataBuilder::new(
+        root_thread_id,
+        codex_home.path().join("sessions").join("cold-root.jsonl"),
+        Utc::now(),
+        SessionSource::Cli,
+    );
+    metadata.cwd = codex_home.path().to_path_buf();
+    state_db
+        .upsert_thread(&metadata.build("mock_provider"))
+        .await?;
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Create,
+                    task_id: Some("cold-root".to_string()),
+                    title: Some("Cold root task".to_string()),
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(20),
+                        upper_seconds: Some(30),
+                    }),
+                    reason: None,
+                    owner_thread_id: None,
+                },
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Start,
+                    task_id: Some("cold-root".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+            ],
+            Utc::now() - ChronoDuration::seconds(61),
+        )
+        .await?;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await?,
+        None
+    );
+    drop(state_db);
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let snapshot = read(&mut app, &root_thread_id.to_string()).await?.snapshot;
+    assert_eq!(snapshot.active.len(), 1);
+    assert!(snapshot.active[0].is_stale);
+    assert_eq!(
+        snapshot.overall.unknown_reason.as_deref(),
+        Some("stale task update")
+    );
+
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await?,
+        Some(60)
+    );
     Ok(())
 }

@@ -1101,6 +1101,60 @@ impl CodexThread {
         self.session.thread_config_snapshot().await
     }
 
+    /// Returns the configured ETA freshness age for this thread's root session.
+    pub async fn eta_freshness_minimum_seconds(&self) -> u64 {
+        self.session.eta_freshness_minimum_seconds().await
+    }
+
+    /// Arm owner-routed ETA reminders after a durable update. This is exposed for the app-server
+    /// root update path; the model-facing handler uses the same session seam.
+    pub async fn schedule_eta_reminders(
+        &self,
+        root_thread_id: codex_protocol::ThreadId,
+        tasks: &[codex_state::TaskEstimate],
+    ) {
+        self.session
+            .schedule_eta_reminders(root_thread_id, tasks)
+            .await;
+    }
+
+    /// Fence an ETA mutation against a reminder callback that is resolving the same task.
+    pub async fn lock_eta_reminders(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.session.lock_eta_reminders().await
+    }
+
+    /// Replace changed ETA timers while the caller holds [`Self::lock_eta_reminders`].
+    pub async fn schedule_eta_reminders_locked(
+        &self,
+        root_thread_id: codex_protocol::ThreadId,
+        tasks: &[codex_state::TaskEstimate],
+        eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.session
+            .schedule_eta_reminders_locked(root_thread_id, tasks, eta_dispatch)
+            .await;
+    }
+
+    pub async fn cancel_eta_reminders(&self) {
+        self.session.cancel_eta_reminders().await;
+    }
+
+    pub async fn cancel_eta_reminders_locked(
+        &self,
+        eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.session.cancel_eta_reminders_locked(eta_dispatch).await;
+    }
+
+    pub async fn cancel_eta_reminders_for_owner_locked(
+        &self,
+        eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.session
+            .cancel_eta_reminders_for_owner_locked(eta_dispatch)
+            .await;
+    }
+
     pub async fn memory_write_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
         self.session.memory_write_permit().await
     }

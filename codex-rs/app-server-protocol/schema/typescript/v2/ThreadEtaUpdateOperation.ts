@@ -7,4 +7,8 @@ import type { ThreadEtaAction } from "./ThreadEtaAction";
  * One requested ETA mutation. Fields omitted for an action are left unchanged;
  * `create` requires a title and may omit an estimate to record an explicit unknown.
  */
-export type ThreadEtaUpdateOperation = { action: ThreadEtaAction, taskId: string | null, title: string | null, parentTaskId: string | null, dependsOnTaskIds: Array<string> | null, estimateLowerSeconds: bigint | null, estimateUpperSeconds: bigint | null, reason: string | null, };
+export type ThreadEtaUpdateOperation = { action: ThreadEtaAction, taskId: string | null, title: string | null, parentTaskId: string | null, dependsOnTaskIds: Array<string> | null, estimateLowerSeconds: bigint | null, estimateUpperSeconds: bigint | null, reason: string | null,
+/**
+ * Root Lead only: persisted agent thread that owns this task and receives reminders.
+ */
+ownerThreadId: string | null, };
