@@ -2950,6 +2950,7 @@ impl Session {
         let Ok(root_thread_id) = state_db.root_thread_id(self.thread_id).await else {
             return;
         };
+        let eta_dispatch = self.lock_eta_reminders().await;
         if root_thread_id == self.thread_id {
             let configured_seconds = self
                 .get_config()
@@ -2974,7 +2975,12 @@ impl Session {
         );
         self.services
             .agent_control
-            .reconfigure_eta_reminders(state_db, root_thread_id, freshness_minimum)
+            .reconfigure_eta_reminders_locked(
+                state_db,
+                root_thread_id,
+                freshness_minimum,
+                &eta_dispatch,
+            )
             .await;
     }
 

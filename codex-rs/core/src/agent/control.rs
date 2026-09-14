@@ -769,15 +769,15 @@ impl AgentControl {
             .await;
     }
 
-    /// Re-arm all active ETA reminders after a runtime configuration refresh.
-    pub(crate) async fn reconfigure_eta_reminders(
+    pub(crate) async fn reconfigure_eta_reminders_locked(
         &self,
         state_db: codex_rollout::StateDbHandle,
         root_thread_id: ThreadId,
         freshness_after: std::time::Duration,
+        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
     ) {
         self.eta_reminders
-            .reconfigure(
+            .reconfigure_locked(
                 self.clone(),
                 state_db,
                 root_thread_id,

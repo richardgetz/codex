@@ -145,14 +145,13 @@ impl EtaReminderController {
         }
     }
 
-    pub(crate) async fn reconfigure(
+    pub(crate) async fn reconfigure_locked(
         self: &Arc<Self>,
         control: AgentControl,
         state_db: StateDbHandle,
         root_thread_id: ThreadId,
         freshness_minimum: Duration,
     ) {
-        let _dispatch = self.lock_dispatch().await;
         self.cancel_all_locked().await;
         let freshness_minimum_seconds =
             i64::try_from(freshness_minimum.as_secs()).unwrap_or(i64::MAX);
