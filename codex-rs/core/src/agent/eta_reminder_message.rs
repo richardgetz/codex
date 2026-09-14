@@ -109,6 +109,7 @@ fn truncate_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::EtaReminderMessage;
+    use super::MAX_REMINDER_BYTES;
     use super::ReminderTrigger;
     use super::format_reminder;
     use super::truncate_message;
