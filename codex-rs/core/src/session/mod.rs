@@ -1169,6 +1169,9 @@ impl Session {
                 .await;
         }
         let thread_id = session.thread_id;
+        // Resume/forked sessions may already have active ETA rows. Arm their one-shot reminders
+        // from durable state without inventing a model turn or inferring lifecycle progress.
+        session.reconfigure_eta_reminders().await;
         if let Some(state_db) = session.state_db() {
             start_thread_inbound_message_poller(
                 thread_id,
@@ -2863,6 +2866,86 @@ impl Session {
             .clone()
     }
 
+    /// Arm one-shot ETA reminders after a durable mutation. Delivery is routed directly to each
+    /// persisted owner and inherits the normal pause, shutdown, usage, and Team admission gates.
+    pub(crate) async fn schedule_eta_reminders(
+        &self,
+        root_thread_id: ThreadId,
+        tasks: &[codex_state::TaskEstimate],
+    ) {
+        let Some(state_db) = self.state_db() else {
+            return;
+        };
+        let freshness_minimum = std::time::Duration::from_secs(
+            self.get_config()
+                .await
+                .eta
+                .freshness_minimum_minutes
+                .saturating_mul(60),
+        );
+        self.services
+            .agent_control
+            .schedule_eta_reminders(state_db, root_thread_id, tasks, freshness_minimum)
+            .await;
+    }
+
+    pub(crate) async fn lock_eta_reminders(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.services.agent_control.lock_eta_reminders().await
+    }
+
+    pub(crate) async fn schedule_eta_reminders_locked(
+        &self,
+        root_thread_id: ThreadId,
+        tasks: &[codex_state::TaskEstimate],
+        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let Some(state_db) = self.state_db() else {
+            return;
+        };
+        let freshness_minimum = std::time::Duration::from_secs(
+            self.get_config()
+                .await
+                .eta
+                .freshness_minimum_minutes
+                .saturating_mul(60),
+        );
+        self.services
+            .agent_control
+            .schedule_eta_reminders_locked(state_db, root_thread_id, tasks, freshness_minimum)
+            .await;
+    }
+
+    pub(crate) async fn reconfigure_eta_reminders(&self) {
+        let Some(state_db) = self.state_db() else {
+            return;
+        };
+        let Ok(root_thread_id) = state_db.root_thread_id(self.thread_id).await else {
+            return;
+        };
+        let freshness_minimum = std::time::Duration::from_secs(
+            self.get_config()
+                .await
+                .eta
+                .freshness_minimum_minutes
+                .saturating_mul(60),
+        );
+        self.services
+            .agent_control
+            .reconfigure_eta_reminders(state_db, root_thread_id, freshness_minimum)
+            .await;
+    }
+
+    pub(crate) async fn cancel_eta_reminders(&self) {
+        self.services.agent_control.cancel_eta_reminders().await;
+    }
+
+    pub(crate) async fn cancel_eta_reminders_for_owner(&self) {
+        self.services
+            .agent_control
+            .cancel_eta_reminders_for_owner(self.thread_id)
+            .await;
+    }
+
     pub(crate) async fn session_source(&self) -> SessionSource {
         self.state
             .lock()
@@ -2894,7 +2977,7 @@ impl Session {
         // layers such as request/session overrides that were present when this session
         // was created.
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (previous_config, new_config, config) = {
+        let (previous_config, new_config, config, eta_changed) = {
             let mut state = self.state.lock().await;
             let previous_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
@@ -2915,6 +2998,8 @@ impl Session {
             config.scratchpad.loopback = next_config.scratchpad.loopback;
             config.mcp_servers = next_config.mcp_servers.clone();
             config.mcp_optional_startup_grace = next_config.mcp_optional_startup_grace;
+            let eta_changed = config.eta != next_config.eta;
+            config.eta = next_config.eta;
             config.mcp_oauth_credentials_store_mode = next_config.mcp_oauth_credentials_store_mode;
             if let Err(err) = config.features.set_enabled(
                 Feature::SecretAuthStorage,
@@ -2935,9 +3020,12 @@ impl Session {
             self.mark_mcp_runtime_dirty();
             let new_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
-            (previous_config, new_config, config)
+            (previous_config, new_config, config, eta_changed)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
+        if eta_changed {
+            self.reconfigure_eta_reminders().await;
+        }
         self.schedule_mcp_prewarm();
         self.refresh_hooks(config).await;
     }

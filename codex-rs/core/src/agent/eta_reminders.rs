@@ -101,6 +101,27 @@ impl EtaReminderController {
             .filter(|task| !task.status.is_terminal())
             .map(|task| task.task_id.as_str())
             .collect::<HashSet<_>>();
+        // A parent may have been scheduled before a child was attached. The child mutation only
+        // appears in `tasks`, so cancel every currently grouped parent from the full projection
+        // before replacing the explicitly changed rows.
+        let grouping_parent_ids = scheduling_tasks
+            .iter()
+            .filter(|task| {
+                scheduling_tasks.iter().any(|child| {
+                    child.parent_task_id.as_deref() == Some(task.task_id.as_str())
+                        && active_task_ids.contains(child.task_id.as_str())
+                })
+            })
+            .map(|task| task.task_id.clone())
+            .collect::<HashSet<_>>();
+        if !grouping_parent_ids.is_empty() {
+            let mut state = self.state.lock().await;
+            for task_id in grouping_parent_ids {
+                if let Some(entry) = state.tasks.remove(&task_id) {
+                    abort_entry(entry);
+                }
+            }
+        }
         for task in tasks {
             // Pending work has no truthful elapsed baseline yet. Wait for its explicit `start`
             // transition before asking the owner to reassess; this also avoids waking owners for

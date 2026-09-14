@@ -67,6 +67,9 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_state::TaskEstimateAction;
+use codex_state::TaskEstimateMutation;
+use codex_state::TaskEstimateRange;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
@@ -1183,6 +1186,154 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
         history.raw_items(),
         &communication
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
+    let harness = AgentControlHarness::new().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("eta-worker").expect("worker path");
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-owner-overdue".to_string()),
+                title: Some("Overdue reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: Some(1),
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create ETA task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-owner-overdue".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start ETA task");
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-pending-dependency".to_string()),
+                title: Some("Waiting dependency".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: Some(vec!["eta-owner-overdue".to_string()]),
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(5),
+                    upper_seconds: Some(10),
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create pending dependency ETA task");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    let reminder_messages = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter_map(|(thread_id, op)| {
+            (thread_id == worker_thread_id).then_some(op).and_then(|op| {
+                let Op::InterAgentCommunication { communication, .. } = op else {
+                    return None;
+                };
+                communication
+                    .content
+                    .contains("Task: eta-owner-overdue")
+                    .then(|| communication.content)
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reminder_messages.len(), 2);
+    assert!(reminder_messages
+        .iter()
+        .any(|message| message.contains("ETA reminder (overdue)")));
+    assert!(reminder_messages
+        .iter()
+        .any(|message| message.contains("ETA reminder (freshness)")));
+
+    tokio::time::advance(Duration::from_secs(30)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(thread_id, op)| {
+            *thread_id == worker_thread_id
+                && matches!(
+                    op,
+                    Op::InterAgentCommunication { communication, .. }
+                        if communication.content.contains("Task: eta-owner-overdue")
+                )
+        })
+        .count();
+    assert_eq!(reminder_count, 2);
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-pending-dependency")
+        )
+    }));
 }
 
 #[tokio::test]

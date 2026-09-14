@@ -2,7 +2,6 @@
 
 use crate::context::ContextualUserFragment;
 use chrono::DateTime;
-use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_protocol::AgentPath;
 use codex_state::TaskEstimate;

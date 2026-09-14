@@ -121,10 +121,17 @@ the actual freshness delay is the greater of that minimum and one quarter of
 the latest saved upper estimate (rounded up); an unknown upper bound uses the
 configured minimum.
 
-This stage defines the saved-range projection and adaptive freshness policy;
-the owner-routed reminder scheduler is delivered by a dependent stage. Child
-revisions synchronously recompute dependency and parallel aggregates while
-grouping parents remain excluded from double counting.
+Freshness and overdue reminders are event-driven one-shot messages sent directly
+to the persisted task owner (Lead or Worker). The freshness delay is the greater
+of the configured minimum and one quarter of the latest saved upper estimate,
+rounded up; the upper estimate separately arms the overdue event. Each reminder
+identifies the task, owner, trigger, saved range, and remaining range from now,
+then asks the owner to call `update_eta` with a truthful range and change or
+blocker reason. Explicit revision, reassignment, lifecycle, configuration, pause,
+shutdown, and owner-lifecycle events cancel or rearm stale callbacks; timers do
+not poll and never infer completion or cancellation. Pending dependency rows and
+grouping parents stay quiet, while child revisions synchronously recompute
+dependency and parallel aggregates without double counting.
 
 The model-facing tool accepts at most eight operations per call so its response
 remains bounded and returns every changed task summary. The public app-server
