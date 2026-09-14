@@ -1140,6 +1140,28 @@ impl CodexThread {
             .await;
     }
 
+    pub async fn cancel_eta_reminders(&self) {
+        self.session.cancel_eta_reminders().await;
+    }
+
+    pub async fn cancel_eta_reminders_locked(
+        &self,
+        eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.session
+            .cancel_eta_reminders_locked(eta_dispatch)
+            .await;
+    }
+
+    pub async fn cancel_eta_reminders_for_owner_locked(
+        &self,
+        eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        self.session
+            .cancel_eta_reminders_for_owner_locked(eta_dispatch)
+            .await;
+    }
+
     pub async fn memory_write_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
         self.session.memory_write_permit().await
     }

@@ -55,10 +55,10 @@ impl ContextualUserFragment for EtaReminderMessage {
     }
 
     fn body(&self) -> String {
-        format!(
+        truncate_message(&format!(
             "Message Type: MESSAGE\nTask name: {}\nSender: root\nPayload:\n{}",
             self.task_name, self.payload
-        )
+        ))
     }
 }
 
@@ -165,5 +165,10 @@ mod tests {
         let truncated = truncate_message(&message);
         assert!(truncated.len() <= MAX_REMINDER_BYTES);
         assert!(truncated.ends_with('…'));
+
+        let long_owner = AgentPath::try_from(format!("/root/{}worker", "worker/".repeat(199)))
+            .expect("long owner path should remain a valid path");
+        let fragment = EtaReminderMessage::new(long_owner, message);
+        assert!(fragment.body().len() <= MAX_REMINDER_BYTES);
     }
 }
