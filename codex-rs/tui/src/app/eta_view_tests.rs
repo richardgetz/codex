@@ -29,8 +29,9 @@ fn task(
         depends_on_task_ids: Vec::new(),
         title: title.to_string(),
         status,
-        current_lower_seconds: Some(60),
-        current_upper_seconds: Some(120),
+        // API task projections carry the range remaining at `generated_at`.
+        current_lower_seconds: Some(30),
+        current_upper_seconds: Some(90),
         original_lower_seconds: Some(90),
         original_upper_seconds: Some(180),
         started_at: Some(1_700_000_000),
@@ -70,6 +71,10 @@ fn snapshot() -> EtaSnapshot {
         "Run checks",
         EtaTaskStatus::Blocked,
     );
+    // Stale API rows intentionally retain their saved estimate rather than a
+    // from-now range so the view can show the actionable value with a warning.
+    child.current_lower_seconds = Some(60);
+    child.current_upper_seconds = Some(120);
     child.is_stale = true;
     let mut completed = task(
         "done-task",
@@ -164,7 +169,7 @@ fn overall_finish_range_uses_fixed_snapshot_time_in_utc() {
 }
 
 #[test]
-fn active_remaining_uses_snapshot_anchor_and_started_at() {
+fn active_remaining_uses_server_remaining_range() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let view = EtaView::new(
         known_finish_snapshot(),

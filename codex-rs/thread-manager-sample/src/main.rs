@@ -353,6 +353,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         token_budget_startup_config: None,
         rollout_budget: None,
         current_time_reminder: None,
+        eta: Default::default(),
         sleep_tool_mode: Default::default(),
         features: Default::default(),
         suppress_unstable_features_warning: false,

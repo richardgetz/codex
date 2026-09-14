@@ -37,7 +37,7 @@ fn api_task_exposes_remaining_estimate_and_accuracy() {
             active_api.current_upper_seconds,
             active_api.accuracy,
         ),
-        (Some(0), Some(0), ThreadEtaAccuracy::Unknown),
+        (Some(20), Some(30), ThreadEtaAccuracy::Unknown),
     );
 
     let completed = task(now, TaskEstimateStatus::Completed);
@@ -63,7 +63,7 @@ fn api_snapshot_marks_stale_active_work_unknown() {
     let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
     let root = ThreadId::new();
     let stale = task(
-        now - Duration::seconds(STALE_AFTER_SECONDS + 1),
+        now - Duration::seconds(DEFAULT_FRESHNESS_MINIMUM_SECONDS + 1),
         TaskEstimateStatus::Active,
     );
     let snapshot = TaskEstimateSnapshot {
@@ -89,5 +89,17 @@ fn api_snapshot_marks_stale_active_work_unknown() {
             remaining_upper_seconds: None,
             unknown_reason: Some("stale task update".to_string()),
         }
+    );
+}
+
+#[test]
+fn api_task_honors_configured_freshness_and_keeps_saved_range() {
+    let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp");
+    let task = task(now - Duration::seconds(61), TaskEstimateStatus::Active);
+    let api = api_task_with_freshness_minimum(&task, now, 60);
+    assert!(api.is_stale);
+    assert_eq!(
+        (api.current_lower_seconds, api.current_upper_seconds),
+        (Some(20), Some(30))
     );
 }

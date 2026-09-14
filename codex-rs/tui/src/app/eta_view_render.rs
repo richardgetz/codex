@@ -120,11 +120,11 @@ impl EtaView {
                 status.push_str(task.accuracy.label());
             }
             if task.is_stale {
-                status.push_str(" · stale");
+                status.push_str(" · ⚠");
             }
             let status = fit_text(&status, ETA_STATUS_WIDTH);
             let estimate = if self.tab == EtaTab::Active {
-                active_remaining_label(task, self.snapshot.generated_at)
+                active_remaining_label(task)
             } else {
                 let actual = task
                     .actual_elapsed_seconds
@@ -176,7 +176,7 @@ impl EtaView {
         };
         lines.push(detail_line("Status", &status));
         let current = if self.tab == EtaTab::Active {
-            active_remaining_label(task, self.snapshot.generated_at)
+            active_remaining_label(task)
         } else {
             format_range(task.current_lower_seconds, task.current_upper_seconds)
         };
@@ -195,7 +195,7 @@ impl EtaView {
         lines.push(detail_line("Updated", &format_timestamp(task.updated_at)));
         if task.is_stale {
             lines.push(
-                "Snapshot is stale; waiting for a stored update."
+                "⚠ May be outdated; the saved estimate remains visible until its owner updates it."
                     .yellow()
                     .into(),
             );
@@ -338,54 +338,13 @@ fn table_title_width(width: usize) -> usize {
         .max(8)
 }
 
-fn active_remaining_label(task: &super::EtaTask, generated_at: i64) -> String {
-    if task.is_stale {
-        return "stale".to_string();
-    }
-    if task.status != EtaTaskStatus::Active {
-        return format_range(task.current_lower_seconds, task.current_upper_seconds);
-    }
-    let Some(started_at) = task.started_at else {
-        return format_range(task.current_lower_seconds, task.current_upper_seconds);
-    };
-    let Some(elapsed) = generated_at.checked_sub(started_at) else {
-        return "unknown".to_string();
-    };
-    if elapsed < 0 {
-        return "unknown".to_string();
-    }
-    if let (Some(lower), Some(upper)) = (task.current_lower_seconds, task.current_upper_seconds)
-        && (lower < 0 || upper < lower)
-    {
-        return "unknown".to_string();
-    }
-    if let Some(upper) = task.current_upper_seconds {
-        if upper < 0 {
-            return "unknown".to_string();
-        }
-        if elapsed >= upper {
-            return "overdue".to_string();
-        }
-    }
-    let lower = match task.current_lower_seconds {
-        Some(value) => {
-            let Some(remaining) = value.checked_sub(elapsed) else {
-                return "unknown".to_string();
-            };
-            Some(remaining.max(0))
-        }
-        None => None,
-    };
-    let upper = match task.current_upper_seconds {
-        Some(value) => {
-            let Some(remaining) = value.checked_sub(elapsed) else {
-                return "unknown".to_string();
-            };
-            Some(remaining.max(0))
-        }
-        None => None,
-    };
-    format_range(lower, upper)
+fn active_remaining_label(task: &super::EtaTask) -> String {
+    // The app-server projection already evaluates active estimates at its
+    // snapshot timestamp. Keep that from-now range intact so revisions do not
+    // get subtracted again from their original start time. A stale row carries
+    // the saved range by design; the warning marker and details explain that it
+    // needs owner reassessment.
+    format_range(task.current_lower_seconds, task.current_upper_seconds)
 }
 
 fn fit_text(value: &str, width: usize) -> String {

@@ -28,8 +28,9 @@ release or merge rules.
   keeps activity observational: no idle, elapsed ETA, or UI read infers
   completion. Root Lead mutations may assign a verified persisted Worker owner;
   revisions are measured from the latest saved update so a reassignment alone
-  does not reset the estimate clock. Adaptive freshness display and reminders
-  are delivered by dependent fork stages.
+  does not reset the estimate clock. The adaptive freshness minimum and saved
+  range warning are now projected through `/eta` and config; owner-routed
+  reminders are delivered by the dependent runtime stage.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
