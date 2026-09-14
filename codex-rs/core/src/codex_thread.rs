@@ -1103,12 +1103,7 @@ impl CodexThread {
 
     /// Returns the configured ETA freshness age for this thread's root session.
     pub async fn eta_freshness_minimum_seconds(&self) -> u64 {
-        self.session
-            .get_config()
-            .await
-            .eta
-            .freshness_minimum_minutes
-            .saturating_mul(60)
+        self.session.eta_freshness_minimum_seconds().await
     }
 
     /// Arm owner-routed ETA reminders after a durable update. This is exposed for the app-server

@@ -75,13 +75,9 @@ impl ThreadEtaRequestProcessor {
         if !self.root_exists(state_db, root_thread_id).await? {
             return Err(invalid_request("ETA root thread was not found"));
         }
-        let freshness_minimum_seconds = match self.thread_manager.get_thread(root_thread_id).await {
-            Ok(thread) => thread
-                .eta_freshness_minimum_seconds()
-                .await
-                .min(i64::MAX as u64) as i64,
-            Err(_) => DEFAULT_FRESHNESS_MINIMUM_SECONDS,
-        };
+        let freshness_minimum_seconds = self
+            .freshness_minimum_seconds(state_db, root_thread_id)
+            .await;
         let snapshot = state_db
             .read_task_estimate_snapshot_with_freshness_minimum(
                 root_thread_id,
@@ -130,13 +126,9 @@ impl ThreadEtaRequestProcessor {
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_root_persisted(root_thread_id).await?;
         let root_thread = self.thread_manager.get_thread(root_thread_id).await.ok();
-        let freshness_minimum_seconds = match root_thread.as_ref() {
-            Some(thread) => thread
-                .eta_freshness_minimum_seconds()
-                .await
-                .min(i64::MAX as u64) as i64,
-            None => DEFAULT_FRESHNESS_MINIMUM_SECONDS,
-        };
+        let freshness_minimum_seconds = self
+            .freshness_minimum_seconds(state_db, root_thread_id)
+            .await;
         let result = if let Some(thread) = root_thread.as_ref() {
             let eta_dispatch = thread.lock_eta_reminders().await;
             let result = state_db
@@ -194,6 +186,26 @@ impl ThreadEtaRequestProcessor {
         self.state_db
             .as_ref()
             .ok_or_else(|| internal_error("sqlite state db unavailable for ETA"))
+    }
+
+    async fn freshness_minimum_seconds(
+        &self,
+        state_db: &StateDbHandle,
+        root_thread_id: ThreadId,
+    ) -> i64 {
+        if let Ok(Some(seconds)) = state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+        {
+            return seconds.clamp(0, i64::MAX);
+        }
+        if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
+            return thread
+                .eta_freshness_minimum_seconds()
+                .await
+                .min(i64::MAX as u64) as i64;
+        }
+        DEFAULT_FRESHNESS_MINIMUM_SECONDS
     }
 
     async fn ensure_root_persisted(

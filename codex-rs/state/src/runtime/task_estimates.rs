@@ -692,6 +692,41 @@ WHERE task_id = ? AND root_thread_id = ?
 }
 
 impl StateRuntime {
+    /// Persist the root-owned freshness minimum used by ETA projections and reminders.
+    pub async fn set_eta_freshness_minimum_seconds(
+        &self,
+        root_thread_id: ThreadId,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO eta_roots (root_thread_id, sequence) VALUES (?, 0) ON CONFLICT(root_thread_id) DO NOTHING",
+        )
+        .bind(root_thread_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE eta_roots SET freshness_minimum_seconds = ? WHERE root_thread_id = ?")
+            .bind(freshness_minimum_seconds.max(0))
+            .bind(root_thread_id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Read the persisted root-owned freshness minimum, if the ETA root exists.
+    pub async fn eta_freshness_minimum_seconds(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<Option<i64>> {
+        Ok(sqlx::query_scalar::<_, i64>(
+            "SELECT freshness_minimum_seconds FROM eta_roots WHERE root_thread_id = ?",
+        )
+        .bind(root_thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?)
+    }
+
     pub async fn read_task_estimate_snapshot(
         &self,
         root_thread_id: ThreadId,

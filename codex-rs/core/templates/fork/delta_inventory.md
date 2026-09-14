@@ -37,7 +37,10 @@ release or merge rules.
   callbacks; pending dependency rows and grouping parents stay quiet, and child
   revisions recompute serial/parallel aggregates without double-counting. Runtime
   removal holds the shared dispatch fence through manager removal and rejects
-  absent owners so concurrent updates cannot re-arm deleted-owner callbacks.
+  absent owners so concurrent updates cannot re-arm deleted-owner callbacks. The
+  root-owned freshness minimum is persisted with the ETA ledger (migration
+  `0060_rick_eta_root_freshness.sql`), so cold app-server reads and Worker
+  mutations use the Lead policy; a Worker config refresh cannot replace it.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -738,6 +741,9 @@ release or merge rules.
   owners; owner reminders request from-now remaining estimates and explicit
   lifecycle/blocker status; and child revisions recompute serial/parallel
   aggregates without double-counting grouping parents.
+- Verify the persisted root freshness policy survives cold reads, remains
+  authoritative for Worker mutations, and is updated/rearmed only by the root
+  Lead configuration path.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute

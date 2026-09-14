@@ -216,11 +216,8 @@ impl EtaHandler {
             .map(mutation_from_args)
             .collect::<Result<Vec<_>, _>>()?;
         let freshness_minimum_seconds = session
-            .get_config()
+            .eta_freshness_minimum_seconds_for_root(root_thread_id)
             .await
-            .eta
-            .freshness_minimum_minutes
-            .saturating_mul(60)
             .min(i64::MAX as u64) as i64;
         let result = {
             // Fence durable mutation and timer replacement against a callback that is already

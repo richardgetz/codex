@@ -121,6 +121,10 @@ the actual freshness delay is the greater of that minimum and one quarter of
 the latest saved upper estimate (rounded up); an unknown upper bound uses the
 configured minimum.
 
+The resolved root minimum is persisted with the ETA ledger. Cold
+`thread/eta/read` and `thread/eta/update` requests use that persisted value, and
+Worker configuration refreshes cannot replace the Lead-owned timer policy.
+
 Freshness and overdue reminders are event-driven one-shot messages sent directly
 to the persisted task owner (Lead or Worker). The freshness delay is the greater
 of the configured minimum and one quarter of the latest saved upper estimate,

@@ -228,6 +228,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
+use crate::config::DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::PermissionProfileState;
 use crate::config::StartedNetworkProxy;
@@ -2866,6 +2867,39 @@ impl Session {
             .clone()
     }
 
+    pub(crate) async fn eta_freshness_minimum_seconds(&self) -> u64 {
+        let fallback = self
+            .get_config()
+            .await
+            .eta
+            .freshness_minimum_minutes
+            .saturating_mul(60);
+        let Some(state_db) = self.state_db() else {
+            return fallback;
+        };
+        let Ok(root_thread_id) = state_db.root_thread_id(self.thread_id).await else {
+            return fallback;
+        };
+        self.root_eta_freshness_minimum_seconds(&state_db, root_thread_id)
+            .await
+    }
+
+    pub(crate) async fn eta_freshness_minimum_seconds_for_root(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> u64 {
+        let Some(state_db) = self.state_db() else {
+            return self
+                .get_config()
+                .await
+                .eta
+                .freshness_minimum_minutes
+                .saturating_mul(60);
+        };
+        self.root_eta_freshness_minimum_seconds(&state_db, root_thread_id)
+            .await
+    }
+
     /// Arm one-shot ETA reminders after a durable mutation. Delivery is routed directly to each
     /// persisted owner and inherits the normal pause, shutdown, usage, and Team admission gates.
     pub(crate) async fn schedule_eta_reminders(
@@ -2877,11 +2911,8 @@ impl Session {
             return;
         };
         let freshness_minimum = std::time::Duration::from_secs(
-            self.get_config()
-                .await
-                .eta
-                .freshness_minimum_minutes
-                .saturating_mul(60),
+            self.root_eta_freshness_minimum_seconds(&state_db, root_thread_id)
+                .await,
         );
         self.services
             .agent_control
@@ -2903,11 +2934,8 @@ impl Session {
             return;
         };
         let freshness_minimum = std::time::Duration::from_secs(
-            self.get_config()
-                .await
-                .eta
-                .freshness_minimum_minutes
-                .saturating_mul(60),
+            self.root_eta_freshness_minimum_seconds(&state_db, root_thread_id)
+                .await,
         );
         self.services
             .agent_control
@@ -2922,17 +2950,54 @@ impl Session {
         let Ok(root_thread_id) = state_db.root_thread_id(self.thread_id).await else {
             return;
         };
-        let freshness_minimum = std::time::Duration::from_secs(
-            self.get_config()
+        if root_thread_id == self.thread_id {
+            let configured_seconds = self
+                .get_config()
                 .await
                 .eta
                 .freshness_minimum_minutes
-                .saturating_mul(60),
+                .saturating_mul(60);
+            if let Err(error) = state_db
+                .set_eta_freshness_minimum_seconds(root_thread_id, configured_seconds as i64)
+                .await
+            {
+                warn!(
+                    %root_thread_id,
+                    %error,
+                    "failed to persist ETA freshness policy"
+                );
+            }
+        }
+        let freshness_minimum = std::time::Duration::from_secs(
+            self.root_eta_freshness_minimum_seconds(&state_db, root_thread_id)
+                .await,
         );
         self.services
             .agent_control
             .reconfigure_eta_reminders(state_db, root_thread_id, freshness_minimum)
             .await;
+    }
+
+    async fn root_eta_freshness_minimum_seconds(
+        &self,
+        state_db: &state_db::StateDbHandle,
+        root_thread_id: ThreadId,
+    ) -> u64 {
+        if let Ok(Some(seconds)) = state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+        {
+            return seconds.max(0) as u64;
+        }
+        if root_thread_id == self.thread_id {
+            return self
+                .get_config()
+                .await
+                .eta
+                .freshness_minimum_minutes
+                .saturating_mul(60);
+        }
+        DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES.saturating_mul(60)
     }
 
     pub(crate) async fn cancel_eta_reminders(&self) {
