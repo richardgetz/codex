@@ -3630,6 +3630,17 @@ impl Config {
     ) -> std::io::Result<Self> {
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
+        if let Some(alias) = cfg
+            .accounts
+            .as_ref()
+            .and_then(|accounts| accounts.active.as_deref())
+            && !alias.trim().is_empty()
+            && codex_config::account_registry::normalize_account_alias(alias).is_none()
+        {
+            return Err(
+                codex_config::account_registry::invalid_configured_account_alias_error(alias),
+            );
+        }
         if cfg.experimental_thread_store_endpoint.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

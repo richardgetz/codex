@@ -33,6 +33,40 @@ foo = "bar"
 }
 
 #[test]
+fn invalid_configured_account_alias_fails_non_strict_standalone_app_server() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+[accounts]
+active = "../work"
+"#,
+    )?;
+
+    let output = Command::new(codex_utils_cargo_bin::cargo_bin("codex-app-server")?)
+        .env("CODEX_HOME", codex_home.path())
+        .env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            codex_home.path().join("managed_config.toml"),
+        )
+        .args(["--listen", "off"])
+        .output()?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("invalid configured account alias `../work` in `[accounts].active`"),
+        "expected invalid account alias error in stderr, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("using defaults"),
+        "invalid account aliases must not fall back to the root auth config"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn managed_auth_requirements_fail_closed_for_standalone_app_server() -> Result<()> {
     for requirements in [
         "allowed_login_methods = []\n",

@@ -1720,8 +1720,10 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    config =
-        crate::app::config_for_startup_account_alias(&config, startup_account_alias.as_deref());
+    config = crate::app::config_for_startup_account_alias(
+        &config,
+        startup_account_alias.as_deref(),
+    )?;
     tui.configure_realtime_voice(config.realtime.enabled);
 
     let local_settings = crate::local_settings::LocalSettings::from(&config);
@@ -3530,7 +3532,8 @@ requires_openai_auth = {requires_openai_auth}
                 AuthKeyringBackendKind::default(),
             )?;
             let base_config = build_config(&temp_dir).await?;
-            let config = crate::app::config_for_startup_account_alias(&base_config, Some("work"));
+            let config =
+                crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
             let mut app_server = AppServerSession::new(
                 codex_app_server_client::AppServerClient::InProcess(
                     start_test_embedded_app_server(config.clone()).await?,
@@ -3540,6 +3543,45 @@ requires_openai_auth = {requires_openai_auth}
 
             let (login_status, _) = get_login_status(&mut app_server, &config).await?;
             assert_eq!(login_status, LoginStatus::NotAuthenticated);
+
+            app_server.shutdown().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn configured_account_alias_uses_alias_auth_store_without_cli_override()
+    -> color_eyre::Result<()> {
+        Box::pin(async {
+            let temp_dir = TempDir::new()?;
+            login_with_api_key(
+                temp_dir.path(),
+                "sk-root",
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )?;
+            let alias_home = temp_dir.path().join("accounts/personal");
+            std::fs::create_dir_all(&alias_home)?;
+            login_with_api_key(
+                &alias_home,
+                "sk-personal",
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )?;
+
+            let mut base_config = build_config(&temp_dir).await?;
+            base_config.accounts.active = Some("personal".to_string());
+            let config = crate::app::config_for_startup_account_alias(&base_config, None)?;
+            let mut app_server = AppServerSession::new(
+                codex_app_server_client::AppServerClient::InProcess(
+                    start_test_embedded_app_server(config.clone()).await?,
+                ),
+                /*thread_params_mode*/ ThreadParamsMode::Embedded,
+            );
+
+            let (login_status, _) = get_login_status(&mut app_server, &config).await?;
+            assert_eq!(login_status, LoginStatus::AuthMode(AuthMode::ApiKey));
 
             app_server.shutdown().await?;
             Ok(())
@@ -3563,7 +3605,8 @@ requires_openai_auth = {requires_openai_auth}
 
             let mut base_config = build_config(&temp_dir).await?;
             base_config.accounts.active = Some("personal".to_string());
-            let config = crate::app::config_for_startup_account_alias(&base_config, Some("work"));
+            let config =
+                crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
             let mut app_server = AppServerSession::new(
                 codex_app_server_client::AppServerClient::InProcess(
                     start_test_embedded_app_server(config.clone()).await?,
@@ -3603,7 +3646,7 @@ requires_openai_auth = {requires_openai_auth}
             );
 
             let startup_config =
-                crate::app::config_for_startup_account_alias(&base_config, Some("work"));
+                crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
             let (login_status, _) = get_login_status(&mut app_server, &startup_config).await?;
             assert_eq!(login_status, LoginStatus::NotAuthenticated);
 

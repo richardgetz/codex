@@ -67,6 +67,8 @@ pub struct Cli {
 
     /// Start the interactive session using the selected managed account alias.
     ///
+    /// When omitted, uses `[accounts].active` from config.toml when configured.
+    ///
     /// Use `default` to force the original root auth store under `CODEX_HOME`.
     #[arg(long = "account", value_name = "ALIAS")]
     pub startup_account_alias: Option<String>,

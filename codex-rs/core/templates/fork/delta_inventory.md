@@ -60,6 +60,13 @@ release or merge rules.
   `/orchestrator-memory-forget <needle>` command index ahead of the
   8,000-token middle-truncated inventory so essential fork commands remain
   discoverable while the full inventory stays the source of truth.
+- Configured account defaults honor `[accounts].active` when `--account` is
+  omitted, let an explicit `--account` (including `default`) win over user and
+  project defaults, preserve the root auth fallback when no default is
+  configured, and reject invalid effective aliases before auth selection. A
+  valid explicit alias overrides a malformed user-configured default while
+  higher-precedence managed policy remains authoritative. Existing `/account`
+  switching and already-running daemon behavior remain unchanged.
 - Initial developer context keeps extension Skills world-state sections ahead of
   Apps and Plugins usage guidance, while preserving the existing App enablement,
   model-capability, and connector filtering rules.
@@ -900,6 +907,13 @@ release or merge rules.
   collaboration-mode values map to Default.
 - Verify `codex --account ...` and `/account ...` still switch auth stores
   without breaking the default root auth location.
+- Verify `[accounts].active` selects the startup auth store only when
+  `--account` is omitted, explicit aliases (including `default`) override user
+  and project defaults, invalid effective configured or CLI aliases fail
+  clearly, a valid explicit alias overrides malformed user-configured input,
+  managed policy precedence remains intact, and an unset default keeps the root
+  auth fallback. Existing `/account` switching and daemon launcher propagation
+  must remain intact; do not infer a restart of an already-running daemon.
 - Verify `/orchestrator-memory-forget <needle>` still prunes and reconsolidates
   orchestrator memory, including bucket mirror files.
 - Verify `/orchestrator-memory-consolidate` still triggers a manual

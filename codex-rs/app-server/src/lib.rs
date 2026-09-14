@@ -93,6 +93,11 @@ fn is_unsupported_untrusted_approval_policy_error(err: &std::io::Error) -> bool 
     )
 }
 
+fn is_fatal_config_error(err: &std::io::Error) -> bool {
+    is_unsupported_untrusted_approval_policy_error(err)
+        || codex_config::account_registry::is_invalid_configured_account_alias_error(err)
+}
+
 mod analytics_utils;
 mod app_info;
 mod app_server_tracing;
@@ -529,7 +534,7 @@ pub async fn run_main_with_transport_options(
                 config.http_client_factory(),
             );
         }
-        Err(err) if is_unsupported_untrusted_approval_policy_error(&err) => {
+        Err(err) if is_fatal_config_error(&err) => {
             return Err(err);
         }
         Err(err) => {
@@ -545,7 +550,7 @@ pub async fn run_main_with_transport_options(
         .await
     {
         Ok(config) => config,
-        Err(err) if is_unsupported_untrusted_approval_policy_error(&err) => {
+        Err(err) if is_fatal_config_error(&err) => {
             return Err(err);
         }
         Err(err) => {
@@ -1493,10 +1498,12 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::is_fatal_config_error;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
+    use codex_config::account_registry::invalid_configured_account_alias_error;
     #[cfg(debug_assertions)]
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
@@ -1517,6 +1524,12 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[test]
+    fn invalid_configured_account_alias_is_fatal_for_non_strict_startup() {
+        let error = invalid_configured_account_alias_error("../work");
+        assert!(is_fatal_config_error(&error));
     }
 
     #[cfg(debug_assertions)]

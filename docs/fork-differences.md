@@ -1215,6 +1215,10 @@ details.
 ### Account aliases
 
 - `--account <alias>` starts a session using a managed account alias.
+- When `--account` is omitted, `[accounts].active` selects the startup alias;
+  an explicit alias (including `default`) overrides user and project defaults.
+  Invalid effective aliases fail before auth selection, while an unset default
+  keeps the root auth store.
 - `/account <alias>` switches the current session to a managed alias.
 - `/account default` returns the session to the original root auth store.
 - `/status` displays managed aliases as `<alias> - <email> (<account type>)`
