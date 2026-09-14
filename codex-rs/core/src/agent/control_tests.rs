@@ -106,6 +106,16 @@ async fn test_config() -> (TempDir, Config) {
     test_config_with_cli_overrides(Vec::new()).await
 }
 
+async fn test_sqlite_config() -> (TempDir, Config) {
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("enable SQLite for ETA test harness");
+    config.sqlite = codex_state::SqliteConfig::new_for_testing(config.codex_home.clone());
+    (home, config)
+}
+
 fn text_input(text: &str) -> Vec<UserInput> {
     vec![UserInput::Text {
         text: text.to_string(),
@@ -195,8 +205,32 @@ impl AgentControlHarness {
         Self::new_with_config(home, config).await
     }
 
+    async fn new_with_sqlite() -> Self {
+        let (home, config) = test_sqlite_config().await;
+        Self::new_with_config_and_state_db(home, config).await
+    }
+
     async fn new_with_config(home: TempDir, config: Config) -> Self {
         let state_db = init_state_db(&config).await;
+        Self::from_parts(home, config, state_db)
+    }
+
+    async fn new_with_config_and_state_db(home: TempDir, config: Config) -> Self {
+        let state_db = codex_rollout::state_db::try_init(&config)
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "initialize test state database at {}: {err:#}",
+                    config.sqlite.home().display()
+                )
+            });
+        // Initialize SQLite while the runtime uses wall-clock time. ETA tests pause the clock
+        // below so scheduling assertions remain deterministic without blocking DB startup.
+        tokio::time::pause();
+        Self::from_parts(home, config, Some(state_db))
+    }
+
+    fn from_parts(home: TempDir, config: Config, state_db: Option<StateDbHandle>) -> Self {
         let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
@@ -1188,9 +1222,9 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
     ));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
-    let harness = AgentControlHarness::new().await;
+    let harness = AgentControlHarness::new_with_sqlite().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;
     let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
     let worker_thread_id = harness
@@ -1336,11 +1370,11 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
     }));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
-    let (home, mut config) = test_config().await;
+    let (home, mut config) = test_sqlite_config().await;
     config.eta.freshness_minimum_minutes = 1;
-    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
+    let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
     let (root_thread_id, root_thread) = harness.start_thread().await;
     let worker_config = {
         let mut config = config.clone();
@@ -1475,9 +1509,9 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
     assert_eq!(reminder_count, 1);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn eta_reminder_routes_nested_owner_without_lead_relay() {
-    let harness = AgentControlHarness::new().await;
+    let harness = AgentControlHarness::new_with_sqlite().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;
     let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
     let worker_thread_id = harness
@@ -1615,9 +1649,9 @@ async fn eta_reminder_routes_nested_owner_without_lead_relay() {
     assert_eq!(messages_for(nested_thread_id, "eta-root-owner"), 0);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn eta_reminder_is_suppressed_after_owner_close() {
-    let harness = AgentControlHarness::new().await;
+    let harness = AgentControlHarness::new_with_sqlite().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;
     let worker_thread_id = harness
         .control
@@ -1708,9 +1742,9 @@ async fn eta_reminder_is_suppressed_after_owner_close() {
     }));
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn eta_reminder_is_suppressed_after_owner_runtime_removal() {
-    let harness = AgentControlHarness::new().await;
+    let harness = AgentControlHarness::new_with_sqlite().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;
     let state_db = harness
         .state_db
