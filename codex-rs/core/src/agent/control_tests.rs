@@ -1192,7 +1192,7 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;
-    let worker_path = AgentPath::root().join("eta-worker").expect("worker path");
+    let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
     let worker_thread_id = harness
         .control
         .spawn_agent(
@@ -1357,7 +1357,7 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
                 depth: 1,
                 agent_path: Some(
                     AgentPath::root()
-                        .join("eta-policy-worker")
+                        .join("eta_policy_worker")
                         .expect("worker path"),
                 ),
                 agent_nickname: None,
@@ -1479,7 +1479,7 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
 async fn eta_reminder_routes_nested_owner_without_lead_relay() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;
-    let worker_path = AgentPath::root().join("eta-worker").expect("worker path");
+    let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
     let worker_thread_id = harness
         .control
         .spawn_agent(
@@ -1629,7 +1629,7 @@ async fn eta_reminder_is_suppressed_after_owner_close() {
                 depth: 1,
                 agent_path: Some(
                     AgentPath::root()
-                        .join("eta-worker")
+                        .join("eta_worker")
                         .expect("worker path"),
                 ),
                 agent_nickname: None,
