@@ -21753,6 +21753,13 @@
               "null"
             ]
           },
+          "ownerThreadId": {
+            "description": "Root Lead only: persisted agent thread that owns this task and receives reminders.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "parentTaskId": {
             "type": [
               "string",
@@ -21772,12 +21779,6 @@
             ]
           },
           "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "ownerThreadId": {
             "type": [
               "string",
               "null"
