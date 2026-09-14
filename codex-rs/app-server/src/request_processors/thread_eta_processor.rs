@@ -129,11 +129,49 @@ impl ThreadEtaRequestProcessor {
             .map(mutation_from_api)
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_root_persisted(root_thread_id).await?;
-        let result = state_db
-            .apply_task_estimate_mutations(root_thread_id, root_thread_id, &mutations, Utc::now())
-            .await
-            .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?;
-        let response = api_update_response(&result);
+        let root_thread = self.thread_manager.get_thread(root_thread_id).await.ok();
+        let freshness_minimum_seconds = match root_thread.as_ref() {
+            Some(thread) => thread
+                .eta_freshness_minimum_seconds()
+                .await
+                .min(i64::MAX as u64) as i64,
+            None => DEFAULT_FRESHNESS_MINIMUM_SECONDS,
+        };
+        let result = if let Some(thread) = root_thread.as_ref() {
+            let eta_dispatch = thread.lock_eta_reminders().await;
+            let result = state_db
+                .apply_task_estimate_mutations_with_freshness_minimum(
+                    root_thread_id,
+                    root_thread_id,
+                    &mutations,
+                    Utc::now(),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?;
+            if !result.changed_tasks.is_empty() {
+                thread
+                    .schedule_eta_reminders_locked(
+                        result.root_thread_id,
+                        &result.changed_tasks,
+                        &eta_dispatch,
+                    )
+                    .await;
+            }
+            result
+        } else {
+            state_db
+                .apply_task_estimate_mutations_with_freshness_minimum(
+                    root_thread_id,
+                    root_thread_id,
+                    &mutations,
+                    Utc::now(),
+                    freshness_minimum_seconds,
+                )
+                .await
+                .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?
+        };
+        let response = api_update_response_with_freshness_minimum(&result, freshness_minimum_seconds);
         if !response.changed_tasks.is_empty() {
             self.outgoing
                 .send_server_notification(ServerNotification::ThreadEtaUpdated(

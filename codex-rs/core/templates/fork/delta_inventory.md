@@ -23,16 +23,19 @@ release or merge rules.
 - Session-scoped `/eta` task estimates persist root/worker ownership, explicit
   lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
   aggregate finish ranges, and paginated history through app-server v2 and the
-  model-facing `update_eta` tool. This foundation caps each model call at eight
-  operations, returns all changed summaries, preserves terminal History, and
-  keeps activity observational: no idle, elapsed ETA, or UI read infers
+  model-facing `update_eta` tool. Each model call remains capped at eight
+  operations, changed summaries are returned, terminal History is preserved, and
+  activity remains observational: no idle, elapsed ETA, or UI read infers
   completion. Root Lead mutations may assign a verified persisted Worker owner;
-  revisions are measured from the latest saved update so a reassignment alone
-  does not reset the estimate clock. The adaptive freshness minimum and saved
-  range warning are now projected through `/eta` and config. The bounded
-  ContextualUserFragment reminder controller is present with one-shot freshness
-  and overdue scheduling, while dependent lifecycle wiring activates delivery
-  and pause/ownership gates.
+  revisions are measured from the latest saved update so reassignment alone does
+  not reset the estimate clock. The adaptive freshness minimum and saved range
+  warning are projected through `/eta` and config. Event-driven one-shot
+  freshness and overdue reminders are sent directly to the persisted owner with a
+  bounded `ContextualUserFragment` that identifies the trigger and asks for a
+  truthful from-now `update_eta` revision. Revision, reassignment, lifecycle,
+  configuration, pause, shutdown, and owner-lifecycle events invalidate stale
+  callbacks; pending dependency rows and grouping parents stay quiet, and child
+  revisions recompute serial/parallel aggregates without double-counting.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
