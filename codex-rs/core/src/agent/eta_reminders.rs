@@ -52,9 +52,36 @@ struct EtaReminderEntry {
     overdue_timer: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ReminderSentState {
+    freshness_sent: bool,
+    overdue_sent: bool,
+}
+
+struct ReminderProgress {
+    task: TaskEstimate,
+    sent: ReminderSentState,
+}
+
 impl EtaReminderController {
     pub(crate) async fn lock_dispatch(&self) -> tokio::sync::OwnedMutexGuard<()> {
         Arc::clone(&self.dispatch).lock_owned().await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn state_for_tests(
+        &self,
+        task_id: &str,
+    ) -> Option<(bool, bool, bool, bool)> {
+        let state = self.state.lock().await;
+        state.tasks.get(task_id).map(|entry| {
+            (
+                entry.freshness_sent,
+                entry.overdue_sent,
+                entry.freshness_timer.is_some(),
+                entry.overdue_timer.is_some(),
+            )
+        })
     }
 
     pub(crate) async fn schedule(
@@ -77,6 +104,27 @@ impl EtaReminderController {
         root_thread_id: ThreadId,
         tasks: &[TaskEstimate],
         freshness_minimum: Duration,
+    ) {
+        let previous = HashMap::new();
+        self.schedule_locked_with_previous(
+            control,
+            state_db,
+            root_thread_id,
+            tasks,
+            freshness_minimum,
+            &previous,
+        )
+        .await;
+    }
+
+    async fn schedule_locked_with_previous(
+        self: &Arc<Self>,
+        control: AgentControl,
+        state_db: StateDbHandle,
+        root_thread_id: ThreadId,
+        tasks: &[TaskEstimate],
+        freshness_minimum: Duration,
+        previous: &HashMap<String, ReminderProgress>,
     ) {
         // Read the active projection so grouping suppression sees unchanged executable children.
         let freshness_minimum_seconds =
@@ -146,6 +194,11 @@ impl EtaReminderController {
                 root_thread_id,
                 task,
                 freshness_minimum,
+                previous
+                    .get(&task.task_id)
+                    .filter(|previous| previous.task == *task)
+                    .map(|previous| previous.sent)
+                    .unwrap_or_default(),
             )
             .await;
         }
@@ -158,7 +211,26 @@ impl EtaReminderController {
         root_thread_id: ThreadId,
         freshness_minimum: Duration,
     ) {
-        self.cancel_all_locked().await;
+        let previous = {
+            let mut state = self.state.lock().await;
+            let previous = state
+                .tasks
+                .drain()
+                .map(|(task_id, mut entry)| {
+                    let progress = ReminderProgress {
+                        task: entry.task.clone(),
+                        sent: ReminderSentState {
+                            freshness_sent: entry.freshness_sent,
+                            overdue_sent: entry.overdue_sent,
+                        },
+                    };
+                    abort_entry(entry);
+                    (task_id, progress)
+                })
+                .collect::<HashMap<_, _>>();
+            state.next_generation = state.next_generation.wrapping_add(1);
+            previous
+        };
         let freshness_minimum_seconds =
             i64::try_from(freshness_minimum.as_secs()).unwrap_or(i64::MAX);
         let Ok(snapshot) = state_db
@@ -173,12 +245,19 @@ impl EtaReminderController {
         else {
             return;
         };
-        self.schedule_locked(
+        // A configuration refresh may race an explicit root pause. The pause path owns the
+        // dispatch boundary and will reconfigure again after `/continue`; do not arm timers
+        // while the tree remains paused.
+        if control.root_activity_paused() {
+            return;
+        }
+        self.schedule_locked_with_previous(
             control,
             state_db,
             root_thread_id,
             &snapshot.active,
             freshness_minimum,
+            &previous,
         )
         .await;
     }
@@ -224,6 +303,7 @@ impl EtaReminderController {
         root_thread_id: ThreadId,
         task: &TaskEstimate,
         freshness_minimum: Duration,
+        sent: ReminderSentState,
     ) {
         if task.status.is_terminal() || task.status == TaskEstimateStatus::Blocked {
             self.cancel_task_locked(&task.task_id).await;
@@ -241,16 +321,18 @@ impl EtaReminderController {
             .updated_at
             .checked_add_signed(ChronoDuration::seconds(freshness_seconds))
             .unwrap_or(DateTime::<Utc>::MAX_UTC);
-        let freshness_timer = self.spawn_timer(
-            control.clone(),
-            Arc::clone(&state_db),
-            root_thread_id,
-            task.task_id.clone(),
-            generation,
-            ReminderTrigger::Freshness,
-            deadline_to_instant(freshness_deadline),
-        );
-        let overdue_timer = (task.status == TaskEstimateStatus::Active)
+        let freshness_timer = (!sent.freshness_sent).then(|| {
+            self.spawn_timer(
+                control.clone(),
+                Arc::clone(&state_db),
+                root_thread_id,
+                task.task_id.clone(),
+                generation,
+                ReminderTrigger::Freshness,
+                deadline_to_instant(freshness_deadline),
+            )
+        });
+        let overdue_timer = (task.status == TaskEstimateStatus::Active && !sent.overdue_sent)
             .then_some(task.current_upper_seconds)
             .flatten()
             .map(|upper| {
@@ -273,9 +355,9 @@ impl EtaReminderController {
             EtaReminderEntry {
                 generation,
                 task: task.clone(),
-                freshness_sent: false,
-                overdue_sent: false,
-                freshness_timer: Some(freshness_timer),
+                freshness_sent: sent.freshness_sent,
+                overdue_sent: sent.overdue_sent,
+                freshness_timer,
                 overdue_timer,
             },
         );
@@ -322,9 +404,8 @@ impl EtaReminderController {
         generation: u64,
         trigger: ReminderTrigger,
     ) {
-        if !self.claim(&task_id, generation, trigger).await {
-            return;
-        }
+        // Serialize the claim with scheduling, reconfiguration, and lifecycle cancellation so a
+        // callback cannot consume a sent latch while waiting behind a replacement generation.
         let _dispatch = self.dispatch.lock().await;
         if !self.generation_is_current(&task_id, generation).await {
             return;
@@ -387,6 +468,11 @@ impl EtaReminderController {
             self.cancel_task_locked(&task_id).await;
             return;
         };
+        // Claim only once all delivery gates have passed. A paused root or a transiently
+        // unavailable owner can therefore be rearmed by the next lifecycle/configuration pass.
+        if !self.claim(&task_id, generation, trigger).await {
+            return;
+        }
         let message = EtaReminderMessage::new(owner_path.clone(), format_reminder(task, trigger, Utc::now()));
         let mut communication = InterAgentCommunication::new(
             AgentPath::root(),

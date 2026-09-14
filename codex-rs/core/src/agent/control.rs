@@ -769,6 +769,14 @@ impl AgentControl {
             .await;
     }
 
+    #[cfg(test)]
+    pub(crate) async fn eta_reminder_state_for_tests(
+        &self,
+        task_id: &str,
+    ) -> Option<(bool, bool, bool, bool)> {
+        self.eta_reminders.state_for_tests(task_id).await
+    }
+
     pub(crate) async fn reconfigure_eta_reminders_locked(
         &self,
         state_db: codex_rollout::StateDbHandle,

@@ -1571,6 +1571,194 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
 }
 
 #[tokio::test]
+async fn eta_reconfigure_preserves_delivered_trigger_state() {
+    let (home, mut config) = test_sqlite_config().await;
+    config.eta.freshness_minimum_minutes = 1;
+    let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(
+                    AgentPath::root()
+                        .join("eta_reconfigure_worker")
+                        .expect("worker path"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-reconfigure-latch".to_string()),
+                title: Some("Reconfigure latch reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: None,
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create ETA task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-reconfigure-latch".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start ETA task");
+    let worker_thread = harness
+        .manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker should remain loaded");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
+        .await;
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-reconfigure-latch",
+        /*expected_count*/ 1,
+    )
+    .await;
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+
+    let mut updated_config = config;
+    updated_config.eta.freshness_minimum_minutes = 2;
+    root_thread.refresh_runtime_config(updated_config).await;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+            .expect("read updated root freshness policy"),
+        Some(120)
+    );
+    // The task revision is unchanged, so policy reconfiguration must retain the delivered
+    // freshness latch and avoid arming a replacement timer.
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((true, false, false, false))
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::time::resume();
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+
+    let revised = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Revise,
+                task_id: Some("eta-reconfigure-latch".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(2),
+                    upper_seconds: None,
+                }),
+                reason: Some("meaningful revision".to_string()),
+                owner_thread_id: None,
+            }],
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("revise ETA task");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &revised.changed_tasks)
+        .await;
+    assert_eq!(
+        harness
+            .control
+            .eta_reminder_state_for_tests("eta-reconfigure-latch")
+            .await,
+        Some((false, false, true, false))
+    );
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-reconfigure-latch",
+        /*expected_count*/ 2,
+    )
+    .await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-reconfigure-latch")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 2);
+}
+
+#[tokio::test]
 async fn eta_reminder_routes_nested_owner_without_lead_relay() {
     let harness = AgentControlHarness::new_with_sqlite().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;

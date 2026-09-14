@@ -34,8 +34,10 @@ release or merge rules.
   bounded `ContextualUserFragment` that identifies the trigger and asks for a
   truthful from-now `update_eta` revision. Revision, reassignment, lifecycle,
   configuration, pause, shutdown, and owner-lifecycle events invalidate stale
-  callbacks; pending dependency rows and grouping parents stay quiet, and child
-  revisions recompute serial/parallel aggregates without double-counting. Runtime
+  callbacks; unchanged task revisions retain delivered trigger latches across
+  policy reconfiguration, while paused callbacks rearm after `/continue`;
+  pending dependency rows and grouping parents stay quiet, and child revisions
+  recompute serial/parallel aggregates without double-counting. Runtime
   removal holds the shared dispatch fence through manager removal and rejects
   absent owners so concurrent updates cannot re-arm deleted-owner callbacks. The
   root-owned freshness minimum is persisted with the ETA ledger (migration
@@ -739,10 +741,12 @@ release or merge rules.
   configurable as a minimum, and one-shot freshness/overdue events route to the persisted
   owner without polling or Lead relays. Verify revision, reassignment,
   completion, pause, shutdown, and config changes deduplicate/cancel stale
-  callbacks; pending dependency placeholders and grouping parents do not wake
-  owners; owner reminders request from-now remaining estimates and explicit
-  lifecycle/blocker status; and child revisions recompute serial/parallel
-  aggregates without double-counting grouping parents.
+  callbacks, preserve delivered trigger latches for unchanged revisions, and
+  rearm undelivered work after resume; pending dependency placeholders and
+  grouping parents do not wake owners; owner reminders request from-now
+  remaining estimates and explicit lifecycle/blocker status; and child
+  revisions recompute serial/parallel aggregates without double-counting
+  grouping parents.
 - Verify the persisted root freshness policy survives cold reads, seeds a
   missing cold-root row from the current server configuration, remains
   authoritative for Worker mutations, and is updated/rearmed only by the root
