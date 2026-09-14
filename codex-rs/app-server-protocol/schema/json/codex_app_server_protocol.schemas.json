@@ -21776,6 +21776,12 @@
               "string",
               "null"
             ]
+          },
+          "ownerThreadId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

@@ -350,6 +350,11 @@ fn mutation_from_api(
             upper_seconds,
         }),
     };
+    let owner_thread_id = operation
+        .owner_thread_id
+        .as_deref()
+        .map(parse_thread_id)
+        .transpose()?;
     Ok(TaskEstimateMutation {
         action: match operation.action {
             ThreadEtaAction::Create => TaskEstimateAction::Create,

@@ -40,6 +40,7 @@ fn operation(
         estimate_lower_seconds: lower_seconds,
         estimate_upper_seconds: upper_seconds,
         reason: reason.map(str::to_string),
+        owner_thread_id: None,
     }
 }
 

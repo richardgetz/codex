@@ -7,9 +7,13 @@ use chrono::Utc;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
-const STALE_AFTER_SECONDS: i64 = 15 * 60;
+pub(super) const DEFAULT_FRESHNESS_MINIMUM_SECONDS: i64 = 15 * 60;
 
-pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> TaskEstimateOverall {
+pub(super) fn compute_overall_with_freshness_minimum(
+    tasks: &[TaskEstimate],
+    now: DateTime<Utc>,
+    freshness_minimum_seconds: i64,
+) -> TaskEstimateOverall {
     if tasks.is_empty() {
         return TaskEstimateOverall::unknown("no task estimates");
     }
@@ -25,8 +29,20 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
             unknown_reason: None,
         };
     }
+    // Grouping rows are bookkeeping records. A child revision refreshes the executable work, so
+    // an unchanged parent must not make the aggregate stale while its active leaves are fresh.
+    let active_task_ids = active_tasks
+        .iter()
+        .map(|task| task.task_id.as_str())
+        .collect::<BTreeSet<_>>();
     if active_tasks.iter().any(|task| {
-        now.timestamp().saturating_sub(task.updated_at.timestamp()) > STALE_AFTER_SECONDS
+        task.started_at.is_some()
+            && !tasks.iter().any(|child| {
+                child.parent_task_id.as_deref() == Some(task.task_id.as_str())
+                    && active_task_ids.contains(child.task_id.as_str())
+            })
+            && now.timestamp().saturating_sub(task.updated_at.timestamp())
+                >= task.freshness_delay_seconds(freshness_minimum_seconds)
     }) {
         return TaskEstimateOverall::unknown("stale task update");
     }
@@ -39,10 +55,6 @@ pub(super) fn compute_overall(tasks: &[TaskEstimate], now: DateTime<Utc>) -> Tas
     let task_ids_with_children = tasks
         .iter()
         .filter_map(|task| task.parent_task_id.as_deref())
-        .collect::<BTreeSet<_>>();
-    let active_task_ids = active_tasks
-        .iter()
-        .map(|task| task.task_id.as_str())
         .collect::<BTreeSet<_>>();
     if active_tasks.iter().any(|task| {
         task_ids_with_children.contains(task.task_id.as_str())
@@ -258,8 +270,10 @@ fn estimate_path(
     }
 
     let remaining = task.remaining_range(now);
-    if let (Some(started_at), Some(upper)) = (task.started_at, task.current_upper_seconds) {
-        let elapsed = (now - started_at).num_seconds().max(0);
+    if task.started_at.is_some()
+        && let Some(upper) = task.current_upper_seconds
+    {
+        let elapsed = (now - task.updated_at).num_seconds().max(0);
         if elapsed > upper {
             return Err(format!("task `{task_id}` estimate has elapsed"));
         }
