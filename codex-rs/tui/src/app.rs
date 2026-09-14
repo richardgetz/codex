@@ -336,8 +336,8 @@ pub(crate) fn config_for_startup_account_alias(
         return Ok(startup_config);
     };
     let normalized_alias = normalized_startup_account_alias(alias)?;
-    startup_config.accounts.active = (!normalized_alias.eq_ignore_ascii_case("default"))
-        .then_some(normalized_alias);
+    startup_config.accounts.active =
+        (!normalized_alias.eq_ignore_ascii_case("default")).then_some(normalized_alias);
     Ok(startup_config)
 }
 

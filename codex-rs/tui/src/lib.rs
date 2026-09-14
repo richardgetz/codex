@@ -1720,10 +1720,8 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    config = crate::app::config_for_startup_account_alias(
-        &config,
-        startup_account_alias.as_deref(),
-    )?;
+    config =
+        crate::app::config_for_startup_account_alias(&config, startup_account_alias.as_deref())?;
     tui.configure_realtime_voice(config.realtime.enabled);
 
     let local_settings = crate::local_settings::LocalSettings::from(&config);
@@ -3532,8 +3530,7 @@ requires_openai_auth = {requires_openai_auth}
                 AuthKeyringBackendKind::default(),
             )?;
             let base_config = build_config(&temp_dir).await?;
-            let config =
-                crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
+            let config = crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
             let mut app_server = AppServerSession::new(
                 codex_app_server_client::AppServerClient::InProcess(
                     start_test_embedded_app_server(config.clone()).await?,
@@ -3605,8 +3602,7 @@ requires_openai_auth = {requires_openai_auth}
 
             let mut base_config = build_config(&temp_dir).await?;
             base_config.accounts.active = Some("personal".to_string());
-            let config =
-                crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
+            let config = crate::app::config_for_startup_account_alias(&base_config, Some("work"))?;
             let mut app_server = AppServerSession::new(
                 codex_app_server_client::AppServerClient::InProcess(
                     start_test_embedded_app_server(config.clone()).await?,

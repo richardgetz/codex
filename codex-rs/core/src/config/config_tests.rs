@@ -7120,9 +7120,11 @@ async fn invalid_configured_account_alias_is_rejected() -> std::io::Result<()> {
     .expect_err("invalid configured account aliases must fail startup");
 
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(error
-        .to_string()
-        .contains("invalid configured account alias `../work` in `[accounts].active`"));
+    assert!(
+        error
+            .to_string()
+            .contains("invalid configured account alias `../work` in `[accounts].active`")
+    );
     Ok(())
 }
 
