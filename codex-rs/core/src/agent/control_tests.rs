@@ -390,6 +390,36 @@ async fn wait_for_recorded_user_message(thread: &CodexThread, needle: &str) {
     .expect("timed out waiting for user message recording");
 }
 
+async fn wait_for_captured_eta_reminders(
+    manager: &ThreadManager,
+    thread_id: ThreadId,
+    task_id: &str,
+    expected_count: usize,
+) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let count = manager
+                .captured_ops()
+                .into_iter()
+                .filter(|(captured_thread_id, op)| {
+                    *captured_thread_id == thread_id
+                        && matches!(
+                            op,
+                            Op::InterAgentCommunication { communication, .. }
+                                if communication.content.contains(task_id)
+                        )
+                })
+                .count();
+            if count >= expected_count {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for ETA reminder delivery");
+}
+
 async fn wait_for_thread_settings_event(thread: &CodexThread) -> ThreadSettingsSnapshot {
     timeout(Duration::from_secs(5), async {
         loop {
@@ -1322,7 +1352,17 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
     tokio::time::advance(Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(2)).await;
-    tokio::task::yield_now().await;
+    // Let the timer callback complete its SQLite snapshot, owner admission, and captured
+    // delivery on wall-clock time before inspecting the manager's operation log.
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-owner-overdue",
+        /*expected_count*/ 2,
+    )
+    .await;
+    tokio::time::pause();
     let reminder_messages = harness
         .manager
         .captured_ops()
@@ -1492,7 +1532,10 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
         Some(120)
     );
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(1)).await;
+    // Tokio resumes from the 59-second virtual clock position reached before the wall-clock
+    // reconfiguration above. Advance the full 120-second timer delay from that position and
+    // keep the final second as the delivery boundary assertion.
+    tokio::time::advance(Duration::from_secs(119)).await;
     tokio::task::yield_now().await;
     assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
         matches!(
@@ -1501,8 +1544,17 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
                 if communication.content.contains("eta-root-policy")
         )
     }));
-    tokio::time::advance(Duration::from_secs(60)).await;
-    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    // Let the timer callback complete its SQLite snapshot, owner admission, and captured
+    // delivery on wall-clock time before inspecting the manager's operation log.
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        worker_thread_id,
+        "eta-root-policy",
+        /*expected_count*/ 1,
+    )
+    .await;
     let reminder_count = harness
         .manager
         .captured_ops()
@@ -1639,7 +1691,21 @@ async fn eta_reminder_routes_nested_owner_without_lead_relay() {
     // armed so fake-time advances do not stall connection acquisition in the state runtime.
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(1)).await;
-    tokio::task::yield_now().await;
+    tokio::time::resume();
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        root_thread_id,
+        "eta-root-owner",
+        /*expected_count*/ 1,
+    )
+    .await;
+    wait_for_captured_eta_reminders(
+        &harness.manager,
+        nested_thread_id,
+        "eta-nested-owner",
+        /*expected_count*/ 1,
+    )
+    .await;
     let messages_for = |thread_id, task_id: &str| {
         harness
             .manager
