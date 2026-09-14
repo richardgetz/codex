@@ -1336,6 +1336,313 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
     }));
 }
 
+#[tokio::test(start_paused = true)]
+async fn eta_reminder_routes_nested_owner_without_lead_relay() {
+    let harness = AgentControlHarness::new().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("eta-worker").expect("worker path");
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path.clone()),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let nested_path = worker_path.join("nested").expect("nested path");
+    let nested_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("nested worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: worker_thread_id,
+                depth: 2,
+                agent_path: Some(nested_path),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("nested worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Create,
+                    task_id: Some("eta-root-owner".to_string()),
+                    title: Some("Lead-owned reminder".to_string()),
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(1),
+                        upper_seconds: Some(1),
+                    }),
+                    reason: None,
+                    owner_thread_id: Some(root_thread_id),
+                },
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Create,
+                    task_id: Some("eta-nested-owner".to_string()),
+                    title: Some("Nested worker reminder".to_string()),
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: Some(TaskEstimateRange {
+                        lower_seconds: Some(1),
+                        upper_seconds: Some(1),
+                    }),
+                    reason: None,
+                    owner_thread_id: Some(nested_thread_id),
+                },
+            ],
+            now,
+        )
+        .await
+        .expect("create owner-routed tasks");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Start,
+                    task_id: Some("eta-root-owner".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Start,
+                    task_id: Some("eta-nested-owner".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+            ],
+            now,
+        )
+        .await
+        .expect("start owner-routed tasks");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    let messages_for = |thread_id, task_id: &str| {
+        harness
+            .manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(captured_thread_id, op)| {
+                *captured_thread_id == thread_id
+                    && matches!(
+                        op,
+                        Op::InterAgentCommunication { communication, .. }
+                            if communication.content.contains(task_id)
+                    )
+            })
+            .count()
+    };
+    assert_eq!(messages_for(root_thread_id, "eta-root-owner"), 1);
+    assert_eq!(messages_for(nested_thread_id, "eta-nested-owner"), 1);
+    assert_eq!(messages_for(root_thread_id, "eta-nested-owner"), 0);
+    assert_eq!(messages_for(nested_thread_id, "eta-root-owner"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn eta_reminder_is_suppressed_after_owner_close() {
+    let harness = AgentControlHarness::new().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(
+                    AgentPath::root()
+                        .join("eta-worker")
+                        .expect("worker path"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-closed-owner".to_string()),
+                title: Some("Closed owner reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: Some(1),
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create closed-owner task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-closed-owner".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start closed-owner task");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+    harness
+        .control
+        .close_agent(worker_thread_id)
+        .await
+        .expect("close owner");
+
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-closed-owner")
+        )
+    }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn eta_reminder_is_suppressed_after_owner_runtime_removal() {
+    let harness = AgentControlHarness::new().await;
+    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-removed-runtime".to_string()),
+                title: Some("Removed runtime reminder".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: Some(1),
+                }),
+                reason: None,
+                owner_thread_id: Some(root_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create removed-runtime task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-removed-runtime".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start removed-runtime task");
+    harness
+        .control
+        .schedule_eta_reminders(
+            state_db,
+            root_thread_id,
+            &result.changed_tasks,
+            Duration::from_secs(3),
+        )
+        .await;
+    harness
+        .manager
+        .remove_thread(&root_thread_id)
+        .await
+        .expect("remove owner runtime");
+
+    tokio::time::advance(Duration::from_secs(5)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-removed-runtime")
+        )
+    }));
+}
+
 #[tokio::test]
 async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
     let harness = AgentControlHarness::new().await;
