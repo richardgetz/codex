@@ -40,7 +40,9 @@ release or merge rules.
   absent owners so concurrent updates cannot re-arm deleted-owner callbacks. The
   root-owned freshness minimum is persisted with the ETA ledger (migration
   `0060_rick_eta_root_freshness.sql`), so cold app-server reads and Worker
-  mutations use the Lead policy; a Worker config refresh cannot replace it.
+  mutations use the Lead policy; a Worker config refresh cannot replace it. A
+  first cold API read with no policy row seeds the persisted value from the
+  authoritative server configuration before projecting or updating ETA.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -741,7 +743,8 @@ release or merge rules.
   owners; owner reminders request from-now remaining estimates and explicit
   lifecycle/blocker status; and child revisions recompute serial/parallel
   aggregates without double-counting grouping parents.
-- Verify the persisted root freshness policy survives cold reads, remains
+- Verify the persisted root freshness policy survives cold reads, seeds a
+  missing cold-root row from the current server configuration, remains
   authoritative for Worker mutations, and is updated/rearmed only by the root
   Lead configuration path.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;

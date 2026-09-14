@@ -215,15 +215,15 @@ impl EtaHandler {
             .iter()
             .map(mutation_from_args)
             .collect::<Result<Vec<_>, _>>()?;
-        let freshness_minimum_seconds = session
-            .eta_freshness_minimum_seconds_for_root(root_thread_id)
-            .await
-            .min(i64::MAX as u64) as i64;
-        let result = {
+        let (result, freshness_minimum_seconds) = {
             // Fence durable mutation and timer replacement against a callback that is already
             // resolving the same task. A callback either delivers before this update commits or
             // observes the replacement generation after the lock is released.
             let eta_dispatch = session.lock_eta_reminders().await;
+            let freshness_minimum_seconds = session
+                .eta_freshness_minimum_seconds_for_root(root_thread_id)
+                .await
+                .min(i64::MAX as u64) as i64;
             let result = state_db
                 .apply_task_estimate_mutations_with_freshness_minimum(
                     root_thread_id,
@@ -245,7 +245,7 @@ impl EtaHandler {
                     )
                     .await;
             }
-            result
+            (result, freshness_minimum_seconds)
         };
         if !result.changed_tasks.is_empty() {
             session

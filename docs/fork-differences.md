@@ -123,7 +123,9 @@ configured minimum.
 
 The resolved root minimum is persisted with the ETA ledger. Cold
 `thread/eta/read` and `thread/eta/update` requests use that persisted value, and
-Worker configuration refreshes cannot replace the Lead-owned timer policy.
+Worker configuration refreshes cannot replace the Lead-owned timer policy. If a
+cold root predates its policy row, the first API read seeds it from the current
+server configuration before computing the projection.
 
 Freshness and overdue reminders are event-driven one-shot messages sent directly
 to the persisted task owner (Lead or Worker). The freshness delay is the greater

@@ -2907,16 +2907,8 @@ impl Session {
         root_thread_id: ThreadId,
         tasks: &[codex_state::TaskEstimate],
     ) {
-        let Some(state_db) = self.state_db() else {
-            return;
-        };
-        let freshness_minimum = std::time::Duration::from_secs(
-            self.root_eta_freshness_minimum_seconds(&state_db, root_thread_id)
-                .await,
-        );
-        self.services
-            .agent_control
-            .schedule_eta_reminders(state_db, root_thread_id, tasks, freshness_minimum)
+        let eta_dispatch = self.lock_eta_reminders().await;
+        self.schedule_eta_reminders_locked(root_thread_id, tasks, &eta_dispatch)
             .await;
     }
 

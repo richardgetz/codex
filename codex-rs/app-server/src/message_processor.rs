@@ -483,6 +483,7 @@ impl MessageProcessor {
         let thread_eta_processor = ThreadEtaRequestProcessor::new(
             outgoing.clone(),
             state_db.clone(),
+            config_manager.clone(),
             Arc::clone(&thread_manager),
             Arc::clone(&thread_store),
         );

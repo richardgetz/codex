@@ -1,5 +1,6 @@
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use crate::config_manager::ConfigManager;
 use crate::outgoing_message::OutgoingMessageSender;
 use chrono::DateTime;
 use chrono::Utc;
@@ -34,6 +35,7 @@ use codex_state::TaskEstimateUpdateResult;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadStore;
 use std::sync::Arc;
+use tracing::warn;
 
 const DEFAULT_HISTORY_LIMIT: usize = 50;
 const MAX_HISTORY_LIMIT: usize = 100;
@@ -43,6 +45,7 @@ const DEFAULT_FRESHNESS_MINIMUM_SECONDS: i64 = 15 * 60;
 pub(crate) struct ThreadEtaRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     state_db: Option<StateDbHandle>,
+    config_manager: ConfigManager,
     thread_manager: Arc<ThreadManager>,
     thread_store: Arc<dyn ThreadStore>,
 }
@@ -51,12 +54,14 @@ impl ThreadEtaRequestProcessor {
     pub(crate) fn new(
         outgoing: Arc<OutgoingMessageSender>,
         state_db: Option<StateDbHandle>,
+        config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
         thread_store: Arc<dyn ThreadStore>,
     ) -> Self {
         Self {
             outgoing,
             state_db,
+            config_manager,
             thread_manager,
             thread_store,
         }
@@ -126,11 +131,11 @@ impl ThreadEtaRequestProcessor {
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_root_persisted(root_thread_id).await?;
         let root_thread = self.thread_manager.get_thread(root_thread_id).await.ok();
-        let freshness_minimum_seconds = self
-            .freshness_minimum_seconds(state_db, root_thread_id)
-            .await;
-        let result = if let Some(thread) = root_thread.as_ref() {
+        let (result, freshness_minimum_seconds) = if let Some(thread) = root_thread.as_ref() {
             let eta_dispatch = thread.lock_eta_reminders().await;
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id)
+                .await;
             let result = state_db
                 .apply_task_estimate_mutations_with_freshness_minimum(
                     root_thread_id,
@@ -150,8 +155,11 @@ impl ThreadEtaRequestProcessor {
                     )
                     .await;
             }
-            result
+            (result, freshness_minimum_seconds)
         } else {
+            let freshness_minimum_seconds = self
+                .freshness_minimum_seconds(state_db, root_thread_id)
+                .await;
             state_db
                 .apply_task_estimate_mutations_with_freshness_minimum(
                     root_thread_id,
@@ -161,6 +169,7 @@ impl ThreadEtaRequestProcessor {
                     freshness_minimum_seconds,
                 )
                 .await
+                .map(|result| (result, freshness_minimum_seconds))
                 .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?
         };
         let response = api_update_response_with_freshness_minimum(&result, freshness_minimum_seconds);
@@ -199,13 +208,28 @@ impl ThreadEtaRequestProcessor {
         {
             return seconds.clamp(0, i64::MAX);
         }
-        if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
-            return thread
+        let freshness_minimum_seconds = if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
+            thread
                 .eta_freshness_minimum_seconds()
                 .await
-                .min(i64::MAX as u64) as i64;
+        } else {
+            self.config_manager
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await
+                .map(|config| config.eta.freshness_minimum_minutes.saturating_mul(60))
+                .unwrap_or_else(|error| {
+                    warn!(%error, %root_thread_id, "failed to load ETA freshness policy");
+                    DEFAULT_FRESHNESS_MINIMUM_SECONDS as u64
+                })
         }
-        DEFAULT_FRESHNESS_MINIMUM_SECONDS
+        .min(i64::MAX as u64) as i64;
+        if let Err(error) = state_db
+            .set_eta_freshness_minimum_seconds(root_thread_id, freshness_minimum_seconds)
+            .await
+        {
+            warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
+        }
+        freshness_minimum_seconds
     }
 
     async fn ensure_root_persisted(

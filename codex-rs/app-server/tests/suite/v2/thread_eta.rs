@@ -20,10 +20,12 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::TaskEstimateAction;
 use codex_state::TaskEstimateMutation;
 use codex_state::TaskEstimateRange;
+use codex_state::ThreadMetadataBuilder;
 use codex_utils_absolute_path::test_support::PathExt;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -345,6 +347,63 @@ async fn thread_eta_cold_root_read_uses_persisted_freshness_policy() -> Result<(
     assert_eq!(
         snapshot.overall.unknown_reason.as_deref(),
         Some("stale task update")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_eta_first_cold_root_read_seeds_configured_freshness_policy() -> Result<()> {
+    let responses_server = create_mock_responses_server_repeating_assistant("unused").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config(
+            "suppress_unstable_features_warning = true\n[eta]\nfreshness_minimum_minutes = 1",
+        )
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+
+    let root_thread_id = ThreadId::new();
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    let mut metadata = ThreadMetadataBuilder::new(
+        root_thread_id,
+        codex_home.join("sessions").join("cold-root.jsonl"),
+        Utc::now(),
+        SessionSource::Cli,
+    );
+    metadata.cwd = codex_home.path().to_path_buf();
+    state_db
+        .upsert_thread(&metadata.build("mock_provider"))
+        .await?;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await?,
+        None
+    );
+    drop(state_db);
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let snapshot = read(&mut app, &root_thread_id.to_string()).await?.snapshot;
+    assert!(snapshot.active.is_empty());
+    assert_eq!(snapshot.overall.unknown_reason, None);
+
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await?,
+        Some(60)
     );
     Ok(())
 }
