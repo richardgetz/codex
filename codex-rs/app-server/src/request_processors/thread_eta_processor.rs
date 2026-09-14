@@ -19,6 +19,7 @@ use codex_app_server_protocol::ThreadEtaUpdateOperation;
 use codex_app_server_protocol::ThreadEtaUpdateParams;
 use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
+use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
@@ -84,7 +85,7 @@ impl ThreadEtaRequestProcessor {
         let (snapshot, freshness_minimum_seconds) = if let Some(thread) = root_thread.as_ref() {
             let _eta_dispatch = thread.lock_eta_reminders().await;
             let freshness_minimum_seconds = self
-                .freshness_minimum_seconds(state_db, root_thread_id)
+                .freshness_minimum_seconds(state_db, root_thread_id, Some(thread))
                 .await;
             let snapshot = state_db
                 .read_task_estimate_snapshot_with_freshness_minimum(
@@ -105,7 +106,7 @@ impl ThreadEtaRequestProcessor {
             (snapshot, freshness_minimum_seconds)
         } else {
             let freshness_minimum_seconds = self
-                .freshness_minimum_seconds(state_db, root_thread_id)
+                .freshness_minimum_seconds(state_db, root_thread_id, None)
                 .await;
             let snapshot = state_db
                 .read_task_estimate_snapshot_with_freshness_minimum(
@@ -161,7 +162,7 @@ impl ThreadEtaRequestProcessor {
         let (result, freshness_minimum_seconds) = if let Some(thread) = root_thread.as_ref() {
             let eta_dispatch = thread.lock_eta_reminders().await;
             let freshness_minimum_seconds = self
-                .freshness_minimum_seconds(state_db, root_thread_id)
+                .freshness_minimum_seconds(state_db, root_thread_id, Some(thread))
                 .await;
             let result = state_db
                 .apply_task_estimate_mutations_with_freshness_minimum(
@@ -185,7 +186,7 @@ impl ThreadEtaRequestProcessor {
             (result, freshness_minimum_seconds)
         } else {
             let freshness_minimum_seconds = self
-                .freshness_minimum_seconds(state_db, root_thread_id)
+                .freshness_minimum_seconds(state_db, root_thread_id, None)
                 .await;
             state_db
                 .apply_task_estimate_mutations_with_freshness_minimum(
@@ -228,6 +229,7 @@ impl ThreadEtaRequestProcessor {
         &self,
         state_db: &StateDbHandle,
         root_thread_id: ThreadId,
+        root_thread: Option<&CodexThread>,
     ) -> i64 {
         if let Ok(Some(seconds)) = state_db
             .eta_freshness_minimum_seconds(root_thread_id)
@@ -235,7 +237,7 @@ impl ThreadEtaRequestProcessor {
         {
             return seconds.clamp(0, i64::MAX);
         }
-        if let Ok(thread) = self.thread_manager.get_thread(root_thread_id).await {
+        if let Some(thread) = root_thread {
             let freshness_minimum_seconds = thread
                 .eta_freshness_minimum_seconds()
                 .await
