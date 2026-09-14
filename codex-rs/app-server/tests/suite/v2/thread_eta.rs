@@ -370,7 +370,7 @@ async fn thread_eta_first_cold_root_read_seeds_configured_freshness_policy() -> 
     .await?;
     let mut metadata = ThreadMetadataBuilder::new(
         root_thread_id,
-        codex_home.join("sessions").join("cold-root.jsonl"),
+        codex_home.path().join("sessions").join("cold-root.jsonl"),
         Utc::now(),
         SessionSource::Cli,
     );
