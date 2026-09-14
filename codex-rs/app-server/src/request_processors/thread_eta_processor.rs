@@ -1,6 +1,6 @@
+use crate::config_manager::ConfigManager;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
-use crate::config_manager::ConfigManager;
 use crate::outgoing_message::OutgoingMessageSender;
 use chrono::DateTime;
 use chrono::Utc;
@@ -96,8 +96,7 @@ impl ThreadEtaRequestProcessor {
                         params
                             .limit
                             .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
-                            .clamp(1, MAX_HISTORY_LIMIT as u32)
-                            as usize,
+                            .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
                     ),
                     freshness_minimum_seconds,
                 )
@@ -117,8 +116,7 @@ impl ThreadEtaRequestProcessor {
                         params
                             .limit
                             .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
-                            .clamp(1, MAX_HISTORY_LIMIT as u32)
-                            as usize,
+                            .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
                     ),
                     freshness_minimum_seconds,
                 )
@@ -200,7 +198,8 @@ impl ThreadEtaRequestProcessor {
                 .map(|result| (result, freshness_minimum_seconds))
                 .map_err(|err| invalid_request(format!("invalid ETA update: {err}")))?
         };
-        let response = api_update_response_with_freshness_minimum(&result, freshness_minimum_seconds);
+        let response =
+            api_update_response_with_freshness_minimum(&result, freshness_minimum_seconds);
         if !response.changed_tasks.is_empty() {
             self.outgoing
                 .send_server_notification(ServerNotification::ThreadEtaUpdated(
@@ -231,10 +230,7 @@ impl ThreadEtaRequestProcessor {
         root_thread_id: ThreadId,
         root_thread: Option<&CodexThread>,
     ) -> i64 {
-        if let Ok(Some(seconds)) = state_db
-            .eta_freshness_minimum_seconds(root_thread_id)
-            .await
-        {
+        if let Ok(Some(seconds)) = state_db.eta_freshness_minimum_seconds(root_thread_id).await {
             return seconds.clamp(0, i64::MAX);
         }
         if let Some(thread) = root_thread {

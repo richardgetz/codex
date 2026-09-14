@@ -11,6 +11,9 @@ use crate::context::ContextualUserFragment;
 use crate::context::EtaReminderMessage;
 use crate::context::ReminderTrigger;
 use crate::context::format_reminder;
+use chrono::DateTime;
+use chrono::Duration as ChronoDuration;
+use chrono::Utc;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
@@ -18,9 +21,6 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_rollout::StateDbHandle;
 use codex_state::TaskEstimate;
 use codex_state::TaskEstimateStatus;
-use chrono::DateTime;
-use chrono::Duration as ChronoDuration;
-use chrono::Utc;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -69,10 +69,7 @@ impl EtaReminderController {
     }
 
     #[cfg(test)]
-    pub(crate) async fn state_for_tests(
-        &self,
-        task_id: &str,
-    ) -> Option<(bool, bool, bool, bool)> {
+    pub(crate) async fn state_for_tests(&self, task_id: &str) -> Option<(bool, bool, bool, bool)> {
         let state = self.state.lock().await;
         state.tasks.get(task_id).map(|entry| {
             (
@@ -241,7 +238,7 @@ impl EtaReminderController {
             let previous = state
                 .tasks
                 .drain()
-                .map(|(task_id, mut entry)| {
+                .map(|(task_id, entry)| {
                     let progress = ReminderProgress {
                         task: entry.task.clone(),
                         sent: ReminderSentState {
@@ -446,15 +443,14 @@ impl EtaReminderController {
         else {
             return;
         };
-        let Some(task) = snapshot
-            .active
-            .iter()
-            .find(|task| task.task_id == task_id)
-        else {
+        let Some(task) = snapshot.active.iter().find(|task| task.task_id == task_id) else {
             self.cancel_task_locked(&task_id).await;
             return;
         };
-        if !self.task_identity_is_current(&task_id, generation, task).await {
+        if !self
+            .task_identity_is_current(&task_id, generation, task)
+            .await
+        {
             return;
         }
         if control.root_activity_paused() {
@@ -503,7 +499,10 @@ impl EtaReminderController {
         if !self.claim(&task_id, generation, trigger).await {
             return;
         }
-        let message = EtaReminderMessage::new(owner_path.clone(), format_reminder(task, trigger, Utc::now()));
+        let message = EtaReminderMessage::new(
+            owner_path.clone(),
+            format_reminder(task, trigger, Utc::now()),
+        );
         let mut communication = InterAgentCommunication::new(
             AgentPath::root(),
             owner_path,
@@ -516,10 +515,8 @@ impl EtaReminderController {
                 content_item_kinds: Some(vec![message.content_kind()]),
                 ..Default::default()
             });
-        let context = AgentCommunicationContext::new(
-            AgentCommunicationKind::Message,
-            root_thread_id,
-        );
+        let context =
+            AgentCommunicationContext::new(AgentCommunicationKind::Message, root_thread_id);
         let delivery = control
             .send_inter_agent_communication(
                 task.owner_thread_id,

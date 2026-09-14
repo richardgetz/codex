@@ -1815,9 +1815,11 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
         .await
         .expect_err("zero freshness window should be rejected");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(error
-        .to_string()
-        .contains("eta.freshness_minimum_minutes must be between 1"));
+    assert!(
+        error
+            .to_string()
+            .contains("eta.freshness_minimum_minutes must be between 1")
+    );
     Ok(())
 }
 

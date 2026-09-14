@@ -79,12 +79,12 @@ use uuid::Uuid;
 
 pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
-use crate::agent::eta_reminders::EtaReminderController;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
 use self::residency::V2Residency;
 pub(crate) use self::worker_limit::TeamWorkerLease;
 use self::worker_limit::TeamWorkerLimiter;
+use crate::agent::eta_reminders::EtaReminderController;
 
 mod activity;
 mod execution;
@@ -785,12 +785,7 @@ impl AgentControl {
         _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
     ) {
         self.eta_reminders
-            .reconfigure_locked(
-                self.clone(),
-                state_db,
-                root_thread_id,
-                freshness_after,
-            )
+            .reconfigure_locked(self.clone(), state_db, root_thread_id, freshness_after)
             .await;
     }
 

@@ -321,7 +321,9 @@ LIMIT ?
                 "task estimate actor is not part of the requested root session"
             ));
         }
-        if mutations.iter().any(|mutation| mutation.owner_thread_id.is_some())
+        if mutations
+            .iter()
+            .any(|mutation| mutation.owner_thread_id.is_some())
             && actor_thread_id != root_thread_id
         {
             return Err(anyhow::anyhow!(

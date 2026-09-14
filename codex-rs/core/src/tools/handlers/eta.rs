@@ -7,9 +7,9 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaRevisionUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaTaskUpdatedEvent;
@@ -315,7 +315,9 @@ fn mutation_from_args(
         .as_deref()
         .map(ThreadId::from_string)
         .transpose()
-        .map_err(|err| FunctionCallError::RespondToModel(format!("invalid owner_thread_id: {err}")))?;
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("invalid owner_thread_id: {err}"))
+        })?;
     Ok(TaskEstimateMutation {
         action: operation.action,
         task_id: operation.task_id.clone(),

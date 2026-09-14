@@ -2981,10 +2981,7 @@ impl Session {
         state_db: &state_db::StateDbHandle,
         root_thread_id: ThreadId,
     ) -> u64 {
-        if let Ok(Some(seconds)) = state_db
-            .eta_freshness_minimum_seconds(root_thread_id)
-            .await
-        {
+        if let Ok(Some(seconds)) = state_db.eta_freshness_minimum_seconds(root_thread_id).await {
             return seconds.max(0) as u64;
         }
         if root_thread_id == self.thread_id {

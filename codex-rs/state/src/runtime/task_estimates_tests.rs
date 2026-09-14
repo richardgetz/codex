@@ -719,10 +719,13 @@ async fn root_can_assign_persisted_worker_and_reassign_without_resetting_estimat
         .expect("snapshot after reassignment");
     assert_eq!(snapshot.active[0].owner_thread_id, root);
     assert_eq!(snapshot.active[0].updated_at, now);
-    assert_eq!(snapshot.active[0].current_range(), TaskEstimateRange {
-        lower_seconds: Some(10),
-        upper_seconds: Some(20),
-    });
+    assert_eq!(
+        snapshot.active[0].current_range(),
+        TaskEstimateRange {
+            lower_seconds: Some(10),
+            upper_seconds: Some(20),
+        }
+    );
 
     runtime
         .set_thread_spawn_edge_status(worker, DirectionalThreadSpawnEdgeStatus::Closed)

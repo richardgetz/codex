@@ -1369,24 +1369,30 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
         .captured_ops()
         .into_iter()
         .filter_map(|(thread_id, op)| {
-            (thread_id == worker_thread_id).then_some(op).and_then(|op| {
-                let Op::InterAgentCommunication { communication, .. } = op else {
-                    return None;
-                };
-                communication
-                    .content
-                    .contains("Task: eta-owner-overdue")
-                    .then(|| communication.content)
-            })
+            (thread_id == worker_thread_id)
+                .then_some(op)
+                .and_then(|op| {
+                    let Op::InterAgentCommunication { communication, .. } = op else {
+                        return None;
+                    };
+                    communication
+                        .content
+                        .contains("Task: eta-owner-overdue")
+                        .then_some(communication.content)
+                })
         })
         .collect::<Vec<_>>();
     assert_eq!(reminder_messages.len(), 2);
-    assert!(reminder_messages
-        .iter()
-        .any(|message| message.contains("ETA reminder (overdue)")));
-    assert!(reminder_messages
-        .iter()
-        .any(|message| message.contains("ETA reminder (freshness)")));
+    assert!(
+        reminder_messages
+            .iter()
+            .any(|message| message.contains("ETA reminder (overdue)"))
+    );
+    assert!(
+        reminder_messages
+            .iter()
+            .any(|message| message.contains("ETA reminder (freshness)"))
+    );
 
     // Both trigger latches survive an explicit pause and resume; no overdue or freshness
     // reminder is emitted again for the unchanged task revision.
@@ -1462,9 +1468,7 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
         .get_thread(worker_thread_id)
         .await
         .expect("worker should remain loaded");
-    worker_thread
-        .refresh_runtime_config(worker_config)
-        .await;
+    worker_thread.refresh_runtime_config(worker_config).await;
     assert_eq!(
         state_db
             .eta_freshness_minimum_seconds(root_thread_id)
@@ -1534,7 +1538,9 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
     // Reconfiguration persists the root policy and reads it back through SQLite. Let that
     // operation finish on wall-clock time before resuming deterministic timer advancement.
     tokio::time::resume();
-    root_thread.refresh_runtime_config(updated_root_config).await;
+    root_thread
+        .refresh_runtime_config(updated_root_config)
+        .await;
     assert_eq!(
         state_db
             .eta_freshness_minimum_seconds(root_thread_id)
@@ -2069,11 +2075,7 @@ async fn eta_reminder_is_suppressed_after_owner_close() {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root_thread_id,
                 depth: 1,
-                agent_path: Some(
-                    AgentPath::root()
-                        .join("eta_worker")
-                        .expect("worker path"),
-                ),
+                agent_path: Some(AgentPath::root().join("eta_worker").expect("worker path")),
                 agent_nickname: None,
                 agent_role: Some("worker".to_string()),
             })),

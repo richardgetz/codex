@@ -133,9 +133,7 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
     lock_config.approvals_reviewer = Some(sc.step_settings.approvals_reviewer);
     lock_config.eta = Some(EtaConfigToml {
         freshness_minimum_minutes: Some(
-            sc.original_config_do_not_use
-                .eta
-                .freshness_minimum_minutes,
+            sc.original_config_do_not_use.eta.freshness_minimum_minutes,
         ),
     });
 }

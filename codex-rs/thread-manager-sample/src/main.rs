@@ -252,6 +252,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_status_line: None,
         tui_status_line_use_colors: true,
         tui_status_token_usage: Default::default(),
+        tui_usage_auto_resume: Default::default(),
         tui_terminal_title: None,
         tui_theme: None,
         tui_raw_output_mode: false,

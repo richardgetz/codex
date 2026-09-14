@@ -1143,9 +1143,7 @@ impl CodexThread {
         &self,
         eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
     ) {
-        self.session
-            .cancel_eta_reminders_locked(eta_dispatch)
-            .await;
+        self.session.cancel_eta_reminders_locked(eta_dispatch).await;
     }
 
     pub async fn cancel_eta_reminders_for_owner_locked(
