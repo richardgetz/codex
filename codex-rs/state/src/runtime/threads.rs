@@ -2098,6 +2098,7 @@ mod tests {
                 upper_seconds: Some(20),
             }),
             reason: None,
+            owner_thread_id: None,
         };
         let transition = |action, task_id: &str| TaskEstimateMutation {
             action,
@@ -2107,6 +2108,7 @@ mod tests {
             depends_on_task_ids: None,
             estimate: None,
             reason: None,
+            owner_thread_id: None,
         };
         runtime
             .apply_task_estimate_mutations(root, worker, &[create("done"), create("active")], now)

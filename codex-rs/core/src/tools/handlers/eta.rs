@@ -9,6 +9,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaRevisionUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaTaskUpdatedEvent;
@@ -46,6 +47,7 @@ struct EtaOperationArgs {
     estimate_lower_seconds: Option<i64>,
     estimate_upper_seconds: Option<i64>,
     reason: Option<String>,
+    owner_thread_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -133,10 +135,17 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
                     "Short reason for a revision or scope change.".to_string(),
                 )),
             ),
+            (
+                "owner_thread_id".to_string(),
+                JsonSchema::string(Some(
+                    "Root Lead only: persisted agent thread that owns this task and receives reminders."
+                        .to_string(),
+                )),
+            ),
         ]);
         ToolSpec::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
-            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Keep estimates current when work starts, scope changes, blockers appear, and work completes. Completion is explicit; idle or elapsed ETA never completes a task. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
+            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Register each task to the agent actually doing the work; the root Lead may assign a persisted Worker with owner_thread_id, and reminders go directly to that owner. Keep estimates current when work starts, scope changes, blockers appear, and work completes. When a reminder arrives, reassess from now and revise with the truthful remaining range plus a short change or blocker reason; do not reset the original duration. Completion or cancellation is explicit; idle or elapsed time never completes a task. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(
@@ -277,6 +286,12 @@ fn mutation_from_args(
             upper_seconds,
         }),
     };
+    let owner_thread_id = operation
+        .owner_thread_id
+        .as_deref()
+        .map(ThreadId::from_string)
+        .transpose()
+        .map_err(|err| FunctionCallError::RespondToModel(format!("invalid owner_thread_id: {err}")))?;
     Ok(TaskEstimateMutation {
         action: operation.action,
         task_id: operation.task_id.clone(),
@@ -285,6 +300,7 @@ fn mutation_from_args(
         depends_on_task_ids: operation.depends_on_task_ids.clone(),
         estimate,
         reason: operation.reason.clone(),
+        owner_thread_id,
     })
 }
 

@@ -23,12 +23,13 @@ release or merge rules.
 - Session-scoped `/eta` task estimates persist root/worker ownership, explicit
   lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
   aggregate finish ranges, and paginated history through app-server v2 and the
-  model-facing `update_eta` tool. The model tool caps each call at eight
-  operations and returns all changed summaries; History does not consume the
-  unfinished-task cap. Root deletion removes the ledger, while worker deletion
-  preserves terminal History and blocks unfinished owned tasks. Existing thread
-  activity remains observational; no idle, elapsed ETA, or UI read infers
-  completion.
+  model-facing `update_eta` tool. This foundation caps each model call at eight
+  operations, returns all changed summaries, preserves terminal History, and
+  keeps activity observational: no idle, elapsed ETA, or UI read infers
+  completion. Root Lead mutations may assign a verified persisted Worker owner;
+  revisions are measured from the latest saved update so a reassignment alone
+  does not reset the estimate clock. Adaptive freshness display and reminders
+  are delivered by dependent fork stages.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -720,7 +721,15 @@ release or merge rules.
   explicit terminal history, bounded revisions, dependency-aware unknown
   aggregates, app-server v2/update_eta wiring, the model batch/output bounds,
   deletion cleanup semantics, and the no-inference boundary across upstream
-  refreshes.
+  refreshes. Verify `/eta` keeps saved ranges visible with an accessible stale
+  warning, `[eta].freshness_minimum_minutes` defaults to 15 minutes and is
+  configurable as a minimum, and one-shot freshness/overdue events route to the persisted
+  owner without polling or Lead relays. Verify revision, reassignment,
+  completion, pause, shutdown, and config changes deduplicate/cancel stale
+  callbacks; pending dependency placeholders and grouping parents do not wake
+  owners; owner reminders request from-now remaining estimates and explicit
+  lifecycle/blocker status; and child revisions recompute serial/parallel
+  aggregates without double-counting grouping parents.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute

@@ -149,13 +149,30 @@ impl TaskEstimate {
         }
     }
 
+    /// Return the one-shot freshness delay for this task, measured from its latest durable
+    /// update. The configured minimum is always honored; a known upper estimate extends the
+    /// delay to one quarter of that estimate, rounded up so fractional seconds never wake early.
+    pub fn freshness_delay_seconds(&self, freshness_minimum_seconds: i64) -> i64 {
+        let minimum = freshness_minimum_seconds.max(0);
+        let Some(upper) = self.current_upper_seconds else {
+            return minimum;
+        };
+        let upper = upper.max(0);
+        let quarter = upper / 4;
+        let quarter = quarter.saturating_add(if upper % 4 == 0 { 0 } else { 1 });
+        minimum.max(quarter)
+    }
+
     /// Return the duration remaining from `now` without changing task state.
     pub fn remaining_range(&self, now: DateTime<Utc>) -> TaskEstimateRange {
         let range = self.current_range();
-        let Some(started_at) = self.started_at else {
+        if self.started_at.is_none() {
             return range;
-        };
-        let elapsed = (now - started_at).num_seconds().max(0);
+        }
+        // A revision is explicitly a remaining range measured from the update time. Using the
+        // row's update timestamp as the baseline keeps a reminder response from restarting the
+        // original duration while still allowing reads to age the saved range deterministically.
+        let elapsed = (now - self.updated_at).num_seconds().max(0);
         TaskEstimateRange {
             lower_seconds: range
                 .lower_seconds
@@ -213,6 +230,8 @@ pub struct TaskEstimateMutation {
     pub depends_on_task_ids: Option<Vec<String>>,
     pub estimate: Option<TaskEstimateRange>,
     pub reason: Option<String>,
+    /// Optional owner override. Only the root Lead may assign a persisted descendant.
+    pub owner_thread_id: Option<ThreadId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
