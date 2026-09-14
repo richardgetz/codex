@@ -360,7 +360,10 @@ fn api_snapshot_with_freshness_minimum(
         task.is_stale
             && !active.iter().any(|child| {
                 child.parent_task_id.as_deref() == Some(task.task_id.as_str())
-                    && !child.status.is_terminal()
+                    && !matches!(
+                        child.status,
+                        ThreadEtaStatus::Completed | ThreadEtaStatus::Cancelled
+                    )
             })
     }) {
         overall = ThreadEtaOverall {
