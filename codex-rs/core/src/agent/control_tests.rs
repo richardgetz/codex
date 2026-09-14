@@ -1337,6 +1337,145 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
+    let (home, mut config) = test_config().await;
+    config.eta.freshness_minimum_minutes = 1;
+    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    let worker_config = {
+        let mut config = config.clone();
+        config.eta.freshness_minimum_minutes = 10;
+        config
+    };
+    let worker_thread_id = harness
+        .control
+        .spawn_agent(
+            worker_config.clone(),
+            text_input("worker task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root_thread_id,
+                depth: 1,
+                agent_path: Some(
+                    AgentPath::root()
+                        .join("eta-policy-worker")
+                        .expect("worker path"),
+                ),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("worker spawn should succeed");
+    let state_db = harness
+        .state_db
+        .clone()
+        .expect("test harness should have a state database");
+    let worker_thread = harness
+        .manager
+        .get_thread(worker_thread_id)
+        .await
+        .expect("worker should remain loaded");
+    worker_thread
+        .refresh_runtime_config(worker_config)
+        .await;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+            .expect("read root freshness policy after worker start"),
+        Some(60)
+    );
+
+    let now = chrono::Utc::now();
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("eta-root-policy".to_string()),
+                title: Some("Root policy deadline".to_string()),
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(1),
+                    upper_seconds: None,
+                }),
+                reason: None,
+                owner_thread_id: Some(worker_thread_id),
+            }],
+            now,
+        )
+        .await
+        .expect("create root policy task");
+    let result = state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Start,
+                task_id: Some("eta-root-policy".to_string()),
+                title: None,
+                parent_task_id: None,
+                depends_on_task_ids: None,
+                estimate: None,
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now,
+        )
+        .await
+        .expect("start root policy task");
+    worker_thread
+        .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
+        .await;
+    tokio::time::advance(Duration::from_secs(59)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-root-policy")
+        )
+    }));
+
+    let mut updated_root_config = config;
+    updated_root_config.eta.freshness_minimum_minutes = 2;
+    root_thread.refresh_runtime_config(updated_root_config).await;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_thread_id)
+            .await
+            .expect("read updated root freshness policy"),
+        Some(120)
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    tokio::task::yield_now().await;
+    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication, .. }
+                if communication.content.contains("eta-root-policy")
+        )
+    }));
+    tokio::time::advance(Duration::from_secs(60)).await;
+    tokio::task::yield_now().await;
+    let reminder_count = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(_, op)| {
+            matches!(
+                op,
+                Op::InterAgentCommunication { communication, .. }
+                    if communication.content.contains("eta-root-policy")
+            )
+        })
+        .count();
+    assert_eq!(reminder_count, 1);
+}
+
+#[tokio::test(start_paused = true)]
 async fn eta_reminder_routes_nested_owner_without_lead_relay() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, _root_thread) = harness.start_thread().await;

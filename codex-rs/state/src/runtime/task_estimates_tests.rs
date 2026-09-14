@@ -26,6 +26,41 @@ async fn runtime() -> (Arc<StateRuntime>, ThreadId) {
     (runtime, ThreadId::new())
 }
 
+#[tokio::test]
+async fn eta_freshness_minimum_is_root_owned_and_persistent() {
+    let (runtime, root) = runtime().await;
+    assert_eq!(
+        runtime
+            .eta_freshness_minimum_seconds(root)
+            .await
+            .expect("read missing ETA root policy"),
+        None
+    );
+    runtime
+        .set_eta_freshness_minimum_seconds(root, 45 * 60)
+        .await
+        .expect("persist ETA root policy");
+    assert_eq!(
+        runtime
+            .eta_freshness_minimum_seconds(root)
+            .await
+            .expect("read ETA root policy"),
+        Some(45 * 60)
+    );
+    runtime
+        .set_eta_freshness_minimum_seconds(root, 30 * 60)
+        .await
+        .expect("update ETA root policy");
+    assert_eq!(
+        runtime
+            .eta_freshness_minimum_seconds(root)
+            .await
+            .expect("read updated ETA root policy"),
+        Some(30 * 60)
+    );
+    runtime.close().await;
+}
+
 fn create(task_id: &str, title: &str, estimate: Option<(i64, i64)>) -> TaskEstimateMutation {
     TaskEstimateMutation {
         action: TaskEstimateAction::Create,
