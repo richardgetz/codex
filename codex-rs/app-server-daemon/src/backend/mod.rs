@@ -5,8 +5,10 @@ pub(crate) mod windows;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anyhow::Result;
 use serde::Serialize;
 
+pub(crate) use pid::LaunchIdentity;
 pub(crate) use pid::PidBackend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -33,6 +35,16 @@ pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
 
 pub(crate) fn pid_update_loop_backend(paths: BackendPaths) -> PidBackend {
     PidBackend::new_update_loop(paths.codex_bin, paths.update_pid_file)
+}
+
+pub(crate) async fn running_launch_identity(pid_file: &Path) -> Result<Option<LaunchIdentity>> {
+    PidBackend::new(
+        PathBuf::new(),
+        pid_file.to_path_buf(),
+        /*remote_control_enabled*/ false,
+    )
+    .running_launch_identity()
+    .await
 }
 
 pub(crate) async fn append_stderr_log_tail_context(pid_file: &Path, context: &mut String) {

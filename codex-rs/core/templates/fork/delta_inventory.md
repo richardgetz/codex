@@ -60,6 +60,10 @@ release or merge rules.
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
+- App-server daemon lifecycle and apply responses expose nullable
+  `runningManagedCodexVersion` captured with the active child PID/start record;
+  legacy or generation-ambiguous records remain unknown instead of re-reading
+  the mutable launcher and misreporting Inbound readiness.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
@@ -762,6 +766,10 @@ release or merge rules.
   process only after a suspended all-node receipt, records start/recovery
   failures durably, restores exact turn ids, and requires explicit recover
   before retrying an unresolved attempt without enabling remote control.
+- Verify daemon lifecycle and apply status keep `runningManagedCodexVersion`
+  tied to the active PID/start record, return null for legacy/reused or
+  launcher-generation races, and never use a current shim read or generic
+  `appServerVersion` as running-child identity.
 - Verify the macOS Seatbelt GPU/Metal base-policy allowances and focused
   regression tests survive upstream policy changes without wildcard access.
 - Verify `enable_mcp_approvals` remains a Rick-owned toggle and fork-only

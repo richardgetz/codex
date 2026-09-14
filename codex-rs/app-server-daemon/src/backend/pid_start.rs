@@ -2,14 +2,16 @@
 //! the record is published, and on Windows until an updater acknowledges startup.
 
 use super::PidBackend;
-#[cfg(windows)]
 use super::PidCommandKind;
 use super::PidFileState;
 use super::PidRecord;
+use super::LaunchIdentity;
 use super::read_process_start_time;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use crate::managed_install::ExecutableIdentity;
+use std::path::Path;
 use std::process::Stdio;
 use tokio::fs;
 use tokio::process::Command;
@@ -74,7 +76,8 @@ impl PidBackend {
             .unwrap_or_else(|_| self.codex_bin.clone());
         #[cfg(not(windows))]
         let codex_bin = &self.codex_bin;
-        let mut command = Command::new(codex_bin);
+        let codex_bin_path: &Path = codex_bin.as_ref();
+        let mut command = Command::new(codex_bin_path);
         let stderr_log = match self.open_stderr_log().await {
             Ok(stderr_log) => stderr_log,
             Err(err) => {
@@ -195,6 +198,22 @@ impl PidBackend {
             }
         }
 
+        // Observe the launcher generation immediately before spawn while the reservation lock is
+        // held. A same-path installer replacement during this window is caught by the post-spawn
+        // comparison and publishes an unknown version instead of attributing it to this child.
+        let launch_identity = if matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
+            Some((
+                codex_bin_path.to_path_buf(),
+                crate::managed_install::managed_codex_version(codex_bin_path)
+                    .await
+                    .ok(),
+                crate::managed_install::executable_identity(codex_bin_path)
+                    .await
+                    .ok(),
+            ))
+        } else {
+            None
+        };
         let child = match command.spawn() {
             Ok(child) => child,
             Err(err) => {
@@ -217,6 +236,30 @@ impl PidBackend {
         let pid = child
             .id()
             .context("spawned app-server process has no pid")?;
+        // Do not publish the PID record until the post-spawn observation agrees with the
+        // pre-spawn generation; the PID and process start time then bind that result to this child.
+        let launch_identity = if let Some((
+            path,
+            version_before_spawn,
+            identity_before_spawn,
+        )) = launch_identity
+        {
+            let version_after_spawn = crate::managed_install::managed_codex_version(&path)
+                .await
+                .ok();
+            let identity_after_spawn = crate::managed_install::executable_identity(&path)
+                .await
+                .ok();
+            Some(retain_launch_identity(
+                path,
+                version_before_spawn,
+                identity_before_spawn,
+                version_after_spawn,
+                identity_after_spawn,
+            ))
+        } else {
+            None
+        };
         let record = match async {
             #[cfg(windows)]
             super::super::windows::Process::open(pid)?
@@ -229,6 +272,7 @@ impl PidBackend {
             Ok(process_start_time) => PidRecord {
                 pid,
                 process_start_time,
+                launch_identity,
             },
             Err(err) => {
                 let _ = self.terminate_process(pid);
@@ -271,3 +315,30 @@ impl PidBackend {
         Ok(Some(pid))
     }
 }
+
+fn retain_launch_identity(
+    path: std::path::PathBuf,
+    version_before_spawn: Option<String>,
+    identity_before_spawn: Option<ExecutableIdentity>,
+    version_after_spawn: Option<String>,
+    identity_after_spawn: Option<ExecutableIdentity>,
+) -> LaunchIdentity {
+    let version = match (
+        version_before_spawn,
+        identity_before_spawn,
+        version_after_spawn,
+        identity_after_spawn,
+    ) {
+        (Some(version), Some(identity_before), Some(version_after), Some(identity_after))
+            if version == version_after && identity_before == identity_after =>
+        {
+            Some(version)
+        }
+        _ => None,
+    };
+    LaunchIdentity { path, version }
+}
+
+#[cfg(test)]
+#[path = "pid_start_tests.rs"]
+mod tests;

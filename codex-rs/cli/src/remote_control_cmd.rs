@@ -438,11 +438,11 @@ fn daemon_app_server_identity(
     match output {
         AppServerRemoteControlStartOutput::Bootstrap(output) => (
             &output.managed_codex_path,
-            output.managed_codex_version.as_deref(),
+            output.running_managed_codex_version.as_deref(),
         ),
         AppServerRemoteControlStartOutput::Start(output) => (
             &output.managed_codex_path,
-            output.managed_codex_version.as_deref(),
+            output.running_managed_codex_version.as_deref(),
         ),
     }
 }
@@ -527,7 +527,8 @@ mod tests {
                 backend: None,
                 pid: Some(42),
                 managed_codex_path: PathBuf::from("/opt/codex/bin/codex"),
-                managed_codex_version: Some("1.0.0".to_string()),
+                managed_codex_version: Some("2.0.0".to_string()),
+                running_managed_codex_version: Some("1.0.0".to_string()),
                 socket_path: PathBuf::from("/tmp/app-server-control.sock"),
                 cli_version: Some("1.0.0".to_string()),
                 app_server_version: Some("2.0.0".to_string()),
@@ -618,6 +619,24 @@ mod tests {
     }
 
     #[test]
+    fn daemon_app_server_human_lines_show_unknown_without_running_identity() {
+        let daemon = daemon_ready_output(RemoteControlConnectionStatus::Connected).daemon;
+        let AppServerRemoteControlStartOutput::Start(mut daemon) = daemon else {
+            panic!("test daemon output should be a lifecycle start output");
+        };
+        daemon.running_managed_codex_version = None;
+
+        assert_eq!(
+            daemon_app_server_human_lines(&AppServerRemoteControlStartOutput::Start(daemon)),
+            vec![
+                "Daemon used app-server:".to_string(),
+                "  path: /opt/codex/bin/codex".to_string(),
+                "  version: unknown".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn remote_control_json_output_marks_foreground_or_daemon() {
         let foreground_summary = remote_control_status(RemoteControlConnectionStatus::Connected);
         assert_eq!(
@@ -648,7 +667,8 @@ mod tests {
                     "status": "started",
                     "pid": 42,
                     "managedCodexPath": "/opt/codex/bin/codex",
-                    "managedCodexVersion": "1.0.0",
+                    "managedCodexVersion": "2.0.0",
+                    "runningManagedCodexVersion": "1.0.0",
                     "socketPath": "/tmp/app-server-control.sock",
                     "cliVersion": "1.0.0",
                     "appServerVersion": "2.0.0",
