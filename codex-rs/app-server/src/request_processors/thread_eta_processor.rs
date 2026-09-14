@@ -370,6 +370,7 @@ fn mutation_from_api(
         depends_on_task_ids: operation.depends_on_task_ids.clone(),
         estimate,
         reason: operation.reason.clone(),
+        owner_thread_id,
     })
 }
 
