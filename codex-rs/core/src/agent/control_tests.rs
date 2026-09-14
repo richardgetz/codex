@@ -1584,8 +1584,10 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
     config.eta.freshness_minimum_minutes = 1;
     let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
     let (root_thread_id, root_thread) = harness.start_thread().await;
-    let worker_thread_id = harness
-        .control
+    // Spawn through the loaded root's control so pause/continue reaches the same ETA controller
+    // that owns the Worker's timers.
+    let root_control = root_thread.session.services.agent_control.clone();
+    let worker_thread_id = root_control
         .spawn_agent(
             config.clone(),
             text_input("worker task"),
@@ -1667,8 +1669,7 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
     )
     .await;
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-reconfigure-latch")
             .await,
         Some((true, false, false, false))
@@ -1677,7 +1678,7 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
     // A delivered freshness reminder stays latched across an explicit pause and resume. The
     // pause invalidates timer handles without discarding the durable task identity or sent state.
     tokio::time::pause();
-    harness.control.pause_activity_for_subtree().await;
+    root_control.pause_activity_for_subtree().await;
     tokio::time::advance(Duration::from_secs(120)).await;
     tokio::task::yield_now().await;
     let reminder_count = harness
@@ -1694,14 +1695,13 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
         .count();
     assert_eq!(reminder_count, 1);
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-reconfigure-latch")
             .await,
         Some((true, false, false, false))
     );
     tokio::time::resume();
-    harness.control.continue_activity_for_subtree().await;
+    root_control.continue_activity_for_subtree().await;
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(120)).await;
     tokio::task::yield_now().await;
@@ -1719,8 +1719,7 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
         .count();
     assert_eq!(reminder_count, 1);
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-reconfigure-latch")
             .await,
         Some((true, false, false, false))
@@ -1773,7 +1772,7 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
         .schedule_eta_reminders(root_thread_id, &pending_result.changed_tasks)
         .await;
     tokio::time::pause();
-    harness.control.pause_activity_for_subtree().await;
+    root_control.pause_activity_for_subtree().await;
     tokio::time::advance(Duration::from_secs(120)).await;
     tokio::task::yield_now().await;
     assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
@@ -1784,17 +1783,15 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
         )
     }));
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-pause-pending")
             .await,
         Some((false, false, false, false))
     );
     tokio::time::resume();
-    harness.control.continue_activity_for_subtree().await;
+    root_control.continue_activity_for_subtree().await;
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-pause-pending")
             .await,
         Some((false, false, true, false))
@@ -1823,8 +1820,7 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
     // The task revision is unchanged, so policy reconfiguration must retain the delivered
     // freshness latch and avoid arming a replacement timer.
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-reconfigure-latch")
             .await,
         Some((true, false, false, false))
@@ -1871,8 +1867,7 @@ async fn eta_reconfigure_preserves_delivered_trigger_state() {
         .schedule_eta_reminders(root_thread_id, &revised.changed_tasks)
         .await;
     assert_eq!(
-        harness
-            .control
+        root_control
             .eta_reminder_state_for_tests("eta-reconfigure-latch")
             .await,
         Some((false, false, true, false))
