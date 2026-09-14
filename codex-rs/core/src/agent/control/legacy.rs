@@ -52,7 +52,7 @@ impl AgentControl {
         let eta_dispatch = self.lock_eta_reminders().await;
         let state = self.upgrade()?;
         let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
-        let close_result = match state.get_thread(agent_id).await {
+        let close_result: CodexResult<()> = match state.get_thread(agent_id).await {
             Ok(thread) => {
                 if !thread.config_snapshot().await.ephemeral
                     && let Some(agent_graph_store) = state.agent_graph_store()

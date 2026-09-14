@@ -79,7 +79,7 @@ use uuid::Uuid;
 
 pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
-use self::eta_reminders::EtaReminderController;
+use crate::agent::eta_reminders::EtaReminderController;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
 use self::residency::V2Residency;
