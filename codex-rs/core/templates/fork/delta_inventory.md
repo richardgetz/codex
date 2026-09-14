@@ -29,8 +29,10 @@ release or merge rules.
   completion. Root Lead mutations may assign a verified persisted Worker owner;
   revisions are measured from the latest saved update so a reassignment alone
   does not reset the estimate clock. The adaptive freshness minimum and saved
-  range warning are now projected through `/eta` and config; owner-routed
-  reminders are delivered by the dependent runtime stage.
+  range warning are now projected through `/eta` and config. The bounded
+  ContextualUserFragment reminder controller is present with one-shot freshness
+  and overdue scheduling, while dependent lifecycle wiring activates delivery
+  and pause/ownership gates.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`

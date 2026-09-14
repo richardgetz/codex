@@ -169,6 +169,42 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         Ok(())
     }
 
+    /// Return whether `thread_id` is the root or an open persisted descendant of that root.
+    ///
+    /// Automatic owner-directed work uses this check immediately before delivery so a callback
+    /// cannot wake an owner whose spawn edge has already been closed or deleted.
+    pub async fn thread_is_open_descendant(
+        &self,
+        root_thread_id: ThreadId,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        if root_thread_id == thread_id {
+            return Ok(true);
+        }
+        Ok(sqlx::query_scalar::<_, i64>(
+            r#"
+SELECT EXISTS(
+    WITH RECURSIVE subtree(thread_id) AS (
+        SELECT child_thread_id
+        FROM thread_spawn_edges
+        WHERE parent_thread_id = ? AND status = 'open'
+        UNION
+        SELECT edge.child_thread_id
+        FROM thread_spawn_edges edge
+        JOIN subtree ON edge.parent_thread_id = subtree.thread_id
+        WHERE edge.status = 'open'
+    )
+    SELECT 1 FROM subtree WHERE thread_id = ?
+)
+            "#,
+        )
+        .bind(root_thread_id.to_string())
+        .bind(thread_id.to_string())
+        .fetch_one(self.pool.as_ref())
+        .await?
+            != 0)
+    }
+
     /// List direct spawned children of `parent_thread_id` whose edge matches `status`.
     pub async fn list_thread_spawn_children_with_status(
         &self,
