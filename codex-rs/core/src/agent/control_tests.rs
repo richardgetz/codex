@@ -226,7 +226,6 @@ impl AgentControlHarness {
             });
         // Initialize SQLite while the runtime uses wall-clock time. ETA tests pause the clock
         // below so scheduling assertions remain deterministic without blocking DB startup.
-        tokio::time::pause();
         Self::from_parts(home, config, Some(state_db))
     }
 
@@ -1317,6 +1316,9 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
         )
         .await;
 
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(2)).await;
@@ -1463,6 +1465,9 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
     worker_thread
         .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
         .await;
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(59)).await;
     tokio::task::yield_now().await;
     assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
@@ -1475,6 +1480,9 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
 
     let mut updated_root_config = config;
     updated_root_config.eta.freshness_minimum_minutes = 2;
+    // Reconfiguration persists the root policy and reads it back through SQLite. Let that
+    // operation finish on wall-clock time before resuming deterministic timer advancement.
+    tokio::time::resume();
     root_thread.refresh_runtime_config(updated_root_config).await;
     assert_eq!(
         state_db
@@ -1483,6 +1491,7 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
             .expect("read updated root freshness policy"),
         Some(120)
     );
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
@@ -1626,6 +1635,9 @@ async fn eta_reminder_routes_nested_owner_without_lead_relay() {
         )
         .await;
 
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     let messages_for = |thread_id, task_id: &str| {
@@ -1731,6 +1743,9 @@ async fn eta_reminder_is_suppressed_after_owner_close() {
         .await
         .expect("close owner");
 
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(5)).await;
     tokio::task::yield_now().await;
     assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
@@ -1805,6 +1820,9 @@ async fn eta_reminder_is_suppressed_after_owner_runtime_removal() {
         .await
         .expect("remove owner runtime");
 
+    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
+    // armed so fake-time advances do not stall connection acquisition in the state runtime.
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(5)).await;
     tokio::task::yield_now().await;
     assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {

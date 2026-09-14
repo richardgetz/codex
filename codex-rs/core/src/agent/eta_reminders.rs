@@ -45,8 +45,7 @@ struct EtaReminderState {
 
 struct EtaReminderEntry {
     generation: u64,
-    owner_thread_id: ThreadId,
-    updated_at: DateTime<Utc>,
+    task: TaskEstimate,
     freshness_sent: bool,
     overdue_sent: bool,
     freshness_timer: Option<JoinHandle<()>>,
@@ -119,6 +118,13 @@ impl EtaReminderController {
             }
         }
         for task in tasks {
+            // Prefer the durable row when the caller supplied a higher-precision in-memory
+            // timestamp. SQLite stores ETA timestamps at epoch-second precision; scheduling and
+            // delivery must compare the same persisted task identity.
+            let task = scheduling_tasks
+                .iter()
+                .find(|persisted| persisted.task_id == task.task_id)
+                .unwrap_or(task);
             // Pending work has no elapsed baseline; wait for explicit `start` and avoid dependency
             // placeholders that cannot execute until another task finishes.
             if task.status == TaskEstimateStatus::Pending {
@@ -200,7 +206,7 @@ impl EtaReminderController {
         let task_ids = state
             .tasks
             .iter()
-            .filter(|(_, entry)| entry.owner_thread_id == owner_thread_id)
+            .filter(|(_, entry)| entry.task.owner_thread_id == owner_thread_id)
             .map(|(task_id, _)| task_id.clone())
             .collect::<Vec<_>>();
         for task_id in task_ids {
@@ -266,8 +272,7 @@ impl EtaReminderController {
             task.task_id.clone(),
             EtaReminderEntry {
                 generation,
-                owner_thread_id: task.owner_thread_id,
-                updated_at: task.updated_at,
+                task: task.clone(),
                 freshness_sent: false,
                 overdue_sent: false,
                 freshness_timer: Some(freshness_timer),
@@ -338,10 +343,7 @@ impl EtaReminderController {
             self.cancel_task_locked(&task_id).await;
             return;
         };
-        if !self
-            .task_identity_is_current(&task_id, generation, task.owner_thread_id, task.updated_at)
-            .await
-        {
+        if !self.task_identity_is_current(&task_id, generation, task).await {
             return;
         }
         if control.root_activity_paused() {
@@ -468,19 +470,14 @@ impl EtaReminderController {
         &self,
         task_id: &str,
         generation: u64,
-        owner_thread_id: ThreadId,
-        updated_at: DateTime<Utc>,
+        task: &TaskEstimate,
     ) -> bool {
         self.state
             .lock()
             .await
             .tasks
             .get(task_id)
-            .is_some_and(|entry| {
-                entry.generation == generation
-                    && entry.owner_thread_id == owner_thread_id
-                    && entry.updated_at == updated_at
-            })
+            .is_some_and(|entry| entry.generation == generation && entry.task == *task)
     }
 }
 
