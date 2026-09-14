@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/eta_view_tests.rs
+assertion_line: 168
 expression: "render(&view, 96, 24)"
 ---
 "                                                                                                "
@@ -10,7 +11,7 @@ expression: "render(&view, 96, 24)"
 "   ──────────────────────────────────────────────────────────────────────────────────────────   "
 "   Task                        Agent         Status                    Remaining                "
 "   ▾ Prepare release           Lead          active                    30s–1m                   "
-"       Run checks              Worker 0000…  active                    30s–1m                   "
+"       Run checks              Worker 0000…  active                    1m–2m                    "
 "                                                                                                "
 "                                                                                                "
 "                                                                                                "
