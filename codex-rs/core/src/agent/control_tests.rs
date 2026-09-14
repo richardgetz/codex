@@ -1254,10 +1254,12 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 #[tokio::test]
 async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
     let harness = AgentControlHarness::new_with_sqlite().await;
-    let (root_thread_id, _root_thread) = harness.start_thread().await;
+    let (root_thread_id, root_thread) = harness.start_thread().await;
+    // Use the loaded root's shared control so pause/continue reaches the controller that owns
+    // the Worker reminder timers.
+    let root_control = root_thread.session.services.agent_control.clone();
     let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
-    let worker_thread_id = harness
-        .control
+    let worker_thread_id = root_control
         .spawn_agent(
             harness.config.clone(),
             text_input("worker task"),
@@ -1336,8 +1338,7 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
         )
         .await
         .expect("create pending dependency ETA task");
-    harness
-        .control
+    root_control
         .schedule_eta_reminders(
             state_db,
             root_thread_id,
@@ -1389,11 +1390,11 @@ async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
 
     // Both trigger latches survive an explicit pause and resume; no overdue or freshness
     // reminder is emitted again for the unchanged task revision.
-    harness.control.pause_activity_for_subtree().await;
+    root_control.pause_activity_for_subtree().await;
     tokio::time::advance(Duration::from_secs(30)).await;
     tokio::task::yield_now().await;
     tokio::time::resume();
-    harness.control.continue_activity_for_subtree().await;
+    root_control.continue_activity_for_subtree().await;
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(30)).await;
     tokio::task::yield_now().await;
@@ -1426,13 +1427,15 @@ async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
     config.eta.freshness_minimum_minutes = 1;
     let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
     let (root_thread_id, root_thread) = harness.start_thread().await;
+    // Spawn through the loaded root's control so root reconfiguration fences the same controller
+    // that owns the Worker's reminder timers.
+    let root_control = root_thread.session.services.agent_control.clone();
     let worker_config = {
         let mut config = config.clone();
         config.eta.freshness_minimum_minutes = 10;
         config
     };
-    let worker_thread_id = harness
-        .control
+    let worker_thread_id = root_control
         .spawn_agent(
             worker_config.clone(),
             text_input("worker task"),
