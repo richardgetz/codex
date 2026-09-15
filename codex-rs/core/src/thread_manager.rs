@@ -1543,6 +1543,7 @@ impl ThreadManager {
                 continue;
             }
             let stored_thread = self
+                .state
                 .read_stored_thread(ReadThreadParams {
                     thread_id: child_thread_id,
                     include_archived: true,

@@ -1501,7 +1501,7 @@ impl Session {
             // can be admitted. The marker is cleared only after an explicit ContinueActivity
             // acknowledgement, so a replacement that stops halfway through reconstruction stays
             // paused and can retry without replaying work.
-            agent_control.set_root_activity(true).await;
+            agent_control.pause_activity_for_subtree().await;
         }
 
         let mut live_thread_init =
