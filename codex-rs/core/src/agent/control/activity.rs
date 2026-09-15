@@ -24,6 +24,17 @@ impl AgentControl {
         Arc::clone(&self.root_activity_resume_notify)
     }
 
+    /// Serialize a durable Team activity transition with every loaded descendant of this root.
+    ///
+    /// Callers may hold this guard while updating the durable pause marker and awaiting the Core
+    /// pause or continue acknowledgement. It is separate from the Core activity-update mutex so
+    /// the acknowledgement handler can acquire its normal gate without deadlocking recovery.
+    pub(crate) async fn lock_root_activity_transition(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        Arc::clone(&self.root_activity_transition)
+            .lock_owned()
+            .await
+    }
+
     /// Atomically admit one model/tool operation with the root pause toggle. A pause request that
     /// acquires the update lock first prevents this increment; an operation that acquires it
     /// first is considered already in flight and is allowed to finish at its next boundary.

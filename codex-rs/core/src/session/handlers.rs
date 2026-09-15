@@ -1853,8 +1853,18 @@ pub(super) async fn submission_loop(
                     pause_activity(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::PauseActivityWithAck { reply } => {
+                    pause_activity(&sess, sub.id.clone()).await;
+                    let _ = reply.send(());
+                    false
+                }
                 Op::ContinueActivity => {
                     continue_activity(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::ContinueActivityWithAck { reply } => {
+                    continue_activity(&sess, sub.id.clone()).await;
+                    let _ = reply.send(());
                     false
                 }
                 Op::CleanBackgroundTerminals => {

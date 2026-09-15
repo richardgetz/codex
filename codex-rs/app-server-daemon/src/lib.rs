@@ -72,6 +72,7 @@ pub struct LifecycleOutput {
     pub pid: Option<u32>,
     pub managed_codex_path: PathBuf,
     pub managed_codex_version: Option<String>,
+    pub running_managed_codex_version: Option<String>,
     pub socket_path: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cli_version: Option<String>,
@@ -110,6 +111,7 @@ pub struct BootstrapOutput {
     pub remote_control_enabled: bool,
     pub managed_codex_path: PathBuf,
     pub managed_codex_version: Option<String>,
+    pub running_managed_codex_version: Option<String>,
     pub socket_path: PathBuf,
     pub cli_version: String,
     pub app_server_version: String,
@@ -563,12 +565,12 @@ impl Daemon {
         managed_codex_bin: &Path,
         context: &mut String,
     ) {
-        let managed_codex_version = self
-            .managed_codex_version_best_effort(managed_codex_bin)
+        let running_managed_codex_version = self
+            .running_managed_codex_version_best_effort()
             .await
             .unwrap_or_else(|| "unknown".to_string());
         context.push_str(&format!(
-            "\n\nDaemon used app-server:\n  path: {}\n  version: {managed_codex_version}",
+            "\n\nDaemon used app-server:\n  path: {}\n  version: {running_managed_codex_version}",
             managed_codex_bin.display()
         ));
     }
@@ -732,6 +734,7 @@ impl Daemon {
         let managed_codex_version = self
             .managed_codex_version_best_effort(managed_codex_bin)
             .await;
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
@@ -739,6 +742,7 @@ impl Daemon {
             remote_control_enabled: settings.remote_control_enabled,
             managed_codex_path: managed_codex_bin.to_path_buf(),
             managed_codex_version,
+            running_managed_codex_version,
             socket_path: self.socket_path.clone(),
             cli_version: env!("CARGO_PKG_VERSION").to_string(),
             app_server_version: info.app_server_version,
@@ -833,6 +837,14 @@ impl Daemon {
         None
     }
 
+    async fn running_managed_codex_version_best_effort(&self) -> Option<String> {
+        backend::running_launch_identity(&self.pid_file)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|identity| identity.version)
+    }
+
     fn backend_paths(&self, settings: &DaemonSettings) -> BackendPaths {
         self.backend_paths_with_bin(settings, self.configured_managed_codex_bin(settings))
     }
@@ -909,12 +921,14 @@ impl Daemon {
         let managed_codex_version = self
             .managed_codex_version_best_effort(managed_codex_bin)
             .await;
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
         LifecycleOutput {
             status,
             backend,
             pid,
             managed_codex_path: managed_codex_bin.to_path_buf(),
             managed_codex_version,
+            running_managed_codex_version,
             socket_path: self.socket_path.clone(),
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             app_server_version,
@@ -1106,6 +1120,7 @@ mod tests {
             pid: None,
             managed_codex_path: "codex".into(),
             managed_codex_version: Some("1.2.3".to_string()),
+            running_managed_codex_version: Some("1.2.3".to_string()),
             socket_path: "codex.sock".into(),
             cli_version: Some("1.2.3".to_string()),
             app_server_version: Some("1.2.4".to_string()),
@@ -1119,6 +1134,7 @@ mod tests {
                 "backend": "pid",
                 "managedCodexPath": "codex",
                 "managedCodexVersion": "1.2.3",
+                "runningManagedCodexVersion": "1.2.3",
                 "socketPath": "codex.sock",
                 "cliVersion": "1.2.3",
                 "appServerVersion": "1.2.4",
@@ -1136,6 +1152,7 @@ mod tests {
             remote_control_enabled: true,
             managed_codex_path: "codex".into(),
             managed_codex_version: Some("1.2.3".to_string()),
+            running_managed_codex_version: Some("1.2.3".to_string()),
             socket_path: "codex.sock".into(),
             cli_version: "1.2.3".to_string(),
             app_server_version: "1.2.4".to_string(),
@@ -1151,6 +1168,7 @@ mod tests {
                 "remoteControlEnabled": true,
                 "managedCodexPath": "codex",
                 "managedCodexVersion": "1.2.3",
+                "runningManagedCodexVersion": "1.2.3",
                 "socketPath": "codex.sock",
                 "cliVersion": "1.2.3",
                 "appServerVersion": "1.2.4",
@@ -1159,6 +1177,26 @@ mod tests {
         assert_eq!(
             serde_json::to_value(output).expect("serialize"),
             serde_json::to_value(bootstrap_output).expect("serialize")
+        );
+    }
+
+    #[test]
+    fn lifecycle_output_keeps_unknown_running_identity_explicit() {
+        let output = LifecycleOutput {
+            status: LifecycleStatus::Running,
+            backend: Some(BackendKind::Pid),
+            pid: None,
+            managed_codex_path: "codex".into(),
+            managed_codex_version: Some("1.2.4".to_string()),
+            running_managed_codex_version: None,
+            socket_path: "codex.sock".into(),
+            cli_version: Some("1.2.3".to_string()),
+            app_server_version: Some("1.2.4".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(output).expect("serialize")["runningManagedCodexVersion"],
+            serde_json::Value::Null
         );
     }
 

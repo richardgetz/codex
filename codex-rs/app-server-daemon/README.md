@@ -44,8 +44,14 @@ codex app-server daemon bootstrap --remote-control
 
 On success, every command writes exactly one JSON object to stdout. Consumers
 should parse that JSON rather than relying on human-readable text. Lifecycle
-responses report the selected launcher path, launcher version, resolved backend,
-socket path, local CLI version, and running app-server version when applicable.
+responses report the selected launcher path, current launcher version, resolved
+backend, socket path, local CLI version, and running app-server version when
+applicable. `runningManagedCodexVersion` is a nullable launch-time identity
+captured with the active app-server PID record; it is `null` for a legacy or
+unidentified process and must not be inferred from `appServerVersion` or a
+launcher read performed after startup.
+Apply, recover, and apply-status responses expose the same field while the
+handoff receipt is being reconciled.
 
 ## Bootstrap flow
 
@@ -203,7 +209,9 @@ The daemon stores its local state under `CODEX_HOME/app-server-daemon/`:
 
 - `settings.json` for persisted launch settings, including an optional
   `managedCodexPath` selected by a local bootstrap command
-- `app-server.pid` for the app-server process record
+- `app-server.pid` for the app-server process record, including the PID/start
+  identity and the launch-time launcher generation used for
+  `runningManagedCodexVersion`
 - `app-server-updater.pid` for the pid-backed standalone updater loop
 - `daemon.lock` for daemon-wide lifecycle serialization
 - apply-receipt.json for the latest checkpoint, selected launcher, and any

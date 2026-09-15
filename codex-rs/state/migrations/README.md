@@ -95,3 +95,8 @@ The authoritative per-root ETA freshness minimum is appended as
 `0060_rick_eta_root_freshness.sql` so cold API reads and Worker mutations keep
 using the Lead's persisted policy. The column remains nullable for legacy roots
 until the first authoritative root/config read resolves and persists it.
+
+Durable Team activity pause generations are appended as
+`0061_rick_thread_activity_pauses.sql`; the marker records the gate application boundary,
+remains through an interrupted continue, and is cleared only after Core acknowledges an
+explicit release.

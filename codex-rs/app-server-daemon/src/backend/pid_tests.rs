@@ -7,6 +7,7 @@ use tempfile::TempDir;
 
 use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
 
+use super::LaunchIdentity;
 use super::PidBackend;
 use super::PidCommandKind;
 use super::PidFileState;
@@ -17,6 +18,129 @@ use super::read_process_start_time;
 use super::read_stderr_log_tail;
 use super::stderr_log_file_for_pid_file;
 use super::try_lock_file;
+
+#[test]
+fn legacy_pid_records_have_unknown_launch_identity() {
+    let record: PidRecord = serde_json::from_value(serde_json::json!({
+        "pid": 42,
+        "processStartTime": "old",
+    }))
+    .expect("legacy pid record should remain readable");
+
+    assert_eq!(record.launch_identity, None);
+}
+
+#[tokio::test]
+async fn running_launch_identity_returns_the_active_record_identity() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let pid_file = temp_dir.path().join("app-server.pid");
+    let identity = LaunchIdentity {
+        path: "/opt/homebrew/bin/codex-rick".into(),
+        version: Some("0.154.0-rick.6".to_string()),
+    };
+    let record = PidRecord {
+        pid: std::process::id(),
+        process_start_time: super::read_process_start_time(std::process::id())
+            .await
+            .expect("current process start time"),
+        launch_identity: Some(identity.clone()),
+    };
+    let backend = PidBackend::new(
+        temp_dir.path().join("codex"),
+        pid_file.clone(),
+        /*remote_control_enabled*/ false,
+    );
+    let legacy_record = PidRecord {
+        launch_identity: None,
+        ..record.clone()
+    };
+    tokio::fs::write(
+        &pid_file,
+        serde_json::to_vec(&legacy_record).expect("serialize legacy pid record"),
+    )
+    .await
+    .expect("write legacy pid record");
+    assert_eq!(
+        backend
+            .running_launch_identity()
+            .await
+            .expect("read legacy launch identity"),
+        None
+    );
+
+    tokio::fs::write(
+        &pid_file,
+        serde_json::to_vec(&record).expect("serialize pid record"),
+    )
+    .await
+    .expect("write pid record");
+
+    assert_eq!(
+        backend
+            .running_launch_identity()
+            .await
+            .expect("read running launch identity"),
+        Some(identity)
+    );
+}
+
+#[tokio::test]
+async fn running_launch_identity_cleans_stale_record_without_returning_identity() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let pid_file = temp_dir.path().join("app-server.pid");
+    let record = PidRecord {
+        pid: u32::MAX,
+        process_start_time: "stale".to_string(),
+        launch_identity: Some(LaunchIdentity {
+            path: "/opt/homebrew/bin/codex-rick".into(),
+            version: Some("0.154.0-rick.6".to_string()),
+        }),
+    };
+    tokio::fs::write(
+        &pid_file,
+        serde_json::to_vec(&record).expect("serialize stale pid record"),
+    )
+    .await
+    .expect("write stale pid record");
+    let backend = PidBackend::new(
+        temp_dir.path().join("codex"),
+        pid_file.clone(),
+        /*remote_control_enabled*/ false,
+    );
+
+    assert_eq!(
+        backend
+            .running_launch_identity()
+            .await
+            .expect("read stale launch identity"),
+        None
+    );
+    assert!(!pid_file.exists());
+}
+
+#[test]
+fn pid_records_persist_launch_identity_with_process_metadata() {
+    let record = PidRecord {
+        pid: 42,
+        process_start_time: "started-at".to_string(),
+        launch_identity: Some(LaunchIdentity {
+            path: "/opt/homebrew/bin/codex-rick".into(),
+            version: Some("0.154.0-rick.6".to_string()),
+        }),
+    };
+
+    assert_eq!(
+        serde_json::to_value(record).expect("serialize pid record"),
+        serde_json::json!({
+            "pid": 42,
+            "processStartTime": "started-at",
+            "launchIdentity": {
+                "path": "/opt/homebrew/bin/codex-rick",
+                "version": "0.154.0-rick.6",
+            },
+        })
+    );
+}
 
 #[cfg(windows)]
 fn is_elevated_test_process() -> anyhow::Result<bool> {
@@ -165,10 +289,12 @@ async fn stale_record_cleanup_preserves_replacement_record() {
     let stale = PidRecord {
         pid: 1,
         process_start_time: "old".to_string(),
+        launch_identity: None,
     };
     let replacement = PidRecord {
         pid: 2,
         process_start_time: "new".to_string(),
+        launch_identity: None,
     };
     tokio::fs::write(
         &pid_file,
@@ -202,6 +328,7 @@ async fn stop_reaps_untracked_app_server_child() {
     let record = PidRecord {
         pid,
         process_start_time: read_process_start_time(pid).await.expect("start time"),
+        launch_identity: None,
     };
     tokio::fs::write(
         &pid_file,
@@ -239,6 +366,7 @@ async fn exited_unreaped_updater_is_reaped() {
         process_start_time: read_process_start_time(child.id())
             .await
             .expect("start time"),
+        launch_identity: None,
     };
     let backend =
         PidBackend::new_update_loop(temp.path().join("codex"), temp.path().join("updater.pid"));
@@ -341,6 +469,7 @@ async fn stale_creation_time_never_stops_reused_pid() {
     let record = PidRecord {
         pid: std::process::id(),
         process_start_time: "stale".into(),
+        launch_identity: None,
     };
     tokio::fs::write(&backend.pid_file, serde_json::to_vec(&record).unwrap())
         .await
@@ -368,6 +497,7 @@ async fn failed_updater_handoff_preserves_predecessor_record() {
         process_start_time: super::read_process_start_time(std::process::id())
             .await
             .unwrap(),
+        launch_identity: None,
     };
     for record in [
         record.clone(),
@@ -428,12 +558,14 @@ async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
         process_start_time: super::read_process_start_time(pid)
             .await
             .expect("creation time"),
+        launch_identity: None,
     };
     let predecessor = PidRecord {
         pid: std::process::id(),
         process_start_time: super::read_process_start_time(std::process::id())
             .await
             .expect("creation time"),
+        launch_identity: None,
     };
     tokio::fs::write(&backend.pid_file, serde_json::to_vec(&successor).unwrap())
         .await
@@ -532,6 +664,7 @@ fn inaccessible_reused_pid_is_stale_without_hiding_process_open_errors() {
         let record = PidRecord {
             pid: std::process::id(),
             process_start_time: "stale".into(),
+            launch_identity: None,
         };
         assert!(
             crate::backend::windows::Process::open(record.pid)

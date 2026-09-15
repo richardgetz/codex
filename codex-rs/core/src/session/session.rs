@@ -1479,6 +1479,33 @@ impl Session {
         let (thread_persistence_result, state_db_ctx, (auth, mcp_projection)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
+        let root_thread_id = codex_protocol::ThreadId::from(agent_control.session_id());
+        if session_id == SessionId::from(thread_id)
+            && let Some(state_db) = state_db_ctx.as_ref()
+        {
+            // A replacement that observed a pause or continue marker mid-flight must require a
+            // fresh explicit /continue. Re-arm it before restoring the gate so startup never
+            // runs retained work implicitly.
+            state_db
+                .recover_thread_activity_pause(root_thread_id)
+                .await?;
+        }
+        let durable_activity_pause = if let Some(state_db) = state_db_ctx.as_ref() {
+            state_db
+                .get_thread_activity_pause(root_thread_id)
+                .await?
+                .is_some()
+        } else {
+            false
+        };
+        if durable_activity_pause {
+            // Restore the shared root gate before any resumed worker or automatic continuation
+            // can be admitted. The marker is cleared only after an explicit ContinueActivity
+            // acknowledgement, so a replacement that stops halfway through reconstruction stays
+            // paused and can retry without replaying work.
+            agent_control.pause_activity_for_subtree().await;
+        }
+
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
                 error!("failed to initialize thread persistence: {e:#}");

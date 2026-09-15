@@ -30,6 +30,7 @@ pub struct ApplyOutput {
     pub nodes: Vec<serde_json::Value>,
     pub managed_codex_path: PathBuf,
     pub managed_codex_version: Option<String>,
+    pub running_managed_codex_version: Option<String>,
     pub socket_path: PathBuf,
     pub app_server_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,6 +166,21 @@ impl ApplyAttemptReceipt {
         app_server_version: Option<String>,
         error: Option<String>,
     ) -> ApplyOutput {
+        self.output_with_running_version(
+            socket_path,
+            app_server_version,
+            error,
+            /*running_managed_codex_version*/ None,
+        )
+    }
+
+    pub(crate) fn output_with_running_version(
+        &self,
+        socket_path: &Path,
+        app_server_version: Option<String>,
+        error: Option<String>,
+        running_managed_codex_version: Option<String>,
+    ) -> ApplyOutput {
         ApplyOutput {
             status: match self.phase {
                 ApplyPhase::Applied => ApplyStatus::Applied,
@@ -180,6 +196,7 @@ impl ApplyAttemptReceipt {
             nodes: self.handoff.nodes.clone(),
             managed_codex_path: self.managed_codex_path.clone(),
             managed_codex_version: self.managed_codex_version.clone(),
+            running_managed_codex_version,
             socket_path: socket_path.to_path_buf(),
             app_server_version,
             error: error.or_else(|| self.failure.clone()),

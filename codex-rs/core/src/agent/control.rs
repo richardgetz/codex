@@ -171,6 +171,12 @@ pub(crate) struct AgentControl {
     root_usage_auto_resume_propagation: Arc<Mutex<()>>,
     /// Root-scoped process-local manual pause switch shared by every loaded descendant.
     root_activity_paused: Arc<std::sync::atomic::AtomicBool>,
+    /// Serializes durable Team activity transitions across the loaded root tree.
+    ///
+    /// This is intentionally separate from `root_activity_pause_update`, which the Core
+    /// activity handlers hold while applying a pause or continue. App-server recovery can hold
+    /// this outer transition guard while it updates durable state and waits for those handlers.
+    root_activity_transition: Arc<Mutex<()>>,
     /// Root-scoped process-local fence that rejects new work during daemon handoff.
     pub(crate) handoff_admission_sealed: Arc<AtomicBool>,
     /// Number of admissions that passed the handoff fence before it sealed.
@@ -240,6 +246,7 @@ impl AgentControl {
             root_usage_auto_resume_update: Arc::new(Mutex::new(())),
             root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
             root_activity_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            root_activity_transition: Arc::new(Mutex::new(())),
             handoff_admission_sealed: Arc::new(AtomicBool::new(false)),
             handoff_admission_in_flight: Arc::new(AtomicU32::new(0)),
             handoff_delivery_state: Arc::new(AtomicU64::new(0)),

@@ -461,6 +461,13 @@ impl HandoffCoordinator {
                 .ensure_multi_agent_v2_child_loaded(thread_id)
                 .await
                 .map_err(|_| HandoffBlocker::ParentUnavailable)?;
+        } else if node.parent_thread_id.is_some()
+            && multi_agent_version == Some(MultiAgentVersion::V1)
+        {
+            self.thread_manager
+                .ensure_v1_agent_loaded(thread_id)
+                .await
+                .map_err(|_| HandoffBlocker::ParentUnavailable)?;
         } else {
             let rollout_path = node
                 .rollout_path

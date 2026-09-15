@@ -12,6 +12,7 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_app_server_protocol::TurnItemsView;
 use codex_extension_api::empty_extension_registry;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -29,6 +30,7 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -40,6 +42,8 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::WebSearchBeginEvent;
+use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -52,6 +56,116 @@ use tempfile::tempdir;
 use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+fn recovery_test_turn(id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
+    Turn {
+        id: id.to_string(),
+        items,
+        items_view: TurnItemsView::Full,
+        status,
+        error: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    }
+}
+
+#[test]
+fn team_recovery_uses_only_the_latest_unfinished_turn() {
+    let thread_id = ThreadId::new();
+    let mut plan = TeamActivityRecoveryPlan::default();
+    let turns = vec![
+        recovery_test_turn("interrupted", TurnStatus::Interrupted, Vec::new()),
+        recovery_test_turn("completed", TurnStatus::Completed, Vec::new()),
+    ];
+    append_latest_recovery(&mut plan, thread_id, &turns);
+
+    assert!(plan.recoverable_turns.is_empty());
+    assert!(plan.blockers.is_empty());
+}
+
+#[test]
+fn team_recovery_blocks_unfinished_external_work_before_retry() {
+    let thread_id = ThreadId::new();
+    let mut plan = TeamActivityRecoveryPlan::default();
+    let items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "interrupted-with-search".to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+        RolloutItem::EventMsg(EventMsg::WebSearchBegin(WebSearchBeginEvent {
+            call_id: "search-1".to_string(),
+        })),
+    ];
+    append_persisted_recovery(&mut plan, thread_id, &items);
+
+    assert!(plan.recoverable_turns.is_empty());
+    assert_eq!(plan.blockers.len(), 1);
+    assert!(plan.blockers[0].contains("unfinished web search call"));
+}
+
+#[test]
+fn team_recovery_allows_completed_empty_web_search_results() {
+    let thread_id = ThreadId::new();
+    let mut plan = TeamActivityRecoveryPlan::default();
+    let items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "interrupted-with-empty-search".to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+        RolloutItem::EventMsg(EventMsg::WebSearchBegin(WebSearchBeginEvent {
+            call_id: "search-2".to_string(),
+        })),
+        RolloutItem::EventMsg(EventMsg::WebSearchEnd(WebSearchEndEvent {
+            call_id: "search-2".to_string(),
+            query: "no matches".to_string(),
+            action: CoreWebSearchAction::Search {
+                query: Some("no matches".to_string()),
+                queries: None,
+            },
+            results: None,
+        })),
+    ];
+    append_persisted_recovery(&mut plan, thread_id, &items);
+
+    assert_eq!(
+        plan.recoverable_turns,
+        vec![(thread_id, "interrupted-with-empty-search".to_string())]
+    );
+    assert!(plan.blockers.is_empty());
+}
+
+#[test]
+fn team_recovery_allows_latest_model_only_interruption_once() {
+    let thread_id = ThreadId::new();
+    let mut plan = TeamActivityRecoveryPlan::default();
+    append_recovery_turn(
+        &mut plan,
+        thread_id,
+        &recovery_test_turn(
+            "interrupted-model",
+            TurnStatus::Interrupted,
+            vec![ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["unfinished model reasoning".to_string()],
+                content: Vec::new(),
+            }],
+        ),
+        None,
+    );
+
+    assert_eq!(
+        plan.recoverable_turns,
+        vec![(thread_id, "interrupted-model".to_string())]
+    );
+    assert!(plan.blockers.is_empty());
+}
 
 /// Controls without a custom allocation policy still produce distinct thread identifiers.
 #[test]

@@ -405,6 +405,42 @@ impl CodexThread {
             .await
     }
 
+    /// Queue ContinueActivity and wait until Core has applied the root gate.
+    ///
+    /// Durable pause recovery must not clear its marker merely because a submission was queued;
+    /// the acknowledgement is sent by the session handler after the shared AgentControl gate is
+    /// released and retained work has been scheduled.
+    pub async fn continue_activity_with_ack(&self) -> CodexResult<()> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.submit_with_trace(Op::ContinueActivityWithAck { reply }, None)
+            .await?;
+        acknowledged.await.map_err(|_| CodexErr::InternalAgentDied)
+    }
+
+    /// Serialize a durable Team activity transition across this thread's root tree.
+    ///
+    /// App-server pause recovery holds this guard while updating the durable marker and waiting
+    /// for the Core pause or continue acknowledgement. The guard is shared by every descendant
+    /// through the root's AgentControl handle.
+    pub async fn lock_activity_transition(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.session
+            .services
+            .agent_control
+            .lock_root_activity_transition()
+            .await
+    }
+
+    /// Queue PauseActivity and wait until Core has applied the root gate.
+    ///
+    /// Durable pause recovery must not expose a ready marker while a queued pause can still be
+    /// overtaken by a concurrent continue request.
+    pub async fn pause_activity_with_ack(&self, trace: Option<W3cTraceContext>) -> CodexResult<()> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.submit_with_trace(Op::PauseActivityWithAck { reply }, trace)
+            .await?;
+        acknowledged.await.map_err(|_| CodexErr::InternalAgentDied)
+    }
+
     /// Seal this root agent tree against new user turns and descendant spawns.
     ///
     /// The returned guard must remain alive until a handoff coordinator has

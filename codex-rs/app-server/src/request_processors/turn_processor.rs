@@ -135,6 +135,27 @@ struct ThreadSettingsBuildParams {
     team: Option<codex_protocol::protocol::ThreadTeamSettingsUpdate>,
 }
 
+async fn resolve_team_activity_root(
+    state_db: &StateDbHandle,
+    thread_id: ThreadId,
+    thread: &CodexThread,
+) -> anyhow::Result<ThreadId> {
+    let root_thread_id = state_db.root_thread_id(thread_id).await?;
+    if root_thread_id != thread_id {
+        return Ok(root_thread_id);
+    }
+
+    // Older worker records may not have a persisted spawn edge yet. A loaded worker's
+    // process-local snapshot still identifies the AgentControl root; use it only when the
+    // durable relation reports the worker as its own root.
+    Ok(thread
+        .activity_snapshot()
+        .await
+        .into_iter()
+        .find(|activity| activity.thread_id == thread_id)
+        .map_or(root_thread_id, |activity| activity.root_thread_id))
+}
+
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -1155,10 +1176,62 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadActivityPauseParams,
     ) -> Result<ThreadActivityPauseResponse, JSONRPCErrorError> {
-        let (_, thread) = self.load_thread(&params.thread_id).await?;
-        self.submit_core_op(request_id, thread.as_ref(), Op::PauseActivity)
+        let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
+        // Serialize durable pause with markerless assessment and recovery. The guard is shared
+        // by every loaded descendant through the root AgentControl handle; its Core activity
+        // acknowledgement uses a separate internal mutex and cannot deadlock this boundary.
+        let _transition_guard = thread.lock_activity_transition().await;
+        if thread.config_snapshot().await.ephemeral {
+            return Err(invalid_request(format!(
+                "ephemeral thread {thread_id} cannot persist Team activity pause intent"
+            )));
+        }
+        let state_db = thread.state_db().ok_or_else(|| {
+            internal_error(format!(
+                "sqlite state db unavailable; cannot durably pause Team activity for {thread_id}"
+            ))
+        })?;
+        let root_thread_id = resolve_team_activity_root(&state_db, thread_id, thread.as_ref())
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to resolve Team activity root for {thread_id}: {err}"
+                ))
+            })?;
+        let marker = state_db
+            .pause_thread_activity(root_thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to persist Team activity pause for {root_thread_id}: {err}"
+                ))
+            })?;
+        let root_thread = self
+            .thread_manager
+            .get_thread(root_thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to load Team activity root {root_thread_id} for pause: {err}"
+                ))
+            })?;
+        root_thread
+            .pause_activity_with_ack(self.request_trace_context(request_id).await)
             .await
             .map_err(|err| internal_error(format!("failed to pause thread activity: {err}")))?;
+        let applied = state_db
+            .complete_thread_activity_pause(root_thread_id, marker.generation)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to finalize Team activity pause for {root_thread_id}: {err}"
+                ))
+            })?;
+        if !applied {
+            return Err(invalid_request(format!(
+                "Team activity changed while pausing {root_thread_id}; retry /pause"
+            )));
+        }
         Ok(ThreadActivityPauseResponse {})
     }
 
@@ -1167,11 +1240,320 @@ impl TurnRequestProcessor {
         request_id: &ConnectionRequestId,
         params: ThreadActivityContinueParams,
     ) -> Result<ThreadActivityContinueResponse, JSONRPCErrorError> {
-        let (_, thread) = self.load_thread(&params.thread_id).await?;
-        self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
+        let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
+        let state_db = thread.state_db();
+        let Some(state_db) = state_db else {
+            // Preserve the historical in-process behavior when no durable state store exists,
+            // but do not claim that the pause can survive replacement.
+            self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to continue thread activity: {err}"))
+                })?;
+            return Ok(ThreadActivityContinueResponse {});
+        };
+        // Keep this root-scoped guard through the durable continue claim, recovery, Core
+        // acknowledgement, and marker clear. A newer pause must not release the root gate
+        // between those steps.
+        let _transition_guard = thread.lock_activity_transition().await;
+        let root_thread_id = resolve_team_activity_root(&state_db, thread_id, thread.as_ref())
             .await
-            .map_err(|err| internal_error(format!("failed to continue thread activity: {err}")))?;
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to resolve Team activity root for {thread_id}: {err}"
+                ))
+            })?;
+        let existing_marker = state_db
+            .get_thread_activity_pause(root_thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to read Team activity recovery for {root_thread_id}: {err}"
+                ))
+            })?;
+        let existing_marker = if existing_marker.is_none() {
+            let recovery_needed = self
+                .team_activity_recovery_needed(root_thread_id)
+                .await
+                .map_err(|error| {
+                    invalid_request(format!(
+                        "cannot assess Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if !recovery_needed {
+                let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
+                    invalid_request(format!(
+                        "cannot continue Team activity for {root_thread_id}: root runtime is not loaded ({error})"
+                    ))
+                })?;
+                root_thread
+                    .continue_activity_with_ack()
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!("failed to continue thread activity: {err}"))
+                    })?;
+                return Ok(ThreadActivityContinueResponse {});
+            }
+
+            // An interrupted session can lose the marker before the process-local gate is
+            // durably recorded. Establish a fresh generation before reconciling open
+            // descendants so any failure remains retryable and explicitly paused.
+            let marker = state_db
+                .pause_thread_activity(root_thread_id)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to persist Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
+                invalid_request(format!(
+                    "cannot recover Team activity for {root_thread_id}: root runtime is not loaded ({error})"
+                ))
+            })?;
+            if let Err(error) = root_thread.pause_activity_with_ack(None).await {
+                retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
+                    .await;
+                return Err(invalid_request(format!(
+                    "cannot apply Team activity recovery pause for {root_thread_id}: {error}"
+                )));
+            }
+            let applied = state_db
+                .complete_thread_activity_pause(root_thread_id, marker.generation)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to finalize Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if !applied {
+                return Err(invalid_request(format!(
+                    "Team activity changed while preparing recovery for {root_thread_id}; retry /continue"
+                )));
+            }
+            let marker = state_db
+                .get_thread_activity_pause(root_thread_id)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to read Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if marker.is_none() {
+                return Err(invalid_request(format!(
+                    "Team activity recovery marker disappeared for {root_thread_id}; retry /continue"
+                )));
+            }
+            marker
+        } else {
+            existing_marker
+        };
+        let Some(existing_marker) = existing_marker else {
+            self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
+                .await
+                .map_err(|err| {
+                    internal_error(format!("failed to continue thread activity: {err}"))
+                })?;
+            return Ok(ThreadActivityContinueResponse {});
+        };
+        if existing_marker.state == codex_state::ThreadActivityPauseState::Pausing {
+            // `/continue` is also the recovery entrypoint when `/pause` was interrupted before
+            // its acknowledgement. Re-apply the idempotent root gate before making the marker
+            // eligible for release, so a failed pause can never be released accidentally.
+            let pause_root = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
+                invalid_request(format!(
+                    "cannot finish Team activity pause for {root_thread_id}: root runtime is not loaded ({error})"
+                ))
+            })?;
+            pause_root
+                .pause_activity_with_ack(None)
+                .await
+                .map_err(|error| {
+                    invalid_request(format!(
+                        "cannot finish Team activity pause for {root_thread_id}: {error}; retry /continue"
+                    ))
+                })?;
+            let applied = state_db
+                .complete_thread_activity_pause(root_thread_id, existing_marker.generation)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to finalize Team activity pause for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if !applied {
+                return Err(invalid_request(format!(
+                    "Team activity changed while finishing pause for {root_thread_id}; retry /continue"
+                )));
+            }
+        }
+        if existing_marker.state == codex_state::ThreadActivityPauseState::Resuming {
+            return Err(invalid_request(format!(
+                "Team activity recovery for {root_thread_id} is already in progress; retry /continue after the runtime is ready"
+            )));
+        }
+        let persisted_plan = self
+            .thread_manager
+            .team_activity_recovery_plan(root_thread_id)
+            .await
+            .map_err(|error| {
+                invalid_request(format!(
+                    "cannot assess persisted Team recovery for {root_thread_id}: {error}"
+                ))
+            })?;
+        if !persisted_plan.blockers.is_empty() {
+            return Err(invalid_request(format!(
+                "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
+                persisted_plan.blockers.join(", ")
+            )));
+        }
+        let Some(marker) = state_db
+            .begin_thread_activity_resume(root_thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to claim Team activity recovery for {root_thread_id}: {err}"
+                ))
+            })?
+        else {
+            return Err(invalid_request(format!(
+                "Team activity recovery for {root_thread_id} changed concurrently; retry /continue"
+            )));
+        };
+
+        let root_thread = match self.thread_manager.get_thread(root_thread_id).await {
+            Ok(root_thread) => root_thread,
+            Err(error) => {
+                retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
+                    .await;
+                return Err(invalid_request(format!(
+                    "cannot continue Team activity for {root_thread_id}: root runtime is not loaded ({error})"
+                )));
+            }
+        };
+        if let Err(error) = self
+            .thread_manager
+            .restore_paused_team(root_thread_id)
+            .await
+        {
+            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
+            return Err(invalid_request(format!(
+                "cannot continue Team activity for {root_thread_id}: worker recovery failed ({error})"
+            )));
+        }
+        let blockers = self.unrecoverable_activity_blockers(root_thread_id).await;
+        if !blockers.is_empty() {
+            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
+            return Err(invalid_request(format!(
+                "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
+                blockers.join(", ")
+            )));
+        }
+        if let Err(error) = root_thread.continue_activity_with_ack().await {
+            let _ = root_thread.pause_activity_with_ack(None).await;
+            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
+            return Err(internal_error(format!(
+                "failed to apply Team activity continue for {root_thread_id}: {error}"
+            )));
+        }
+        let completed = match state_db
+            .complete_thread_activity_resume(root_thread_id, marker.generation)
+            .await
+        {
+            Ok(completed) => completed,
+            Err(error) => {
+                let _ = root_thread.pause_activity_with_ack(None).await;
+                retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
+                    .await;
+                return Err(internal_error(format!(
+                    "failed to clear Team activity recovery for {root_thread_id}: {error}"
+                )));
+            }
+        };
+        if !completed {
+            // A newer pause won the durable generation race. Re-apply the gate before reporting
+            // the conflict so explicit user intent cannot be lost.
+            let _ = root_thread.pause_activity_with_ack(None).await;
+            return Err(invalid_request(format!(
+                "Team activity changed while recovering {root_thread_id}; retry /continue"
+            )));
+        }
         Ok(ThreadActivityContinueResponse {})
+    }
+
+    async fn team_activity_recovery_needed(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        let persisted_plan = self
+            .thread_manager
+            .team_activity_recovery_plan(root_thread_id)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if !persisted_plan.blockers.is_empty() {
+            return Ok(true);
+        }
+        for (thread_id, turn_id) in persisted_plan.recoverable_turns {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                return Ok(true);
+            };
+            let preflight = thread.handoff_preflight().await;
+            // A live owner already has this exact persisted turn. A markerless `/continue` is
+            // idempotent in that case and must not transiently pause healthy in-process work.
+            if !(preflight.was_running
+                && !preflight.was_paused
+                && preflight.turn_id.as_deref() == Some(turn_id.as_str()))
+            {
+                return Ok(true);
+            }
+        }
+        let thread_ids = self
+            .thread_manager
+            .list_open_agent_subtree_thread_ids(root_thread_id)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        for thread_id in thread_ids {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                return Ok(true);
+            };
+            if thread
+                .activity_snapshot()
+                .await
+                .into_iter()
+                .any(|activity| {
+                    activity.pause_state != codex_protocol::protocol::ThreadPauseState::Running
+                })
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn unrecoverable_activity_blockers(&self, root_thread_id: ThreadId) -> Vec<String> {
+        let Ok(thread_ids) = self
+            .thread_manager
+            .list_open_agent_subtree_thread_ids(root_thread_id)
+            .await
+        else {
+            return vec!["persistence".to_string()];
+        };
+        let mut blockers = Vec::new();
+        for thread_id in thread_ids {
+            let thread = match self.thread_manager.get_thread(thread_id).await {
+                Ok(thread) => thread,
+                Err(_) => return vec!["persistence".to_string()],
+            };
+            for blocker in thread.handoff_preflight().await.blockers {
+                if activity_blocker_is_unrecoverable(&blocker) {
+                    let value = format!("{blocker:?}");
+                    if !blockers.contains(&value) {
+                        blockers.push(value);
+                    }
+                }
+            }
+        }
+        blockers
     }
 
     async fn thread_activity_read_inner(
@@ -1919,6 +2301,35 @@ impl TurnRequestProcessor {
         )
         .await
     }
+}
+
+async fn retain_activity_pause_after_failure(
+    state_db: &codex_rollout::StateDbHandle,
+    root_thread_id: ThreadId,
+    generation: i64,
+) {
+    if let Err(error) = state_db
+        .retain_thread_activity_pause(root_thread_id, generation)
+        .await
+    {
+        tracing::warn!(%root_thread_id, %generation, %error, "failed to retain Team activity pause after recovery failure");
+    }
+}
+
+fn activity_blocker_is_unrecoverable(blocker: &codex_protocol::turn_input::HandoffBlocker) -> bool {
+    matches!(
+        blocker,
+        codex_protocol::turn_input::HandoffBlocker::UnsupportedTask
+            | codex_protocol::turn_input::HandoffBlocker::ActiveOperation
+            | codex_protocol::turn_input::HandoffBlocker::UnifiedExecProcess
+            | codex_protocol::turn_input::HandoffBlocker::Persistence
+            | codex_protocol::turn_input::HandoffBlocker::VersionMismatch
+            | codex_protocol::turn_input::HandoffBlocker::ParentUnavailable
+            | codex_protocol::turn_input::HandoffBlocker::RealtimeConversation
+            | codex_protocol::turn_input::HandoffBlocker::SuspensionTimeout
+            | codex_protocol::turn_input::HandoffBlocker::TaskExitedUnexpectedly
+            | codex_protocol::turn_input::HandoffBlocker::TurnFinalization
+    )
 }
 
 fn xcode_26_4_mcp_elicitations_auto_deny(

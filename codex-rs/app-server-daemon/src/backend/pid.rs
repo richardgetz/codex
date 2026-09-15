@@ -36,9 +36,18 @@ pub(crate) struct PidBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct LaunchIdentity {
+    pub(crate) path: PathBuf,
+    pub(crate) version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PidRecord {
     pid: u32,
     process_start_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    launch_identity: Option<LaunchIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +117,23 @@ impl PidBackend {
                     }
                     match self.refresh_after_stale_record(&record).await? {
                         PidFileState::Missing => return Ok(false),
+                        PidFileState::Starting | PidFileState::Running(_) => continue,
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn running_launch_identity(&self) -> Result<Option<LaunchIdentity>> {
+        loop {
+            match self.read_pid_file_state().await? {
+                PidFileState::Missing | PidFileState::Starting => return Ok(None),
+                PidFileState::Running(record) => {
+                    if self.record_is_active(&record).await? {
+                        return Ok(record.launch_identity);
+                    }
+                    match self.refresh_after_stale_record(&record).await? {
+                        PidFileState::Missing => return Ok(None),
                         PidFileState::Starting | PidFileState::Running(_) => continue,
                     }
                 }

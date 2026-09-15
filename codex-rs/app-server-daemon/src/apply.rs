@@ -35,13 +35,14 @@ impl Daemon {
         if let Some(receipt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?
             && !receipt.is_resolved()
         {
-            return Ok(receipt.output(
+            return Ok(receipt.output_with_running_version(
                 &self.socket_path,
                 client::probe(&self.socket_path)
                     .await
                     .ok()
                     .map(|info| info.app_server_version),
-                None,
+                /*error*/ None,
+                self.running_managed_codex_version_best_effort().await,
             ));
         }
         self.apply_fresh().await
@@ -53,13 +54,14 @@ impl Daemon {
             return Err(anyhow!("no pending app-server handoff receipt to recover"));
         };
         if attempt.is_resolved() {
-            return Ok(attempt.output(
+            return Ok(attempt.output_with_running_version(
                 &self.socket_path,
                 client::probe(&self.socket_path)
                     .await
                     .ok()
                     .map(|info| info.app_server_version),
-                None,
+                /*error*/ None,
+                self.running_managed_codex_version_best_effort().await,
             ));
         }
 
@@ -117,8 +119,14 @@ impl Daemon {
             .await
             .ok()
             .map(|info| info.app_server_version);
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
         if attempt.is_resolved() || app_server_version.is_none() {
-            return Ok(attempt.output(&self.socket_path, app_server_version, None));
+            return Ok(attempt.output_with_running_version(
+                &self.socket_path,
+                app_server_version,
+                /*error*/ None,
+                running_managed_codex_version,
+            ));
         }
         let fallback = attempt.clone();
         match self
@@ -135,12 +143,18 @@ impl Daemon {
                     "draining" | "suspended" | "restoring" => ApplyPhase::Recovering,
                     _ => ApplyPhase::NeedsAttention,
                 };
-                Ok(view.output(&self.socket_path, app_server_version, None))
+                Ok(view.output_with_running_version(
+                    &self.socket_path,
+                    app_server_version,
+                    /*error*/ None,
+                    running_managed_codex_version,
+                ))
             }
-            Err(error) => Ok(fallback.output(
+            Err(error) => Ok(fallback.output_with_running_version(
                 &self.socket_path,
                 app_server_version,
                 Some(sanitize_failure(&error.to_string())),
+                running_managed_codex_version,
             )),
         }
     }
@@ -242,10 +256,11 @@ impl Daemon {
                     attempt.phase = ApplyPhase::Applied;
                     attempt.failure = None;
                     attempt.save(&self.apply_receipt_file).await?;
-                    return Ok(attempt.output(
+                    return Ok(attempt.output_with_running_version(
                         &self.socket_path,
                         Some(info.app_server_version.clone()),
-                        None,
+                        /*error*/ None,
+                        self.running_managed_codex_version_best_effort().await,
                     ));
                 }
                 if attempt.handoff.state == "needsAttention" {
@@ -289,7 +304,12 @@ impl Daemon {
                     .managed_codex_version_best_effort(managed_codex_bin)
                     .await;
                 attempt.save(&self.apply_receipt_file).await?;
-                Ok(attempt.output(&self.socket_path, Some(info.app_server_version), None))
+                Ok(attempt.output_with_running_version(
+                    &self.socket_path,
+                    Some(info.app_server_version),
+                    /*error*/ None,
+                    self.running_managed_codex_version_best_effort().await,
+                ))
             }
             Ok(receipt) => {
                 attempt.handoff = receipt;
@@ -337,13 +357,14 @@ impl Daemon {
         attempt.phase = ApplyPhase::NeedsAttention;
         attempt.failure = Some(failure.clone());
         attempt.save(&self.apply_receipt_file).await?;
-        Ok(attempt.output(
+        Ok(attempt.output_with_running_version(
             &self.socket_path,
             client::probe(&self.socket_path)
                 .await
                 .ok()
                 .map(|info| info.app_server_version),
             Some(failure),
+            self.running_managed_codex_version_best_effort().await,
         ))
     }
 }

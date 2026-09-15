@@ -3,6 +3,7 @@ use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ThreadActivityContinueResponse;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
 use codex_app_server_protocol::ThreadActivityUpdatedNotification;
@@ -346,6 +347,33 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
             .activities
             .iter()
             .all(|entry| entry.pause_state == ThreadPauseState::Paused)
+    );
+
+    let continue_request = replacement
+        .send_raw_request(
+            "thread/activity/continue",
+            Some(json!({"threadId": parent.id.clone()})),
+        )
+        .await?;
+    let _: ThreadActivityContinueResponse =
+        timeout(REQUEST_TIMEOUT, replacement.read_response(continue_request)).await??;
+    let continued_activity_request = replacement
+        .send_raw_request(
+            "thread/activity/read",
+            Some(json!({"threadId": parent.id.clone()})),
+        )
+        .await?;
+    let continued_activity: ThreadActivityReadResponse = timeout(
+        REQUEST_TIMEOUT,
+        replacement.read_response(continued_activity_request),
+    )
+    .await??;
+    assert!(continued_activity.activities.len() >= 2);
+    assert!(
+        continued_activity
+            .activities
+            .iter()
+            .all(|entry| entry.pause_state == ThreadPauseState::Running)
     );
 
     replacement.shutdown_gracefully().await?;
