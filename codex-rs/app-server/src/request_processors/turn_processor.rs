@@ -1251,15 +1251,80 @@ impl TurnRequestProcessor {
                     "failed to resolve Team activity root for {thread_id}: {err}"
                 ))
             })?;
-        let Some(existing_marker) = state_db
+        let existing_marker = state_db
             .get_thread_activity_pause(root_thread_id)
             .await
             .map_err(|err| {
                 internal_error(format!(
                     "failed to read Team activity recovery for {root_thread_id}: {err}"
                 ))
-            })?
-        else {
+            })?;
+        let existing_marker = if existing_marker.is_none() {
+            let recovery_needed = self
+                .team_activity_recovery_needed(root_thread_id)
+                .await
+                .map_err(|error| {
+                    invalid_request(format!(
+                        "cannot assess Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if !recovery_needed {
+                self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!("failed to continue thread activity: {err}"))
+                    })?;
+                return Ok(ThreadActivityContinueResponse {});
+            }
+
+            // An interrupted session can lose the marker before the process-local gate is
+            // durably recorded. Establish a fresh generation before reconciling open
+            // descendants so any failure remains retryable and explicitly paused.
+            let marker = state_db
+                .pause_thread_activity(root_thread_id)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to persist Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
+                invalid_request(format!(
+                    "cannot recover Team activity for {root_thread_id}: root runtime is not loaded ({error})"
+                ))
+            })?;
+            if let Err(error) = root_thread.pause_activity_with_ack(None).await {
+                retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
+                    .await;
+                return Err(invalid_request(format!(
+                    "cannot apply Team activity recovery pause for {root_thread_id}: {error}"
+                )));
+            }
+            let applied = state_db
+                .complete_thread_activity_pause(root_thread_id, marker.generation)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to finalize Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if !applied {
+                return Err(invalid_request(format!(
+                    "Team activity changed while preparing recovery for {root_thread_id}; retry /continue"
+                )));
+            }
+            state_db
+                .get_thread_activity_pause(root_thread_id)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to read Team activity recovery for {root_thread_id}: {error}"
+                    ))
+                })?
+        } else {
+            existing_marker
+        };
+        let Some(existing_marker) = existing_marker else {
             self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
                 .await
                 .map_err(|err| {
@@ -1380,6 +1445,28 @@ impl TurnRequestProcessor {
             )));
         }
         Ok(ThreadActivityContinueResponse {})
+    }
+
+    async fn team_activity_recovery_needed(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        let thread_ids = self
+            .thread_manager
+            .list_open_agent_subtree_thread_ids(root_thread_id)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        for thread_id in thread_ids {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                return Ok(true);
+            };
+            if thread.activity_snapshot().await.into_iter().any(|activity| {
+                activity.pause_state != codex_protocol::protocol::ThreadPauseState::Running
+            }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn unrecoverable_activity_blockers(&self, root_thread_id: ThreadId) -> Vec<String> {
