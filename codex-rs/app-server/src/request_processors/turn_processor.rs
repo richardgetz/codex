@@ -1388,6 +1388,21 @@ impl TurnRequestProcessor {
                 "Team activity recovery for {root_thread_id} is already in progress; retry /continue after the runtime is ready"
             )));
         }
+        let persisted_plan = self
+            .thread_manager
+            .team_activity_recovery_plan(root_thread_id)
+            .await
+            .map_err(|error| {
+                invalid_request(format!(
+                    "cannot assess persisted Team recovery for {root_thread_id}: {error}"
+                ))
+            })?;
+        if !persisted_plan.blockers.is_empty() {
+            return Err(invalid_request(format!(
+                "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
+                persisted_plan.blockers.join(", ")
+            )));
+        }
         let Some(marker) = state_db
             .begin_thread_activity_resume(root_thread_id)
             .await
@@ -1471,6 +1486,28 @@ impl TurnRequestProcessor {
         &self,
         root_thread_id: ThreadId,
     ) -> anyhow::Result<bool> {
+        let persisted_plan = self
+            .thread_manager
+            .team_activity_recovery_plan(root_thread_id)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if !persisted_plan.blockers.is_empty() {
+            return Ok(true);
+        }
+        for (thread_id, turn_id) in persisted_plan.recoverable_turns {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                return Ok(true);
+            };
+            let preflight = thread.handoff_preflight().await;
+            // A live owner already has this exact persisted turn. A markerless `/continue` is
+            // idempotent in that case and must not transiently pause healthy in-process work.
+            if !(preflight.was_running
+                && !preflight.was_paused
+                && preflight.turn_id.as_deref() == Some(turn_id.as_str()))
+            {
+                return Ok(true);
+            }
+        }
         let thread_ids = self
             .thread_manager
             .list_open_agent_subtree_thread_ids(root_thread_id)

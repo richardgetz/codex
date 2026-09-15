@@ -27,6 +27,13 @@ use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::DynamicToolCallStatus;
+use codex_app_server_protocol::McpToolCallStatus;
+use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_attachment_store::AttachmentStore;
 use codex_attachment_store::InlineAttachmentStore;
@@ -61,6 +68,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -81,6 +89,9 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::turn_input::RecoverTurnRequest;
+use codex_protocol::turn_input::NotSubmittedReason;
+use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::state_db::StateDbHandle;
 use codex_skills_extension::HostSkillsService;
@@ -115,6 +126,15 @@ use tracing::instrument;
 use tracing::warn;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
+
+/// Persisted Team work that can be admitted after the root pause gate is held.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TeamActivityRecoveryPlan {
+    /// Model-only turns whose latest persisted state is unfinished and safe to retry.
+    pub recoverable_turns: Vec<(ThreadId, String)>,
+    /// Persisted operations whose external effects are not known to be complete.
+    pub blockers: Vec<String>,
+}
 // Reject pathological selected cwd values at the environment-selection boundary.
 const MAX_TURN_ENVIRONMENT_CWD_BYTES: usize = 8 * 1024;
 
@@ -1511,6 +1531,102 @@ impl ThreadManager {
             .await
     }
 
+    /// Reloads a recorded V1 ThreadSpawn child through its loaded parent control.
+    ///
+    /// V1 children share the root `AgentControl` with their parent. Recovery must preserve that
+    /// ownership so root-scoped activity pause and continue transitions reach every descendant.
+    pub async fn ensure_v1_agent_loaded(&self, child_thread_id: ThreadId) -> CodexResult<()> {
+        let _handoff_admission = self.begin_handoff_admission()?;
+        let stored_thread = self
+            .state
+            .read_stored_thread(ReadThreadParams {
+                thread_id: child_thread_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await?;
+        let Some(parent_thread_id) = stored_thread.parent_thread_id else {
+            return Err(CodexErr::InvalidRequest(format!(
+                "thread {child_thread_id} is not a recorded V1 child"
+            )));
+        };
+        let parent = self.get_thread(parent_thread_id).await.map_err(|_| {
+            CodexErr::InvalidRequest(format!(
+                "cannot resume V1 child {child_thread_id}: parent {parent_thread_id} is not loaded; resume the parent first"
+            ))
+        })?;
+        let config = parent.session.get_config().await.as_ref().clone();
+        parent
+            .session
+            .services
+            .agent_control
+            .resume_agent_from_rollout(config, child_thread_id, stored_thread.source)
+            .await
+            .map(|_| ())
+    }
+
+    /// Inspects persisted Team history before any recovered turn is admitted.
+    ///
+    /// Only the latest persisted turn can be resumed. Older interrupted turns are
+    /// historical records once a later turn completed. A latest turn containing
+    /// an unfinished tool, command, approval, or collaboration operation is
+    /// deliberately reported as a blocker because its external effect cannot be
+    /// replayed safely after a process replacement.
+    pub async fn team_activity_recovery_plan(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        let Some(agent_graph_store) = self.state.agent_graph_store() else {
+            return Err(CodexErr::Fatal(
+                "cannot inspect Team recovery: agent graph store unavailable".to_string(),
+            ));
+        };
+        let descendant_ids = agent_graph_store
+            .list_thread_spawn_descendants(
+                root_thread_id,
+                Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?;
+        let mut plan = TeamActivityRecoveryPlan::default();
+        for thread_id in descendant_ids.into_iter().chain([root_thread_id]) {
+            let stored_thread = self
+                .state
+                .read_stored_thread(ReadThreadParams {
+                    thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await?;
+            let items = match stored_thread.history_mode {
+                ThreadHistoryMode::Legacy => self
+                    .state
+                    .thread_store
+                    .load_history(LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived: true,
+                    })
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Fatal(format!(
+                            "failed to load persisted Team history for thread {thread_id}: {err}"
+                        ))
+                    })?
+                    .items,
+                ThreadHistoryMode::Paginated => self
+                    .state
+                    .load_latest_model_context(LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived: true,
+                    })
+                    .await?
+                    .items,
+            };
+            append_persisted_recovery(&mut plan, thread_id, &items);
+        }
+        Ok(plan)
+    }
+
     /// Reconcile open persisted Team descendants under a paused root.
     ///
     /// Existing sessions are retained, terminal edges are ignored, and unloaded open workers are
@@ -1522,26 +1638,32 @@ impl ThreadManager {
         root_thread_id: ThreadId,
     ) -> CodexResult<Vec<ThreadId>> {
         let root = self.get_thread(root_thread_id).await?;
-        let Some(agent_graph_store) = self.state.agent_graph_store() else {
-            return Err(CodexErr::Fatal(
-                "cannot restore paused Team descendants: agent graph store unavailable"
-                    .to_string(),
-            ));
-        };
-        let descendant_ids = agent_graph_store
+        let plan = self.team_activity_recovery_plan(root_thread_id).await?;
+        if !plan.blockers.is_empty() {
+            return Err(CodexErr::InvalidRequest(format!(
+                "persisted Team work needs attention before recovery: {}",
+                plan.blockers.join(", ")
+            )));
+        }
+        let config = root.session.get_config().await.as_ref().clone();
+        let agent_control = root.session.services.agent_control.clone();
+        let mut restored = Vec::new();
+        let descendant_ids = self
+            .state
+            .agent_graph_store()
+            .ok_or_else(|| {
+                CodexErr::Fatal(
+                    "cannot restore paused Team descendants: agent graph store unavailable"
+                        .to_string(),
+                )
+            })?
             .list_thread_spawn_descendants(
                 root_thread_id,
                 Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
             )
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load paused Team descendants: {err}")))?;
-        let config = root.session.get_config().await.as_ref().clone();
-        let agent_control = root.session.services.agent_control.clone();
-        let mut restored = Vec::new();
         for child_thread_id in descendant_ids {
-            if self.get_thread(child_thread_id).await.is_ok() {
-                continue;
-            }
             let stored_thread = self
                 .state
                 .read_stored_thread(ReadThreadParams {
@@ -1550,10 +1672,42 @@ impl ThreadManager {
                     include_history: false,
                 })
                 .await?;
+            if self.get_thread(child_thread_id).await.is_ok() {
+                continue;
+            }
             agent_control
                 .resume_agent_from_rollout(config.clone(), child_thread_id, stored_thread.source)
                 .await?;
             restored.push(child_thread_id);
+        }
+        for (thread_id, turn_id) in plan.recoverable_turns {
+            let thread = self.get_thread(thread_id).await?;
+            let submission = thread
+                .recover_turn_if_idle(RecoverTurnRequest {
+                    turn_id: turn_id.clone(),
+                    thread_settings: Default::default(),
+                    trace: None,
+                    cyber_access_program: None,
+                })
+                .await?;
+            match submission {
+                StartIfIdleSubmission::Started {
+                    turn_id: started_turn_id,
+                } if started_turn_id == turn_id => {}
+                StartIfIdleSubmission::NotSubmitted {
+                    reason: NotSubmittedReason::NotIdle,
+                } => {}
+                StartIfIdleSubmission::NotSubmitted { reason } => {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "cannot recover unfinished Team turn {turn_id} for thread {thread_id}: Core declined recovery ({reason:?})"
+                    )));
+                }
+                StartIfIdleSubmission::Started { .. } => {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "cannot recover unfinished Team turn {turn_id} for thread {thread_id}"
+                    )));
+                }
+            }
         }
         Ok(restored)
     }
@@ -2849,6 +3003,165 @@ fn stored_thread_to_initial_history(
         history: Arc::new(history.items),
         rollout_path: rollout_path.or(stored_thread.rollout_path),
     }))
+}
+
+fn append_persisted_recovery(
+    plan: &mut TeamActivityRecoveryPlan,
+    thread_id: ThreadId,
+    items: &[RolloutItem],
+) {
+    let turns = codex_app_server_protocol::build_turns_from_rollout_items(items);
+    let Some(turn) = turns.last() else {
+        return;
+    };
+    append_recovery_turn(plan, thread_id, turn, Some(items));
+}
+
+fn append_latest_recovery(
+    plan: &mut TeamActivityRecoveryPlan,
+    thread_id: ThreadId,
+    turns: &[Turn],
+) {
+    let Some(turn) = turns.last() else {
+        return;
+    };
+    append_recovery_turn(plan, thread_id, turn, None);
+}
+
+fn append_recovery_turn(
+    plan: &mut TeamActivityRecoveryPlan,
+    thread_id: ThreadId,
+    turn: &Turn,
+    raw_items: Option<&[RolloutItem]>,
+) {
+    if !matches!(turn.status, TurnStatus::Interrupted | TurnStatus::InProgress) {
+        return;
+    }
+    let mut blockers = turn
+        .items
+        .iter()
+        .filter_map(persisted_external_blocker)
+        .collect::<Vec<_>>();
+    if let Some(items) = raw_items
+        && let Some(blocker) = persisted_response_item_blocker(items, &turn.id)
+    {
+        blockers.push(blocker);
+    }
+    if blockers.is_empty() {
+        plan.recoverable_turns.push((thread_id, turn.id.clone()));
+    } else {
+        for blocker in blockers {
+            plan.blockers.push(format!("thread {thread_id}: {blocker}"));
+        }
+    }
+}
+
+fn persisted_response_item_blocker(items: &[RolloutItem], turn_id: &str) -> Option<&'static str> {
+    let start = items.iter().rposition(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) if event.turn_id == turn_id
+        )
+    })?;
+    let mut pending_call_ids = HashSet::new();
+    let mut pending_web_search_ids = HashSet::new();
+    for item in &items[start..] {
+        let envelope = match item {
+            RolloutItem::EventMsg(EventMsg::WebSearchBegin(event)) => {
+                pending_web_search_ids.insert(event.call_id.clone());
+                continue;
+            }
+            RolloutItem::EventMsg(EventMsg::WebSearchEnd(event)) => {
+                pending_web_search_ids.remove(&event.call_id);
+                continue;
+            }
+            RolloutItem::ResponseItem(envelope) => envelope,
+            _ => continue,
+        };
+        match &envelope.item {
+            ResponseItem::LocalShellCall { status, .. }
+                if matches!(
+                    status,
+                    codex_protocol::models::LocalShellStatus::InProgress
+                        | codex_protocol::models::LocalShellStatus::Incomplete
+                ) => return Some("unfinished local shell call"),
+            ResponseItem::WebSearchCall { id, status, .. } => {
+                if matches!(status.as_deref(), Some("completed" | "failed")) {
+                    if let Some(id) = id {
+                        pending_web_search_ids.remove(id.as_ref());
+                    }
+                } else if let Some(id) = id {
+                    pending_web_search_ids.insert(id.to_string());
+                } else {
+                    return Some("unfinished web search call");
+                }
+            }
+            ResponseItem::ImageGenerationCall { status, .. }
+                if !matches!(status.as_str(), "completed" | "failed") =>
+            {
+                return Some("unfinished image generation call");
+            }
+            ResponseItem::FunctionCall { call_id, .. }
+            | ResponseItem::CustomToolCall { call_id, .. } => {
+                pending_call_ids.insert(call_id.clone());
+            }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                ..
+            } => {
+                pending_call_ids.insert(call_id.clone());
+            }
+            ResponseItem::FunctionCallOutput {
+                call_id: Some(call_id),
+                ..
+            }
+            | ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                ..
+            } => {
+                pending_call_ids.remove(call_id);
+            }
+            ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                pending_call_ids.remove(call_id);
+            }
+            _ => {}
+        }
+    }
+    if !pending_web_search_ids.is_empty() {
+        return Some("unfinished web search call");
+    }
+    (!pending_call_ids.is_empty()).then_some("unfinished model tool call")
+}
+
+fn persisted_external_blocker(item: &ThreadItem) -> Option<&'static str> {
+    match item {
+        ThreadItem::CommandExecution {
+            status: CommandExecutionStatus::InProgress,
+            ..
+        } => Some("unfinished command execution"),
+        ThreadItem::FileChange {
+            status: PatchApplyStatus::InProgress,
+            ..
+        } => Some("unfinished file change approval or apply"),
+        ThreadItem::McpToolCall {
+            status: McpToolCallStatus::InProgress,
+            ..
+        } => Some("unfinished MCP tool call"),
+        ThreadItem::DynamicToolCall {
+            status: DynamicToolCallStatus::InProgress,
+            ..
+        } => Some("unfinished dynamic tool call"),
+        ThreadItem::CollabAgentToolCall {
+            status: CollabAgentToolCallStatus::InProgress,
+            ..
+        } => Some("unfinished collaboration operation"),
+        ThreadItem::ImageGeneration(image)
+            if !matches!(image.status.as_str(), "completed" | "failed") =>
+        {
+            Some("unfinished image generation")
+        }
+        _ => None,
+    }
 }
 
 fn thread_store_rollout_read_error(err: ThreadStoreError) -> CodexErr {

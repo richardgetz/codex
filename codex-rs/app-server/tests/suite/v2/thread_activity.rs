@@ -7,6 +7,7 @@ use codex_app_server_protocol::ThreadActivityContinueResponse;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
@@ -130,7 +131,18 @@ async fn thread_activity_continue_without_marker_keeps_healthy_tree_running() ->
 
 #[tokio::test]
 async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let _seed_response = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("pause-restart-seed"),
+            responses::ev_assistant_message("pause-restart-seed-message", "seed history"),
+            responses::ev_completed("pause-restart-seed"),
+        ]),
+    )
+    .await;
     let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri()).write(codex_home.path())?;
     let mut first = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(REQUEST_TIMEOUT)
@@ -139,6 +151,23 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
         .start_thread(ThreadStartParams::default())
         .await?
         .thread;
+    let seed_turn_request = first
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(REQUEST_TIMEOUT, first.read_response(seed_turn_request)).await??;
+    timeout(
+        REQUEST_TIMEOUT,
+        first.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     let pause_request = first
         .send_raw_request(
@@ -218,16 +247,20 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
 
 #[tokio::test]
 async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> Result<()> {
-    run_cold_resume_case(/*pause_before_exit*/ true).await
+    run_cold_resume_case(/*pause_before_exit*/ true, ThreadHistoryMode::Legacy, false).await
 }
 
 #[tokio::test]
 async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested_workers(
 ) -> Result<()> {
-    run_cold_resume_case(/*pause_before_exit*/ false).await
+    run_cold_resume_case(/*pause_before_exit*/ false, ThreadHistoryMode::Paginated, true).await
 }
 
-async fn run_cold_resume_case(pause_before_exit: bool) -> Result<()> {
+async fn run_cold_resume_case(
+    pause_before_exit: bool,
+    history_mode: ThreadHistoryMode,
+    continue_before_exit: bool,
+) -> Result<()> {
     const PARENT_PROMPT: &str = "spawn a direct worker and keep the team unfinished";
     const CHILD_PROMPT: &str = "spawn a nested worker and keep the team unfinished";
     const GRANDCHILD_PROMPT: &str = "hold this nested worker for recovery";
@@ -290,7 +323,10 @@ async fn run_cold_resume_case(pause_before_exit: bool) -> Result<()> {
         .build_initialized_with_timeout(REQUEST_TIMEOUT)
         .await?;
     let ThreadStartResponse { thread: parent, .. } = old_server
-        .start_thread(ThreadStartParams::default())
+        .start_thread(ThreadStartParams {
+            history_mode: Some(history_mode),
+            ..Default::default()
+        })
         .await?;
     let parent_turn_request = old_server
         .send_turn_start_request(TurnStartParams {
@@ -353,6 +389,30 @@ async fn run_cold_resume_case(pause_before_exit: bool) -> Result<()> {
         }
     }
     responses_server.wait_for_request_count(5).await;
+
+    if continue_before_exit {
+        let continue_request = old_server
+            .send_raw_request(
+                "thread/activity/continue",
+                Some(json!({"threadId": parent.id.clone()})),
+            )
+            .await?;
+        let _: ThreadActivityContinueResponse =
+            timeout(REQUEST_TIMEOUT, old_server.read_response(continue_request)).await??;
+        assert_eq!(responses_server.requests().await.len(), 5);
+        let read_request = old_server
+            .send_raw_request(
+                "thread/activity/read",
+                Some(json!({"threadId": parent.id.clone()})),
+            )
+            .await?;
+        let active: ThreadActivityReadResponse =
+            timeout(REQUEST_TIMEOUT, old_server.read_response(read_request)).await??;
+        assert!(active
+            .activities
+            .iter()
+            .all(|entry| entry.pause_state == ThreadPauseState::Running));
+    }
 
     if pause_before_exit {
         let pause_request = old_server

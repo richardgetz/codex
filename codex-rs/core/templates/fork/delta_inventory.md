@@ -73,7 +73,10 @@ release or merge rules.
   keeps the marker until Core acknowledges the release.
   Interrupted recovery remains paused and
   reports blockers; terminal work and already-launched external commands are
-  never replayed.
+  never replayed. Markerless recovery now assesses the latest persisted turn,
+  resumes only proven model-only `InProgress`/`Interrupted` work, and retains
+  the pause with an actionable blocker for unfinished command, approval, MCP,
+  collaboration, or other external operations.
 - Team activity pause intent is durable in the state database (migration
   `0061_rick_thread_activity_pauses.sql`). A successful app-server
   `thread/activity/pause` records a generation, waits for Core to apply the
