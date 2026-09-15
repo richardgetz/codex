@@ -1191,7 +1191,7 @@ impl TurnRequestProcessor {
                 "sqlite state db unavailable; cannot durably pause Team activity for {thread_id}"
             ))
         })?;
-        let root_thread_id = resolve_team_activity_root(state_db, thread_id, thread.as_ref())
+        let root_thread_id = resolve_team_activity_root(&state_db, thread_id, thread.as_ref())
             .await
             .map_err(|err| {
                 internal_error(format!(
@@ -1252,7 +1252,7 @@ impl TurnRequestProcessor {
         // acknowledgement, and marker clear. A newer pause must not release the root gate
         // between those steps.
         let _transition_guard = thread.lock_activity_transition().await;
-        let root_thread_id = resolve_team_activity_root(state_db, thread_id, thread.as_ref())
+        let root_thread_id = resolve_team_activity_root(&state_db, thread_id, thread.as_ref())
             .await
             .map_err(|err| {
                 internal_error(format!(
