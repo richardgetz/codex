@@ -1177,6 +1177,10 @@ impl TurnRequestProcessor {
         params: ThreadActivityPauseParams,
     ) -> Result<ThreadActivityPauseResponse, JSONRPCErrorError> {
         let (thread_id, thread) = self.load_thread(&params.thread_id).await?;
+        // Serialize durable pause with markerless assessment and recovery. The guard is shared
+        // by every loaded descendant through the root AgentControl handle; its Core activity
+        // acknowledgement uses a separate internal mutex and cannot deadlock this boundary.
+        let _transition_guard = thread.lock_activity_transition().await;
         if thread.config_snapshot().await.ephemeral {
             return Err(invalid_request(format!(
                 "ephemeral thread {thread_id} cannot persist Team activity pause intent"
@@ -1244,6 +1248,10 @@ impl TurnRequestProcessor {
                 })?;
             return Ok(ThreadActivityContinueResponse {});
         };
+        // Keep this root-scoped guard through the durable continue claim, recovery, Core
+        // acknowledgement, and marker clear. A newer pause must not release the root gate
+        // between those steps.
+        let _transition_guard = thread.lock_activity_transition().await;
         let root_thread_id = resolve_team_activity_root(state_db, thread_id, thread.as_ref())
             .await
             .map_err(|err| {
@@ -1269,7 +1277,13 @@ impl TurnRequestProcessor {
                     ))
                 })?;
             if !recovery_needed {
-                self.submit_core_op(request_id, thread.as_ref(), Op::ContinueActivity)
+                let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
+                    invalid_request(format!(
+                        "cannot continue Team activity for {root_thread_id}: root runtime is not loaded ({error})"
+                    ))
+                })?;
+                root_thread
+                    .continue_activity_with_ack()
                     .await
                     .map_err(|err| {
                         internal_error(format!("failed to continue thread activity: {err}"))
@@ -1313,14 +1327,20 @@ impl TurnRequestProcessor {
                     "Team activity changed while preparing recovery for {root_thread_id}; retry /continue"
                 )));
             }
-            state_db
+            let marker = state_db
                 .get_thread_activity_pause(root_thread_id)
                 .await
                 .map_err(|error| {
                     internal_error(format!(
                         "failed to read Team activity recovery for {root_thread_id}: {error}"
                     ))
-                })?
+                })?;
+            if marker.is_none() {
+                return Err(invalid_request(format!(
+                    "Team activity recovery marker disappeared for {root_thread_id}; retry /continue"
+                )));
+            }
+            marker
         } else {
             existing_marker
         };

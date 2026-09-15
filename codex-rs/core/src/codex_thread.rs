@@ -419,6 +419,19 @@ impl CodexThread {
             .map_err(|_| CodexErr::InternalAgentDied)
     }
 
+    /// Serialize a durable Team activity transition across this thread's root tree.
+    ///
+    /// App-server pause recovery holds this guard while updating the durable marker and waiting
+    /// for the Core pause or continue acknowledgement. The guard is shared by every descendant
+    /// through the root's AgentControl handle.
+    pub async fn lock_activity_transition(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.session
+            .services
+            .agent_control
+            .lock_root_activity_transition()
+            .await
+    }
+
     /// Queue PauseActivity and wait until Core has applied the root gate.
     ///
     /// Durable pause recovery must not expose a ready marker while a queued pause can still be
