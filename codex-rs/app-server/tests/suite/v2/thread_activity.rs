@@ -465,8 +465,7 @@ async fn run_cold_resume_case(
     .await;
 
     let codex_home = TempDir::new()?;
-    let mock_config = MockResponsesConfig::new(responses_server.uri())
-        .enable_feature(Feature::Collab);
+    let mock_config = MockResponsesConfig::new(responses_server.uri()).enable_feature(Feature::Collab);
     let mock_config = if multi_agent_v2 {
         mock_config.enable_feature(Feature::MultiAgentV2)
     } else {
