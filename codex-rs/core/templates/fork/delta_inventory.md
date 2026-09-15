@@ -354,7 +354,10 @@ release or merge rules.
     model turn. A successful pause intent survives cold root resume and is
     re-applied before retained work is admitted; explicit continue reconciles
     open persisted descendants and is required to release it. Completed, cancelled, and manually
-    stopped work is never revived. The MCP `tools/call` runner forwards activity updates as
+    stopped work is never revived. A loaded fresh thread with no rollout is
+    treated as a healthy empty recovery plan only when process-local preflight
+    proves no unfinished turn or blocker; missing cold checkpoints remain
+    actionable errors. The MCP `tools/call` runner forwards activity updates as
     notifications while retaining its existing turn completion semantics.
   - The native TUI renders the selected tree as two aligned rows: `Lead:
     idle|working|waiting · Team: N working[, M waiting]`, followed by

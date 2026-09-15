@@ -576,13 +576,14 @@ async fn run_cold_resume_case(
     for thread_id in &expected_threads {
         let count = recovered_requests[5..]
             .iter()
-            .filter(|request| String::from_utf8_lossy(request).contains(thread_id))
+            .filter(|request| request_thread_id(request).as_deref() == Some(thread_id.as_str()))
             .count();
         assert_eq!(count, 1, "worker {thread_id} should resume exactly once");
     }
+    let terminal_thread_id = terminal_thread_id.to_string();
     assert!(recovered_requests[5..]
         .iter()
-        .all(|request| !String::from_utf8_lossy(request).contains(&terminal_thread_id.to_string())));
+        .all(|request| request_thread_id(request).as_deref() != Some(terminal_thread_id.as_str())));
 
     let request_count = recovered_requests.len();
     let repeat_continue_request = resumed
@@ -631,4 +632,10 @@ fn completed_response(response_id: &'static str) -> Vec<StreamingSseChunk> {
             responses::ev_completed(response_id),
         ]),
     }]
+}
+
+fn request_thread_id(request: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(request)
+        .ok()
+        .and_then(|body| body["client_metadata"]["thread_id"].as_str().map(str::to_owned))
 }

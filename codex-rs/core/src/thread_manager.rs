@@ -65,6 +65,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
@@ -1590,16 +1591,23 @@ impl ThreadManager {
             .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?;
         let mut plan = TeamActivityRecoveryPlan::default();
         for thread_id in descendant_ids.into_iter().chain([root_thread_id]) {
-            let stored_thread = self
+            let stored_thread = match self
                 .state
                 .read_stored_thread(ReadThreadParams {
                     thread_id,
                     include_archived: true,
                     include_history: false,
                 })
-                .await?;
+                .await
+            {
+                Ok(stored_thread) => stored_thread,
+                Err(error) if self.missing_team_history_is_live_idle(thread_id, &error).await => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let items = match stored_thread.history_mode {
-                ThreadHistoryMode::Legacy => self
+                ThreadHistoryMode::Legacy => match self
                     .state
                     .thread_store
                     .load_history(LoadThreadHistoryParams {
@@ -1607,24 +1615,82 @@ impl ThreadManager {
                         include_archived: true,
                     })
                     .await
-                    .map_err(|err| {
-                        CodexErr::Fatal(format!(
-                            "failed to load persisted Team history for thread {thread_id}: {err}"
-                        ))
-                    })?
-                    .items,
-                ThreadHistoryMode::Paginated => self
+                {
+                    Ok(history) => history.items,
+                    Err(ThreadStoreError::ThreadNotFound {
+                        thread_id: missing_thread_id,
+                    }) => {
+                        let error = CodexErr::ThreadNotFound(missing_thread_id);
+                        if self
+                            .missing_team_history_is_live_idle(thread_id, &error)
+                            .await
+                        {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                    Err(ThreadStoreError::InvalidRequest { message })
+                        if message.starts_with("no rollout found for thread id ") =>
+                    {
+                        let error = CodexErr::ThreadNotFound(thread_id);
+                        if self
+                            .missing_team_history_is_live_idle(thread_id, &error)
+                            .await
+                        {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        return Err(CodexErr::Fatal(format!(
+                            "failed to load persisted Team history for thread {thread_id}: {error}"
+                        )));
+                    }
+                },
+                ThreadHistoryMode::Paginated => match self
                     .state
                     .load_latest_model_context(LoadThreadHistoryParams {
                         thread_id,
                         include_archived: true,
                     })
-                    .await?
-                    .items,
+                    .await
+                {
+                    Ok(context) => context.items,
+                    Err(error) if self.missing_team_history_is_live_idle(thread_id, &error).await => {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                },
             };
             append_persisted_recovery(&mut plan, thread_id, &items);
         }
         Ok(plan)
+    }
+
+    /// A newly started in-memory thread has no rollout until its first durable item is written.
+    /// Treat that case as an empty recovery plan only when the runtime is loaded and its
+    /// process-local preflight proves there is no unfinished turn or blocker. An unloaded thread
+    /// still returns `ThreadNotFound`, preserving the fail-closed behavior for missing cold
+    /// checkpoints. Cold resume reaches this method only after `LiveThread::resume` has opened
+    /// the persisted history and the manager has inserted the resulting runtime, so a missing
+    /// cold checkpoint cannot masquerade as this loaded fresh-thread case.
+    async fn missing_team_history_is_live_idle(
+        &self,
+        thread_id: ThreadId,
+        error: &CodexErr,
+    ) -> bool {
+        if !matches!(
+            error.details(),
+            CodexErrorDetails::ThreadNotFound(missing_thread_id)
+                if *missing_thread_id == thread_id
+        ) {
+            return false;
+        }
+        let Ok(thread) = self.get_thread(thread_id).await else {
+            return false;
+        };
+        let preflight = thread.handoff_preflight().await;
+        preflight.turn_id.is_none() && preflight.blockers.is_empty()
     }
 
     /// Reconcile open persisted Team descendants under a paused root.
