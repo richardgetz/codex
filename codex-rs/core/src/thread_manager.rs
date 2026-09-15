@@ -1709,36 +1709,38 @@ impl ThreadManager {
     ) -> CodexResult<Option<MultiAgentVersion>> {
         let thread_id = stored_thread.thread_id;
         let items = match stored_thread.history_mode {
-            ThreadHistoryMode::Legacy => self
-                .state
-                .thread_store
-                .load_history(LoadThreadHistoryParams {
-                    thread_id,
-                    include_archived: true,
-                })
-                .await
-                .map_err(|error| match error {
-                    ThreadStoreError::ThreadNotFound { thread_id } => {
-                        CodexErr::ThreadNotFound(thread_id)
-                    }
-                    ThreadStoreError::InvalidRequest { message }
-                        if message.starts_with("no rollout found for thread id ") =>
-                    {
-                        CodexErr::ThreadNotFound(thread_id)
-                    }
-                    error => CodexErr::Fatal(format!(
-                        "failed to load persisted Team history for thread {thread_id}: {error}"
-                    )),
-                })?
-                .items,
-            ThreadHistoryMode::Paginated => self
-                .state
-                .load_latest_model_context(LoadThreadHistoryParams {
-                    thread_id,
-                    include_archived: true,
-                })
-                .await?
-                .items,
+            ThreadHistoryMode::Legacy => {
+                self.state
+                    .thread_store
+                    .load_history(LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived: true,
+                    })
+                    .await
+                    .map_err(|error| match error {
+                        ThreadStoreError::ThreadNotFound { thread_id } => {
+                            CodexErr::ThreadNotFound(thread_id)
+                        }
+                        ThreadStoreError::InvalidRequest { message }
+                            if message.starts_with("no rollout found for thread id ") =>
+                        {
+                            CodexErr::ThreadNotFound(thread_id)
+                        }
+                        error => CodexErr::Fatal(format!(
+                            "failed to load persisted Team history for thread {thread_id}: {error}"
+                        )),
+                    })?
+                    .items
+            }
+            ThreadHistoryMode::Paginated => {
+                self.state
+                    .load_latest_model_context(LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived: true,
+                    })
+                    .await?
+                    .items
+            }
         };
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
