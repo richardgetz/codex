@@ -101,13 +101,21 @@ async fn apply_receipt_round_trips_atomically() {
     assert_eq!(actual, expected);
     assert_eq!(
         expected
-            .output(Path::new("socket"), /*app_server_version*/ None, /*error*/ None)
+            .output(
+                Path::new("socket"),
+                /*app_server_version*/ None,
+                /*error*/ None
+            )
             .status,
         ApplyStatus::InProgress
     );
     assert_eq!(
         expected
-            .output(Path::new("socket"), /*app_server_version*/ None, /*error*/ None)
+            .output(
+                Path::new("socket"),
+                /*app_server_version*/ None,
+                /*error*/ None
+            )
             .running_managed_codex_version,
         None
     );

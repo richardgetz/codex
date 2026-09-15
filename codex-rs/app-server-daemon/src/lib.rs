@@ -734,9 +734,7 @@ impl Daemon {
         let managed_codex_version = self
             .managed_codex_version_best_effort(managed_codex_bin)
             .await;
-        let running_managed_codex_version = self
-            .running_managed_codex_version_best_effort()
-            .await;
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
@@ -923,9 +921,7 @@ impl Daemon {
         let managed_codex_version = self
             .managed_codex_version_best_effort(managed_codex_bin)
             .await;
-        let running_managed_codex_version = self
-            .running_managed_codex_version_best_effort()
-            .await;
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
         LifecycleOutput {
             status,
             backend,

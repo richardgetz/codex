@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
 
-use super::retain_launch_identity;
 use super::super::LaunchIdentity;
+use super::retain_launch_identity;
 use crate::managed_install::executable_identity_from_bytes;
 
 #[test]

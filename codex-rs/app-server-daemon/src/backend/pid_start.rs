@@ -1,16 +1,16 @@
 //! Detached process launch and PID publication. Hold the reservation lock until
 //! the record is published, and on Windows until an updater acknowledges startup.
 
+use super::LaunchIdentity;
 use super::PidBackend;
 use super::PidCommandKind;
 use super::PidFileState;
 use super::PidRecord;
-use super::LaunchIdentity;
 use super::read_process_start_time;
+use crate::managed_install::ExecutableIdentity;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use crate::managed_install::ExecutableIdentity;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::fs;
@@ -238,28 +238,24 @@ impl PidBackend {
             .context("spawned app-server process has no pid")?;
         // Do not publish the PID record until the post-spawn observation agrees with the
         // pre-spawn generation; the PID and process start time then bind that result to this child.
-        let launch_identity = if let Some((
-            path,
-            version_before_spawn,
-            identity_before_spawn,
-        )) = launch_identity
-        {
-            let version_after_spawn = crate::managed_install::managed_codex_version(&path)
-                .await
-                .ok();
-            let identity_after_spawn = crate::managed_install::executable_identity(&path)
-                .await
-                .ok();
-            Some(retain_launch_identity(
-                path,
-                version_before_spawn,
-                identity_before_spawn,
-                version_after_spawn,
-                identity_after_spawn,
-            ))
-        } else {
-            None
-        };
+        let launch_identity =
+            if let Some((path, version_before_spawn, identity_before_spawn)) = launch_identity {
+                let version_after_spawn = crate::managed_install::managed_codex_version(&path)
+                    .await
+                    .ok();
+                let identity_after_spawn = crate::managed_install::executable_identity(&path)
+                    .await
+                    .ok();
+                Some(retain_launch_identity(
+                    path,
+                    version_before_spawn,
+                    identity_before_spawn,
+                    version_after_spawn,
+                    identity_after_spawn,
+                ))
+            } else {
+                None
+            };
         let record = match async {
             #[cfg(windows)]
             super::super::windows::Process::open(pid)?

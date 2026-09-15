@@ -119,9 +119,7 @@ impl Daemon {
             .await
             .ok()
             .map(|info| info.app_server_version);
-        let running_managed_codex_version = self
-            .running_managed_codex_version_best_effort()
-            .await;
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
         if attempt.is_resolved() || app_server_version.is_none() {
             return Ok(attempt.output_with_running_version(
                 &self.socket_path,

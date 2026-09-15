@@ -7,12 +7,12 @@ use tempfile::TempDir;
 
 use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
 
+use super::LaunchIdentity;
 use super::PidBackend;
 use super::PidCommandKind;
 use super::PidFileState;
 use super::PidLogTail;
 use super::PidRecord;
-use super::LaunchIdentity;
 #[cfg(unix)]
 use super::read_process_start_time;
 use super::read_stderr_log_tail;
@@ -68,9 +68,12 @@ async fn running_launch_identity_returns_the_active_record_identity() {
         None
     );
 
-    tokio::fs::write(&pid_file, serde_json::to_vec(&record).expect("serialize pid record"))
-        .await
-        .expect("write pid record");
+    tokio::fs::write(
+        &pid_file,
+        serde_json::to_vec(&record).expect("serialize pid record"),
+    )
+    .await
+    .expect("write pid record");
 
     assert_eq!(
         backend
@@ -93,9 +96,12 @@ async fn running_launch_identity_cleans_stale_record_without_returning_identity(
             version: Some("0.154.0-rick.6".to_string()),
         }),
     };
-    tokio::fs::write(&pid_file, serde_json::to_vec(&record).expect("serialize stale pid record"))
-        .await
-        .expect("write stale pid record");
+    tokio::fs::write(
+        &pid_file,
+        serde_json::to_vec(&record).expect("serialize stale pid record"),
+    )
+    .await
+    .expect("write stale pid record");
     let backend = PidBackend::new(
         temp_dir.path().join("codex"),
         pid_file.clone(),
