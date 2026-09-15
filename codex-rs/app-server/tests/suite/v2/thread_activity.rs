@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::write_models_cache;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ThreadActivityContinueResponse;
@@ -256,6 +257,7 @@ async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> R
         /*pause_before_exit*/ true,
         ThreadHistoryMode::Legacy,
         false,
+        /*multi_agent_v2*/ false,
     )
     .await
 }
@@ -267,6 +269,18 @@ async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested
         /*pause_before_exit*/ false,
         ThreadHistoryMode::Paginated,
         true,
+        /*multi_agent_v2*/ false,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn thread_activity_cold_resume_reconciles_v2_direct_and_nested_workers() -> Result<()> {
+    run_cold_resume_case(
+        /*pause_before_exit*/ true,
+        ThreadHistoryMode::Paginated,
+        false,
+        /*multi_agent_v2*/ true,
     )
     .await
 }
@@ -363,20 +377,42 @@ async fn run_cold_resume_case(
     pause_before_exit: bool,
     history_mode: ThreadHistoryMode,
     continue_before_exit: bool,
+    multi_agent_v2: bool,
 ) -> Result<()> {
     const PARENT_PROMPT: &str = "spawn a direct worker and keep the team unfinished";
     const CHILD_PROMPT: &str = "spawn a nested worker and keep the team unfinished";
     const GRANDCHILD_PROMPT: &str = "hold this nested worker for recovery";
     const PARENT_SPAWN_CALL_ID: &str = "cold-team-parent-spawn";
     const CHILD_SPAWN_CALL_ID: &str = "cold-team-child-spawn";
-    let parent_spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-        "model": "gpt-5.4",
-    }))?;
-    let child_spawn_args = serde_json::to_string(&json!({
-        "message": GRANDCHILD_PROMPT,
-        "model": "gpt-5.4",
-    }))?;
+    let parent_spawn_args = if multi_agent_v2 {
+        serde_json::to_string(&json!({
+            "message": CHILD_PROMPT,
+            "task_name": "direct_worker",
+            "fork_turns": "none",
+        }))?
+    } else {
+        serde_json::to_string(&json!({
+            "message": CHILD_PROMPT,
+            "model": "gpt-5.4",
+        }))?
+    };
+    let child_spawn_args = if multi_agent_v2 {
+        serde_json::to_string(&json!({
+            "message": GRANDCHILD_PROMPT,
+            "task_name": "nested_worker",
+            "fork_turns": "none",
+        }))?
+    } else {
+        serde_json::to_string(&json!({
+            "message": GRANDCHILD_PROMPT,
+            "model": "gpt-5.4",
+        }))?
+    };
+    let spawn_namespace = if multi_agent_v2 {
+        "collaboration"
+    } else {
+        "multi_agent_v1"
+    };
     let (release_a, gate_a) = oneshot::channel();
     let (release_b, gate_b) = oneshot::channel();
     let (release_c, gate_c) = oneshot::channel();
@@ -387,7 +423,7 @@ async fn run_cold_resume_case(
                 responses::ev_response_created("cold-parent-spawn"),
                 responses::ev_function_call_with_namespace(
                     PARENT_SPAWN_CALL_ID,
-                    "multi_agent_v1",
+                    spawn_namespace,
                     "spawn_agent",
                     &parent_spawn_args,
                 ),
@@ -400,7 +436,7 @@ async fn run_cold_resume_case(
                 responses::ev_response_created("cold-child-spawn"),
                 responses::ev_function_call_with_namespace(
                     CHILD_SPAWN_CALL_ID,
-                    "multi_agent_v1",
+                    spawn_namespace,
                     "spawn_agent",
                     &child_spawn_args,
                 ),
@@ -429,10 +465,17 @@ async fn run_cold_resume_case(
     .await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(responses_server.uri())
-        .disable_feature(Feature::MultiAgentV2)
-        .enable_feature(Feature::Collab)
-        .write(codex_home.path())?;
+    let mock_config = MockResponsesConfig::new(responses_server.uri())
+        .enable_feature(Feature::Collab);
+    let mock_config = if multi_agent_v2 {
+        mock_config.enable_feature(Feature::MultiAgentV2)
+    } else {
+        mock_config.disable_feature(Feature::MultiAgentV2)
+    };
+    mock_config.write(codex_home.path())?;
+    if multi_agent_v2 {
+        write_models_cache(codex_home.path())?;
+    }
     let mut old_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(REQUEST_TIMEOUT)
@@ -465,18 +508,32 @@ async fn run_cold_resume_case(
         while grandchild_id.is_none() {
             let completed: ItemCompletedNotification =
                 old_server.read_notification("item/completed").await?;
-            if let ThreadItem::CollabAgentToolCall {
-                id,
-                status: CollabAgentToolCallStatus::Completed,
-                receiver_thread_ids,
-                ..
-            } = completed.item
-            {
-                if id == PARENT_SPAWN_CALL_ID {
-                    child_id = receiver_thread_ids.into_iter().next();
-                } else if id == CHILD_SPAWN_CALL_ID {
-                    grandchild_id = receiver_thread_ids.into_iter().next();
+            match completed.item {
+                ThreadItem::CollabAgentToolCall {
+                    id,
+                    status: CollabAgentToolCallStatus::Completed,
+                    receiver_thread_ids,
+                    ..
+                } if !multi_agent_v2 => {
+                    if id == PARENT_SPAWN_CALL_ID {
+                        child_id = receiver_thread_ids.into_iter().next();
+                    } else if id == CHILD_SPAWN_CALL_ID {
+                        grandchild_id = receiver_thread_ids.into_iter().next();
+                    }
                 }
+                ThreadItem::SubAgentActivity {
+                    id,
+                    kind: codex_app_server_protocol::SubAgentActivityKind::Started,
+                    agent_thread_id,
+                    ..
+                } if multi_agent_v2 => {
+                    if id == PARENT_SPAWN_CALL_ID {
+                        child_id = Some(agent_thread_id.to_string());
+                    } else if id == CHILD_SPAWN_CALL_ID {
+                        grandchild_id = Some(agent_thread_id.to_string());
+                    }
+                }
+                _ => {}
             }
         }
         Ok::<_, anyhow::Error>((

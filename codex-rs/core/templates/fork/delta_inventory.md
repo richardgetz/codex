@@ -77,6 +77,9 @@ release or merge rules.
   resumes only proven model-only `InProgress`/`Interrupted` work, and retains
   the pause with an actionable blocker for unfinished command, approval, MCP,
   collaboration, or other external operations.
+  Unloaded V2 descendants are restored through their loaded immediate parent,
+  preserving parent-owned settings, version, and ownership validation; missing
+  or inconsistent V2 lineage remains blocked for explicit recovery.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.

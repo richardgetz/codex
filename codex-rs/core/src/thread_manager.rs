@@ -1703,6 +1703,51 @@ impl ThreadManager {
         preflight.turn_id.is_none() && preflight.blockers.is_empty()
     }
 
+    async fn persisted_team_multi_agent_version(
+        &self,
+        stored_thread: &StoredThread,
+    ) -> CodexResult<Option<MultiAgentVersion>> {
+        let thread_id = stored_thread.thread_id;
+        let items = match stored_thread.history_mode {
+            ThreadHistoryMode::Legacy => self
+                .state
+                .thread_store
+                .load_history(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await
+                .map_err(|error| match error {
+                    ThreadStoreError::ThreadNotFound { thread_id } => {
+                        CodexErr::ThreadNotFound(thread_id)
+                    }
+                    ThreadStoreError::InvalidRequest { message }
+                        if message.starts_with("no rollout found for thread id ") =>
+                    {
+                        CodexErr::ThreadNotFound(thread_id)
+                    }
+                    error => CodexErr::Fatal(format!(
+                        "failed to load persisted Team history for thread {thread_id}: {error}"
+                    )),
+                })?
+                .items,
+            ThreadHistoryMode::Paginated => self
+                .state
+                .load_latest_model_context(LoadThreadHistoryParams {
+                    thread_id,
+                    include_archived: true,
+                })
+                .await?
+                .items,
+        };
+        Ok(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: thread_id,
+            history: Arc::new(items),
+            rollout_path: stored_thread.rollout_path.clone(),
+        })
+        .get_multi_agent_version())
+    }
+
     /// Reconcile open persisted Team descendants under a paused root.
     ///
     /// Existing sessions are retained, terminal edges are ignored, and unloaded open workers are
@@ -1713,7 +1758,7 @@ impl ThreadManager {
         &self,
         root_thread_id: ThreadId,
     ) -> CodexResult<Vec<ThreadId>> {
-        let root = self.get_thread(root_thread_id).await?;
+        self.get_thread(root_thread_id).await?;
         let plan = self.team_activity_recovery_plan(root_thread_id).await?;
         if !plan.blockers.is_empty() {
             return Err(CodexErr::InvalidRequest(format!(
@@ -1721,8 +1766,6 @@ impl ThreadManager {
                 plan.blockers.join(", ")
             )));
         }
-        let config = root.session.get_config().await.as_ref().clone();
-        let agent_control = root.session.services.agent_control.clone();
         let mut restored = Vec::new();
         let descendant_ids = self
             .state
@@ -1753,9 +1796,49 @@ impl ThreadManager {
             if self.get_thread(child_thread_id).await.is_ok() {
                 continue;
             }
-            agent_control
-                .resume_agent_from_rollout(config.clone(), child_thread_id, stored_thread.source)
+            let persisted_multi_agent_version = self
+                .persisted_team_multi_agent_version(&stored_thread)
                 .await?;
+            let multi_agent_version = match persisted_multi_agent_version {
+                Some(version) => version,
+                None => {
+                    let parent_thread_id = stored_thread.parent_thread_id.ok_or_else(|| {
+                        CodexErr::InvalidRequest(format!(
+                            "cannot restore Team child {child_thread_id}: persisted parent is missing"
+                        ))
+                    })?;
+                    let parent = self.get_thread(parent_thread_id).await.map_err(|_| {
+                        CodexErr::InvalidRequest(format!(
+                            "cannot restore Team child {child_thread_id}: parent {parent_thread_id} is not loaded"
+                        ))
+                    })?;
+                    match parent.multi_agent_version() {
+                        Some(MultiAgentVersion::V1) | None => MultiAgentVersion::V1,
+                        Some(MultiAgentVersion::V2) => {
+                            return Err(CodexErr::InvalidRequest(format!(
+                                "cannot restore Team child {child_thread_id}: persisted multi-agent version is missing"
+                            )));
+                        }
+                        Some(MultiAgentVersion::Disabled) => {
+                            return Err(CodexErr::InvalidRequest(format!(
+                                "cannot restore Team child {child_thread_id}: parent multi-agent delegation is disabled"
+                            )));
+                        }
+                    }
+                }
+            };
+            match multi_agent_version {
+                MultiAgentVersion::V2 => {
+                    self.ensure_multi_agent_v2_child_loaded(child_thread_id)
+                        .await?
+                }
+                MultiAgentVersion::V1 => self.ensure_v1_agent_loaded(child_thread_id).await?,
+                MultiAgentVersion::Disabled => {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "cannot restore Team child {child_thread_id}: multi-agent delegation is disabled"
+                    )));
+                }
+            }
             restored.push(child_thread_id);
         }
         for (thread_id, turn_id) in plan.recoverable_turns {
