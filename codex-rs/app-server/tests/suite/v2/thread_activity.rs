@@ -95,6 +95,40 @@ async fn thread_activity_pause_continue_is_root_scoped_and_wake_only() -> Result
 }
 
 #[tokio::test]
+async fn thread_activity_continue_without_marker_keeps_healthy_tree_running() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(REQUEST_TIMEOUT)
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+
+    let continue_request = app
+        .send_raw_request(
+            "thread/activity/continue",
+            Some(json!({"threadId": thread.id.clone()})),
+        )
+        .await?;
+    let _: ThreadActivityContinueResponse =
+        timeout(REQUEST_TIMEOUT, app.read_response(continue_request)).await??;
+
+    let read_request = app
+        .send_raw_request(
+            "thread/activity/read",
+            Some(json!({"threadId": thread.id.clone()})),
+        )
+        .await?;
+    let activity: ThreadActivityReadResponse =
+        timeout(REQUEST_TIMEOUT, app.read_response(read_request)).await??;
+    assert!(activity
+        .activities
+        .iter()
+        .all(|entry| entry.pause_state == ThreadPauseState::Running));
+    app.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut first = TestAppServer::builder()
@@ -184,6 +218,16 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
 
 #[tokio::test]
 async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> Result<()> {
+    run_cold_resume_case(/*pause_before_exit*/ true).await
+}
+
+#[tokio::test]
+async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested_workers(
+) -> Result<()> {
+    run_cold_resume_case(/*pause_before_exit*/ false).await
+}
+
+async fn run_cold_resume_case(pause_before_exit: bool) -> Result<()> {
     const PARENT_PROMPT: &str = "spawn a direct worker and keep the team unfinished";
     const CHILD_PROMPT: &str = "spawn a nested worker and keep the team unfinished";
     const GRANDCHILD_PROMPT: &str = "hold this nested worker for recovery";
@@ -310,37 +354,40 @@ async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> R
     }
     responses_server.wait_for_request_count(5).await;
 
-    let pause_request = old_server
-        .send_raw_request(
-            "thread/activity/pause",
-            Some(json!({"threadId": parent.id.clone()})),
-        )
-        .await?;
-    let _: ThreadActivityPauseResponse =
-        timeout(REQUEST_TIMEOUT, old_server.read_response(pause_request)).await??;
-    let read_request = old_server
-        .send_raw_request(
-            "thread/activity/read",
-            Some(json!({"threadId": parent.id.clone()})),
-        )
-        .await?;
-    let paused: ThreadActivityReadResponse =
-        timeout(REQUEST_TIMEOUT, old_server.read_response(read_request)).await??;
-    assert!(paused.activities.len() >= 3);
-    assert!(paused.activities.iter().all(|entry| {
-        expected_threads.contains(&entry.thread_id.to_string())
-            && matches!(
-                entry.pause_state,
-                ThreadPauseState::Pausing | ThreadPauseState::Paused
+    if pause_before_exit {
+        let pause_request = old_server
+            .send_raw_request(
+                "thread/activity/pause",
+                Some(json!({"threadId": parent.id.clone()})),
             )
-    }));
-    assert!(paused
-        .activities
-        .iter()
-        .any(|entry| entry.pause_state == ThreadPauseState::Pausing));
+            .await?;
+        let _: ThreadActivityPauseResponse =
+            timeout(REQUEST_TIMEOUT, old_server.read_response(pause_request)).await??;
+        let read_request = old_server
+            .send_raw_request(
+                "thread/activity/read",
+                Some(json!({"threadId": parent.id.clone()})),
+            )
+            .await?;
+        let paused: ThreadActivityReadResponse =
+            timeout(REQUEST_TIMEOUT, old_server.read_response(read_request)).await??;
+        assert!(paused.activities.len() >= 3);
+        assert!(paused.activities.iter().all(|entry| {
+            expected_threads.contains(&entry.thread_id.to_string())
+                && matches!(
+                    entry.pause_state,
+                    ThreadPauseState::Pausing | ThreadPauseState::Paused
+                )
+        }));
+        assert!(paused
+            .activities
+            .iter()
+            .any(|entry| entry.pause_state == ThreadPauseState::Pausing));
+    }
 
-    // Teardown while the three model streams remain unfinished. The durable marker and graph are
-    // already committed, so cold startup must re-arm the root without replaying these requests.
+    // Teardown while the three model streams remain unfinished. With an explicit pause, the
+    // durable marker and graph are already committed; without one, the graph is the recovery
+    // authority and `/continue` must establish the marker before admitting retained work.
     drop(old_server);
     drop((release_a, release_b, release_c));
 
@@ -356,6 +403,20 @@ async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> R
         .await?;
     let _: ThreadResumeResponse = timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
     assert_eq!(responses_server.requests().await.len(), 5);
+    if !pause_before_exit {
+        let read_request = resumed
+            .send_raw_request(
+                "thread/activity/read",
+                Some(json!({"threadId": parent.id.clone()})),
+            )
+            .await?;
+        let activity: ThreadActivityReadResponse =
+            timeout(REQUEST_TIMEOUT, resumed.read_response(read_request)).await??;
+        assert!(activity
+            .activities
+            .iter()
+            .all(|entry| entry.pause_state != ThreadPauseState::Paused));
+    }
 
     let continue_request = resumed
         .send_raw_request(
