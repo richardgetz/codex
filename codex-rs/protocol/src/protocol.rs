@@ -736,9 +736,21 @@ pub enum Op {
     /// In-flight side-effectful operations finish at their normal cooperative boundary.
     PauseActivity,
 
+    /// Pause a manually controlled agent tree and acknowledge after Core applies the gate.
+    /// Durable pause recovery uses the acknowledgement before allowing `/continue` to claim it.
+    PauseActivityWithAck {
+        reply: oneshot::Sender<()>,
+    },
+
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
     /// This never creates a synthetic model turn by itself.
     ContinueActivity,
+
+    /// Resume a manually paused agent tree and acknowledge after Core applies the gate change.
+    /// This is used by durable pause recovery so a queued operation cannot clear its marker.
+    ContinueActivityWithAck {
+        reply: oneshot::Sender<()>,
+    },
 
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
@@ -1192,7 +1204,9 @@ impl Op {
             Self::Interrupt => "interrupt",
             Self::ContinueUsage => "continue_usage",
             Self::PauseActivity => "pause_activity",
+            Self::PauseActivityWithAck { .. } => "pause_activity_with_ack",
             Self::ContinueActivity => "continue_activity",
+            Self::ContinueActivityWithAck { .. } => "continue_activity_with_ack",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",

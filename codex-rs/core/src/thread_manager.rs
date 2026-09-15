@@ -1064,6 +1064,49 @@ impl ThreadManager {
         Ok(subtree_thread_ids)
     }
 
+    /// List the selected root and descendants whose persisted spawn edges are still open.
+    ///
+    /// Live descendants are merged because ephemeral or newly spawned workers may not have a
+    /// durable edge yet. Callers that use this list for recovery must treat a missing returned
+    /// thread as a persistence failure; closed edges are intentionally absent from the result.
+    pub async fn list_open_agent_subtree_thread_ids(
+        &self,
+        thread_id: ThreadId,
+    ) -> CodexResult<Vec<ThreadId>> {
+        let Some(agent_graph_store) = self.state.agent_graph_store() else {
+            return Err(CodexErr::Fatal(
+                "failed to load open thread-spawn descendants: agent graph store unavailable"
+                    .to_string(),
+            ));
+        };
+        let mut subtree_thread_ids = vec![thread_id];
+        let mut seen_thread_ids = HashSet::from([thread_id]);
+        let persisted_descendants = agent_graph_store
+            .list_thread_spawn_descendants(
+                thread_id,
+                Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
+            )
+            .await
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to load open thread-spawn descendants: {err}"))
+            })?;
+        for descendant_id in persisted_descendants {
+            if seen_thread_ids.insert(descendant_id) {
+                subtree_thread_ids.push(descendant_id);
+            }
+        }
+        for descendant_id in self
+            .agent_control()
+            .list_live_agent_subtree_thread_ids(thread_id)
+            .await?
+        {
+            if seen_thread_ids.insert(descendant_id) {
+                subtree_thread_ids.push(descendant_id);
+            }
+        }
+        Ok(subtree_thread_ids)
+    }
+
     /// Reconstructs complete billing usage for a thread and every reachable agent source.
     ///
     /// The latest model-context checkpoint is deliberately not used here. Each physical rollout
@@ -1466,6 +1509,52 @@ impl ThreadManager {
         agent_control
             .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
             .await
+    }
+
+    /// Reconcile open persisted Team descendants under a paused root.
+    ///
+    /// Existing sessions are retained, terminal edges are ignored, and unloaded open workers are
+    /// restored through the same AgentControl rollout path used by explicit agent resume. The
+    /// caller must keep the root paused until this method and its subsequent ContinueActivity
+    /// acknowledgement complete.
+    pub async fn restore_paused_team(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> CodexResult<Vec<ThreadId>> {
+        let root = self.get_thread(root_thread_id).await?;
+        let Some(agent_graph_store) = self.state.agent_graph_store() else {
+            return Err(CodexErr::Fatal(
+                "cannot restore paused Team descendants: agent graph store unavailable"
+                    .to_string(),
+            ));
+        };
+        let descendant_ids = agent_graph_store
+            .list_thread_spawn_descendants(
+                root_thread_id,
+                Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load paused Team descendants: {err}")))?;
+        let config = root.session.get_config().await.as_ref().clone();
+        let agent_control = root.session.services.agent_control.clone();
+        let mut restored = Vec::new();
+        for child_thread_id in descendant_ids {
+            if self.get_thread(child_thread_id).await.is_ok() {
+                continue;
+            }
+            let stored_thread = self
+                .read_stored_thread(ReadThreadParams {
+                    thread_id: child_thread_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await?;
+            agent_control
+                .resume_agent_from_rollout(config.clone(), child_thread_id, stored_thread.source)
+                .await?;
+            restored.push(child_thread_id);
+        }
+        Ok(restored)
     }
 
     pub async fn resume_thread_with_history(
