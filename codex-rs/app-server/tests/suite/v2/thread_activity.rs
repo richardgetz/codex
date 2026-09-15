@@ -256,6 +256,91 @@ async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested
     run_cold_resume_case(/*pause_before_exit*/ false, ThreadHistoryMode::Paginated, true).await
 }
 
+#[tokio::test]
+async fn thread_activity_cold_resume_without_marker_reconciles_root_only_model_once() -> Result<()>
+{
+    let (release_pending_turn, pending_turn_gate) = oneshot::channel();
+    let (responses_server, _completions) = start_streaming_sse_server(vec![
+        gated_response(
+            "root-only-pending",
+            "root-only work remains pending",
+            pending_turn_gate,
+        ),
+        completed_response("root-only-recovered"),
+    ])
+    .await;
+
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(responses_server.uri()).write(codex_home.path())?;
+    let mut old_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(REQUEST_TIMEOUT)
+        .await?;
+    let thread = old_server
+        .start_thread(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?
+        .thread;
+    let turn_request = old_server
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "keep this root-only turn unfinished".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(REQUEST_TIMEOUT, old_server.read_response(turn_request)).await??;
+    responses_server.wait_for_request_count(1).await;
+
+    // Teardown while the root model stream is still unfinished. No pause marker is written.
+    drop(old_server);
+    drop(release_pending_turn);
+
+    let mut resumed = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(REQUEST_TIMEOUT)
+        .await?;
+    let resume_request = resumed
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadResumeResponse =
+        timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
+    assert_eq!(responses_server.requests().await.len(), 1);
+
+    let continue_request = resumed
+        .send_raw_request(
+            "thread/activity/continue",
+            Some(json!({"threadId": thread.id.clone()})),
+        )
+        .await?;
+    let _: ThreadActivityContinueResponse =
+        timeout(REQUEST_TIMEOUT, resumed.read_response(continue_request)).await??;
+    responses_server.wait_for_request_count(2).await;
+    assert_eq!(responses_server.requests().await.len(), 2);
+
+    let repeat_continue_request = resumed
+        .send_raw_request(
+            "thread/activity/continue",
+            Some(json!({"threadId": thread.id.clone()})),
+        )
+        .await?;
+    let _: ThreadActivityContinueResponse =
+        timeout(REQUEST_TIMEOUT, resumed.read_response(repeat_continue_request)).await??;
+    assert_eq!(responses_server.requests().await.len(), 2);
+
+    resumed.shutdown_gracefully().await?;
+    responses_server.shutdown().await;
+    Ok(())
+}
+
 async fn run_cold_resume_case(
     pause_before_exit: bool,
     history_mode: ThreadHistoryMode,
