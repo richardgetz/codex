@@ -55,6 +55,7 @@ mod task_estimate_storage;
 mod task_estimates;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod thread_activity;
 mod thread_control;
 mod thread_inbound_messages;
 mod thread_section_order;
@@ -80,6 +81,8 @@ pub use recovery::sqlite_error_detail_is_corruption;
 pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use task_estimates::TaskEstimateStore;
+pub use thread_activity::ThreadActivityPause;
+pub use thread_activity::ThreadActivityPauseState;
 pub use threads::ThreadFilterOptions;
 
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:

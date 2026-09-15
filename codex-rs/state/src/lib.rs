@@ -91,6 +91,8 @@ pub use runtime::GoalAccountingOutcome;
 pub use runtime::GoalStore;
 pub use runtime::GoalUpdate;
 pub use runtime::TaskEstimateStore;
+pub use runtime::ThreadActivityPause;
+pub use runtime::ThreadActivityPauseState;
 pub type ThreadGoalAccountingMode = GoalAccountingMode;
 pub type ThreadGoalAccountingOutcome = GoalAccountingOutcome;
 pub type ThreadGoalUpdate = GoalUpdate;
