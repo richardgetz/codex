@@ -551,8 +551,13 @@ Clients can read a live tree snapshot with `thread/activity/read` and subscribe
 to the ephemeral `thread/activity/updated` notification. Each state carries
 `activity` (`idle`, `working`, or `waiting`), `pauseState` (`running`,
 `pausing`, or `paused`), an optional wait reason, and the count of admitted
-in-flight operations. Activity state is process-local and is not restored from
-rollout history after a cold resume.
+in-flight operations. A successful app-server pause also persists the root pause
+intent and acknowledges only after the process-local gate is active. A cold
+`thread/resume` restores that intent before any retained work can be admitted;
+`/continue` explicitly reconciles open persisted descendants and releases the
+tree. A failed or interrupted recovery leaves the intent paused with an
+actionable error; already-launched external commands remain neither suspended
+nor replayed.
 
 In the native TUI, this event stream drives two aligned rows for the selected
 Lead tree: `Lead: idle|working|waiting · Team: N working[, M waiting]`, then

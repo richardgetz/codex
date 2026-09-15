@@ -64,6 +64,26 @@ release or merge rules.
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
   the mutable launcher and misreporting Inbound readiness.
+- Team activity pause intent is durable in the state database (migration
+  `0061_rick_thread_activity_pauses.sql`). A successful app-server
+  `thread/activity/pause` records a generation, waits for Core to apply the
+  process-local Lead-tree gate, then marks the generation ready for continue;
+  cold root resume restores that gate before retained work is admitted, while
+  explicit `thread/activity/continue` reconciles open persisted descendants and
+  keeps the marker until Core acknowledges the release.
+  Interrupted recovery remains paused and
+  reports blockers; terminal work and already-launched external commands are
+  never replayed.
+- Team activity pause intent is durable in the state database (migration
+  `0061_rick_thread_activity_pauses.sql`). A successful app-server
+  `thread/activity/pause` records a generation, waits for Core to apply the
+  process-local Lead-tree gate, then marks the generation ready for continue;
+  cold root resume restores that gate before retained work is admitted, while
+  explicit `thread/activity/continue` reconciles open persisted descendants and
+  keeps the marker until Core acknowledges the release.
+  Interrupted recovery remains paused and
+  reports blockers; terminal work and already-launched external commands are
+  never replayed.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
@@ -328,9 +348,10 @@ release or merge rules.
     `thread/activity/updated` notification with structured activity, pause
     state, wait reason, and in-flight operation count. Continue releases the
     retained scheduler and nudges an existing usage wait without a synthetic
-    model turn. Activity state is process-local and is not restored after a
-    cold resume; completed, cancelled, and manually stopped work is never
-    revived. The MCP `tools/call` runner forwards activity updates as
+    model turn. A successful pause intent survives cold root resume and is
+    re-applied before retained work is admitted; explicit continue reconciles
+    open persisted descendants and is required to release it. Completed, cancelled, and manually
+    stopped work is never revived. The MCP `tools/call` runner forwards activity updates as
     notifications while retaining its existing turn completion semantics.
   - The native TUI renders the selected tree as two aligned rows: `Lead:
     idle|working|waiting · Team: N working[, M waiting]`, followed by
@@ -1015,10 +1036,15 @@ release or merge rules.
   newly loaded descendants, gate future model/tool starts and automatic Lead or
   usage wakes, preserve retained work without synthetic turns, and report
   running/pausing/paused separately from idle/working/waiting activity. Confirm
-  already-launched external commands are neither suspended nor replayed and
-  process-local activity is reconstructed through `thread/activity/read` after
-  startup/resume, root selection, and reconnect rather than cold-resume
-  persistence; verify bounded `thread/read` hydration attempts admit a
+  `/pause` waits for the Core gate acknowledgement before exposing a ready
+  marker, while `/continue` rejects a still-applying pause; already-launched
+  external commands are neither suspended nor replayed and successful pause
+  intent survives cold root resume, remains paused through interrupted/failed
+  continue, and clears only after an acknowledged explicit continue. Verify
+  missing state DB fails clearly rather than claiming durable pause. Verify
+  process-local activity is reconstructed through
+  `thread/activity/read` after startup/resume, root selection, and reconnect;
+  verify bounded `thread/read` hydration attempts admit a
   resumed Worker activity edge only after validating its selected-root parent
   chain and loaded ThreadSpawn status, and failed lookup tracking stays capped,
   clears on metadata, and retains a bounded terminal guard until fresh-turn or
