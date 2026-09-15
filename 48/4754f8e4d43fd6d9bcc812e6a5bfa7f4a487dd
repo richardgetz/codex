@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-15/codex-identity-team-stable#484754f8e4"
+  change_type: "fix"
+  scope: "daemon identity and Team pause/recovery"
+  summary: "Consolidate Codex daemon launch identity and Team pause/recovery safety fixes into stable."
+  decision: "Merge PR #147 as the combined stable candidate after reviewed source integration, focused tests, scoped fixes, formatter, and hosted checks."
+  constraints:
+    - "Preserve process-local daemon identity semantics and reject stale launcher/version records."
+    - "Gate Team pause/continue recovery, prevent external-operation replay, and restore V2 descendants through parent-owned validation."
+    - "Keep identity, Team, dependency, inventory, and intent history scoped and documented."
+    - "Do not alter sandbox environment handling or perform release/tag/live activation."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-daemon"
+    - "codex-rs/cli/src/remote_control_cmd.rs"
+    - "codex-rs/app-server/src/handoff_coordinator"
+    - "codex-rs/core/src/thread_manager.rs"
+    - "codex-rs/core/src/agent/control/activity.rs"
+    - "codex-rs/app-server/tests/suite/v2/thread_activity.rs"
+    - "codex-rs/Cargo.lock"
+    - "MODULE.bazel.lock"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5.6"
