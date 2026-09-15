@@ -77,16 +77,6 @@ release or merge rules.
   resumes only proven model-only `InProgress`/`Interrupted` work, and retains
   the pause with an actionable blocker for unfinished command, approval, MCP,
   collaboration, or other external operations.
-- Team activity pause intent is durable in the state database (migration
-  `0061_rick_thread_activity_pauses.sql`). A successful app-server
-  `thread/activity/pause` records a generation, waits for Core to apply the
-  process-local Lead-tree gate, then marks the generation ready for continue;
-  cold root resume restores that gate before retained work is admitted, while
-  explicit `thread/activity/continue` reconciles open persisted descendants and
-  keeps the marker until Core acknowledges the release.
-  Interrupted recovery remains paused and
-  reports blockers; terminal work and already-launched external commands are
-  never replayed.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
