@@ -75,7 +75,8 @@ RETURNING generation, state
         .bind(root_thread_id.to_string())
         .fetch_optional(self.pool.as_ref())
         .await?;
-        row.map(|row| pause_from_row(&row, root_thread_id)).transpose()
+        row.map(|row| pause_from_row(&row, root_thread_id))
+            .transpose()
     }
 
     pub async fn complete_thread_activity_pause(
@@ -153,7 +154,8 @@ RETURNING generation, state
         .bind(root_thread_id.to_string())
         .fetch_optional(self.pool.as_ref())
         .await?;
-        row.map(|row| pause_from_row(&row, root_thread_id)).transpose()
+        row.map(|row| pause_from_row(&row, root_thread_id))
+            .transpose()
     }
 }
 
@@ -176,25 +178,31 @@ mod tests {
         )
         .await
         .expect("initialize runtime");
-        let root = ThreadId::from_string("00000000-0000-0000-0000-000000000011")
-            .expect("root id");
+        let root = ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("root id");
 
         let first = runtime.pause_thread_activity(root).await.expect("pause");
         assert_eq!(first.state, ThreadActivityPauseState::Pausing);
-        assert!(runtime
-            .begin_thread_activity_resume(root)
-            .await
-            .expect("continue while pausing")
-            .is_none());
-        assert!(runtime
-            .complete_thread_activity_pause(root, first.generation)
-            .await
-            .expect("apply pause"));
+        assert!(
+            runtime
+                .begin_thread_activity_resume(root)
+                .await
+                .expect("continue while pausing")
+                .is_none()
+        );
+        assert!(
+            runtime
+                .complete_thread_activity_pause(root, first.generation)
+                .await
+                .expect("apply pause")
+        );
         let paused = runtime
             .get_thread_activity_pause(root)
             .await
             .expect("read paused marker");
-        assert_eq!(paused.map(|marker| marker.state), Some(ThreadActivityPauseState::Paused));
+        assert_eq!(
+            paused.map(|marker| marker.state),
+            Some(ThreadActivityPauseState::Paused)
+        );
         let claimed = runtime
             .begin_thread_activity_resume(root)
             .await
@@ -202,10 +210,12 @@ mod tests {
             .expect("marker");
         assert_eq!(claimed.generation, first.generation);
         assert_eq!(claimed.state, ThreadActivityPauseState::Resuming);
-        assert!(runtime
-            .retain_thread_activity_pause(root, first.generation)
-            .await
-            .expect("retain pause"));
+        assert!(
+            runtime
+                .retain_thread_activity_pause(root, first.generation)
+                .await
+                .expect("retain pause")
+        );
 
         let retry = runtime
             .begin_thread_activity_resume(root)
@@ -213,14 +223,18 @@ mod tests {
             .expect("retry resume")
             .expect("marker");
         assert_eq!(retry, claimed);
-        assert!(runtime
-            .complete_thread_activity_resume(root, retry.generation)
-            .await
-            .expect("complete resume"));
-        assert!(runtime
-            .get_thread_activity_pause(root)
-            .await
-            .expect("read marker")
-            .is_none());
+        assert!(
+            runtime
+                .complete_thread_activity_resume(root, retry.generation)
+                .await
+                .expect("complete resume")
+        );
+        assert!(
+            runtime
+                .get_thread_activity_pause(root)
+                .await
+                .expect("read marker")
+                .is_none()
+        );
     }
 }

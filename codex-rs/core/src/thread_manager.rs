@@ -26,12 +26,12 @@ use crate::thread_manager_handoff::ThreadManagerRecoveryGuard;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
-use codex_app_server_protocol::ThreadHistoryBuilder;
-use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::DynamicToolCallStatus;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
@@ -90,8 +90,8 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
-use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::NotSubmittedReason;
+use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::state_db::StateDbHandle;
@@ -1109,7 +1109,9 @@ impl ThreadManager {
             )
             .await
             .map_err(|err| {
-                CodexErr::Fatal(format!("failed to load open thread-spawn descendants: {err}"))
+                CodexErr::Fatal(format!(
+                    "failed to load open thread-spawn descendants: {err}"
+                ))
             })?;
         for descendant_id in persisted_descendants {
             if seen_thread_ids.insert(descendant_id) {
@@ -1601,7 +1603,11 @@ impl ThreadManager {
                 .await
             {
                 Ok(stored_thread) => stored_thread,
-                Err(error) if self.missing_team_history_is_live_idle(thread_id, &error).await => {
+                Err(error)
+                    if self
+                        .missing_team_history_is_live_idle(thread_id, &error)
+                        .await =>
+                {
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -1656,7 +1662,11 @@ impl ThreadManager {
                     .await
                 {
                     Ok(context) => context.items,
-                    Err(error) if self.missing_team_history_is_live_idle(thread_id, &error).await => {
+                    Err(error)
+                        if self
+                            .missing_team_history_is_live_idle(thread_id, &error)
+                            .await =>
+                    {
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -1728,7 +1738,9 @@ impl ThreadManager {
                 Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
             )
             .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to load paused Team descendants: {err}")))?;
+            .map_err(|err| {
+                CodexErr::Fatal(format!("failed to load paused Team descendants: {err}"))
+            })?;
         for child_thread_id in descendant_ids {
             let stored_thread = self
                 .state
@@ -3100,7 +3112,10 @@ fn append_recovery_turn(
     turn: &Turn,
     raw_items: Option<&[RolloutItem]>,
 ) {
-    if !matches!(turn.status, TurnStatus::Interrupted | TurnStatus::InProgress) {
+    if !matches!(
+        turn.status,
+        TurnStatus::Interrupted | TurnStatus::InProgress
+    ) {
         return;
     }
     let mut blockers = turn
@@ -3150,7 +3165,10 @@ fn persisted_response_item_blocker(items: &[RolloutItem], turn_id: &str) -> Opti
                     status,
                     codex_protocol::models::LocalShellStatus::InProgress
                         | codex_protocol::models::LocalShellStatus::Incomplete
-                ) => return Some("unfinished local shell call"),
+                ) =>
+            {
+                return Some("unfinished local shell call");
+            }
             ResponseItem::WebSearchCall { id, status, .. } => {
                 if matches!(status.as_deref(), Some("completed" | "failed")) {
                     if let Some(id) = id {

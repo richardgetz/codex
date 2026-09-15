@@ -6,8 +6,8 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ThreadActivityContinueResponse;
 use codex_app_server_protocol::ThreadActivityPauseResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
-use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
@@ -21,10 +21,10 @@ use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_state::StateRuntime;
+use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
-use codex_utils_absolute_path::test_support::PathExt;
 use serde_json::json;
 use std::collections::HashSet;
 use tempfile::TempDir;
@@ -121,10 +121,12 @@ async fn thread_activity_continue_without_marker_keeps_healthy_tree_running() ->
         .await?;
     let activity: ThreadActivityReadResponse =
         timeout(REQUEST_TIMEOUT, app.read_response(read_request)).await??;
-    assert!(activity
-        .activities
-        .iter()
-        .all(|entry| entry.pause_state == ThreadPauseState::Running));
+    assert!(
+        activity
+            .activities
+            .iter()
+            .all(|entry| entry.pause_state == ThreadPauseState::Running)
+    );
     app.shutdown_gracefully().await?;
     Ok(())
 }
@@ -175,7 +177,8 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
             Some(serde_json::json!({"threadId": thread.id.clone()})),
         )
         .await?;
-    let _: ThreadActivityPauseResponse = timeout(REQUEST_TIMEOUT, first.read_response(pause_request)).await??;
+    let _: ThreadActivityPauseResponse =
+        timeout(REQUEST_TIMEOUT, first.read_response(pause_request)).await??;
     timeout(REQUEST_TIMEOUT, first.shutdown_gracefully()).await??;
     drop(first);
 
@@ -189,7 +192,8 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
             ..Default::default()
         })
         .await?;
-    let _: ThreadResumeResponse = timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
+    let _: ThreadResumeResponse =
+        timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
 
     let read_request = resumed
         .send_raw_request(
@@ -197,7 +201,8 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
             Some(serde_json::json!({"threadId": thread.id.clone()})),
         )
         .await?;
-    let paused: ThreadActivityReadResponse = timeout(REQUEST_TIMEOUT, resumed.read_response(read_request)).await??;
+    let paused: ThreadActivityReadResponse =
+        timeout(REQUEST_TIMEOUT, resumed.read_response(read_request)).await??;
     assert!(!paused.activities.is_empty());
     assert!(
         paused
@@ -247,13 +252,23 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
 
 #[tokio::test]
 async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> Result<()> {
-    run_cold_resume_case(/*pause_before_exit*/ true, ThreadHistoryMode::Legacy, false).await
+    run_cold_resume_case(
+        /*pause_before_exit*/ true,
+        ThreadHistoryMode::Legacy,
+        false,
+    )
+    .await
 }
 
 #[tokio::test]
-async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested_workers(
-) -> Result<()> {
-    run_cold_resume_case(/*pause_before_exit*/ false, ThreadHistoryMode::Paginated, true).await
+async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested_workers()
+-> Result<()> {
+    run_cold_resume_case(
+        /*pause_before_exit*/ false,
+        ThreadHistoryMode::Paginated,
+        true,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -332,8 +347,11 @@ async fn thread_activity_cold_resume_without_marker_reconciles_root_only_model_o
             Some(json!({"threadId": thread.id.clone()})),
         )
         .await?;
-    let _: ThreadActivityContinueResponse =
-        timeout(REQUEST_TIMEOUT, resumed.read_response(repeat_continue_request)).await??;
+    let _: ThreadActivityContinueResponse = timeout(
+        REQUEST_TIMEOUT,
+        resumed.read_response(repeat_continue_request),
+    )
+    .await??;
     assert_eq!(responses_server.requests().await.len(), 2);
 
     resumed.shutdown_gracefully().await?;
@@ -389,9 +407,21 @@ async fn run_cold_resume_case(
                 responses::ev_completed("cold-child-spawn"),
             ]),
         }],
-        gated_response("cold-pending-a", "direct or nested work remains pending", gate_a),
-        gated_response("cold-pending-b", "direct or nested work remains pending", gate_b),
-        gated_response("cold-pending-c", "direct or nested work remains pending", gate_c),
+        gated_response(
+            "cold-pending-a",
+            "direct or nested work remains pending",
+            gate_a,
+        ),
+        gated_response(
+            "cold-pending-b",
+            "direct or nested work remains pending",
+            gate_b,
+        ),
+        gated_response(
+            "cold-pending-c",
+            "direct or nested work remains pending",
+            gate_c,
+        ),
         completed_response("cold-recovered-a"),
         completed_response("cold-recovered-b"),
         completed_response("cold-recovered-c"),
@@ -433,7 +463,8 @@ async fn run_cold_resume_case(
         let mut child_id = None;
         let mut grandchild_id = None;
         while grandchild_id.is_none() {
-            let completed: ItemCompletedNotification = old_server.read_notification("item/completed").await?;
+            let completed: ItemCompletedNotification =
+                old_server.read_notification("item/completed").await?;
             if let ThreadItem::CollabAgentToolCall {
                 id,
                 status: CollabAgentToolCallStatus::Completed,
@@ -448,11 +479,15 @@ async fn run_cold_resume_case(
                 }
             }
         }
-        Ok::<_, anyhow::Error>((child_id.expect("direct worker id"), grandchild_id.expect("nested worker id")))
+        Ok::<_, anyhow::Error>((
+            child_id.expect("direct worker id"),
+            grandchild_id.expect("nested worker id"),
+        ))
     })
     .await??;
 
-    let expected_threads = HashSet::from([parent.id.clone(), child_id.clone(), grandchild_id.clone()]);
+    let expected_threads =
+        HashSet::from([parent.id.clone(), child_id.clone(), grandchild_id.clone()]);
     let terminal_thread_id = ThreadId::new();
     let state_db = StateRuntime::init(
         codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
@@ -493,10 +528,12 @@ async fn run_cold_resume_case(
             .await?;
         let active: ThreadActivityReadResponse =
             timeout(REQUEST_TIMEOUT, old_server.read_response(read_request)).await??;
-        assert!(active
-            .activities
-            .iter()
-            .all(|entry| entry.pause_state == ThreadPauseState::Running));
+        assert!(
+            active
+                .activities
+                .iter()
+                .all(|entry| entry.pause_state == ThreadPauseState::Running)
+        );
     }
 
     if pause_before_exit {
@@ -524,10 +561,12 @@ async fn run_cold_resume_case(
                     ThreadPauseState::Pausing | ThreadPauseState::Paused
                 )
         }));
-        assert!(paused
-            .activities
-            .iter()
-            .any(|entry| entry.pause_state == ThreadPauseState::Pausing));
+        assert!(
+            paused
+                .activities
+                .iter()
+                .any(|entry| entry.pause_state == ThreadPauseState::Pausing)
+        );
     }
 
     // Teardown while the three model streams remain unfinished. With an explicit pause, the
@@ -546,7 +585,8 @@ async fn run_cold_resume_case(
             ..Default::default()
         })
         .await?;
-    let _: ThreadResumeResponse = timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
+    let _: ThreadResumeResponse =
+        timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
     assert_eq!(responses_server.requests().await.len(), 5);
     if !pause_before_exit {
         let read_request = resumed
@@ -557,10 +597,12 @@ async fn run_cold_resume_case(
             .await?;
         let activity: ThreadActivityReadResponse =
             timeout(REQUEST_TIMEOUT, resumed.read_response(read_request)).await??;
-        assert!(activity
-            .activities
-            .iter()
-            .all(|entry| entry.pause_state != ThreadPauseState::Paused));
+        assert!(
+            activity
+                .activities
+                .iter()
+                .all(|entry| entry.pause_state != ThreadPauseState::Paused)
+        );
     }
 
     let continue_request = resumed
@@ -581,9 +623,12 @@ async fn run_cold_resume_case(
         assert_eq!(count, 1, "worker {thread_id} should resume exactly once");
     }
     let terminal_thread_id = terminal_thread_id.to_string();
-    assert!(recovered_requests[5..]
-        .iter()
-        .all(|request| request_thread_id(request).as_deref() != Some(terminal_thread_id.as_str())));
+    assert!(
+        recovered_requests[5..]
+            .iter()
+            .all(|request| request_thread_id(request).as_deref()
+                != Some(terminal_thread_id.as_str()))
+    );
 
     let request_count = recovered_requests.len();
     let repeat_continue_request = resumed
@@ -637,5 +682,9 @@ fn completed_response(response_id: &'static str) -> Vec<StreamingSseChunk> {
 fn request_thread_id(request: &[u8]) -> Option<String> {
     serde_json::from_slice::<serde_json::Value>(request)
         .ok()
-        .and_then(|body| body["client_metadata"]["thread_id"].as_str().map(str::to_owned))
+        .and_then(|body| {
+            body["client_metadata"]["thread_id"]
+                .as_str()
+                .map(str::to_owned)
+        })
 }

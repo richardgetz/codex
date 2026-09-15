@@ -1486,7 +1486,9 @@ impl Session {
             // A replacement that observed a pause or continue marker mid-flight must require a
             // fresh explicit /continue. Re-arm it before restoring the gate so startup never
             // runs retained work implicitly.
-            state_db.recover_thread_activity_pause(root_thread_id).await?;
+            state_db
+                .recover_thread_activity_pause(root_thread_id)
+                .await?;
         }
         let durable_activity_pause = if let Some(state_db) = state_db_ctx.as_ref() {
             state_db

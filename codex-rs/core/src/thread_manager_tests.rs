@@ -12,8 +12,8 @@ use crate::session::tests::make_session_and_context;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_extension_api::empty_extension_registry;
 use codex_app_server_protocol::TurnItemsView;
+use codex_extension_api::empty_extension_registry;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_models_manager::manager::RefreshStrategy;
@@ -30,6 +30,7 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -43,7 +44,6 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
-use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -57,11 +57,7 @@ use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
-fn recovery_test_turn(
-    id: &str,
-    status: TurnStatus,
-    items: Vec<ThreadItem>,
-) -> Turn {
+fn recovery_test_turn(id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: id.to_string(),
         items,
@@ -82,11 +78,7 @@ fn team_recovery_uses_only_the_latest_unfinished_turn() {
         recovery_test_turn("interrupted", TurnStatus::Interrupted, Vec::new()),
         recovery_test_turn("completed", TurnStatus::Completed, Vec::new()),
     ];
-    append_latest_recovery(
-        &mut plan,
-        thread_id,
-        &turns,
-    );
+    append_latest_recovery(&mut plan, thread_id, &turns);
 
     assert!(plan.recoverable_turns.is_empty());
     assert!(plan.blockers.is_empty());

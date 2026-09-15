@@ -414,9 +414,7 @@ impl CodexThread {
         let (reply, acknowledged) = oneshot::channel();
         self.submit_with_trace(Op::ContinueActivityWithAck { reply }, None)
             .await?;
-        acknowledged
-            .await
-            .map_err(|_| CodexErr::InternalAgentDied)
+        acknowledged.await.map_err(|_| CodexErr::InternalAgentDied)
     }
 
     /// Serialize a durable Team activity transition across this thread's root tree.
@@ -436,16 +434,11 @@ impl CodexThread {
     ///
     /// Durable pause recovery must not expose a ready marker while a queued pause can still be
     /// overtaken by a concurrent continue request.
-    pub async fn pause_activity_with_ack(
-        &self,
-        trace: Option<W3cTraceContext>,
-    ) -> CodexResult<()> {
+    pub async fn pause_activity_with_ack(&self, trace: Option<W3cTraceContext>) -> CodexResult<()> {
         let (reply, acknowledged) = oneshot::channel();
         self.submit_with_trace(Op::PauseActivityWithAck { reply }, trace)
             .await?;
-        acknowledged
-            .await
-            .map_err(|_| CodexErr::InternalAgentDied)
+        acknowledged.await.map_err(|_| CodexErr::InternalAgentDied)
     }
 
     /// Seal this root agent tree against new user turns and descendant spawns.

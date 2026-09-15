@@ -1206,11 +1206,15 @@ impl TurnRequestProcessor {
                     "failed to persist Team activity pause for {root_thread_id}: {err}"
                 ))
             })?;
-        let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|err| {
-            internal_error(format!(
-                "failed to load Team activity root {root_thread_id} for pause: {err}"
-            ))
-        })?;
+        let root_thread = self
+            .thread_manager
+            .get_thread(root_thread_id)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to load Team activity root {root_thread_id} for pause: {err}"
+                ))
+            })?;
         root_thread
             .pause_activity_with_ack(self.request_trace_context(request_id).await)
             .await
@@ -1432,18 +1436,14 @@ impl TurnRequestProcessor {
             .restore_paused_team(root_thread_id)
             .await
         {
-            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
-                .await;
+            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
             return Err(invalid_request(format!(
                 "cannot continue Team activity for {root_thread_id}: worker recovery failed ({error})"
             )));
         }
-        let blockers = self
-            .unrecoverable_activity_blockers(root_thread_id)
-            .await;
+        let blockers = self.unrecoverable_activity_blockers(root_thread_id).await;
         if !blockers.is_empty() {
-            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
-                .await;
+            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
             return Err(invalid_request(format!(
                 "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
                 blockers.join(", ")
@@ -1451,8 +1451,7 @@ impl TurnRequestProcessor {
         }
         if let Err(error) = root_thread.continue_activity_with_ack().await {
             let _ = root_thread.pause_activity_with_ack(None).await;
-            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation)
-                .await;
+            retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
             return Err(internal_error(format!(
                 "failed to apply Team activity continue for {root_thread_id}: {error}"
             )));
@@ -1517,9 +1516,14 @@ impl TurnRequestProcessor {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 return Ok(true);
             };
-            if thread.activity_snapshot().await.into_iter().any(|activity| {
-                activity.pause_state != codex_protocol::protocol::ThreadPauseState::Running
-            }) {
+            if thread
+                .activity_snapshot()
+                .await
+                .into_iter()
+                .any(|activity| {
+                    activity.pause_state != codex_protocol::protocol::ThreadPauseState::Running
+                })
+            {
                 return Ok(true);
             }
         }

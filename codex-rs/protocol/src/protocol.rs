@@ -738,9 +738,7 @@ pub enum Op {
 
     /// Pause a manually controlled agent tree and acknowledge after Core applies the gate.
     /// Durable pause recovery uses the acknowledgement before allowing `/continue` to claim it.
-    PauseActivityWithAck {
-        reply: oneshot::Sender<()>,
-    },
+    PauseActivityWithAck { reply: oneshot::Sender<()> },
 
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
     /// This never creates a synthetic model turn by itself.
@@ -748,9 +746,7 @@ pub enum Op {
 
     /// Resume a manually paused agent tree and acknowledge after Core applies the gate change.
     /// This is used by durable pause recovery so a queued operation cannot clear its marker.
-    ContinueActivityWithAck {
-        reply: oneshot::Sender<()>,
-    },
+    ContinueActivityWithAck { reply: oneshot::Sender<()> },
 
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
