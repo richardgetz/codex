@@ -308,6 +308,7 @@ fn task_from_api(task: ThreadEtaTask) -> EtaTask {
         original_lower_seconds: task.original_lower_seconds,
         original_upper_seconds: task.original_upper_seconds,
         started_at: task.started_at,
+        terminal_at: task.terminal_at,
         actual_elapsed_seconds: task.actual_elapsed_seconds,
         updated_at: task.updated_at,
         is_stale: task.is_stale,

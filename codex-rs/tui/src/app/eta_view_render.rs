@@ -175,6 +175,17 @@ impl EtaView {
             task.status.label().to_string()
         };
         lines.push(detail_line("Status", &status));
+        let started = task
+            .started_at
+            .map(format_timestamp)
+            .unwrap_or_else(|| "not started".to_string());
+        let ended = match task.terminal_at {
+            Some(timestamp) => format_timestamp(timestamp),
+            None if task.started_at.is_some() => "in progress".to_string(),
+            None => "not started".to_string(),
+        };
+        lines.push(detail_line("Started", &started));
+        lines.push(detail_line("Ended", &ended));
         let current = if self.tab == EtaTab::Active {
             active_remaining_label(task)
         } else {

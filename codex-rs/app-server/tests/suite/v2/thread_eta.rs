@@ -196,6 +196,8 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
     )
     .await?;
     assert_eq!(started.changed_tasks[0].status, ThreadEtaStatus::Active);
+    let started_at = started.changed_tasks[0].started_at;
+    assert!(started_at.is_some());
 
     let completed = update(
         &mut app,
@@ -214,6 +216,11 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
         completed.changed_tasks[0].status,
         ThreadEtaStatus::Completed
     );
+    assert_eq!(completed.changed_tasks[0].started_at, started_at);
+    assert_eq!(
+        completed.changed_tasks[0].terminal_at,
+        Some(completed.generated_at)
+    );
 
     let current = read(&mut app, &thread_id).await?;
     assert!(current.snapshot.active.is_empty());
@@ -231,6 +238,11 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
     assert!(persisted.snapshot.active.is_empty());
     assert_eq!(persisted.snapshot.history.len(), 1);
     assert_terminal_history(&persisted.snapshot.history[0]);
+    assert_eq!(persisted.snapshot.history[0].started_at, started_at);
+    assert_eq!(
+        persisted.snapshot.history[0].terminal_at,
+        completed.changed_tasks[0].terminal_at
+    );
 
     let requests = responses_server
         .received_requests()

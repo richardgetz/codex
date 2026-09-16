@@ -299,6 +299,21 @@ impl ChatWidget {
                     .credits
                     .as_ref()
                     .is_some_and(has_usable_workspace_credits);
+            let usage_window_recovered = is_codex_limit
+                && matches!(source, RateLimitSnapshotSource::AccountUsage)
+                && !workspace_limit_reached
+                && (snapshot.primary.is_some() || snapshot.secondary.is_some())
+                && snapshot
+                    .primary
+                    .as_ref()
+                    .is_none_or(|window| window.used_percent < 100)
+                && snapshot
+                    .secondary
+                    .as_ref()
+                    .is_none_or(|window| window.used_percent < 100);
+            if usage_window_recovered {
+                self.last_team_usage_limit_error = None;
+            }
             if is_codex_limit && has_workspace_credits {
                 match self.rate_limit_switch_prompt {
                     RateLimitSwitchPromptState::Pending => {

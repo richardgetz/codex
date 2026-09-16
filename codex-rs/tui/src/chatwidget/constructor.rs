@@ -177,6 +177,7 @@ impl ChatWidget {
             codex_rate_limit_reached_type: None,
             codex_spend_control_reached: None,
             rate_limit_warnings: RateLimitWarningState::default(),
+            last_team_usage_limit_error: None,
             exhausted_account_rotation_aliases: HashSet::new(),
             backend_banner_state: backend_banners::BackendBannerState::default(),
             automatic_model_switch_state: backend_banners::AutomaticModelSwitchState::default(),

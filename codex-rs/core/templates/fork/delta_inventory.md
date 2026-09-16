@@ -45,6 +45,10 @@ release or merge rules.
   mutations use the Lead policy; a Worker config refresh cannot replace it. A
   first cold API read with no policy row seeds the persisted value from the
   authoritative server configuration before projecting or updating ETA.
+  Each task also persists its explicit `started_at` and terminal `terminal_at`
+  timestamps (with the measured duration), and `/eta` plus model-facing
+  `update_eta` summaries expose both without inferring lifecycle from elapsed or
+  idle time.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -77,6 +81,10 @@ release or merge rules.
   resumes only proven model-only `InProgress`/`Interrupted` work, and retains
   the pause with an actionable blocker for unfinished command, approval, MCP,
   collaboration, or other external operations.
+  Cold `/continue` restores only unloaded descendants that own recoverable
+  model-only turns and the open ancestor chain needed to load them; idle open
+  descendants remain persisted for on-demand followup, including V1 workers
+  without recursive descendant reopening.
   Unloaded V2 descendants are restored through their loaded immediate parent,
   preserving parent-owned settings, version, and ownership validation; missing
   or inconsistent V2 lineage remains blocked for explicit recovery.
@@ -187,6 +195,11 @@ release or merge rules.
     ThreadSpawn Workers' settings snapshots and client notifications. In-flight
     turns keep their captured request tier, while later and newly spawned turns
     use the root selection.
+  - Team Lead usage-limit history coalesces identical rendered errors while
+    preserving distinct reset/account messages; lifecycle handling and later
+    recovery remain unchanged.
+  - Prompt-composer sparkle animation uses background tinting so decorative
+    braille glyphs do not enter terminal selection or clipboard text.
   - `[team.worker].max_concurrent` optionally sets a positive, atomic ceiling
     for active direct Workers per Lead across V1 and V2. Pending starts reserve
     capacity, followups reacquire it, completed or aborted Workers release it,
@@ -351,7 +364,9 @@ release or merge rules.
     treated as a healthy empty recovery plan only when process-local preflight
     proves no unfinished turn or blocker; missing cold checkpoints remain
     actionable errors. The MCP `tools/call` runner forwards activity updates as
-    notifications while retaining its existing turn completion semantics.
+    notifications while retaining its existing turn completion semantics. A failed
+    native TUI `/continue` request is rendered as an in-session error and leaves
+    the session running so the user can retry after recovery.
   - The native TUI renders the selected tree as two aligned rows: `Lead:
     idle|working|waiting · Team: N working[, M waiting]`, followed by
     `Workers: N[/cap] · Subagents: M`. Team counts include all unfinished
@@ -757,7 +772,8 @@ release or merge rules.
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
 - Verify session-scoped ETA tasks retain composite root/task identity keys,
-  explicit terminal history, bounded revisions, dependency-aware unknown
+  explicit terminal history and immutable explicit start/terminal timestamps,
+  bounded revisions, dependency-aware unknown
   aggregates, app-server v2/update_eta wiring, the model batch/output bounds,
   deletion cleanup semantics, and the no-inference boundary across upstream
   refreshes. Verify `/eta` keeps saved ranges visible with an accessible stale
@@ -768,7 +784,8 @@ release or merge rules.
   callbacks, preserve delivered trigger latches for unchanged revisions, and
   rearm undelivered work after resume; pending dependency placeholders and
   grouping parents do not wake owners; owner reminders request from-now
-  remaining estimates and explicit lifecycle/blocker status; and child
+  remaining estimates and explicit lifecycle/blocker status; `/eta` history
+  details show persisted Started and Ended timestamps; and child
   revisions recompute serial/parallel aggregates without double-counting
   grouping parents.
 - Verify the persisted root freshness policy survives cold reads, seeds a
@@ -830,6 +847,7 @@ release or merge rules.
   age-plus-force form.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
   Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
+- Verify cold Team `/continue` loads only recoverable unfinished descendants plus their open ancestors, leaves idle open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a genuinely recoverable child has missing or inconsistent ancestry.
   Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
@@ -1058,7 +1076,11 @@ release or merge rules.
   normal aborted tool response without surfacing an internal `TurnAborted`
   fatal error, including the ready/ready arbitration boundary; verify a
   terminal completion claimed before cancellation is preserved and genuine
-  dispatch join failures still surface.
+  dispatch join failures still surface. Verify a failed native TUI `/continue`
+  request is rendered as an in-session error without terminating the session.
+  Verify cold `/continue` restores only recoverable turns and their persisted
+  ancestor chain, leaves terminal open descendants unloaded for on-demand
+  access, and still blocks missing or inconsistent ancestry for retained work.
 - Verify the TUI sets its waiting header before interrupt-hint updates, and
   leaves an empty server collaboration-mode catalog empty while retaining only
   visible server-provided modes.
@@ -1078,6 +1100,10 @@ release or merge rules.
   parent edges before metadata refresh, same-root refreshes retain a provisional
   edge for a bounded grace window, and later omissions prune stale/unloaded
   edges.
+  Verify Team Lead usage-limit history coalesces identical errors without
+  dropping turn lifecycle handling or distinct reset/account messages.
+  Verify prompt-composer sparkles change only cell backgrounds and never write
+  decorative glyphs into terminal selection or clipboard text.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.

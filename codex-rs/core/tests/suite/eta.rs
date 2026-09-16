@@ -125,24 +125,26 @@ async fn update_eta_tool_is_registered_and_records_explicit_lifecycle() -> Resul
             .is_some_and(|description| description.contains("Completion is explicit"))
     );
 
-    assert_eq!(
-        eta_call_output(&requests, "eta-create")["changed_tasks"],
-        json!([
-            {"task_id": "compile", "status": "pending"}
-        ])
-    );
-    assert_eq!(
-        eta_call_output(&requests, "eta-start")["changed_tasks"],
-        json!([
-            {"task_id": "compile", "status": "active"}
-        ])
-    );
-    assert_eq!(
-        eta_call_output(&requests, "eta-complete")["changed_tasks"],
-        json!([
-            {"task_id": "compile", "status": "completed"}
-        ])
-    );
+    let created = &eta_call_output(&requests, "eta-create")["changed_tasks"][0];
+    assert_eq!(created["task_id"], "compile");
+    assert_eq!(created["status"], "pending");
+    assert!(created["started_at"].is_null());
+    assert!(created["terminal_at"].is_null());
+    let started = &eta_call_output(&requests, "eta-start")["changed_tasks"][0];
+    assert_eq!(started["task_id"], "compile");
+    assert_eq!(started["status"], "active");
+    assert!(started["started_at"].is_i64());
+    assert!(started["terminal_at"].is_null());
+    let completed = &eta_call_output(&requests, "eta-complete")["changed_tasks"][0];
+    assert_eq!(completed["task_id"], "compile");
+    assert_eq!(completed["status"], "completed");
+    let started_at = completed["started_at"]
+        .as_i64()
+        .expect("completion should retain task start timestamp");
+    let terminal_at = completed["terminal_at"]
+        .as_i64()
+        .expect("completion should include task terminal timestamp");
+    assert!(terminal_at >= started_at);
 
     assert_eq!(updates.len(), 3);
     assert_eq!(updates[0].sequence, 1);

@@ -1441,7 +1441,14 @@ impl TurnRequestProcessor {
                 "cannot continue Team activity for {root_thread_id}: worker recovery failed ({error})"
             )));
         }
-        let blockers = self.unrecoverable_activity_blockers(root_thread_id).await;
+        let recoverable_thread_ids = persisted_plan
+            .recoverable_turns
+            .iter()
+            .map(|(thread_id, _)| *thread_id)
+            .collect::<HashSet<_>>();
+        let blockers = self
+            .unrecoverable_activity_blockers(root_thread_id, &recoverable_thread_ids)
+            .await;
         if !blockers.is_empty() {
             retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
             return Err(invalid_request(format!(
@@ -1530,7 +1537,11 @@ impl TurnRequestProcessor {
         Ok(false)
     }
 
-    async fn unrecoverable_activity_blockers(&self, root_thread_id: ThreadId) -> Vec<String> {
+    async fn unrecoverable_activity_blockers(
+        &self,
+        root_thread_id: ThreadId,
+        recoverable_thread_ids: &HashSet<ThreadId>,
+    ) -> Vec<String> {
         let Ok(thread_ids) = self
             .thread_manager
             .list_open_agent_subtree_thread_ids(root_thread_id)
@@ -1542,7 +1553,12 @@ impl TurnRequestProcessor {
         for thread_id in thread_ids {
             let thread = match self.thread_manager.get_thread(thread_id).await {
                 Ok(thread) => thread,
-                Err(_) => return vec!["persistence".to_string()],
+                Err(_) if recoverable_thread_ids.contains(&thread_id) => {
+                    return vec!["persistence".to_string()];
+                }
+                // Idle or terminal open descendants are intentionally left unloaded during
+                // recovery. Their persisted edges remain available for explicit on-demand loads.
+                Err(_) => continue,
             };
             for blocker in thread.handoff_preflight().await.blockers {
                 if activity_blocker_is_unrecoverable(&blocker) {

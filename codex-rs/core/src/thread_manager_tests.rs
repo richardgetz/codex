@@ -167,6 +167,86 @@ fn team_recovery_allows_latest_model_only_interruption_once() {
     assert!(plan.blockers.is_empty());
 }
 
+#[test]
+fn team_recovery_load_order_selects_recoverable_ancestors_only() {
+    let root_thread_id = ThreadId::new();
+    let ancestor_thread_id = ThreadId::new();
+    let recoverable_thread_id = ThreadId::new();
+    let idle_sibling_thread_id = ThreadId::new();
+    let open_descendant_ids = HashSet::from([
+        ancestor_thread_id,
+        recoverable_thread_id,
+        idle_sibling_thread_id,
+    ]);
+    let parent_by_thread = HashMap::from([
+        (ancestor_thread_id, root_thread_id),
+        (recoverable_thread_id, ancestor_thread_id),
+        (idle_sibling_thread_id, root_thread_id),
+    ]);
+
+    let load_order = team_recovery_load_order(
+        root_thread_id,
+        &[recoverable_thread_id],
+        &open_descendant_ids,
+        &parent_by_thread,
+        &HashSet::from([root_thread_id]),
+    )
+    .expect("recoverable worker should have a load order");
+
+    assert_eq!(load_order, vec![ancestor_thread_id, recoverable_thread_id]);
+}
+
+#[test]
+fn team_recovery_load_order_fails_closed_on_missing_ancestry() {
+    let root_thread_id = ThreadId::new();
+    let recoverable_thread_id = ThreadId::new();
+    let missing_parent_thread_id = ThreadId::new();
+    let open_descendant_ids = HashSet::from([recoverable_thread_id]);
+    let parent_by_thread = HashMap::from([(recoverable_thread_id, missing_parent_thread_id)]);
+
+    let error = team_recovery_load_order(
+        root_thread_id,
+        &[recoverable_thread_id],
+        &open_descendant_ids,
+        &parent_by_thread,
+        &HashSet::from([root_thread_id]),
+    )
+    .expect_err("missing ancestry must block recovery");
+
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(message)
+            if message.contains("is not an open descendant")
+    ));
+}
+
+#[test]
+fn team_recovery_load_order_fails_closed_on_ancestry_cycle() {
+    let root_thread_id = ThreadId::new();
+    let first_thread_id = ThreadId::new();
+    let second_thread_id = ThreadId::new();
+    let open_descendant_ids = HashSet::from([first_thread_id, second_thread_id]);
+    let parent_by_thread = HashMap::from([
+        (first_thread_id, second_thread_id),
+        (second_thread_id, first_thread_id),
+    ]);
+
+    let error = team_recovery_load_order(
+        root_thread_id,
+        &[first_thread_id],
+        &open_descendant_ids,
+        &parent_by_thread,
+        &HashSet::from([root_thread_id]),
+    )
+    .expect_err("ancestry cycles must block recovery");
+
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::InvalidRequest(message)
+            if message.contains("ancestry contains a cycle")
+    ));
+}
+
 /// Controls without a custom allocation policy still produce distinct thread identifiers.
 #[test]
 fn thread_id_generator_defaults_to_standard_ids() {

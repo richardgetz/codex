@@ -969,6 +969,7 @@ impl App {
                 let is_user_turn = matches!(&op, AppCommand::UserTurn { .. });
                 let is_continuous_policy_update =
                     matches!(&op, AppCommand::SetScratchpadContinuousPolicy { .. });
+                let is_activity_continue = matches!(&op, AppCommand::ContinueUsage);
                 if is_user_turn {
                     let screen_size = tui.terminal.last_known_screen_size;
                     self.handle_draw_pre_render(tui, screen_size)?;
@@ -991,6 +992,14 @@ impl App {
                         );
                     } else if self.recover_transport_error(&err) {
                         return Ok(AppRunControl::Continue);
+                    } else if is_activity_continue {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to continue activity: {err:#}"
+                        ));
+                        tracing::warn!(
+                            error = ?err,
+                            "failed to continue activity through app server"
+                        );
                     } else {
                         let unsupported_permissions = err
                             .downcast_ref::<UnsupportedLegacyPermissionProfile>()
