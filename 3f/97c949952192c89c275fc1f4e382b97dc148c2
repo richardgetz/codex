@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-16/tui-continue-nonfatal"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Keep native TUI sessions alive when /continue activity recovery is rejected."
+  decision: "Handle ContinueUsage app-server errors as in-session history errors after transport recovery, returning control to the event loop so users can retry."
+  constraints:
+    - "Preserve app-server Team pause/continue recovery semantics and actionable server errors."
+    - "Do not alter usage warning or composer copy behavior."
+    - "Keep the fix scoped to native TUI event dispatch and focused regression coverage."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/app/event_dispatch.rs"
+    - "codex-rs/tui/src/app/tests/turn_submission.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5.6"
