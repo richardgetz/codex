@@ -40,16 +40,14 @@ fn sparkle_keeps_the_existing_composer_layout() {
                 composer.cursor_pos(area),
                 Duration::ZERO,
                 /*foreground*/ (230, 216, 255),
+                user_message_bg_rgb((36, 27, 53)),
                 &mut buffer,
             );
-            // Snapshot the composer layout without freezing the star distribution.
+            // Snapshot composer symbols; sparkle animation paints backgrounds only.
             let rows = (area.y..area.bottom())
                 .map(|y| {
                     (area.x..area.right())
-                        .map(|x| {
-                            let symbol = buffer[(x, y)].symbol();
-                            if DOTS.contains(&symbol) { " " } else { symbol }
-                        })
+                        .map(|x| buffer[(x, y)].symbol())
                         .collect::<String>()
                 })
                 .collect::<Vec<_>>()
@@ -60,7 +58,7 @@ fn sparkle_keeps_the_existing_composer_layout() {
 }
 
 #[test]
-fn sparkle_preserves_content_cursor_and_background() {
+fn sparkle_preserves_content_and_cursor_with_space_symbols() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 3,
     );
@@ -71,8 +69,9 @@ fn sparkle_preserves_content_cursor_and_background() {
     before[(4, 0)].set_symbol("✦");
     before[(5, 0)].set_style(Style::default().reversed());
     before[(6, 0)].set_diff_option(CellDiffOption::Skip);
+    before[(7, 0)].set_bg(rgb_color((12, 23, 34)));
     let protected = [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)];
-    let mut seen = std::collections::HashMap::new();
+    let mut seen = std::collections::HashSet::new();
     for tick in 0..80 {
         let mut after = before.clone();
         render_stars(
@@ -80,18 +79,21 @@ fn sparkle_preserves_content_cursor_and_background() {
             Some((3, 0)),
             FRAME_TICK * tick,
             /*foreground*/ (230, 216, 255),
+            /*base_background*/ (36, 27, 53),
             &mut after,
         );
         assert_eq!(
             protected.map(|p| after[p].clone()),
             protected.map(|p| before[p].clone())
         );
+        assert_eq!(after[(7, 0)], before[(7, 0)]);
         for (index, cell) in after.content.iter().enumerate() {
-            assert_eq!(cell.bg, before.content[index].bg);
-            if DOTS.contains(&cell.symbol())
-                && let Some(previous) = seen.insert(index, cell.symbol().to_string())
-            {
-                assert_eq!(cell.symbol(), previous);
+            if before.content[index].symbol() == " " {
+                // Decorative frames may change the background, but never the copied symbol.
+                assert_eq!(cell.symbol(), " ");
+                if cell.bg != before.content[index].bg {
+                    seen.insert(index);
+                }
             }
         }
     }
@@ -124,14 +126,15 @@ fn stars_fade_using_the_custom_terminal_foreground() {
                     /*cursor*/ None,
                     FRAME_TICK * tick,
                     colors.fg,
+                    /*base_background*/ colors.bg,
                     &mut buffer,
                 );
                 for (index, cell) in buffer.content.iter().enumerate() {
-                    if DOTS.contains(&cell.symbol()) {
-                        let Color::Rgb(r, g, b) = cell.fg else {
+                    if cell.bg != rgb_color(colors.bg) {
+                        let Color::Rgb(r, g, b) = cell.bg else {
                             panic!("expected RGB fade")
                         };
-                        shades.entry(index).or_default().insert(cell.fg);
+                        shades.entry(index).or_default().insert(cell.bg);
                         for (actual, fg, bg) in [
                             (r, colors.fg.0, colors.bg.0),
                             (g, colors.fg.1, colors.bg.1),
@@ -139,7 +142,7 @@ fn stars_fade_using_the_custom_terminal_foreground() {
                         ] {
                             assert!((fg.min(bg)..=fg.max(bg)).contains(&actual));
                         }
-                        assert_eq!(cell.bg, rgb_color(colors.bg));
+                        assert_eq!(cell.symbol(), " ");
                     }
                 }
             }
@@ -262,12 +265,15 @@ fn sparkle_renders_with_effort_bursts_and_pauses_for_popups() {
                     .map(ratatui::buffer::Cell::symbol)
                     .collect::<String>();
                 assert!(text.contains("hello 界"));
-                assert!(
-                    after
-                        .content
-                        .iter()
-                        .any(|cell| DOTS.contains(&cell.symbol()))
-                );
+                let mut sparkle = before.clone();
+                composer.render_sparkle(area, composer.cursor_pos(area), &mut sparkle);
+                assert!(sparkle
+                    .content
+                    .iter()
+                    .zip(before.content.iter())
+                    .any(|(after, before)| {
+                        after.symbol() == " " && after.bg != before.bg
+                    }));
                 assert_eq!(
                     composer.cursor_pos(area).map(|p| after[p].clone()),
                     composer.cursor_pos(area).map(|p| before[p].clone())
@@ -301,14 +307,12 @@ fn sparkle_waits_for_terminal_colors() {
             bg: (36, 27, 53),
         },
         || {
-            buffer.set_style(area, Style::default().bg(rgb_color((36, 27, 53))));
+            let base_background = user_message_bg_rgb((36, 27, 53));
+            buffer.set_style(area, Style::default().bg(rgb_color(base_background)));
             composer.render_sparkle(area, /*cursor*/ None, &mut buffer);
-            assert!(
-                buffer
-                    .content
-                    .iter()
-                    .any(|cell| DOTS.contains(&cell.symbol()))
-            );
+            assert!(buffer.content.iter().any(|cell| {
+                cell.symbol() == " " && cell.bg != rgb_color(base_background)
+            }));
         },
     );
 }
