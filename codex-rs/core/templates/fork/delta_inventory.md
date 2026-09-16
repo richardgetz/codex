@@ -49,6 +49,10 @@ release or merge rules.
   timestamps (with the measured duration), and `/eta` plus model-facing
   `update_eta` summaries expose both without inferring lifecycle from elapsed or
   idle time.
+  ETA timestamp rendering keeps persisted Unix seconds unchanged, defaults to
+  UTC, and supports opt-in system-local display or a validated IANA timezone
+  override through `[eta].use_local_timezone` and `[eta].timezone`; the named
+  override takes precedence and handles daylight-saving transitions.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -787,7 +791,10 @@ release or merge rules.
   remaining estimates and explicit lifecycle/blocker status; `/eta` history
   details show persisted Started and Ended timestamps; and child
   revisions recompute serial/parallel aggregates without double-counting
-  grouping parents.
+  grouping parents. Verify ETA timestamp display defaults to UTC, keeps all
+  persisted and wire timestamps as Unix seconds, supports deterministic
+  system-local rendering and named IANA overrides with DST handling, and
+  rejects invalid `[eta].timezone` values clearly.
 - Verify the persisted root freshness policy survives cold reads, seeds a
   missing cold-root row from the current server configuration, remains
   authoritative for Worker mutations, and is updated/rearmed only by the root

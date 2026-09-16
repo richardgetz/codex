@@ -135,6 +135,8 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
         freshness_minimum_minutes: Some(
             sc.original_config_do_not_use.eta.freshness_minimum_minutes,
         ),
+        use_local_timezone: Some(sc.original_config_do_not_use.eta.use_local_timezone),
+        timezone: sc.original_config_do_not_use.eta.timezone.clone(),
     });
 }
 

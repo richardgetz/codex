@@ -187,6 +187,12 @@ pub struct EtaConfigToml {
     /// Defaults to 15 minutes.
     #[schemars(range(min = 1, max = 52560000))]
     pub freshness_minimum_minutes: Option<u64>,
+    /// Display ETA timestamps in the system's local time zone instead of UTC.
+    /// Defaults to `false`.
+    pub use_local_timezone: Option<bool>,
+    /// Optional IANA time zone name used for ETA timestamps. This takes precedence over
+    /// `use_local_timezone` when set.
+    pub timezone: Option<String>,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.

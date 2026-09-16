@@ -1,6 +1,7 @@
 use super::EtaTab;
 use super::EtaTaskStatus;
 use super::EtaView;
+use crate::app::eta_time::EtaTimestampFormatter;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::renderable::Renderable;
 use crate::style::accent_style;
@@ -57,7 +58,11 @@ impl EtaView {
             overall.remaining_lower_seconds,
             overall.remaining_upper_seconds,
         );
-        let finish = format_finish_range(self.snapshot.generated_at, overall);
+        let finish = format_finish_range(
+            self.snapshot.generated_at,
+            overall,
+            &self.timestamp_formatter,
+        );
         let mut lines = vec![Line::from(vec![
             "Finish: ".dim(),
             finish.into(),
@@ -177,10 +182,10 @@ impl EtaView {
         lines.push(detail_line("Status", &status));
         let started = task
             .started_at
-            .map(format_timestamp)
+            .map(|timestamp| self.timestamp_formatter.format(timestamp))
             .unwrap_or_else(|| "not started".to_string());
         let ended = match task.terminal_at {
-            Some(timestamp) => format_timestamp(timestamp),
+            Some(timestamp) => self.timestamp_formatter.format(timestamp),
             None if task.started_at.is_some() => "in progress".to_string(),
             None => "not started".to_string(),
         };
@@ -203,7 +208,10 @@ impl EtaView {
                 .map(format_seconds)
                 .unwrap_or_else(|| "unknown".to_string()),
         ));
-        lines.push(detail_line("Updated", &format_timestamp(task.updated_at)));
+        lines.push(detail_line(
+            "Updated",
+            &self.timestamp_formatter.format(task.updated_at),
+        ));
         if task.is_stale {
             lines.push(
                 "⚠ May be outdated; the saved estimate remains visible until its owner updates it."
@@ -234,13 +242,13 @@ impl EtaView {
                     .map(|reason| {
                         format!(
                             "{estimate} · {} · by {actor} · {reason}",
-                            format_timestamp(revision.updated_at)
+                            self.timestamp_formatter.format(revision.updated_at)
                         )
                     })
                     .unwrap_or_else(|| {
                         format!(
                             "{estimate} · {} · by {actor}",
-                            format_timestamp(revision.updated_at)
+                            self.timestamp_formatter.format(revision.updated_at)
                         )
                     });
                 lines.push(detail_line(&format!("  #{}", index + 1), &value));
@@ -289,7 +297,7 @@ impl Renderable for EtaView {
                 self.snapshot.active.len(),
                 self.snapshot.history.len(),
                 if self.snapshot.generated_at > 0 {
-                    format_timestamp(self.snapshot.generated_at)
+                    self.timestamp_formatter.format(self.snapshot.generated_at)
                 } else {
                     "unknown".to_string()
                 },
@@ -419,13 +427,11 @@ fn format_seconds(seconds: i64) -> String {
     format!("{hours}h {}m", minutes % 60)
 }
 
-fn format_timestamp(seconds: i64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
-        .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| format!("unix {seconds}"))
-}
-
-fn format_finish_range(generated_at: i64, overall: &super::EtaOverall) -> String {
+fn format_finish_range(
+    generated_at: i64,
+    overall: &super::EtaOverall,
+    timestamp_formatter: &EtaTimestampFormatter,
+) -> String {
     if overall.unknown_reason.is_some() {
         return "unknown".to_string();
     }
@@ -442,29 +448,29 @@ fn format_finish_range(generated_at: i64, overall: &super::EtaOverall) -> String
                 return "unknown".to_string();
             };
             if lower == 0 && upper == 0 {
-                format!("≤{}", format_timestamp(upper_finish))
+                format!("≤{}", timestamp_formatter.format(upper_finish))
             } else if lower_finish == upper_finish {
-                format_timestamp(lower_finish)
+                timestamp_formatter.format(lower_finish)
             } else {
                 format!(
                     "{}–{}",
-                    format_timestamp(lower_finish),
-                    format_timestamp(upper_finish)
+                    timestamp_formatter.format(lower_finish),
+                    timestamp_formatter.format(upper_finish)
                 )
             }
         }
         (Some(lower), None) if generated_at > 0 && lower >= 0 => generated_at
             .checked_add(lower)
-            .map(|finish| format!("≥{}", format_timestamp(finish)))
+            .map(|finish| format!("≥{}", timestamp_formatter.format(finish)))
             .unwrap_or_else(|| "unknown".to_string()),
         (None, Some(upper)) if generated_at > 0 && upper >= 0 => generated_at
             .checked_add(upper)
-            .map(|finish| format!("≤{}", format_timestamp(finish)))
+            .map(|finish| format!("≤{}", timestamp_formatter.format(finish)))
             .unwrap_or_else(|| "unknown".to_string()),
         _ => overall
             .finish_at
             .filter(|finish| *finish > 0)
-            .map(|finish| format!("≤{}", format_timestamp(finish)))
+            .map(|finish| format!("≤{}", timestamp_formatter.format(finish)))
             .unwrap_or_else(|| "unknown".to_string()),
     }
 }

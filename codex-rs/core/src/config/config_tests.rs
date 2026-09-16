@@ -1799,6 +1799,8 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
         default_config.eta,
         EtaConfig {
             freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
+            use_local_timezone: false,
+            timezone: None,
         }
     );
 
@@ -1808,6 +1810,21 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
         configured.eta,
         EtaConfig {
             freshness_minimum_minutes: 45,
+            use_local_timezone: false,
+            timezone: None,
+        }
+    );
+
+    let configured = load_current_time_reminder_config(
+        "\n[eta]\nuse_local_timezone = true\ntimezone = \"America/New_York\"\n",
+    )
+    .await?;
+    assert_eq!(
+        configured.eta,
+        EtaConfig {
+            freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
+            use_local_timezone: true,
+            timezone: Some("America/New_York".to_string()),
         }
     );
 
@@ -1820,6 +1837,15 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
             .to_string()
             .contains("eta.freshness_minimum_minutes must be between 1")
     );
+
+    for timezone in ["", "Mars/Olympus"] {
+        let error =
+            load_current_time_reminder_config(&format!("\n[eta]\ntimezone = \"{timezone}\"\n"))
+                .await
+                .expect_err("invalid ETA timezone should be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("eta.timezone"));
+    }
     Ok(())
 }
 
