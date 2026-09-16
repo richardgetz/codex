@@ -1,0 +1,23 @@
+intent:
+  id: "intent/2026-09-16/team-selective-paused-recovery#2033a94a73"
+  change_type: "fix"
+  scope: "team pause recovery"
+  summary: "Resume only recoverable paused Team workers and required open ancestors."
+  decision: "Use the persisted recovery plan to select unfinished model-only turns, load only their open ancestor chains, keep idle open descendants unloaded, and retain exact-turn recovery and blocker gates."
+  constraints:
+    - "Preserve V1 and V2 parent-owned loading and exact persisted turn IDs."
+    - "Leave idle or terminal open edges persisted for explicit on-demand followup."
+    - "Fail closed when a genuinely recoverable child has missing or inconsistent ancestry."
+    - "Do not replay external operations or change sandbox environment handling."
+    - "Validate integrated Rust sources through the main build owner."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/thread_manager.rs"
+    - "codex-rs/core/src/agent/control/spawn.rs"
+    - "codex-rs/core/src/thread_manager_tests.rs"
+    - "codex-rs/app-server/src/request_processors/turn_processor.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6-astra"
