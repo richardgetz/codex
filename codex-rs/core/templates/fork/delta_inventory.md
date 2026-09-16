@@ -354,7 +354,9 @@ release or merge rules.
     treated as a healthy empty recovery plan only when process-local preflight
     proves no unfinished turn or blocker; missing cold checkpoints remain
     actionable errors. The MCP `tools/call` runner forwards activity updates as
-    notifications while retaining its existing turn completion semantics.
+    notifications while retaining its existing turn completion semantics. A failed
+    native TUI `/continue` request is rendered as an in-session error and leaves
+    the session running so the user can retry after recovery.
   - The native TUI renders the selected tree as two aligned rows: `Lead:
     idle|working|waiting · Team: N working[, M waiting]`, followed by
     `Workers: N[/cap] · Subagents: M`. Team counts include all unfinished
@@ -1061,7 +1063,8 @@ release or merge rules.
   normal aborted tool response without surfacing an internal `TurnAborted`
   fatal error, including the ready/ready arbitration boundary; verify a
   terminal completion claimed before cancellation is preserved and genuine
-  dispatch join failures still surface.
+  dispatch join failures still surface. Verify a failed native TUI `/continue`
+  request is rendered as an in-session error without terminating the session.
 - Verify the TUI sets its waiting header before interrupt-hint updates, and
   leaves an empty server collaboration-mode catalog empty while retaining only
   visible server-provided modes.
