@@ -4,6 +4,7 @@
 //! and final-message separator handling.
 
 use super::*;
+use codex_app_server_protocol::TeamMode;
 
 const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
@@ -130,6 +131,9 @@ impl ChatWidget {
         from_replay: bool,
     ) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        if last_agent_message.is_some() {
+            self.last_team_usage_limit_error = None;
+        }
         let sanitized_last_agent_message = last_agent_message.as_deref().map(|message| {
             parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown
         });
@@ -385,10 +389,16 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.finish_error_turn(Some(message));
+    }
+
+    fn finish_error_turn(&mut self, message: Option<String>) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
         self.flush_answer_stream_with_separator();
         self.finalize_turn();
-        self.add_to_history(history_cell::new_error_event(message));
+        if let Some(message) = message {
+            self.add_to_history(history_cell::new_error_event(message));
+        }
         self.set_ambient_pet_notification(
             crate::pets::PetNotificationKind::Failed,
             /*body*/ None,
@@ -468,7 +478,29 @@ impl ChatWidget {
                 (message, Some(AddCreditsNudgeCreditType::UsageLimit)),
             Some(RateLimitReachedType::RateLimitReached) | None => (message, None),
         };
-        self.on_error(message);
+        let is_team_lead = self.team_settings.as_ref().is_some_and(|team| {
+            team.mode == TeamMode::LeadWorker && team.role == Some(TeamRole::Lead)
+        });
+        let usage_limit_error_key = is_team_lead.then(|| TeamUsageLimitErrorKey {
+            message: message.clone(),
+            rate_limit_reached_type,
+        });
+        let duplicate_team_usage_limit_error = usage_limit_error
+            && is_team_lead
+            && self.last_team_usage_limit_error == usage_limit_error_key;
+        if !duplicate_team_usage_limit_error
+            && usage_limit_error
+            && let Some(key) = usage_limit_error_key
+        {
+            self.last_team_usage_limit_error = Some(key);
+        }
+        if duplicate_team_usage_limit_error {
+            // Keep each failed turn's lifecycle and queued-input handling intact while avoiding
+            // one identical history cell per Worker completion wake.
+            self.finish_error_turn(/*message*/ None);
+        } else {
+            self.on_error(message);
+        }
         if !self.has_applicable_backend_banner()
             && let Some(credit_type) = nudge
         {

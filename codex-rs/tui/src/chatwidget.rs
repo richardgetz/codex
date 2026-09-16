@@ -564,6 +564,12 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) session_telemetry: SessionTelemetry,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TeamUsageLimitErrorKey {
+    message: String,
+    rate_limit_reached_type: Option<RateLimitReachedType>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ExternalEditorState {
     #[default]
@@ -657,6 +663,9 @@ pub(crate) struct ChatWidget {
     codex_rate_limit_reached_type: Option<RateLimitReachedType>,
     codex_spend_control_reached: Option<bool>,
     rate_limit_warnings: RateLimitWarningState,
+    /// Last usage-limit error rendered for a Team Lead. Worker completion wakes can start
+    /// several identical failed Lead turns while the provider limit remains exhausted.
+    last_team_usage_limit_error: Option<TeamUsageLimitErrorKey>,
     exhausted_account_rotation_aliases: HashSet<String>,
     backend_banner_state: backend_banners::BackendBannerState,
     automatic_model_switch_state: backend_banners::AutomaticModelSwitchState,
@@ -2213,6 +2222,7 @@ impl ChatWidget {
         if account_changed {
             self.account_generation = self.account_generation.wrapping_add(1);
             self.rate_limit_snapshots_by_limit_id.clear();
+            self.last_team_usage_limit_error = None;
             self.codex_rate_limit_reached_type = None;
             self.rate_limit_warnings = RateLimitWarningState::default();
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::default();

@@ -226,6 +226,14 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_team_settings(&mut self, team_settings: Option<ThreadTeamSettings>) {
+        let previous_assignment = self
+            .team_settings
+            .as_ref()
+            .map(|team| (team.mode, team.role));
+        let next_assignment = team_settings.as_ref().map(|team| (team.mode, team.role));
+        if previous_assignment != next_assignment {
+            self.last_team_usage_limit_error = None;
+        }
         self.team_settings = team_settings;
         self.request_redraw();
     }

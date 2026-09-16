@@ -187,6 +187,9 @@ release or merge rules.
     ThreadSpawn Workers' settings snapshots and client notifications. In-flight
     turns keep their captured request tier, while later and newly spawned turns
     use the root selection.
+  - Team Lead usage-limit history coalesces identical rendered errors while
+    preserving distinct reset/account messages; lifecycle handling and later
+    recovery remain unchanged.
   - `[team.worker].max_concurrent` optionally sets a positive, atomic ceiling
     for active direct Workers per Lead across V1 and V2. Pending starts reserve
     capacity, followups reacquire it, completed or aborted Workers release it,
@@ -1078,6 +1081,8 @@ release or merge rules.
   parent edges before metadata refresh, same-root refreshes retain a provisional
   edge for a bounded grace window, and later omissions prune stale/unloaded
   edges.
+  Verify Team Lead usage-limit history coalesces identical errors without
+  dropping turn lifecycle handling or distinct reset/account messages.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.
