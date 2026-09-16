@@ -1,0 +1,25 @@
+intent:
+  id: tui-session-recovery-eta-lifecycle
+change_type: fix
+scope: tui, app-server, core, state
+summary: Recover usage-paused Team sessions safely, reduce duplicate usage noise, keep decorative composer effects out of copied text, and expose explicit ETA lifecycle timestamps.
+decision: Preserve durable pause semantics while restoring only recoverable descendants and their validated ancestors; keep continue transport failures non-fatal in the TUI; deduplicate exact Team Lead usage warnings; render composer sparkles through cell backgrounds; record immutable started_at and terminal_at lifecycle times separately from updated_at.
+constraints:
+  - Do not replay terminal work or external operations.
+  - Keep legacy persisted paused sessions recoverable after upgrade.
+  - Preserve lifecycle processing when duplicate warning history cells are suppressed.
+  - Keep prompt selection and clipboard text free of decorative braille glyphs.
+  - Do not infer ETA start or completion from elapsed time or updates.
+intent_priority: user_requested
+code_locations:
+  - codex-rs/core/src/thread_manager.rs
+  - codex-rs/app-server/src/request_processors/turn_processor.rs
+  - codex-rs/tui/src/chatwidget/turn_runtime.rs
+  - codex-rs/tui/src/chatwidget/rate_limits.rs
+  - codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs
+  - codex-rs/core/src/tools/handlers/eta.rs
+  - codex-rs/tui/src/app/eta_view_render.rs
+requested_by: Rick
+recorded_by: Codex (GPT-6)
+agent: Codex
+model: GPT-6
