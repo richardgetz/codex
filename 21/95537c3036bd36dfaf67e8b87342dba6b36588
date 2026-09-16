@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-16/tui-composer-copy-safe-sparkle"
+  change_type: "fix"
+  scope: "codex-rs/tui"
+  summary: "Keep composer sparkle animation out of terminal copies."
+  decision: "Paint decorative sparkle frames into blank-cell backgrounds while retaining space symbols; terminal selection copies cell symbols and has no app callback."
+  constraints:
+    - "Preserve composer text, cursor, selection protection, popup behavior, and sparkle eligibility."
+    - "Preserve effort burst backgrounds and existing tui.whimsy/tui.animations defaults."
+    - "Do not change usage or activity continue behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/tui/src/bottom_pane/chat_composer/sparkle.rs"
+    - "codex-rs/tui/src/bottom_pane/chat_composer/sparkle_tests.rs"
+    - "codex-rs/tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__sparkle__tests__astra_current_composer.snap"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-5"
