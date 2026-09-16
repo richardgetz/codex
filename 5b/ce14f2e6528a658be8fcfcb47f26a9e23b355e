@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-16/eta-display-timezones#5bce14f2e6"
+  change_type: "feat"
+  scope: "ETA timestamp presentation"
+  summary: "Keep persisted ETA Unix seconds while allowing UTC, system-local, or named IANA display zones."
+  decision: "Add validated ETA timezone config and share a jiff-backed formatter across the TUI ETA view."
+  constraints:
+    - "Preserve wire and persisted integer timestamps."
+    - "Keep UTC as the default display."
+    - "Named timezone overrides take precedence over local mode and handle DST."
+    - "Reject invalid timezone names during config resolution."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/config/src/config_toml.rs"
+    - "codex-rs/core/src/config/mod.rs"
+    - "codex-rs/core/src/session/config_lock.rs"
+    - "codex-rs/tui/src/app/eta_time.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "unknown"
