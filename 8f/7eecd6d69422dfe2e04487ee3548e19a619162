@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-16/team-usage-warning-dedupe#8f7eecd6d694"
+  change_type: "fix"
+  scope: "tui-team-usage"
+  summary: "Coalesce identical Team Lead usage-limit history errors."
+  decision: "Keep lifecycle and recovery processing for every failure while suppressing only repeated Team Lead history cells with the same rendered message and reached type."
+  constraints:
+    - "Team Lead UsageLimit errors only; default and Worker behavior remain unchanged."
+    - "Distinct reset text, account transitions, and remediation types must remain visible."
+    - "Duplicate suppression must not skip turn cleanup, queued-input handling, recovery refresh, or nudges."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/chatwidget/turn_runtime.rs::on_rate_limit_error"
+    - "codex-rs/tui/src/chatwidget/rate_limits.rs::on_rate_limit_snapshot_from"
+    - "codex-rs/tui/src/chatwidget/tests/rate_limit_recovery_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
