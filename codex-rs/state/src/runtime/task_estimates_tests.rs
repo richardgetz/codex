@@ -152,6 +152,8 @@ async fn task_completion_freezes_harness_elapsed_and_history() {
         .expect("complete task");
     assert_eq!(completion.changed_tasks.len(), 1);
     assert_eq!(completion.changed_tasks[0].actual_elapsed_seconds, Some(40));
+    assert_eq!(completion.changed_tasks[0].started_at, Some(started_at));
+    assert_eq!(completion.changed_tasks[0].terminal_at, Some(completed_at));
     assert_eq!(
         completion.changed_tasks[0].original_range(),
         TaskEstimateRange {
@@ -179,6 +181,7 @@ async fn task_completion_freezes_harness_elapsed_and_history() {
     assert!(snapshot.active.is_empty());
     assert_eq!(snapshot.history.len(), 1);
     assert_eq!(snapshot.history[0].terminal_at, Some(completed_at));
+    assert_eq!(snapshot.history[0].started_at, Some(started_at));
     assert_eq!(snapshot.overall.remaining_upper_seconds, Some(0));
     runtime.close().await;
 }
@@ -283,10 +286,11 @@ async fn repeated_start_does_not_rewrite_original_baseline() {
         reason: Some("initial estimate".to_string()),
         owner_thread_id: None,
     };
-    runtime
+    let first_update = runtime
         .apply_task_estimate_mutations(root, root, &[first_start], now)
         .await
         .expect("start task");
+    assert_eq!(first_update.changed_tasks[0].started_at, Some(now));
     let repeated_start = TaskEstimateMutation {
         action: TaskEstimateAction::Start,
         task_id: Some("task".to_string()),
@@ -311,6 +315,7 @@ async fn repeated_start_does_not_rewrite_original_baseline() {
             upper_seconds: Some(20),
         }
     );
+    assert_eq!(update.changed_tasks[0].started_at, Some(now));
     runtime.close().await;
 }
 
@@ -719,6 +724,7 @@ async fn root_can_assign_persisted_worker_and_reassign_without_resetting_estimat
         .expect("snapshot after reassignment");
     assert_eq!(snapshot.active[0].owner_thread_id, root);
     assert_eq!(snapshot.active[0].updated_at, now);
+    assert_eq!(snapshot.active[0].started_at, Some(now));
     assert_eq!(
         snapshot.active[0].current_range(),
         TaskEstimateRange {

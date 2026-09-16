@@ -45,6 +45,10 @@ release or merge rules.
   mutations use the Lead policy; a Worker config refresh cannot replace it. A
   first cold API read with no policy row seeds the persisted value from the
   authoritative server configuration before projecting or updating ETA.
+  Each task also persists its explicit `started_at` and terminal `terminal_at`
+  timestamps (with the measured duration), and `/eta` plus model-facing
+  `update_eta` summaries expose both without inferring lifecycle from elapsed or
+  idle time.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -768,7 +772,8 @@ release or merge rules.
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
 - Verify session-scoped ETA tasks retain composite root/task identity keys,
-  explicit terminal history, bounded revisions, dependency-aware unknown
+  explicit terminal history and immutable explicit start/terminal timestamps,
+  bounded revisions, dependency-aware unknown
   aggregates, app-server v2/update_eta wiring, the model batch/output bounds,
   deletion cleanup semantics, and the no-inference boundary across upstream
   refreshes. Verify `/eta` keeps saved ranges visible with an accessible stale
@@ -779,7 +784,8 @@ release or merge rules.
   callbacks, preserve delivered trigger latches for unchanged revisions, and
   rearm undelivered work after resume; pending dependency placeholders and
   grouping parents do not wake owners; owner reminders request from-now
-  remaining estimates and explicit lifecycle/blocker status; and child
+  remaining estimates and explicit lifecycle/blocker status; `/eta` history
+  details show persisted Started and Ended timestamps; and child
   revisions recompute serial/parallel aggregates without double-counting
   grouping parents.
 - Verify the persisted root freshness policy survives cold reads, seeds a

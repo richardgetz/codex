@@ -96,6 +96,7 @@ pub(super) struct EtaTask {
     pub(super) original_lower_seconds: Option<i64>,
     pub(super) original_upper_seconds: Option<i64>,
     pub(super) started_at: Option<i64>,
+    pub(super) terminal_at: Option<i64>,
     pub(super) actual_elapsed_seconds: Option<i64>,
     pub(super) updated_at: i64,
     pub(super) is_stale: bool,

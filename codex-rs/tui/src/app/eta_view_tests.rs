@@ -35,6 +35,7 @@ fn task(
         original_lower_seconds: Some(90),
         original_upper_seconds: Some(180),
         started_at: Some(1_700_000_000),
+        terminal_at: None,
         actual_elapsed_seconds: None,
         updated_at: 1_700_000_020,
         is_stale: false,
@@ -85,6 +86,7 @@ fn snapshot() -> EtaSnapshot {
     );
     completed.current_lower_seconds = None;
     completed.current_upper_seconds = None;
+    completed.terminal_at = Some(1_700_000_075);
     completed.actual_elapsed_seconds = Some(75);
     completed.accuracy = EtaAccuracy::Within;
     let mut cancelled = task(
@@ -94,6 +96,7 @@ fn snapshot() -> EtaSnapshot {
         "Optional cleanup",
         EtaTaskStatus::Cancelled,
     );
+    cancelled.terminal_at = Some(1_700_000_012);
     cancelled.actual_elapsed_seconds = Some(12);
     cancelled.accuracy = EtaAccuracy::Late;
     EtaSnapshot {
@@ -155,6 +158,20 @@ fn history_renders_accuracy_and_cancelled_without_accuracy() {
     let mut view = view();
     view.handle_key_event(KeyCode::Right.into());
     insta::assert_snapshot!("eta_history_accuracy", render(&view, 96, 24));
+}
+
+#[test]
+fn expanded_history_renders_lifecycle_timestamps() {
+    let mut view = view();
+    view.handle_key_event(KeyCode::Right.into());
+    view.handle_key_event(KeyCode::Enter.into());
+    let lifecycle_lines = render(&view, 96, 24)
+        .lines()
+        .filter(|line| line.contains("Started:") || line.contains("Ended:"))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("eta_history_lifecycle_timestamps", lifecycle_lines);
 }
 
 #[test]

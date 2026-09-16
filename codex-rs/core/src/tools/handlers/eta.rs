@@ -62,6 +62,8 @@ struct EtaToolResult {
 struct EtaToolTaskSummary {
     task_id: String,
     status: TaskEstimateStatus,
+    started_at: Option<i64>,
+    terminal_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,7 +147,7 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
         ]);
         ToolSpec::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
-            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Register each task to the agent actually doing the work; the root Lead may assign a persisted Worker with owner_thread_id, and reminders go directly to that owner. Keep estimates current when work starts, scope changes, blockers appear, and work completes. When a reminder arrives, reassess from now and revise with the truthful remaining range plus a short change or blocker reason; do not reset the original duration. Completion or cancellation is explicit; idle or elapsed time never completes a task. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
+            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Register each task to the agent actually doing the work; the root Lead may assign a persisted Worker with owner_thread_id, and reminders go directly to that owner. Keep estimates current when work starts, scope changes, blockers appear, and work completes. When a reminder arrives, reassess from now and revise with the truthful remaining range plus a short change or blocker reason; do not reset the original duration. Completion or cancellation is explicit; idle or elapsed time never completes a task. Results include each changed task's durable started_at and terminal_at Unix timestamps. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(
@@ -266,6 +268,8 @@ impl EtaHandler {
                 .map(|task| EtaToolTaskSummary {
                     task_id: task.task_id.clone(),
                     status: task.status,
+                    started_at: task.started_at.map(|value| value.timestamp()),
+                    terminal_at: task.terminal_at.map(|value| value.timestamp()),
                 })
                 .collect(),
             omitted_task_count: 0,
