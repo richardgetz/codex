@@ -82,6 +82,7 @@ pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use task_estimates::TaskEstimateStore;
 pub use thread_activity::ThreadActivityPause;
+pub use thread_activity::ThreadActivityPauseSnapshot;
 pub use thread_activity::ThreadActivityPauseState;
 pub use threads::ThreadFilterOptions;
 

@@ -45,6 +45,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadActivity;
 use codex_protocol::protocol::ThreadActivityUpdatedEvent;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
@@ -439,6 +440,22 @@ impl CodexThread {
         self.submit_with_trace(Op::PauseActivityWithAck { reply }, trace)
             .await?;
         acknowledged.await.map_err(|_| CodexErr::InternalAgentDied)
+    }
+
+    /// Queue a pause and return the loaded activity snapshot captured before Core applies it.
+    ///
+    /// Durable app-server pause state persists this snapshot so a later continue can recover
+    /// only the work that was active at the pause boundary.
+    pub async fn pause_activity_with_snapshot_ack(
+        &self,
+        trace: Option<W3cTraceContext>,
+    ) -> CodexResult<Vec<(ThreadId, Option<ThreadId>, ThreadActivity)>> {
+        let (reply, acknowledged) = oneshot::channel();
+        self.submit_with_trace(Op::PauseActivityWithSnapshotAck { reply }, trace)
+            .await?;
+        acknowledged
+            .await
+            .map_err(|_| CodexErr::InternalAgentDied)?
     }
 
     /// Seal this root agent tree against new user turns and descendant spawns.

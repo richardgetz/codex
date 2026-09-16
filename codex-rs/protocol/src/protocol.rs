@@ -740,6 +740,13 @@ pub enum Op {
     /// Durable pause recovery uses the acknowledgement before allowing `/continue` to claim it.
     PauseActivityWithAck { reply: oneshot::Sender<()> },
 
+    /// Pause a manually controlled agent tree and return the activity snapshot captured before
+    /// Core applies the gate. Durable pause recovery persists this snapshot before releasing the
+    /// root so a later `/continue` cannot resurrect historical interrupted workers.
+    PauseActivityWithSnapshotAck {
+        reply: oneshot::Sender<CodexResult<Vec<(ThreadId, Option<ThreadId>, ThreadActivity)>>>,
+    },
+
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
     /// This never creates a synthetic model turn by itself.
     ContinueActivity,
@@ -1201,6 +1208,7 @@ impl Op {
             Self::ContinueUsage => "continue_usage",
             Self::PauseActivity => "pause_activity",
             Self::PauseActivityWithAck { .. } => "pause_activity_with_ack",
+            Self::PauseActivityWithSnapshotAck { .. } => "pause_activity_with_snapshot_ack",
             Self::ContinueActivity => "continue_activity",
             Self::ContinueActivityWithAck { .. } => "continue_activity_with_ack",
             Self::CleanBackgroundTerminals => "clean_background_terminals",

@@ -95,6 +95,7 @@ use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::state_db::StateDbHandle;
+use codex_state::ThreadActivityPauseSnapshot;
 use codex_skills_extension::HostSkillsService;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LoadThreadHistoryParams;
@@ -1595,8 +1596,28 @@ impl ThreadManager {
             )
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?;
+        let mut thread_ids = descendant_ids;
+        thread_ids.push(root_thread_id);
+        self.team_activity_recovery_plan_for_threads(root_thread_id, &thread_ids)
+            .await
+    }
+
+    /// Inspects only the threads captured at a durable pause boundary.
+    ///
+    /// The caller supplies a snapshot rather than letting recovery rediscover every open graph
+    /// edge. This keeps completed, cleaned-up, and idle historical workers out of a later
+    /// `/continue` while retaining the same persisted-turn safety checks for captured threads.
+    pub async fn team_activity_recovery_plan_for_threads(
+        &self,
+        _root_thread_id: ThreadId,
+        thread_ids: &[ThreadId],
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        let mut seen_thread_ids = HashSet::new();
         let mut plan = TeamActivityRecoveryPlan::default();
-        for thread_id in descendant_ids.into_iter().chain([root_thread_id]) {
+        for thread_id in thread_ids.iter().copied() {
+            if !seen_thread_ids.insert(thread_id) {
+                continue;
+            }
             let stored_thread = match self
                 .state
                 .read_stored_thread(ReadThreadParams {
@@ -1754,19 +1775,26 @@ impl ThreadManager {
         .get_multi_agent_version())
     }
 
-    /// Reconcile open persisted Team descendants under a paused root.
+    /// Reconcile only the Team threads captured as active at a paused root's boundary.
     ///
-    /// Existing sessions are retained, terminal edges are ignored, and only unloaded workers that
+    /// Existing sessions are retained, terminal edges are ignored, and only captured workers that
     /// own recoverable turns (plus the open ancestors needed to load them) are restored through the
-    /// same AgentControl rollout path used by explicit agent resume. Idle open edges remain
-    /// persisted for on-demand followup. The caller must keep the root paused until this method
-    /// and its subsequent ContinueActivity acknowledgement complete.
+    /// same AgentControl rollout path used by explicit agent resume. Idle or historical open edges
+    /// remain persisted for on-demand followup. The caller must keep the root paused until this
+    /// method and its subsequent ContinueActivity acknowledgement complete.
     pub async fn restore_paused_team(
         &self,
         root_thread_id: ThreadId,
+        pause_snapshot: &[ThreadActivityPauseSnapshot],
     ) -> CodexResult<Vec<ThreadId>> {
         self.get_thread(root_thread_id).await?;
-        let plan = self.team_activity_recovery_plan(root_thread_id).await?;
+        let snapshot_thread_ids = pause_snapshot
+            .iter()
+            .map(|snapshot| snapshot.thread_id)
+            .collect::<Vec<_>>();
+        let plan = self
+            .team_activity_recovery_plan_for_threads(root_thread_id, &snapshot_thread_ids)
+            .await?;
         if !plan.blockers.is_empty() {
             return Err(CodexErr::InvalidRequest(format!(
                 "persisted Team work needs attention before recovery: {}",
@@ -1791,6 +1819,14 @@ impl ThreadManager {
                 CodexErr::Fatal(format!("failed to load paused Team descendants: {err}"))
             })?;
         let open_descendant_ids = descendant_ids.iter().copied().collect::<HashSet<_>>();
+        let snapshot_parent_by_thread = pause_snapshot
+            .iter()
+            .filter_map(|snapshot| {
+                snapshot
+                    .parent_thread_id
+                    .map(|parent_thread_id| (snapshot.thread_id, parent_thread_id))
+            })
+            .collect::<HashMap<_, _>>();
         let mut recoverable_thread_ids = Vec::new();
         for (thread_id, _) in &plan.recoverable_turns {
             if !recoverable_thread_ids.contains(thread_id) {
@@ -1803,14 +1839,10 @@ impl ThreadManager {
         let mut inspected_thread_ids = HashSet::new();
         let mut pending_thread_ids = recoverable_thread_ids.clone();
         while let Some(thread_id) = pending_thread_ids.pop() {
-            if thread_id == root_thread_id || loaded_thread_ids.contains(&thread_id) {
+            if thread_id == root_thread_id {
                 continue;
             }
             if !inspected_thread_ids.insert(thread_id) {
-                continue;
-            }
-            if self.get_thread(thread_id).await.is_ok() {
-                loaded_thread_ids.insert(thread_id);
                 continue;
             }
             if !open_descendant_ids.contains(&thread_id) {
@@ -1831,6 +1863,13 @@ impl ThreadManager {
                     "cannot restore Team child {thread_id}: persisted parent is missing"
                 ))
             })?;
+            if let Some(expected_parent_thread_id) = snapshot_parent_by_thread.get(&thread_id)
+                && *expected_parent_thread_id != parent_thread_id
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "cannot restore Team child {thread_id}: captured parent {expected_parent_thread_id} does not match persisted parent {parent_thread_id}"
+                )));
+            }
             if parent_thread_id != root_thread_id
                 && !open_descendant_ids.contains(&parent_thread_id)
             {
@@ -1839,6 +1878,10 @@ impl ThreadManager {
                 )));
             }
             parent_by_thread.insert(thread_id, parent_thread_id);
+            if self.get_thread(thread_id).await.is_ok() {
+                loaded_thread_ids.insert(thread_id);
+                continue;
+            }
             stored_threads.insert(thread_id, stored_thread);
             if parent_thread_id != root_thread_id && !loaded_thread_ids.contains(&parent_thread_id)
             {

@@ -16,10 +16,15 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::test_support::PathExt;
@@ -310,6 +315,7 @@ async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> R
         ThreadHistoryMode::Legacy,
         false,
         /*multi_agent_v2*/ false,
+        /*include_historical_workers*/ true,
     )
     .await
 }
@@ -322,6 +328,7 @@ async fn thread_activity_cold_resume_without_marker_reconciles_direct_and_nested
         ThreadHistoryMode::Paginated,
         true,
         /*multi_agent_v2*/ false,
+        /*include_historical_workers*/ false,
     )
     .await
 }
@@ -333,6 +340,7 @@ async fn thread_activity_cold_resume_reconciles_v2_direct_and_nested_workers() -
         ThreadHistoryMode::Paginated,
         false,
         /*multi_agent_v2*/ true,
+        /*include_historical_workers*/ true,
     )
     .await
 }
@@ -430,6 +438,7 @@ async fn run_cold_resume_case(
     history_mode: ThreadHistoryMode,
     continue_before_exit: bool,
     multi_agent_v2: bool,
+    include_historical_workers: bool,
 ) -> Result<()> {
     const PARENT_PROMPT: &str = "spawn a direct worker and keep the team unfinished";
     const CHILD_PROMPT: &str = "spawn a nested worker and keep the team unfinished";
@@ -468,7 +477,22 @@ async fn run_cold_resume_case(
     let (release_a, gate_a) = oneshot::channel();
     let (release_b, gate_b) = oneshot::channel();
     let (release_c, gate_c) = oneshot::channel();
-    let (responses_server, _completions) = start_streaming_sse_server(vec![
+    let (historical_release, historical_gate) = if include_historical_workers {
+        let (release, gate) = oneshot::channel();
+        (Some(release), Some(gate))
+    } else {
+        (None, None)
+    };
+    let mut response_sequence = Vec::new();
+    if include_historical_workers {
+        response_sequence.push(completed_response("historical-completed"));
+        response_sequence.push(gated_response(
+            "historical-interrupted",
+            "historical work is interrupted before the pause",
+            historical_gate.expect("historical gate when enabled"),
+        ));
+    }
+    response_sequence.extend([
         vec![StreamingSseChunk {
             gate: None,
             body: responses::sse(vec![
@@ -513,8 +537,8 @@ async fn run_cold_resume_case(
         completed_response("cold-recovered-a"),
         completed_response("cold-recovered-b"),
         completed_response("cold-recovered-c"),
-    ])
-    .await;
+    ]);
+    let (responses_server, _completions) = start_streaming_sse_server(response_sequence).await;
 
     let codex_home = TempDir::new()?;
     let mock_config = MockResponsesConfig::new(responses_server.uri());
@@ -538,6 +562,120 @@ async fn run_cold_resume_case(
             ..Default::default()
         })
         .await?;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    let mut historical_thread_ids = Vec::new();
+    if include_historical_workers {
+        // These workers deliberately remain open in the persisted graph after their turns are
+        // complete or interrupted. They model historical cleanup rows that the old recovery
+        // scan would rediscover, while the root's direct and nested workers below remain active
+        // at the pause boundary and are the only turns allowed to resume.
+        let historical_completed = old_server
+            .start_thread(ThreadStartParams::default())
+            .await?
+            .thread;
+        let historical_completed_turn_request = old_server
+            .send_turn_start_request(TurnStartParams {
+                thread_id: historical_completed.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "complete this historical worker before pause".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let _: TurnStartResponse = timeout(
+            REQUEST_TIMEOUT,
+            old_server.read_response(historical_completed_turn_request),
+        )
+        .await??;
+        loop {
+            let completed: TurnCompletedNotification =
+                old_server.read_notification("turn/completed").await?;
+            if completed.thread_id == historical_completed.id {
+                assert_eq!(completed.turn.status, codex_app_server_protocol::TurnStatus::Completed);
+                break;
+            }
+        }
+
+        let historical_interrupted = old_server
+            .start_thread(ThreadStartParams::default())
+            .await?
+            .thread;
+        let historical_interrupted_turn_request = old_server
+            .send_turn_start_request(TurnStartParams {
+                thread_id: historical_interrupted.id.clone(),
+                input: vec![UserInput::Text {
+                    text: "interrupt this historical worker before pause".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let TurnStartResponse {
+            turn: historical_interrupted_turn,
+        } = timeout(
+            REQUEST_TIMEOUT,
+            old_server.read_response(historical_interrupted_turn_request),
+        )
+        .await??;
+        responses_server.wait_for_request_count(2).await;
+        let interrupt_request = old_server
+            .send_turn_interrupt_request(TurnInterruptParams {
+                thread_id: historical_interrupted.id.clone(),
+                turn_id: historical_interrupted_turn.id.clone(),
+            })
+            .await?;
+        let _: TurnInterruptResponse = timeout(
+            REQUEST_TIMEOUT,
+            old_server.read_response(interrupt_request),
+        )
+        .await??;
+        loop {
+            let completed: TurnCompletedNotification =
+                old_server.read_notification("turn/completed").await?;
+            if completed.thread_id == historical_interrupted.id
+                && completed.turn.id == historical_interrupted_turn.id
+            {
+                assert_eq!(
+                    completed.turn.status,
+                    codex_app_server_protocol::TurnStatus::Interrupted
+                );
+                break;
+            }
+        }
+        drop(historical_release);
+
+        for (thread_id, depth) in [
+            (ThreadId::from_string(&historical_completed.id)?, 1),
+            (ThreadId::from_string(&historical_interrupted.id)?, 1),
+        ] {
+            let mut metadata = state_db
+                .get_thread(thread_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("historical thread metadata missing"))?;
+            metadata.source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: ThreadId::from_string(&parent.id)?,
+                depth,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })
+            .to_string();
+            state_db.upsert_thread(&metadata).await?;
+            state_db
+                .upsert_thread_spawn_edge(
+                    ThreadId::from_string(&parent.id)?,
+                    thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Open,
+                )
+                .await?;
+            historical_thread_ids.push(thread_id.to_string());
+        }
+    }
     let parent_turn_request = old_server
         .send_turn_start_request(TurnStartParams {
             thread_id: parent.id.clone(),
@@ -597,12 +735,8 @@ async fn run_cold_resume_case(
 
     let expected_threads =
         HashSet::from([parent.id.clone(), child_id.clone(), grandchild_id.clone()]);
+    let initial_request_count = historical_thread_ids.len() + 5;
     let terminal_thread_id = ThreadId::new();
-    let state_db = StateRuntime::init(
-        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
-        "mock_provider".to_string(),
-    )
-    .await?;
     state_db
         .upsert_thread_spawn_edge(
             ThreadId::from_string(&parent.id)?,
@@ -617,7 +751,9 @@ async fn run_cold_resume_case(
             started_threads.insert(started.thread_id);
         }
     }
-    responses_server.wait_for_request_count(5).await;
+    responses_server
+        .wait_for_request_count(initial_request_count)
+        .await;
 
     if continue_before_exit {
         let continue_request = old_server
@@ -628,7 +764,7 @@ async fn run_cold_resume_case(
             .await?;
         let _: ThreadActivityContinueResponse =
             timeout(REQUEST_TIMEOUT, old_server.read_response(continue_request)).await??;
-        assert_eq!(responses_server.requests().await.len(), 5);
+        assert_eq!(responses_server.requests().await.len(), initial_request_count);
         let read_request = old_server
             .send_raw_request(
                 "thread/activity/read",
@@ -696,7 +832,7 @@ async fn run_cold_resume_case(
         .await?;
     let _: ThreadResumeResponse =
         timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
-    assert_eq!(responses_server.requests().await.len(), 5);
+    assert_eq!(responses_server.requests().await.len(), initial_request_count);
     if !pause_before_exit {
         let read_request = resumed
             .send_raw_request(
@@ -722,10 +858,12 @@ async fn run_cold_resume_case(
         .await?;
     let _: ThreadActivityContinueResponse =
         timeout(REQUEST_TIMEOUT, resumed.read_response(continue_request)).await??;
-    responses_server.wait_for_request_count(8).await;
+    responses_server
+        .wait_for_request_count(initial_request_count + 3)
+        .await;
     let recovered_requests = responses_server.requests().await;
     for thread_id in &expected_threads {
-        let count = recovered_requests[5..]
+        let count = recovered_requests[initial_request_count..]
             .iter()
             .filter(|request| request_thread_id(request).as_deref() == Some(thread_id.as_str()))
             .count();
@@ -733,11 +871,19 @@ async fn run_cold_resume_case(
     }
     let terminal_thread_id = terminal_thread_id.to_string();
     assert!(
-        recovered_requests[5..]
+        recovered_requests[initial_request_count..]
             .iter()
             .all(|request| request_thread_id(request).as_deref()
                 != Some(terminal_thread_id.as_str()))
     );
+    for thread_id in &historical_thread_ids {
+        assert!(
+            recovered_requests[initial_request_count..]
+                .iter()
+                .all(|request| request_thread_id(request).as_deref() != Some(thread_id.as_str())),
+            "historical worker {thread_id} must not resume"
+        );
+    }
 
     let request_count = recovered_requests.len();
     let repeat_continue_request = resumed
