@@ -1,4 +1,6 @@
 use super::*;
+use codex_app_server_protocol::TeamMode;
+use codex_app_server_protocol::TeamRole;
 use pretty_assertions::assert_eq;
 
 fn team_settings(
@@ -83,37 +85,52 @@ async fn rate_limit_recovery_preserves_settings_hold_and_clears_on_account_chang
 
 #[tokio::test]
 async fn team_lead_deduplicates_identical_usage_limit_errors() {
-    let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut events, mut ops) = make_chatwidget_manual(Some("test-model-a")).await;
+    set_chatgpt_auth(&mut chat);
+    chat.thread_id = Some(ThreadId::new());
     chat.set_team_settings(Some(team_settings(
         codex_app_server_protocol::TeamMode::LeadWorker,
         codex_app_server_protocol::TeamRole::Lead,
     )));
 
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
+    handle_turn_started(&mut chat, "failed-turn-1");
+    chat.queue_user_message(UserMessage::from("queued follow-up"));
+    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".into());
     let first = drain_insert_history(&mut events);
     assert_eq!(first.len(), 1);
-    assert_chatwidget_snapshot!(
-        "team_lead_usage_limit_error",
+    insta::assert_snapshot!(
         lines_to_single_string(&first.concat()),
         @r"
         ■ Usage exhausted
         "
     );
+    assert!(!chat.turn_lifecycle.agent_turn_running);
+    assert!(chat.input_queue.rate_limit_recovery_pending);
+    assert_eq!(chat.queued_user_message_texts(), vec!["queued follow-up"]);
 
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
+    // A duplicate warning still corresponds to a distinct failed turn. Keep a queued follow-up
+    // behind the recovery hold and assert that the duplicate path finalizes this active turn.
+    handle_turn_started(&mut chat, "failed-turn-2");
+    chat.queue_user_message(UserMessage::from("queued after duplicate"));
+    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".into());
     assert!(drain_insert_history(&mut events).is_empty());
+    assert!(!chat.turn_lifecycle.agent_turn_running);
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["queued follow-up", "queued after duplicate"]
+    );
+
+    chat.finish_rate_limit_recovery();
+    let Op::UserTurn { items, .. } = next_submit_op(&mut ops) else {
+        panic!("expected queued follow-up after recovery");
+    };
+    assert!(
+        matches!(items.as_slice(), [UserInput::Text { text, .. }] if text == "queued follow-up")
+    );
+    let _queued_history = drain_insert_history(&mut events);
 
     chat.codex_rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
+    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".into());
     assert_eq!(
         drain_insert_history(&mut events).len(),
         1,
@@ -122,9 +139,19 @@ async fn team_lead_deduplicates_identical_usage_limit_errors() {
 
     chat.on_rate_limit_error(
         RateLimitErrorKind::UsageLimit,
-        "Usage exhausted; try again at 04:10".to_string(),
+        "Usage exhausted; try again at 04:10".into(),
     );
     assert_eq!(drain_insert_history(&mut events).len(), 1);
+}
+
+#[tokio::test]
+async fn team_lead_usage_limit_dedupe_resets_when_assignment_changes() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    for mode in [TeamMode::LeadWorker, TeamMode::Off] {
+        chat.set_team_settings(Some(team_settings(mode, TeamRole::Lead)));
+        chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".into());
+        assert_eq!(drain_insert_history(&mut events).len(), 1);
+    }
 }
 
 #[tokio::test]
@@ -135,50 +162,15 @@ async fn team_lead_usage_limit_dedupe_clears_after_generic_window_recovers() {
         codex_app_server_protocol::TeamRole::Lead,
     )));
 
-    let mut blocked_snapshot = snapshot(/*percent*/ 100.0);
-    blocked_snapshot.rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
-    chat.on_rate_limit_snapshot(Some(blocked_snapshot));
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
-    assert_eq!(drain_insert_history(&mut events).len(), 1);
-
-    let mut recovered_snapshot = snapshot(/*percent*/ 50.0);
-    recovered_snapshot.rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
-    chat.on_rate_limit_snapshot(Some(recovered_snapshot));
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
-    assert_eq!(
-        drain_insert_history(&mut events).len(),
-        1,
-        "a recovered generic usage window should rearm the next meaningful warning"
-    );
-}
-
-#[tokio::test]
-async fn team_lead_usage_limit_dedupe_resets_when_assignment_changes() {
-    let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.set_team_settings(Some(team_settings(
-        codex_app_server_protocol::TeamMode::LeadWorker,
-        codex_app_server_protocol::TeamRole::Lead,
-    )));
-
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
-    assert_eq!(drain_insert_history(&mut events).len(), 1);
-    chat.set_team_settings(Some(team_settings(
-        codex_app_server_protocol::TeamMode::Off,
-        codex_app_server_protocol::TeamRole::Lead,
-    )));
-
-    chat.on_rate_limit_error(
-        RateLimitErrorKind::UsageLimit,
-        "Usage exhausted".to_string(),
-    );
-    assert_eq!(drain_insert_history(&mut events).len(), 1);
+    for percent in [100.0, 50.0] {
+        let mut snapshot = snapshot(percent);
+        snapshot.rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
+        chat.on_rate_limit_snapshot(Some(snapshot));
+        chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".into());
+        assert_eq!(
+            drain_insert_history(&mut events).len(),
+            1,
+            "a recovered generic usage window should rearm the next meaningful warning"
+        );
+    }
 }
