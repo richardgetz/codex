@@ -1840,8 +1840,7 @@ impl ThreadManager {
             }
             parent_by_thread.insert(thread_id, parent_thread_id);
             stored_threads.insert(thread_id, stored_thread);
-            if parent_thread_id != root_thread_id
-                && !loaded_thread_ids.contains(&parent_thread_id)
+            if parent_thread_id != root_thread_id && !loaded_thread_ids.contains(&parent_thread_id)
             {
                 pending_thread_ids.push(parent_thread_id);
             }
@@ -1873,7 +1872,10 @@ impl ThreadManager {
                         error.details(),
                         CodexErrorDetails::ThreadNotFound(missing_thread_id)
                             if *missing_thread_id == child_thread_id
-                    ) => None,
+                    ) =>
+                {
+                    None
+                }
                 Err(error) => return Err(error),
             };
             let multi_agent_version = match persisted_multi_agent_version {

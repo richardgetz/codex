@@ -267,13 +267,13 @@ fn sparkle_renders_with_effort_bursts_and_pauses_for_popups() {
                 assert!(text.contains("hello 界"));
                 let mut sparkle = before.clone();
                 composer.render_sparkle(area, composer.cursor_pos(area), &mut sparkle);
-                assert!(sparkle
-                    .content
-                    .iter()
-                    .zip(before.content.iter())
-                    .any(|(after, before)| {
-                        after.symbol() == " " && after.bg != before.bg
-                    }));
+                assert!(
+                    sparkle
+                        .content
+                        .iter()
+                        .zip(before.content.iter())
+                        .any(|(after, before)| { after.symbol() == " " && after.bg != before.bg })
+                );
                 assert_eq!(
                     composer.cursor_pos(area).map(|p| after[p].clone()),
                     composer.cursor_pos(area).map(|p| before[p].clone())
@@ -310,9 +310,12 @@ fn sparkle_waits_for_terminal_colors() {
             let base_background = user_message_bg_rgb((36, 27, 53));
             buffer.set_style(area, Style::default().bg(rgb_color(base_background)));
             composer.render_sparkle(area, /*cursor*/ None, &mut buffer);
-            assert!(buffer.content.iter().any(|cell| {
-                cell.symbol() == " " && cell.bg != rgb_color(base_background)
-            }));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|cell| { cell.symbol() == " " && cell.bg != rgb_color(base_background) })
+            );
         },
     );
 }

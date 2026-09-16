@@ -13,7 +13,6 @@ fn team_settings(
         lead_balance: None,
         worker_model: None,
         worker_reasoning_effort: None,
-        dynamic_handoff: None,
         previous_model: None,
         previous_reasoning_effort: None,
     }
@@ -90,7 +89,10 @@ async fn team_lead_deduplicates_identical_usage_limit_errors() {
         codex_app_server_protocol::TeamRole::Lead,
     )));
 
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     let first = drain_insert_history(&mut events);
     assert_eq!(first.len(), 1);
     assert_chatwidget_snapshot!(
@@ -101,11 +103,17 @@ async fn team_lead_deduplicates_identical_usage_limit_errors() {
         "
     );
 
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     assert!(drain_insert_history(&mut events).is_empty());
 
     chat.codex_rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     assert_eq!(
         drain_insert_history(&mut events).len(),
         1,
@@ -128,17 +136,21 @@ async fn team_lead_usage_limit_dedupe_clears_after_generic_window_recovers() {
     )));
 
     let mut blocked_snapshot = snapshot(/*percent*/ 100.0);
-    blocked_snapshot.rate_limit_reached_type =
-        Some(RateLimitReachedType::RateLimitReached);
+    blocked_snapshot.rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
     chat.on_rate_limit_snapshot(Some(blocked_snapshot));
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     assert_eq!(drain_insert_history(&mut events).len(), 1);
 
     let mut recovered_snapshot = snapshot(/*percent*/ 50.0);
-    recovered_snapshot.rate_limit_reached_type =
-        Some(RateLimitReachedType::RateLimitReached);
+    recovered_snapshot.rate_limit_reached_type = Some(RateLimitReachedType::RateLimitReached);
     chat.on_rate_limit_snapshot(Some(recovered_snapshot));
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     assert_eq!(
         drain_insert_history(&mut events).len(),
         1,
@@ -154,13 +166,19 @@ async fn team_lead_usage_limit_dedupe_resets_when_assignment_changes() {
         codex_app_server_protocol::TeamRole::Lead,
     )));
 
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     assert_eq!(drain_insert_history(&mut events).len(), 1);
     chat.set_team_settings(Some(team_settings(
         codex_app_server_protocol::TeamMode::Off,
         codex_app_server_protocol::TeamRole::Lead,
     )));
 
-    chat.on_rate_limit_error(RateLimitErrorKind::UsageLimit, "Usage exhausted".to_string());
+    chat.on_rate_limit_error(
+        RateLimitErrorKind::UsageLimit,
+        "Usage exhausted".to_string(),
+    );
     assert_eq!(drain_insert_history(&mut events).len(), 1);
 }

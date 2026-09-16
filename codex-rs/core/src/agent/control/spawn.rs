@@ -1217,12 +1217,9 @@ impl AgentControl {
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
         let _admission = self.begin_handoff_admission()?;
-        let (resumed_thread_id, _) = Box::pin(self.resume_single_agent_from_rollout(
-            config,
-            thread_id,
-            session_source,
-        ))
-        .await?;
+        let (resumed_thread_id, _) =
+            Box::pin(self.resume_single_agent_from_rollout(config, thread_id, session_source))
+                .await?;
         Ok(resumed_thread_id)
     }
 
