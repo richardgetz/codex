@@ -1,0 +1,27 @@
+intent:
+  id: "intent/2026-09-16/eta-lifecycle-timestamps#e12043c0a3"
+  change_type: "feat"
+  scope: "eta"
+  summary: "Expose durable task start and terminal timestamps in update_eta and /eta."
+  decision: "Reuse the existing explicit lifecycle timestamps, expose them in model tool summaries, map terminal timestamps into the TUI, and render Started and Ended details while preserving no-inference semantics."
+  constraints:
+    - "Timestamps are set only by explicit Start, Complete, or Cancel lifecycle operations."
+    - "Revisions, reassignment, idle time, and elapsed reads must not reset or infer lifecycle timestamps."
+    - "Preserve app-server v2 wire compatibility and existing epoch-second timestamp conventions."
+    - "Keep /eta rendering read-only and bounded."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/tools/handlers/eta.rs"
+    - "codex-rs/core/tests/suite/eta.rs"
+    - "codex-rs/state/src/runtime/task_estimates_tests.rs"
+    - "codex-rs/app-server/tests/suite/v2/thread_eta.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+    - "codex-rs/tui/src/app/snapshots/codex_tui__app__eta_view__tests__eta_history_lifecycle_timestamps.snap"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
