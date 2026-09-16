@@ -133,7 +133,7 @@ async fn thread_activity_continue_without_marker_keeps_healthy_tree_running() ->
 }
 
 #[tokio::test]
-async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Result<()> {
+async fn thread_activity_pause_survives_restart_with_idle_open_descendant() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let _seed_response = responses::mount_sse_once(
         &responses_server,
@@ -141,6 +141,18 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
             responses::ev_response_created("pause-restart-seed"),
             responses::ev_assistant_message("pause-restart-seed-message", "seed history"),
             responses::ev_completed("pause-restart-seed"),
+        ]),
+    )
+    .await;
+    let _idle_child_response = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("pause-restart-idle-child"),
+            responses::ev_assistant_message(
+                "pause-restart-idle-child-message",
+                "idle child history",
+            ),
+            responses::ev_completed("pause-restart-idle-child"),
         ]),
     )
     .await;
@@ -171,6 +183,46 @@ async fn thread_activity_pause_survives_restart_until_explicit_continue() -> Res
         first.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let idle_child = first
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
+    let idle_child_turn_request = first
+        .send_turn_start_request(TurnStartParams {
+            thread_id: idle_child.id.clone(),
+            input: vec![UserInput::Text {
+                text: "finish before the parent pauses".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = timeout(
+        REQUEST_TIMEOUT,
+        first.read_response(idle_child_turn_request),
+    )
+    .await??;
+    timeout(
+        REQUEST_TIMEOUT,
+        first.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    // Older Team sessions can retain open graph edges after a worker has finished. Keep the
+    // terminal thread metadata untouched so cold recovery proves it does not try to reload idle
+    // historical descendants before continuing the root.
+    state_db
+        .upsert_thread_spawn_edge(
+            ThreadId::from_string(&thread.id)?,
+            ThreadId::from_string(&idle_child.id)?,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await?;
 
     let pause_request = first
         .send_raw_request(

@@ -77,6 +77,10 @@ release or merge rules.
   resumes only proven model-only `InProgress`/`Interrupted` work, and retains
   the pause with an actionable blocker for unfinished command, approval, MCP,
   collaboration, or other external operations.
+  Cold recovery loads only unfinished turns and the persisted ancestor chain
+  needed to own them; idle open descendants remain available for later
+  on-demand resume instead of making `/continue` depend on an entire historical
+  Team graph.
   Unloaded V2 descendants are restored through their loaded immediate parent,
   preserving parent-owned settings, version, and ownership validation; missing
   or inconsistent V2 lineage remains blocked for explicit recovery.
@@ -190,6 +194,8 @@ release or merge rules.
   - Team Lead usage-limit history coalesces identical rendered errors while
     preserving distinct reset/account messages; lifecycle handling and later
     recovery remain unchanged.
+  - Prompt-composer sparkle animation uses background tinting so decorative
+    braille glyphs do not enter terminal selection or clipboard text.
   - `[team.worker].max_concurrent` optionally sets a positive, atomic ceiling
     for active direct Workers per Lead across V1 and V2. Pending starts reserve
     capacity, followups reacquire it, completed or aborted Workers release it,
@@ -1065,6 +1071,9 @@ release or merge rules.
   terminal completion claimed before cancellation is preserved and genuine
   dispatch join failures still surface. Verify a failed native TUI `/continue`
   request is rendered as an in-session error without terminating the session.
+  Verify cold `/continue` restores only recoverable turns and their persisted
+  ancestor chain, leaves terminal open descendants unloaded for on-demand
+  access, and still blocks missing or inconsistent ancestry for retained work.
 - Verify the TUI sets its waiting header before interrupt-hint updates, and
   leaves an empty server collaboration-mode catalog empty while retaining only
   visible server-provided modes.
@@ -1086,6 +1095,8 @@ release or merge rules.
   edges.
   Verify Team Lead usage-limit history coalesces identical errors without
   dropping turn lifecycle handling or distinct reset/account messages.
+  Verify prompt-composer sparkles change only cell backgrounds and never write
+  decorative glyphs into terminal selection or clipboard text.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.
