@@ -1,0 +1,17 @@
+intent:
+  id: team-selective-recovery-blocker-filter
+  change_type: fix
+  scope: app-server
+  summary: Ignore intentionally unloaded idle or terminal Team descendants during post-restore blocker checks.
+  decision: Treat missing runtimes as persistence blockers only when their thread owns a recoverable unfinished turn; skipped historical open edges remain on-demand.
+  constraints:
+    - Preserve fail-closed behavior for genuinely recoverable missing runtimes.
+    - Preserve persisted open graph edges and explicit followup loading.
+    - Keep paused recovery and external-operation blockers unchanged.
+  intent_priority: high
+  code_locations:
+    - codex-rs/app-server/src/request_processors/turn_processor.rs
+  requested_by: user
+  recorded_by: codex
+agent: /root/selective_team_restore
+model: gpt-6-astra
