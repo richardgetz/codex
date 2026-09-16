@@ -77,10 +77,10 @@ release or merge rules.
   resumes only proven model-only `InProgress`/`Interrupted` work, and retains
   the pause with an actionable blocker for unfinished command, approval, MCP,
   collaboration, or other external operations.
-  Cold recovery loads only unfinished turns and the persisted ancestor chain
-  needed to own them; idle open descendants remain available for later
-  on-demand resume instead of making `/continue` depend on an entire historical
-  Team graph.
+  Cold `/continue` restores only unloaded descendants that own recoverable
+  model-only turns and the open ancestor chain needed to load them; idle open
+  descendants remain persisted for on-demand followup, including V1 workers
+  without recursive descendant reopening.
   Unloaded V2 descendants are restored through their loaded immediate parent,
   preserving parent-owned settings, version, and ownership validation; missing
   or inconsistent V2 lineage remains blocked for explicit recovery.
@@ -841,6 +841,7 @@ release or merge rules.
   age-plus-force form.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
   Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
+- Verify cold Team `/continue` loads only recoverable unfinished descendants plus their open ancestors, leaves idle open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a genuinely recoverable child has missing or inconsistent ancestry.
   Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without

@@ -1206,6 +1206,27 @@ impl AgentControl {
     }
 
     /// Resume an existing agent thread from a recorded rollout file.
+    ///
+    /// This variant restores only the requested agent. Callers that are reconciling a paused
+    /// Team tree use it after selecting recoverable turns and their required ancestors; reopening
+    /// every open descendant here would eagerly revive idle historical workers.
+    pub(crate) async fn resume_agent_from_rollout_without_descendants(
+        &self,
+        config: Config,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+    ) -> CodexResult<ThreadId> {
+        let _admission = self.begin_handoff_admission()?;
+        let (resumed_thread_id, _) = Box::pin(self.resume_single_agent_from_rollout(
+            config,
+            thread_id,
+            session_source,
+        ))
+        .await?;
+        Ok(resumed_thread_id)
+    }
+
+    /// Resume an existing agent thread from a recorded rollout file and its open descendants.
     pub(crate) async fn resume_agent_from_rollout(
         &self,
         config: Config,

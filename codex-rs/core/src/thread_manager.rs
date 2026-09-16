@@ -1563,7 +1563,11 @@ impl ThreadManager {
             .session
             .services
             .agent_control
-            .resume_agent_from_rollout(config, child_thread_id, stored_thread.source)
+            .resume_agent_from_rollout_without_descendants(
+                config,
+                child_thread_id,
+                stored_thread.source,
+            )
             .await
             .map(|_| ())
     }
@@ -1752,10 +1756,11 @@ impl ThreadManager {
 
     /// Reconcile open persisted Team descendants under a paused root.
     ///
-    /// Existing sessions are retained, terminal edges are ignored, and unloaded open workers are
-    /// restored through the same AgentControl rollout path used by explicit agent resume. The
-    /// caller must keep the root paused until this method and its subsequent ContinueActivity
-    /// acknowledgement complete.
+    /// Existing sessions are retained, terminal edges are ignored, and only unloaded workers that
+    /// own recoverable turns (plus the open ancestors needed to load them) are restored through the
+    /// same AgentControl rollout path used by explicit agent resume. Idle open edges remain
+    /// persisted for on-demand followup. The caller must keep the root paused until this method
+    /// and its subsequent ContinueActivity acknowledgement complete.
     pub async fn restore_paused_team(
         &self,
         root_thread_id: ThreadId,
@@ -1768,7 +1773,6 @@ impl ThreadManager {
                 plan.blockers.join(", ")
             )));
         }
-        let mut restored = Vec::new();
         let descendant_ids = self
             .state
             .agent_graph_store()
@@ -1786,21 +1790,92 @@ impl ThreadManager {
             .map_err(|err| {
                 CodexErr::Fatal(format!("failed to load paused Team descendants: {err}"))
             })?;
-        for child_thread_id in descendant_ids {
+        let open_descendant_ids = descendant_ids.iter().copied().collect::<HashSet<_>>();
+        let mut recoverable_thread_ids = Vec::new();
+        for (thread_id, _) in &plan.recoverable_turns {
+            if !recoverable_thread_ids.contains(thread_id) {
+                recoverable_thread_ids.push(*thread_id);
+            }
+        }
+        let mut loaded_thread_ids = HashSet::from([root_thread_id]);
+        let mut stored_threads = HashMap::new();
+        let mut parent_by_thread = HashMap::new();
+        let mut inspected_thread_ids = HashSet::new();
+        let mut pending_thread_ids = recoverable_thread_ids.clone();
+        while let Some(thread_id) = pending_thread_ids.pop() {
+            if thread_id == root_thread_id || loaded_thread_ids.contains(&thread_id) {
+                continue;
+            }
+            if !inspected_thread_ids.insert(thread_id) {
+                continue;
+            }
+            if self.get_thread(thread_id).await.is_ok() {
+                loaded_thread_ids.insert(thread_id);
+                continue;
+            }
+            if !open_descendant_ids.contains(&thread_id) {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "cannot restore Team child {thread_id}: persisted edge is not an open descendant of root {root_thread_id}"
+                )));
+            }
             let stored_thread = self
                 .state
                 .read_stored_thread(ReadThreadParams {
-                    thread_id: child_thread_id,
+                    thread_id,
                     include_archived: true,
                     include_history: false,
                 })
                 .await?;
+            let parent_thread_id = stored_thread.parent_thread_id.ok_or_else(|| {
+                CodexErr::InvalidRequest(format!(
+                    "cannot restore Team child {thread_id}: persisted parent is missing"
+                ))
+            })?;
+            if parent_thread_id != root_thread_id
+                && !open_descendant_ids.contains(&parent_thread_id)
+            {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "cannot restore Team child {thread_id}: persisted parent {parent_thread_id} is not an open descendant of root {root_thread_id}"
+                )));
+            }
+            parent_by_thread.insert(thread_id, parent_thread_id);
+            stored_threads.insert(thread_id, stored_thread);
+            if parent_thread_id != root_thread_id
+                && !loaded_thread_ids.contains(&parent_thread_id)
+            {
+                pending_thread_ids.push(parent_thread_id);
+            }
+        }
+        let load_order = team_recovery_load_order(
+            root_thread_id,
+            &recoverable_thread_ids,
+            &open_descendant_ids,
+            &parent_by_thread,
+            &loaded_thread_ids,
+        )?;
+        let mut restored = Vec::new();
+        for child_thread_id in load_order {
+            let stored_thread = stored_threads.remove(&child_thread_id).ok_or_else(|| {
+                CodexErr::InvalidRequest(format!(
+                    "cannot restore Team child {child_thread_id}: persisted metadata is missing"
+                ))
+            })?;
             if self.get_thread(child_thread_id).await.is_ok() {
                 continue;
             }
-            let persisted_multi_agent_version = self
+            let persisted_multi_agent_version = match self
                 .persisted_team_multi_agent_version(&stored_thread)
-                .await?;
+                .await
+            {
+                Ok(version) => version,
+                Err(error)
+                    if matches!(
+                        error.details(),
+                        CodexErrorDetails::ThreadNotFound(missing_thread_id)
+                            if *missing_thread_id == child_thread_id
+                    ) => None,
+                Err(error) => return Err(error),
+            };
             let multi_agent_version = match persisted_multi_agent_version {
                 Some(version) => version,
                 None => {
@@ -3166,6 +3241,78 @@ fn stored_thread_to_initial_history(
         history: Arc::new(history.items),
         rollout_path: rollout_path.or(stored_thread.rollout_path),
     }))
+}
+
+fn team_recovery_load_order(
+    root_thread_id: ThreadId,
+    recoverable_thread_ids: &[ThreadId],
+    open_descendant_ids: &HashSet<ThreadId>,
+    parent_by_thread: &HashMap<ThreadId, ThreadId>,
+    loaded_thread_ids: &HashSet<ThreadId>,
+) -> CodexResult<Vec<ThreadId>> {
+    fn append_ancestor_chain(
+        thread_id: ThreadId,
+        root_thread_id: ThreadId,
+        open_descendant_ids: &HashSet<ThreadId>,
+        parent_by_thread: &HashMap<ThreadId, ThreadId>,
+        loaded_thread_ids: &HashSet<ThreadId>,
+        visiting_thread_ids: &mut HashSet<ThreadId>,
+        scheduled_thread_ids: &mut HashSet<ThreadId>,
+        load_order: &mut Vec<ThreadId>,
+    ) -> CodexResult<()> {
+        if thread_id == root_thread_id
+            || loaded_thread_ids.contains(&thread_id)
+            || scheduled_thread_ids.contains(&thread_id)
+        {
+            return Ok(());
+        }
+        if !open_descendant_ids.contains(&thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "cannot restore Team child {thread_id}: persisted edge is not an open descendant of root {root_thread_id}"
+            )));
+        }
+        if !visiting_thread_ids.insert(thread_id) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "cannot restore Team child {thread_id}: persisted ancestry contains a cycle"
+            )));
+        }
+        let parent_thread_id = parent_by_thread.get(&thread_id).copied().ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "cannot restore Team child {thread_id}: persisted parent is missing"
+            ))
+        })?;
+        append_ancestor_chain(
+            parent_thread_id,
+            root_thread_id,
+            open_descendant_ids,
+            parent_by_thread,
+            loaded_thread_ids,
+            visiting_thread_ids,
+            scheduled_thread_ids,
+            load_order,
+        )?;
+        visiting_thread_ids.remove(&thread_id);
+        scheduled_thread_ids.insert(thread_id);
+        load_order.push(thread_id);
+        Ok(())
+    }
+
+    let mut visiting_thread_ids = HashSet::new();
+    let mut scheduled_thread_ids = HashSet::new();
+    let mut load_order = Vec::new();
+    for thread_id in recoverable_thread_ids {
+        append_ancestor_chain(
+            *thread_id,
+            root_thread_id,
+            open_descendant_ids,
+            parent_by_thread,
+            loaded_thread_ids,
+            &mut visiting_thread_ids,
+            &mut scheduled_thread_ids,
+            &mut load_order,
+        )?;
+    }
+    Ok(load_order)
 }
 
 fn append_persisted_recovery(
