@@ -674,6 +674,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadEtaUpdateResponse,
     },
+    #[experimental("thread/eta/list")]
+    ThreadEtaList => "thread/eta/list" {
+        params: v2::ThreadEtaListParams,
+        serialization: global("eta"),
+        response: v2::ThreadEtaListResponse,
+    },
     #[experimental("thread/queue/add")]
     ThreadQueueAdd => "thread/queue/add" {
         params: v2::ThreadQueueAddParams,

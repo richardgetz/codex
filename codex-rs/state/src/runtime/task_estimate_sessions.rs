@@ -17,6 +17,7 @@ use super::TaskEstimateStore;
 
 const DEFAULT_HISTORY_LIMIT: usize = 50;
 const MAX_HISTORY_LIMIT: usize = 100;
+const DEFAULT_FRESHNESS_MINIMUM_SECONDS: i64 = 15 * 60;
 
 impl TaskEstimateStore {
     /// Delete terminal task history older than `retention_days`.
@@ -87,6 +88,18 @@ WHERE status IN ('completed', 'cancelled')
         limit: Option<usize>,
         include_nested: bool,
     ) -> anyhow::Result<TaskEstimateSessionPage> {
+        self.list_sessions_at(cursor, limit, include_nested, Utc::now())
+            .await
+    }
+
+    /// Read a task-first page using one caller-supplied projection timestamp.
+    pub async fn list_sessions_at(
+        &self,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        include_nested: bool,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<TaskEstimateSessionPage> {
         let limit = limit
             .unwrap_or(DEFAULT_HISTORY_LIMIT)
             .clamp(1, MAX_HISTORY_LIMIT);
@@ -105,59 +118,101 @@ WITH RECURSIVE descendants(root_thread_id, ancestor_task_id, descendant_task_id)
     JOIN eta_tasks
       ON eta_tasks.root_thread_id = descendants.root_thread_id
      AND eta_tasks.parent_task_id = descendants.descendant_task_id
+), raw_tasks AS (
+    SELECT eta_tasks.*,
+           eta_roots.freshness_minimum_seconds,
+           MAX(
+               COALESCE(eta_roots.freshness_minimum_seconds, "#,
+        );
+        builder.push_bind(DEFAULT_FRESHNESS_MINIMUM_SECONDS);
+        builder.push(
+            r#"),
+               (COALESCE(eta_tasks.current_upper_seconds, 0) + 3) / 4
+           ) AS freshness_delay_seconds,
+           MAX("#,
+        );
+        builder.push_bind(datetime_to_epoch_seconds(now));
+        builder.push(
+            r#" - eta_tasks.updated_at, 0) AS elapsed_seconds
+    FROM eta_tasks
+    JOIN eta_roots ON eta_roots.root_thread_id = eta_tasks.root_thread_id
+), projected_tasks AS (
+    SELECT raw_tasks.*,
+           CASE
+               WHEN raw_tasks.status NOT IN ('completed', 'cancelled')
+                AND raw_tasks.started_at IS NOT NULL
+                AND raw_tasks.elapsed_seconds >= raw_tasks.freshness_delay_seconds THEN 1
+               ELSE 0
+           END AS projected_is_stale,
+           CASE
+               WHEN raw_tasks.status NOT IN ('completed', 'cancelled')
+                AND raw_tasks.started_at IS NOT NULL
+                AND raw_tasks.elapsed_seconds < raw_tasks.freshness_delay_seconds
+               THEN MAX(raw_tasks.current_lower_seconds - raw_tasks.elapsed_seconds, 0)
+               ELSE raw_tasks.current_lower_seconds
+           END AS projected_lower_seconds,
+           CASE
+               WHEN raw_tasks.status NOT IN ('completed', 'cancelled')
+                AND raw_tasks.started_at IS NOT NULL
+                AND raw_tasks.elapsed_seconds < raw_tasks.freshness_delay_seconds
+               THEN MAX(raw_tasks.current_upper_seconds - raw_tasks.elapsed_seconds, 0)
+               ELSE raw_tasks.current_upper_seconds
+           END AS projected_upper_seconds
+    FROM raw_tasks
 ), nested_summary AS (
     SELECT descendants.root_thread_id,
            descendants.ancestor_task_id,
-           COUNT(*) AS nested_task_count,
+           COUNT(projected_tasks.task_id) AS nested_task_count,
            SUM(CASE
-                   WHEN eta_tasks.status NOT IN ('completed', 'cancelled') THEN 1
+                   WHEN projected_tasks.status NOT IN ('completed', 'cancelled') THEN 1
                    ELSE 0
                END) AS active_nested_task_count,
            CASE
                WHEN SUM(CASE
-                            WHEN eta_tasks.status NOT IN ('completed', 'cancelled')
-                             AND eta_tasks.current_lower_seconds IS NULL THEN 1
+                            WHEN projected_tasks.status NOT IN ('completed', 'cancelled')
+                             AND projected_tasks.projected_lower_seconds IS NULL THEN 1
                             ELSE 0
                         END) > 0 THEN NULL
                ELSE SUM(CASE
-                            WHEN eta_tasks.status NOT IN ('completed', 'cancelled')
-                            THEN eta_tasks.current_lower_seconds
+                            WHEN projected_tasks.status NOT IN ('completed', 'cancelled')
+                            THEN projected_tasks.projected_lower_seconds
                             ELSE 0
                         END)
            END AS nested_lower_seconds,
            CASE
                WHEN SUM(CASE
-                            WHEN eta_tasks.status NOT IN ('completed', 'cancelled')
-                             AND eta_tasks.current_upper_seconds IS NULL THEN 1
+                            WHEN projected_tasks.status NOT IN ('completed', 'cancelled')
+                             AND projected_tasks.projected_upper_seconds IS NULL THEN 1
                             ELSE 0
                         END) > 0 THEN NULL
                ELSE SUM(CASE
-                            WHEN eta_tasks.status NOT IN ('completed', 'cancelled')
-                            THEN eta_tasks.current_upper_seconds
+                            WHEN projected_tasks.status NOT IN ('completed', 'cancelled')
+                            THEN projected_tasks.projected_upper_seconds
                             ELSE 0
                         END)
            END AS nested_upper_seconds
     FROM descendants
-    JOIN eta_tasks
-      ON eta_tasks.root_thread_id = descendants.root_thread_id
-     AND eta_tasks.task_id = descendants.descendant_task_id
+    JOIN projected_tasks
+      ON projected_tasks.root_thread_id = descendants.root_thread_id
+     AND projected_tasks.task_id = descendants.descendant_task_id
     GROUP BY descendants.root_thread_id, descendants.ancestor_task_id
 )
-SELECT eta_tasks.task_id,
-       eta_tasks.root_thread_id,
-       eta_tasks.owner_thread_id,
-       eta_tasks.parent_task_id,
-       eta_tasks.title,
-       eta_tasks.status,
-       eta_tasks.current_lower_seconds,
-       eta_tasks.current_upper_seconds,
-       eta_tasks.original_lower_seconds,
-       eta_tasks.original_upper_seconds,
-       eta_tasks.created_at,
-       eta_tasks.started_at,
-       eta_tasks.terminal_at,
-       eta_tasks.actual_elapsed_seconds,
-       eta_tasks.updated_at,
+SELECT projected_tasks.task_id,
+       projected_tasks.root_thread_id,
+       projected_tasks.owner_thread_id,
+       projected_tasks.parent_task_id,
+       projected_tasks.title,
+       projected_tasks.status,
+       projected_tasks.projected_lower_seconds AS current_lower_seconds,
+       projected_tasks.projected_upper_seconds AS current_upper_seconds,
+       projected_tasks.original_lower_seconds,
+       projected_tasks.original_upper_seconds,
+       projected_tasks.created_at,
+       projected_tasks.started_at,
+       projected_tasks.terminal_at,
+       projected_tasks.actual_elapsed_seconds,
+       projected_tasks.updated_at,
+       projected_tasks.projected_is_stale AS is_stale,
        threads.title AS session_title,
        threads.name AS session_name,
        threads.preview AS session_preview,
@@ -169,36 +224,36 @@ SELECT eta_tasks.task_id,
        COALESCE(nested_summary.active_nested_task_count, 0) AS active_nested_task_count,
        nested_summary.nested_lower_seconds,
        nested_summary.nested_upper_seconds
-FROM eta_tasks
-JOIN threads ON threads.id = eta_tasks.root_thread_id
+FROM projected_tasks
+JOIN threads ON threads.id = projected_tasks.root_thread_id
 LEFT JOIN nested_summary
-  ON nested_summary.root_thread_id = eta_tasks.root_thread_id
- AND nested_summary.ancestor_task_id = eta_tasks.task_id
+  ON nested_summary.root_thread_id = projected_tasks.root_thread_id
+ AND nested_summary.ancestor_task_id = projected_tasks.task_id
 WHERE (
             "#,
         );
         builder
             .push_bind(if include_nested { 1_i64 } else { 0_i64 })
-            .push(" = 1 OR eta_tasks.parent_task_id IS NULL)");
+            .push(" = 1 OR projected_tasks.parent_task_id IS NULL)");
         builder.push(" AND (");
         if let Some((updated_at, root_thread_id, task_id)) = cursor.as_ref() {
             builder
-                .push("eta_tasks.updated_at < ")
+                .push("projected_tasks.updated_at < ")
                 .push_bind(*updated_at)
-                .push(" OR (eta_tasks.updated_at = ")
+                .push(" OR (projected_tasks.updated_at = ")
                 .push_bind(*updated_at)
-                .push(" AND (eta_tasks.root_thread_id > ")
+                .push(" AND (projected_tasks.root_thread_id > ")
                 .push_bind(root_thread_id)
-                .push(" OR (eta_tasks.root_thread_id = ")
+                .push(" OR (projected_tasks.root_thread_id = ")
                 .push_bind(root_thread_id)
-                .push(" AND eta_tasks.task_id > ")
+                .push(" AND projected_tasks.task_id > ")
                 .push_bind(task_id)
                 .push(")))");
         } else {
             builder.push("1 = 1");
         }
         builder
-            .push(") ORDER BY eta_tasks.updated_at DESC, eta_tasks.root_thread_id, eta_tasks.task_id LIMIT ")
+            .push(") ORDER BY projected_tasks.updated_at DESC, projected_tasks.root_thread_id, projected_tasks.task_id LIMIT ")
             .push_bind(i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX));
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut rows = rows
@@ -237,6 +292,19 @@ impl StateRuntime {
             .list_sessions(cursor, limit, include_nested)
             .await
     }
+
+    /// Read a task-first page using one caller-supplied projection timestamp.
+    pub async fn list_task_estimate_sessions_at(
+        &self,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+        include_nested: bool,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<TaskEstimateSessionPage> {
+        self.task_estimates()
+            .list_sessions_at(cursor, limit, include_nested, now)
+            .await
+    }
 }
 
 impl TaskEstimateSessionRow {
@@ -263,6 +331,7 @@ impl TaskEstimateSessionRow {
                 .transpose()?,
             actual_elapsed_seconds: row.try_get("actual_elapsed_seconds")?,
             updated_at: epoch_seconds_to_datetime(row.try_get("updated_at")?)?,
+            is_stale: row.try_get::<i64, _>("is_stale")? != 0,
             session_title: row.try_get("session_title")?,
             session_name: row.try_get("session_name")?,
             session_preview: row.try_get("session_preview")?,
