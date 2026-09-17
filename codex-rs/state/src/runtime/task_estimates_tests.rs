@@ -105,12 +105,7 @@ async fn eta_history_pruning_removes_old_terminal_rows_only() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
     runtime
-        .apply_task_estimate_mutations(
-            root,
-            root,
-            &[create("old", "Old", Some((1, 2)))],
-            now,
-        )
+        .apply_task_estimate_mutations(root, root, &[create("old", "Old", Some((1, 2)))], now)
         .await
         .expect("create old task");
     runtime
@@ -132,12 +127,7 @@ async fn eta_history_pruning_removes_old_terminal_rows_only() {
         .await
         .expect("complete old task");
     runtime
-        .apply_task_estimate_mutations(
-            root,
-            root,
-            &[create("active", "Active", Some((1, 2)))],
-            now,
-        )
+        .apply_task_estimate_mutations(root, root, &[create("active", "Active", Some((1, 2)))], now)
         .await
         .expect("create active task");
     runtime

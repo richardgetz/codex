@@ -1831,10 +1831,8 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
         }
     );
 
-    let configured = load_current_time_reminder_config(
-        "\n[eta]\nhistory_retention_days = 0\n",
-    )
-    .await?;
+    let configured =
+        load_current_time_reminder_config("\n[eta]\nhistory_retention_days = 0\n").await?;
     assert_eq!(configured.eta.history_retention_days, 0);
 
     let error = load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 0\n")

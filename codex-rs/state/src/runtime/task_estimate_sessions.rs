@@ -223,7 +223,9 @@ impl StateRuntime {
         retention_days: u64,
         now: DateTime<Utc>,
     ) -> anyhow::Result<u64> {
-        self.task_estimates().prune_history(retention_days, now).await
+        self.task_estimates()
+            .prune_history(retention_days, now)
+            .await
     }
 
     /// Read a bounded task-first page spanning all persisted ETA roots.
