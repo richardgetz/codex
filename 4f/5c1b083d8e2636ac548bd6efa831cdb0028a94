@@ -1,0 +1,21 @@
+intent:
+  id: "team-activity-spawn-registration-fence#4f5c1b083d"
+  change_type: fix
+  scope: team activity pause snapshots
+  summary: Fence thread-manager registration with the active-at-pause snapshot boundary.
+  decision: Reuse the root activity-update mutex around the final in-memory thread insertion so a concurrent pause either captures the child or completes propagation before registration; release the guard before duplicate shutdown.
+  constraints:
+    - Preserve existing root activity pause/update and propagation lock ordering.
+    - Do not hold the activity-update mutex during session startup or duplicate shutdown.
+    - Cover fresh, forked, and resumed thread registrations through the centralized finalizer.
+    - Keep the durable active-at-pause snapshot and child startup reconciliation semantics unchanged.
+    - Do not replay or alter external operations during pause recovery.
+  intent_priority: high
+  code_locations:
+    - codex-rs/core/src/agent/control/activity.rs
+    - codex-rs/core/src/thread_manager.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: Rick
+  recorded_by:
+    agent: "/root/pause_final_scope_tests"
+    model: "gpt-6-astra"
