@@ -1,0 +1,27 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-list-projection#447e935ec6"
+  change_type: "feat"
+  scope: "eta"
+  summary: "Expose truthful projected cross-session ETA history through the experimental v2 list API."
+  decision: "Add the experimental thread/eta/list protocol and processor over the persisted task-first index, project each row at one timestamp with its root freshness policy, freeze overdue and terminal ranges, project nested summaries consistently, and preserve portable cwd wire values."
+  constraints:
+    - "Keep the endpoint experimental and read-only; do not infer lifecycle completion or start model turns."
+    - "Age only started nonterminal rows while their freshness window is current; freeze overdue rows and mark isStale."
+    - "Keep terminal rows frozen and non-stale."
+    - "Use each root's persisted freshness policy, falling back only for legacy rows without a policy."
+    - "Preserve deterministic updated_at, root_thread_id, task_id ordering and anchor cursors on emitted rows."
+    - "Project nested child ranges with the same timestamp and unknown-range semantics."
+    - "Use LegacyAppPathString for cwd at the API boundary."
+    - "Do not regenerate schemas or run builds in this source-only worker."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-protocol/src/protocol/common.rs::ClientRequest::ThreadEtaList"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread_eta.rs::ThreadEtaListParams"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs::ThreadEtaRequestProcessor::list"
+    - "codex-rs/state/src/runtime/task_estimate_sessions.rs::TaskEstimateStore::list_sessions_at"
+    - "codex-rs/state/src/runtime/task_estimates_tests.rs::all_session_eta_list_projects_ranges_with_root_freshness"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5.6"
