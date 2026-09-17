@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-17/pr151-format#83f816ed40"
+  change_type: "fix"
+  scope: "ci"
+  summary: "Apply repository rustfmt output so PR #151 passes the required format check."
+  decision: "Commit only the deterministic cargo fmt changes reported by CI."
+  constraints:
+    - "Do not alter runtime behavior or public APIs."
+    - "Keep the repair limited to the four files reported by the failed format job."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/config/config_tests.rs"
+    - "codex-rs/core/src/session/config_lock.rs"
+    - "codex-rs/state/src/runtime/task_estimate_sessions.rs"
+    - "codex-rs/state/src/runtime/task_estimates_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-babysit-pr"
+    model: "gpt-5"
