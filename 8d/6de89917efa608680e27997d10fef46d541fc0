@@ -1,0 +1,28 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-history-rebased#8d6de89917"
+  change_type: "feat"
+  scope: "eta"
+  summary: "Carry cross-session ETA history navigation onto stable alongside durable pause snapshots."
+  decision: "Preserve pause migration 0062, append cross-session indexes as migration 0063, retain recursive terminal-history closure, and expose paginated task-first ETA rows with model-facing nesting guidance."
+  constraints:
+    - "Keep unfinished tasks and terminal grouping or dependency ancestors referenced by retained work."
+    - "Preserve UTC Unix-second wire and persisted timestamps plus existing root-scoped ETA projection behavior."
+    - "Keep config, schema, and app-server protocol source synchronized with the history-retention and list fields."
+    - "Use parent_task_id only for true constituent steps of one deliverable; keep independent asks top-level and use depends_on_task_ids for ordering."
+    - "Keep the integrated source diff below the 800-line review ceiling."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimate_sessions.rs"
+    - "codex-rs/state/migrations/0063_rick_eta_cross_session_index.sql"
+    - "codex-rs/state/migrations/README.md"
+    - "codex-rs/state/src/model/task_estimate.rs"
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread_eta.rs"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+    - "codex-rs/core/src/tools/handlers/eta.rs"
+    - "codex-rs/config/src/config_toml.rs"
+    - "codex-rs/core/config.schema.json"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
