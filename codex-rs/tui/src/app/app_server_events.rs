@@ -155,7 +155,22 @@ impl App {
         }
 
         if let ServerNotification::ThreadEtaUpdated(eta) = &notification {
+            let eta_root = ThreadId::from_string(&eta.root_thread_id).ok();
+            let refresh_all_sessions = eta_root
+                .zip(self.eta.root_thread_id)
+                .is_some_and(|(updated_root, selected_root)| updated_root != selected_root)
+                && self
+                    .chat_widget
+                    .active_tab_id_for_active_view(super::eta_view::ETA_VIEW_ID)
+                    .is_some();
             self.apply_eta_notification(eta);
+            if refresh_all_sessions {
+                self.refresh_eta_sessions(
+                    app_server_client,
+                    None,
+                    self.eta.all_sessions_include_nested,
+                );
+            }
             return;
         }
 

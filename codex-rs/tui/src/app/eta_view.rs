@@ -16,6 +16,7 @@ use crate::keymap::KeymapContext;
 use crate::keymap::KeymapContextSet;
 use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
+use crate::resume_picker::SessionTarget;
 use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -130,6 +131,10 @@ pub(super) struct EtaSessionInfo {
     pub(super) thread_id: String,
     pub(super) title: String,
     pub(super) name: Option<String>,
+    pub(super) preview: Option<String>,
+    pub(super) created_at: i64,
+    pub(super) updated_at: i64,
+    pub(super) archived_at: Option<i64>,
     pub(super) cwd: String,
 }
 
@@ -147,6 +152,21 @@ pub(super) struct EtaSessionTask {
     pub(super) active_nested_task_count: u32,
     pub(super) nested_lower_seconds: Option<i64>,
     pub(super) nested_upper_seconds: Option<i64>,
+}
+
+/// Presentation state persisted by the app while a read response replaces the view.
+///
+/// Selection is keyed by the stable task/root identity rather than a row offset. This keeps a
+/// refresh or a newly appended cursor page from moving the highlight to a different task.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EtaViewState {
+    pub(super) tab_id: String,
+    pub(super) selected_task_id: Option<String>,
+    pub(super) selected_session: Option<(String, String)>,
+    pub(super) expanded: bool,
+    pub(super) scroll_top: usize,
+    pub(super) collapsed_task_ids: Vec<String>,
+    pub(super) collapsed_session_task_ids: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -198,6 +218,9 @@ pub(super) struct EtaView {
     all_sessions_next_cursor: Option<String>,
     all_sessions_include_nested: bool,
     all_sessions_request_in_flight: bool,
+    eta_request_in_flight: bool,
+    eta_error: Option<String>,
+    all_sessions_error: Option<String>,
     current_thread_id: Option<ThreadId>,
     tab: EtaTab,
     state: ScrollState,
@@ -260,6 +283,76 @@ impl EtaView {
         )
     }
 
+    pub(super) fn new_with_state_and_all_sessions_and_status(
+        snapshot: EtaSnapshot,
+        keymap: ListKeymap,
+        app_event_tx: AppEventSender,
+        tab_id: &str,
+        selected_idx: Option<usize>,
+        timestamp_formatter: EtaTimestampFormatter,
+        all_sessions: Vec<EtaSessionTask>,
+        all_sessions_next_cursor: Option<String>,
+        all_sessions_include_nested: bool,
+        all_sessions_request_in_flight: bool,
+        current_thread_id: Option<ThreadId>,
+        eta_request_in_flight: bool,
+        eta_error: Option<String>,
+        all_sessions_error: Option<String>,
+        view_state: Option<EtaViewState>,
+    ) -> Self {
+        let saved = view_state.unwrap_or_default();
+        let collapsed_task_ids = saved.collapsed_task_ids.iter().cloned().collect();
+        let collapsed_session_task_ids = saved
+            .collapsed_session_task_ids
+            .iter()
+            .cloned()
+            .collect();
+        let saved_selected_idx = saved.selected_task_id.as_deref().and_then(|task_id| {
+            let tasks = match saved.tab_id.as_str() {
+                ETA_HISTORY_TAB_ID => snapshot.history.as_slice(),
+                _ => snapshot.active.as_slice(),
+            };
+            tasks.iter().position(|task| task.task_id == task_id)
+        });
+        let selected_idx = saved_selected_idx.or(selected_idx);
+        let tab_id = if saved.tab_id.is_empty() {
+            tab_id
+        } else {
+            saved.tab_id.as_str()
+        };
+        let mut view = Self {
+            snapshot,
+            all_sessions,
+            all_sessions_next_cursor,
+            all_sessions_include_nested,
+            all_sessions_request_in_flight,
+            eta_request_in_flight,
+            eta_error,
+            all_sessions_error,
+            current_thread_id,
+            tab: match tab_id {
+                ETA_HISTORY_TAB_ID => EtaTab::History,
+                ETA_ALL_SESSIONS_TAB_ID => EtaTab::AllSessions,
+                _ => EtaTab::Active,
+            },
+            state: ScrollState {
+                selected_idx,
+                scroll_top: saved.scroll_top,
+            },
+            expanded: saved.expanded,
+            complete: None,
+            keymap,
+            app_event_tx,
+            requested_history_cursor: None,
+            collapsed_task_ids,
+            collapsed_session_task_ids,
+            timestamp_formatter,
+        };
+        view.restore_selection(&saved);
+        view.clamp_selection();
+        view
+    }
+
     pub(super) fn new_with_state_and_all_sessions(
         snapshot: EtaSnapshot,
         keymap: ListKeymap,
@@ -273,33 +366,63 @@ impl EtaView {
         all_sessions_request_in_flight: bool,
         current_thread_id: Option<ThreadId>,
     ) -> Self {
-        let mut view = Self {
+        Self::new_with_state_and_all_sessions_and_status(
             snapshot,
+            keymap,
+            app_event_tx,
+            tab_id,
+            selected_idx,
+            timestamp_formatter,
             all_sessions,
             all_sessions_next_cursor,
             all_sessions_include_nested,
             all_sessions_request_in_flight,
             current_thread_id,
-            tab: match tab_id {
-                ETA_HISTORY_TAB_ID => EtaTab::History,
-                ETA_ALL_SESSIONS_TAB_ID => EtaTab::AllSessions,
-                _ => EtaTab::Active,
-            },
-            state: ScrollState {
-                selected_idx,
-                ..ScrollState::new()
-            },
-            expanded: false,
-            complete: None,
-            keymap,
-            app_event_tx,
-            requested_history_cursor: None,
-            collapsed_task_ids: HashSet::new(),
-            collapsed_session_task_ids: HashSet::new(),
-            timestamp_formatter,
+            false,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn restore_selection(&mut self, saved: &EtaViewState) {
+        let selected = match self.tab {
+            EtaTab::AllSessions => saved.selected_session.as_ref().and_then(|key| {
+                self.ordered_session_indices().iter().position(|idx| {
+                    let task = &self.all_sessions[*idx];
+                    task.root_thread_id == key.0 && task.task_id == key.1
+                })
+            }),
+            EtaTab::Active | EtaTab::History => saved.selected_task_id.as_deref().and_then(|id| {
+                self.ordered_indices()
+                    .iter()
+                    .position(|idx| self.tasks()[*idx].task_id == id)
+            }),
         };
-        view.clamp_selection();
-        view
+        if selected.is_some() {
+            self.state.selected_idx = selected;
+        }
+    }
+
+    fn capture_state(&self) -> EtaViewState {
+        EtaViewState {
+            tab_id: self.tab.id().to_string(),
+            selected_task_id: self.selected_task().map(|task| task.task_id.clone()),
+            selected_session: self
+                .selected_session_task()
+                .map(|task| (task.root_thread_id.clone(), task.task_id.clone())),
+            expanded: self.expanded,
+            scroll_top: self.state.scroll_top,
+            collapsed_task_ids: self.collapsed_task_ids.iter().cloned().collect(),
+            collapsed_session_task_ids: self.collapsed_session_task_ids.iter().cloned().collect(),
+        }
+    }
+
+    fn emit_state(&self) {
+        self.app_event_tx.send(AppEvent::EtaViewStateChanged {
+            root_thread_id: self.snapshot.root_thread_id.clone(),
+            state: self.capture_state(),
+        });
     }
 
     fn tasks(&self) -> &[EtaTask] {
@@ -396,20 +519,68 @@ impl EtaView {
     fn ordered_session_indices(&self) -> Vec<usize> {
         let tasks = self.session_tasks();
         let mut root_order = HashMap::new();
-        for task in tasks {
+        let mut roots = Vec::new();
+        let mut children: HashMap<(&str, Option<&str>), Vec<usize>> = HashMap::new();
+        for (idx, task) in tasks.iter().enumerate() {
             let root = task.root_thread_id.as_str();
             let next = root_order.len();
-            root_order.entry(root).or_insert(next);
+            if root_order.insert(root, next).is_none() {
+                roots.push(root);
+            }
+            children.entry((root, task.parent_task_id.as_deref())).or_default().push(idx);
         }
-        let mut ordered = (0..tasks.len()).collect::<Vec<_>>();
-        ordered.sort_by_key(|idx| {
-            (
-                root_order[tasks[*idx].root_thread_id.as_str()],
-                self.session_task_depth(*idx),
-                *idx,
-            )
-        });
-        ordered.retain(|idx| !self.session_task_hidden(*idx));
+        let mut ordered = Vec::with_capacity(tasks.len());
+        let mut seen = HashSet::with_capacity(tasks.len());
+        for root in roots {
+            fn visit(
+                root: &str,
+                parent: Option<&str>,
+                children: &HashMap<(&str, Option<&str>), Vec<usize>>,
+                tasks: &[EtaSessionTask],
+                collapsed: &HashSet<(String, String)>,
+                output: &mut Vec<usize>,
+                seen: &mut HashSet<usize>,
+            ) {
+                let Some(indices) = children.get(&(root, parent)) else {
+                    return;
+                };
+                for &idx in indices {
+                    if !seen.insert(idx) {
+                        continue;
+                    }
+                    output.push(idx);
+                    let task = &tasks[idx];
+                    let key = (root.to_string(), task.task_id.clone());
+                    if !collapsed.contains(&key) {
+                        visit(
+                            root,
+                            Some(task.task_id.as_str()),
+                            children,
+                            tasks,
+                            collapsed,
+                            output,
+                            seen,
+                        );
+                    }
+                }
+            }
+            visit(
+                root,
+                None,
+                &children,
+                tasks,
+                &self.collapsed_session_task_ids,
+                &mut ordered,
+                &mut seen,
+            );
+        }
+        // A parent can arrive on a later cursor page. Re-run the graph walk once the page is
+        // merged, and keep malformed/cyclic rows visible if the graph is still incomplete.
+        for idx in 0..tasks.len() {
+            if seen.insert(idx) && !self.session_task_hidden(idx) {
+                ordered.push(idx);
+            }
+        }
         ordered
     }
 
@@ -502,6 +673,17 @@ impl EtaView {
             .and_then(|task_idx| self.session_tasks().get(*task_idx))
     }
 
+    fn selected_session_target(&self) -> Option<SessionTarget> {
+        let task = self.selected_session_task()?;
+        let thread_id = ThreadId::from_string(&task.session.thread_id).ok()?;
+        Some(SessionTarget {
+            path: None,
+            thread_id,
+            cwd: (!task.session.cwd.trim().is_empty()).then(|| task.session.cwd.clone().into()),
+            history_mode: None,
+        })
+    }
+
     fn clamp_selection(&mut self) {
         let len = if self.tab == EtaTab::AllSessions {
             self.ordered_session_indices().len()
@@ -540,6 +722,7 @@ impl EtaView {
             | ListAction::Cancel => {}
         }
         self.state.ensure_visible(len, self.visible_rows());
+        self.emit_state();
     }
 
     fn request_next_history_page(&mut self) {
@@ -574,11 +757,13 @@ impl EtaView {
             cursor: Some(cursor),
             include_nested: self.all_sessions_include_nested,
         });
+        self.emit_state();
     }
 
     fn switch_tab(&mut self, tab: EtaTab) {
         self.tab = tab;
-        self.state.reset();
+        self.state.selected_idx = None;
+        self.state.scroll_top = 0;
         self.clamp_selection();
         self.expanded = false;
         if tab == EtaTab::AllSessions
@@ -591,23 +776,42 @@ impl EtaView {
                 include_nested: self.all_sessions_include_nested,
             });
         }
+        self.emit_state();
+    }
+
+    fn toggle_nested_mode(&mut self) {
+        if self.tab != EtaTab::AllSessions {
+            return;
+        }
+        self.all_sessions_include_nested = !self.all_sessions_include_nested;
+        self.all_sessions_request_in_flight = true;
+        self.all_sessions_error = None;
+        self.app_event_tx.send(AppEvent::LoadEtaSessions {
+            cursor: None,
+            include_nested: self.all_sessions_include_nested,
+        });
+        self.emit_state();
     }
 
     fn toggle_selected(&mut self) {
         if self.tab == EtaTab::AllSessions {
             let Some(task) = self.selected_session_task() else {
                 self.expanded = !self.expanded;
+                self.emit_state();
                 return;
             };
             if task.nested_task_count > 0 {
                 if !self.all_sessions_include_nested {
                     if !self.all_sessions_request_in_flight {
+                        self.all_sessions_include_nested = true;
                         self.all_sessions_request_in_flight = true;
+                        self.all_sessions_error = None;
                         self.app_event_tx.send(AppEvent::LoadEtaSessions {
                             cursor: None,
                             include_nested: true,
                         });
                     }
+                    self.emit_state();
                     return;
                 }
                 let key = (task.root_thread_id.clone(), task.task_id.clone());
@@ -617,10 +821,12 @@ impl EtaView {
                 self.clamp_selection();
             }
             self.expanded = !self.expanded;
+            self.emit_state();
             return;
         }
         let Some(task_id) = self.selected_task().map(|task| task.task_id.clone()) else {
             self.expanded = !self.expanded;
+            self.emit_state();
             return;
         };
         let has_children = self
@@ -634,17 +840,32 @@ impl EtaView {
             self.clamp_selection();
         }
         self.expanded = !self.expanded;
+        self.emit_state();
     }
 
     fn resume_selected_session(&mut self) {
-        let Some(task) = self.selected_session_task() else {
-            return;
-        };
-        let Ok(thread_id) = ThreadId::from_string(&task.session.thread_id) else {
+        let Some(target) = self.selected_session_target() else {
             return;
         };
         self.app_event_tx
-            .send(AppEvent::ResumeEtaSession { thread_id });
+            .send(AppEvent::ResumeEtaSessionTarget { target });
+    }
+
+    fn retry(&mut self) {
+        if self.tab == EtaTab::AllSessions {
+            self.all_sessions_request_in_flight = true;
+            self.all_sessions_error = None;
+            self.app_event_tx.send(AppEvent::LoadEtaSessions {
+                cursor: None,
+                include_nested: self.all_sessions_include_nested,
+            });
+        } else if let Ok(root_thread_id) = ThreadId::from_string(&self.snapshot.root_thread_id) {
+            self.eta_request_in_flight = true;
+            self.eta_error = None;
+            self.app_event_tx
+                .send(AppEvent::RefreshEta { root_thread_id });
+        }
+        self.emit_state();
     }
 
     fn close(&mut self) {
@@ -704,7 +925,19 @@ impl BottomPaneView for EtaView {
                 code: KeyCode::Char('r' | 'R'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } if self.tab == EtaTab::AllSessions => self.resume_selected_session(),
+            } if self.tab == EtaTab::AllSessions && self.selected_session_task().is_some() => {
+                self.resume_selected_session()
+            }
+            KeyEvent {
+                code: KeyCode::Char('r' | 'R'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.retry(),
+            KeyEvent {
+                code: KeyCode::Char('n' | 'N'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.toggle_nested_mode(),
             _ => {}
         }
     }
