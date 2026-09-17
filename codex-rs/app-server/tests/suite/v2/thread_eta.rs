@@ -421,6 +421,78 @@ async fn thread_eta_list_seeds_missing_root_freshness_from_config() -> Result<()
 }
 
 #[tokio::test]
+async fn thread_eta_read_does_not_prune_terminal_history() -> Result<()> {
+    let responses_server = create_mock_responses_server_repeating_assistant("unused").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config(
+            "suppress_unstable_features_warning = true\n[eta]\nhistory_retention_days = 1",
+        )
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+
+    let root_thread_id = ThreadId::new();
+    let old_now = Utc::now() - ChronoDuration::days(2);
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    let mut metadata = ThreadMetadataBuilder::new(
+        root_thread_id,
+        codex_home.path().join("sessions").join("old-root.jsonl"),
+        old_now,
+        SessionSource::Cli,
+    );
+    metadata.cwd = codex_home.path().to_path_buf();
+    state_db
+        .upsert_thread(&metadata.build("mock_provider"))
+        .await?;
+    state_db
+        .apply_task_estimate_mutations(
+            root_thread_id,
+            root_thread_id,
+            &[
+                state_create_task("old", "Old task", 1, 2),
+                state_start_task("old"),
+                TaskEstimateMutation {
+                    action: TaskEstimateAction::Complete,
+                    task_id: Some("old".to_string()),
+                    title: None,
+                    parent_task_id: None,
+                    depends_on_task_ids: None,
+                    estimate: None,
+                    reason: None,
+                    owner_thread_id: None,
+                },
+            ],
+            old_now,
+        )
+        .await?;
+    state_db.close().await;
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    assert!(read(&mut app, &ThreadId::new().to_string()).await.is_err());
+    drop(app);
+
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    let snapshot = state_db
+        .read_task_estimate_snapshot(root_thread_id, Utc::now(), None, None)
+        .await?;
+    assert_eq!(snapshot.history.len(), 1);
+    assert_eq!(snapshot.history[0].task_id, "old");
+    state_db.close().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_eta_cold_root_read_uses_persisted_freshness_policy() -> Result<()> {
     let responses_server = create_mock_responses_server_repeating_assistant("unused").await;
     let codex_home = TempDir::new()?;

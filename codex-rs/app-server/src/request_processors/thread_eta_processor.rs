@@ -81,7 +81,6 @@ impl ThreadEtaRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, codex_app_server_protocol::JSONRPCErrorError> {
         let thread_id = parse_thread_id(&params.thread_id)?;
         let state_db = self.state_db()?;
-        self.prune_history(state_db).await?;
         let root_thread_id = state_db
             .root_thread_id(thread_id)
             .await
