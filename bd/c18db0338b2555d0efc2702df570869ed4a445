@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-17/team-exact-pause-recovery#bdc18db0338b"
+  change_type: "fix"
+  scope: "codex-rs Team activity pause recovery"
+  summary: "Resume only the exact durable Team turns captured as active when pause began."
+  decision: "Persist Core's non-idle pause snapshot with exact turn IDs, retain completed generations as retry receipts, and make recovery inspect only those exact turns plus required ancestry."
+  constraints:
+    - "Legacy pause markers and markerless broken sessions remain conservatively recoverable without resurrecting historical terminal or interrupted workers."
+    - "V1 and V2 ancestry validation and on-demand loading remain compatible."
+    - "Pause and receipt transitions are root-scoped, transactional, idempotent, and process-replacement safe."
+    - "No UUID or wall-clock inference decides recovery membership."
+    - "Later turns on a captured thread are never substituted for the captured turn."
+    - "Already-launched external operations are never replayed."
+    - "Fork inventory and migration numbering remain current."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/turn_processor.rs"
+    - "codex-rs/core/src/agent/control/activity.rs"
+    - "codex-rs/core/src/thread_manager.rs"
+    - "codex-rs/protocol/src/protocol.rs"
+    - "codex-rs/state/src/runtime/thread_activity.rs"
+    - "codex-rs/state/migrations/0062_rick_thread_activity_pause_snapshots.sql"
+  requested_by: "@rick"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
