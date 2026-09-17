@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-session-paths#8e05940c1a"
+  change_type: "fix"
+  scope: "eta"
+  summary: "Preserve app-server session working-directory paths across operating systems."
+  decision: "Use LegacyAppPathString for ThreadEtaSessionInfo.cwd and construct it from the persisted path so cross-platform separators remain compatible while wire JSON stays a string."
+  constraints:
+    - "Keep the API wire representation as a string and preserve existing session metadata fields."
+    - "Do not change task ordering, pagination, retention, or root-scoped ETA behavior."
+    - "Keep path conversion aligned with app-server legacy path compatibility."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-protocol/src/protocol/v2/thread_eta.rs::ThreadEtaSessionInfo"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs::api_session_task"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
