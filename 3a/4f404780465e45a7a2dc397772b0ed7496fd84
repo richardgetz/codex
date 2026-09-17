@@ -1,0 +1,22 @@
+intent:
+  id: team-activity-pause-active-snapshot
+change_type: fix
+scope: codex-rs Team activity pause recovery
+summary: Persist the exact unfinished loaded Team threads active at pause time and recover only that snapshot.
+decision: Capture activity and parent lineage under the Core root activity admission lock before applying the pause gate; persist a generation-scoped snapshot and filter continue/cold recovery to captured threads plus validated ancestors. Treat legacy pause rows without snapshots as root-only release.
+constraints:
+  - Preserve existing markerless evidence-based recovery behavior.
+  - Never resurrect historical interrupted, completed, cleaned-up, or idle open workers automatically.
+  - Keep external operations fail-closed and do not replay them.
+  - Preserve V1 and V2 lineage validation and migration numbering.
+intent_priority: high
+code_locations:
+  - codex-rs/core/src/agent/control/activity.rs
+  - codex-rs/core/src/thread_manager.rs
+  - codex-rs/app-server/src/request_processors/turn_processor.rs
+  - codex-rs/state/src/runtime/thread_activity.rs
+  - codex-rs/state/migrations/0062_rick_thread_activity_pause_snapshots.sql
+requested_by: Rick
+recorded_by: Codex
+agent: /root/pause_exact_snapshot
+model: gpt-5.6-sol
