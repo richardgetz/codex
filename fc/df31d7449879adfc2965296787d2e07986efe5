@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-history-retention#fcdf31d744"
+  change_type: fix
+  scope: eta
+  summary: Preserve all ancestor and dependency rows needed by retained ETA history.
+  decision: Build a recursive edge closure from parent and dependency links before pruning, so an old terminal grouping chain remains intact whenever any descendant is unfinished or within retention.
+  constraints:
+    - Keep unfinished tasks and terminal grouping rows referenced by unfinished or retained descendants.
+    - Preserve terminal-only pruning and zero-day unlimited retention semantics.
+    - Avoid changing root-scoped ETA projection behavior.
+  intent_priority: must
+  code_locations:
+    - codex-rs/state/src/runtime/task_estimate_sessions.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
