@@ -5373,6 +5373,25 @@ fn realtime_start_omitted_initial_items_remain_none() {
 
     assert_eq!(params.initial_items, None);
 }
+
+#[test]
+fn thread_eta_list_defaults_to_top_level_tasks() {
+    let params = serde_json::from_value::<ThreadEtaListParams>(json!({
+        "limit": 25,
+    }))
+    .expect("ETA list params should deserialize");
+    assert_eq!(params.cursor, None);
+    assert_eq!(params.limit, Some(25));
+    assert!(!params.include_nested);
+
+    let value = serde_json::to_value(ThreadEtaListResponse {
+        data: Vec::new(),
+        next_cursor: None,
+    })
+    .expect("ETA list response should serialize");
+    assert_eq!(value, json!({"data": [], "nextCursor": null}));
+}
+
 #[test]
 fn realtime_start_deserializes_client_handoff_channel_prefixes() {
     let params = serde_json::from_value::<ThreadRealtimeStartParams>(json!({

@@ -8,6 +8,8 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadEtaAccuracy;
 use codex_app_server_protocol::ThreadEtaAction;
+use codex_app_server_protocol::ThreadEtaListParams;
+use codex_app_server_protocol::ThreadEtaListResponse;
 use codex_app_server_protocol::ThreadEtaReadParams;
 use codex_app_server_protocol::ThreadEtaReadResponse;
 use codex_app_server_protocol::ThreadEtaStatus;
@@ -76,6 +78,18 @@ async fn read(app: &mut TestAppServer, thread_id: &str) -> Result<ThreadEtaReadR
             thread_id: thread_id.to_string(),
             cursor: None,
             limit: Some(1),
+        },
+    })
+    .await
+}
+
+async fn list(app: &mut TestAppServer, include_nested: bool) -> Result<ThreadEtaListResponse> {
+    app.request(|request_id| ClientRequest::ThreadEtaList {
+        request_id,
+        params: ThreadEtaListParams {
+            cursor: None,
+            limit: Some(10),
+            include_nested,
         },
     })
     .await
@@ -227,6 +241,10 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
     assert_eq!(current.snapshot.history.len(), 1);
     assert_terminal_history(&current.snapshot.history[0]);
     assert_eq!(current.snapshot.sequence, completed.sequence);
+    let all_sessions = list(&mut app, false).await?;
+    assert_eq!(all_sessions.data.len(), 1);
+    assert_eq!(all_sessions.data[0].task_id, "compile");
+    assert_eq!(all_sessions.data[0].session.thread_id, thread_id);
 
     drop(app);
     let mut restarted = TestAppServer::builder()
@@ -243,6 +261,7 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
         persisted.snapshot.history[0].terminal_at,
         completed.changed_tasks[0].terminal_at
     );
+    assert_eq!(list(&mut restarted, false).await?.data.len(), 1);
 
     let requests = responses_server
         .received_requests()

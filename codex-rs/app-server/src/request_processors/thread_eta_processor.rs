@@ -8,10 +8,14 @@ use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadEtaAccuracy;
 use codex_app_server_protocol::ThreadEtaAction;
+use codex_app_server_protocol::ThreadEtaListParams;
+use codex_app_server_protocol::ThreadEtaListResponse;
 use codex_app_server_protocol::ThreadEtaOverall;
 use codex_app_server_protocol::ThreadEtaReadParams;
 use codex_app_server_protocol::ThreadEtaReadResponse;
 use codex_app_server_protocol::ThreadEtaRevision;
+use codex_app_server_protocol::ThreadEtaSessionInfo;
+use codex_app_server_protocol::ThreadEtaSessionTask;
 use codex_app_server_protocol::ThreadEtaSnapshot;
 use codex_app_server_protocol::ThreadEtaStatus;
 use codex_app_server_protocol::ThreadEtaTask;
@@ -21,6 +25,7 @@ use codex_app_server_protocol::ThreadEtaUpdateResponse;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
+use codex_core::config::DEFAULT_ETA_HISTORY_RETENTION_DAYS;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadEtaOverallUpdatedEvent;
 use codex_protocol::protocol::ThreadEtaTaskUpdatedEvent;
@@ -31,10 +36,12 @@ use codex_state::TaskEstimateAction;
 use codex_state::TaskEstimateMutation;
 use codex_state::TaskEstimateOverall;
 use codex_state::TaskEstimateRange;
+use codex_state::TaskEstimateSessionRow;
 use codex_state::TaskEstimateStatus;
 use codex_state::TaskEstimateUpdateResult;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ThreadStore;
+use codex_utils_path_uri::LegacyAppPathString;
 use std::sync::Arc;
 use tracing::warn;
 
@@ -74,6 +81,7 @@ impl ThreadEtaRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, codex_app_server_protocol::JSONRPCErrorError> {
         let thread_id = parse_thread_id(&params.thread_id)?;
         let state_db = self.state_db()?;
+        self.prune_history(state_db).await?;
         let root_thread_id = state_db
             .root_thread_id(thread_id)
             .await
@@ -214,6 +222,58 @@ impl ThreadEtaRequestProcessor {
                 .await;
         }
         Ok(Some(response.into()))
+    }
+
+    pub(crate) async fn list(
+        &self,
+        params: ThreadEtaListParams,
+    ) -> Result<Option<ClientResponsePayload>, codex_app_server_protocol::JSONRPCErrorError> {
+        let state_db = self.state_db()?;
+        self.prune_history(state_db).await?;
+        let generated_at = Utc::now();
+        let page = state_db
+            .list_task_estimate_sessions_at(
+                params.cursor.as_deref(),
+                Some(
+                    params
+                        .limit
+                        .unwrap_or(DEFAULT_HISTORY_LIMIT as u32)
+                        .clamp(1, MAX_HISTORY_LIMIT as u32) as usize,
+                ),
+                params.include_nested,
+                generated_at,
+            )
+            .await
+            .map_err(|err| internal_error(format!("failed to read all-session ETA: {err}")))?;
+        Ok(Some(
+            ThreadEtaListResponse {
+                data: page.rows.into_iter().map(api_session_task).collect(),
+                next_cursor: page.next_cursor,
+            }
+            .into(),
+        ))
+    }
+
+    async fn prune_history(
+        &self,
+        state_db: &StateDbHandle,
+    ) -> Result<(), codex_app_server_protocol::JSONRPCErrorError> {
+        let retention_days = match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => config.eta.history_retention_days,
+            Err(error) => {
+                warn!(%error, "failed to load ETA history retention policy; using default");
+                DEFAULT_HISTORY_RETENTION_DAYS
+            }
+        };
+        state_db
+            .prune_task_estimate_history(retention_days, Utc::now())
+            .await
+            .map(|_| ())
+            .map_err(|err| internal_error(format!("failed to prune ETA history: {err}")))
     }
 
     pub(crate) fn state_db(
@@ -474,6 +534,41 @@ fn api_overall(overall: TaskEstimateOverall) -> ThreadEtaOverall {
         remaining_lower_seconds: overall.remaining_lower_seconds,
         remaining_upper_seconds: overall.remaining_upper_seconds,
         unknown_reason: overall.unknown_reason,
+    }
+}
+
+fn api_session_task(task: TaskEstimateSessionRow) -> ThreadEtaSessionTask {
+    ThreadEtaSessionTask {
+        task_id: task.task_id,
+        root_thread_id: task.root_thread_id.to_string(),
+        owner_thread_id: task.owner_thread_id.to_string(),
+        parent_task_id: task.parent_task_id,
+        title: task.title,
+        status: api_status(task.status),
+        current_lower_seconds: task.current_lower_seconds,
+        current_upper_seconds: task.current_upper_seconds,
+        original_lower_seconds: task.original_lower_seconds,
+        original_upper_seconds: task.original_upper_seconds,
+        created_at: task.created_at.timestamp(),
+        started_at: task.started_at.map(|value| value.timestamp()),
+        terminal_at: task.terminal_at.map(|value| value.timestamp()),
+        actual_elapsed_seconds: task.actual_elapsed_seconds,
+        updated_at: task.updated_at.timestamp(),
+        is_stale: task.is_stale,
+        session: ThreadEtaSessionInfo {
+            thread_id: task.root_thread_id.to_string(),
+            title: task.session_title,
+            name: task.session_name,
+            preview: task.session_preview,
+            created_at: task.session_created_at.timestamp(),
+            updated_at: task.session_updated_at.timestamp(),
+            archived_at: task.session_archived_at.map(|value| value.timestamp()),
+            cwd: LegacyAppPathString::from_path(&task.session_cwd),
+        },
+        nested_task_count: task.nested_task_count.try_into().unwrap_or(u32::MAX),
+        active_nested_task_count: task.active_nested_task_count.try_into().unwrap_or(u32::MAX),
+        nested_lower_seconds: task.nested_lower_seconds,
+        nested_upper_seconds: task.nested_upper_seconds,
     }
 }
 

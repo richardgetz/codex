@@ -58,6 +58,12 @@ release or merge rules.
   Model-facing guidance uses `parent_task_id` only
   for true constituent steps of one deliverable, keeps independent asks top-level,
   and uses `depends_on_task_ids` for ordering between tasks.
+  The experimental app-server v2 `thread/eta/list` navigator returns paginated
+  task-first rows across persisted roots, ages fresh nonterminal ranges from one
+  read timestamp using each root's persisted freshness policy, freezes overdue
+  rows with `is_stale`, keeps terminal ranges frozen, projects nested summaries
+  with the same semantics, and serializes session cwd through
+  `LegacyAppPathString`.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -805,6 +811,11 @@ release or merge rules.
   missing cold-root row from the current server configuration, remains
   authoritative for Worker mutations, and is updated/rearmed only by the root
   Lead configuration path.
+- Verify experimental `thread/eta/list` keeps keyset cursors anchored on the
+  final emitted row, projects fresh nonterminal ranges with each root's saved
+  freshness policy at one read timestamp, freezes overdue rows with
+  `isStale`, leaves terminal ranges frozen, projects nested summaries using the
+  same remaining-range semantics, and preserves portable cwd wire values.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute

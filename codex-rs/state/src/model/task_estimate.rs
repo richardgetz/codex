@@ -285,6 +285,8 @@ pub struct TaskEstimateSessionRow {
     pub terminal_at: Option<DateTime<Utc>>,
     pub actual_elapsed_seconds: Option<i64>,
     pub updated_at: DateTime<Utc>,
+    /// Whether this active row exceeded its root's persisted freshness window at read time.
+    pub is_stale: bool,
     pub session_title: String,
     pub session_name: Option<String>,
     pub session_preview: Option<String>,
@@ -294,6 +296,7 @@ pub struct TaskEstimateSessionRow {
     pub session_cwd: PathBuf,
     pub nested_task_count: i64,
     pub active_nested_task_count: i64,
+    /// Sum of remaining ranges for active transitive children; unknown when any active child is unknown.
     pub nested_lower_seconds: Option<i64>,
     pub nested_upper_seconds: Option<i64>,
 }
