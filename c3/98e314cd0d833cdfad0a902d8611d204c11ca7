@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-17/eta-refresh-retry#c398e314cd"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Keep All Sessions retry behavior unambiguous and loading state synchronized."
+  decision: "Prioritize refresh retry when All Sessions has an error even if a row is selected, synchronize the requested nested mode before repainting an in-flight refresh, and document the visible All Sessions refresh and cursor-tail contract."
+  constraints:
+    - "The error banner's press-r action must retry the list request rather than resume a selected session."
+    - "Immediate repaint must reflect the requested include-nested mode while the response is in flight."
+    - "Preserve explicit/manual refresh behavior and existing selected-session resume behavior when no refresh error is present."
+    - "Keep worker scope source-only; do not run Rust, Cargo, or just commands."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
