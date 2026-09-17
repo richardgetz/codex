@@ -1,0 +1,20 @@
+intent:
+  id: "team-activity-repeat-continue-receipt"
+  change_type: "fix"
+  scope: "codex-rs Team activity pause recovery"
+  summary: "Keep repeated and post-restart continue requests scoped to the completed active-at-pause snapshot."
+  decision: "Persist a generation completion receipt when snapshot-aware continue succeeds, consult it before legacy markerless recovery, and clear it only when a new durable pause generation starts."
+  constraints:
+    - "Legacy broken sessions without a completion receipt must retain conservative markerless recovery."
+    - "Repeated continue requests must not scan or resurrect historical interrupted workers."
+    - "Receipt and pause marker transitions must remain transactional and restart-safe."
+    - "Preserve V1 and V2 lineage validation and migration numbering."
+  intent_priority: "high"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/turn_processor.rs"
+    - "codex-rs/state/src/runtime/thread_activity.rs"
+    - "codex-rs/state/migrations/0062_rick_thread_activity_pause_snapshots.sql"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Lead"
+    model: "gpt-6"
