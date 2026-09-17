@@ -9,6 +9,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 /// Lifecycle state for a user-visible ETA task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +260,48 @@ pub struct TaskEstimateUpdateResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskEstimateHistoryPage {
     pub tasks: Vec<TaskEstimate>,
+    pub next_cursor: Option<String>,
+}
+
+/// A lightweight task row used by the cross-session ETA navigator.
+///
+/// Unlike [`TaskEstimate`], this projection intentionally omits revision history. It joins the
+/// owning root's persisted thread metadata in one query so clients can render a task-first list
+/// and resume the corresponding session without loading every rollout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskEstimateSessionRow {
+    pub task_id: String,
+    pub root_thread_id: ThreadId,
+    pub owner_thread_id: ThreadId,
+    pub parent_task_id: Option<String>,
+    pub title: String,
+    pub status: TaskEstimateStatus,
+    pub current_lower_seconds: Option<i64>,
+    pub current_upper_seconds: Option<i64>,
+    pub original_lower_seconds: Option<i64>,
+    pub original_upper_seconds: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub terminal_at: Option<DateTime<Utc>>,
+    pub actual_elapsed_seconds: Option<i64>,
+    pub updated_at: DateTime<Utc>,
+    pub session_title: String,
+    pub session_name: Option<String>,
+    pub session_preview: Option<String>,
+    pub session_created_at: DateTime<Utc>,
+    pub session_updated_at: DateTime<Utc>,
+    pub session_archived_at: Option<DateTime<Utc>>,
+    pub session_cwd: PathBuf,
+    pub nested_task_count: i64,
+    pub active_nested_task_count: i64,
+    pub nested_lower_seconds: Option<i64>,
+    pub nested_upper_seconds: Option<i64>,
+}
+
+/// A keyset-paginated page of cross-session ETA task rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskEstimateSessionPage {
+    pub rows: Vec<TaskEstimateSessionRow>,
     pub next_cursor: Option<String>,
 }
 

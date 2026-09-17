@@ -110,13 +110,19 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
             ),
             (
                 "parent_task_id".to_string(),
-                JsonSchema::string(Some("Optional grouping parent task id.".to_string())),
+                JsonSchema::string(Some(
+                    "Optional grouping parent task id. Use only for a true constituent step of one deliverable; keep independent asks top-level."
+                        .to_string(),
+                )),
             ),
             (
                 "depends_on_task_ids".to_string(),
                 JsonSchema::array(
                     JsonSchema::string(None),
-                    Some("Executable dependencies; cycles are rejected.".to_string()),
+                    Some(
+                        "Executable dependencies for ordering between tasks without nesting; cycles are rejected."
+                            .to_string(),
+                    ),
                 ),
             ),
             (
@@ -147,7 +153,7 @@ impl ToolExecutor<ToolInvocation> for EtaHandler {
         ]);
         ToolSpec::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
-            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Register each task to the agent actually doing the work; the root Lead may assign a persisted Worker with owner_thread_id, and reminders go directly to that owner. Keep estimates current when work starts, scope changes, blockers appear, and work completes. When a reminder arrives, reassess from now and revise with the truthful remaining range plus a short change or blocker reason; do not reset the original duration. Completion or cancellation is explicit; idle or elapsed time never completes a task. Results include each changed task's durable started_at and terminal_at Unix timestamps. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
+            description: "Record bounded task estimates and explicit lifecycle updates for the current root session. Register each task to the agent actually doing the work; the root Lead may assign a persisted Worker with owner_thread_id, and reminders go directly to that owner. Use parent_task_id only for true constituent steps of one deliverable, keep independent asks top-level, and use depends_on_task_ids for ordering between tasks. Keep estimates current when work starts, scope changes, blockers appear, and work completes. When a reminder arrives, reassess from now and revise with the truthful remaining range plus a short change or blocker reason; do not reset the original duration. Completion or cancellation is explicit; idle or elapsed time never completes a task. Results include each changed task's durable started_at and terminal_at Unix timestamps. Estimates are lower/upper seconds ranges and may be omitted when unknown.".to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(

@@ -53,6 +53,11 @@ release or merge rules.
   UTC, and supports opt-in system-local display or a validated IANA timezone
   override through `[eta].use_local_timezone` and `[eta].timezone`; the named
   override takes precedence and handles daylight-saving transitions.
+  Cross-session ETA history is retained for 30 days by default, configurable via
+  `[eta].history_retention_days` (`0` means unlimited), with terminal-only pruning.
+  Model-facing guidance uses `parent_task_id` only
+  for true constituent steps of one deliverable, keeps independent asks top-level,
+  and uses `depends_on_task_ids` for ordering between tasks.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`
@@ -790,6 +795,12 @@ release or merge rules.
   persisted and wire timestamps as Unix seconds, supports deterministic
   system-local rendering and named IANA overrides with DST handling, and
   rejects invalid `[eta].timezone` values clearly.
+- Verify `[eta].history_retention_days` defaults to 30, accepts `0` for unlimited
+  retention, prunes terminal rows only (including safe handling of grouping parents
+  with retained children), and keeps unfinished tasks across cleanup. Verify the
+  model-facing `update_eta` guidance keeps independent asks top-level, reserves
+  `parent_task_id` for true constituent steps of one deliverable, and uses
+  `depends_on_task_ids` for ordering.
 - Verify the persisted root freshness policy survives cold reads, seeds a
   missing cold-root row from the current server configuration, remains
   authoritative for Worker mutations, and is updated/rearmed only by the root

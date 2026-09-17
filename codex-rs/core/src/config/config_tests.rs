@@ -1801,6 +1801,7 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
             freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
             use_local_timezone: false,
             timezone: None,
+            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
         }
     );
 
@@ -1812,6 +1813,7 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
             freshness_minimum_minutes: 45,
             use_local_timezone: false,
             timezone: None,
+            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
         }
     );
 
@@ -1825,8 +1827,13 @@ async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
             freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
             use_local_timezone: true,
             timezone: Some("America/New_York".to_string()),
+            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
         }
     );
+
+    let configured =
+        load_current_time_reminder_config("\n[eta]\nhistory_retention_days = 0\n").await?;
+    assert_eq!(configured.eta.history_retention_days, 0);
 
     let error = load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 0\n")
         .await

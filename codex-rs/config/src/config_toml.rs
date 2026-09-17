@@ -193,6 +193,9 @@ pub struct EtaConfigToml {
     /// Optional IANA time zone name used for ETA timestamps. This takes precedence over
     /// `use_local_timezone` when set.
     pub timezone: Option<String>,
+    /// Number of days to retain terminal ETA tasks in the cross-session history. `0` keeps
+    /// terminal history indefinitely. Defaults to 30 days.
+    pub history_retention_days: Option<u64>,
 }
 
 /// Base config deserialized from ~/.codex/config.toml.

@@ -1629,9 +1629,13 @@ pub struct EtaConfig {
     /// Optional IANA time zone name used for ETA timestamps. This takes precedence over
     /// `use_local_timezone` when set.
     pub timezone: Option<String>,
+    /// Number of days to retain terminal ETA tasks in the cross-session history. `0` keeps
+    /// terminal history indefinitely.
+    pub history_retention_days: u64,
 }
 
 pub const DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES: u64 = 15;
+pub const DEFAULT_ETA_HISTORY_RETENTION_DAYS: u64 = 30;
 
 impl Default for EtaConfig {
     fn default() -> Self {
@@ -1639,6 +1643,7 @@ impl Default for EtaConfig {
             freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
             use_local_timezone: false,
             timezone: None,
+            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
         }
     }
 }
@@ -3436,10 +3441,14 @@ fn resolve_eta_config(config_toml: &ConfigToml) -> std::io::Result<EtaConfig> {
             )
         })?;
     }
+    let history_retention_days = eta
+        .and_then(|config| config.history_retention_days)
+        .unwrap_or(DEFAULT_ETA_HISTORY_RETENTION_DAYS);
     Ok(EtaConfig {
         freshness_minimum_minutes,
         use_local_timezone,
         timezone,
+        history_retention_days,
     })
 }
 
