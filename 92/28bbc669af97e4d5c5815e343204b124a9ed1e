@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-17/eta-read-retention-inventory#9228bbc669"
+  change_type: "docs"
+  scope: "eta"
+  summary: "Document the read/list retention boundary for cross-session ETA history."
+  decision: "Record that thread/eta/list is the global retention-maintenance path while thread/eta/read remains side-effect free."
+  constraints:
+    - "Keep the fork inventory aligned with implemented ETA behavior."
+    - "Do not expand the API or alter runtime behavior."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
