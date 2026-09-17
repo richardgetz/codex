@@ -67,9 +67,11 @@ release or merge rules.
   authoritative config and remains the retention-maintenance path, while
   `thread/eta/read` stays side-effect free. The TUI refreshes retained rows for
   updates from the selected root as well as other roots only while All Sessions
-  is visible, repaints loading immediately, and merges by root/task while
-  preserving loaded cursor-tail rows and keyed selection; stale rows remain
-  marked with a warning.
+  is visible, repaints loading immediately, coalesces notifications during an
+  in-flight request, and replaces cursor-less refreshes through the loaded
+  depth in endpoint order while explicit cursor pages append by root/task;
+  keyed selection survives refreshes and stale rows remain marked with a
+  warning.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`

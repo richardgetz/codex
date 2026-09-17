@@ -240,6 +240,61 @@ async fn eta_root_view_state_isolated_between_selected_roots() {
 }
 
 #[tokio::test]
+async fn eta_notifications_coalesce_during_all_sessions_refresh() -> color_eyre::Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let root_thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    app.apply_eta_view_state(
+        root_thread_id.to_string(),
+        saved_state(ETA_ALL_SESSIONS_TAB_ID, None),
+    );
+    app.open_eta(&app_server);
+    app.refresh_eta_sessions(&app_server, None, true);
+    let request_id = app
+        .eta
+        .all_sessions_request_id
+        .expect("nested-mode refresh should be in flight");
+    assert_eq!(
+        app.eta.all_sessions_requested_include_nested,
+        Some(true)
+    );
+
+    for sequence in [1, 2] {
+        app.handle_app_server_event(
+            &app_server,
+            AppServerEvent::ServerNotification(Box::new(
+                ServerNotification::ThreadEtaUpdated(ThreadEtaUpdatedNotification {
+                    root_thread_id: root_thread_id.to_string(),
+                    generated_at: sequence,
+                    sequence,
+                    changed_tasks: Vec::new(),
+                    overall: ThreadEtaOverall {
+                        finish_at: None,
+                        remaining_lower_seconds: None,
+                        remaining_upper_seconds: None,
+                        unknown_reason: None,
+                    },
+                }),
+            )),
+        )
+        .await;
+    }
+
+    assert_eq!(app.eta.all_sessions_request_id, Some(request_id));
+    assert!(app.eta.all_sessions_refresh_pending);
+    assert_eq!(
+        app.eta.all_sessions_requested_include_nested,
+        Some(true)
+    );
+
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn eta_auto_refresh_replaces_loaded_depth_and_preserves_selection() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let root_thread_id = ThreadId::new();

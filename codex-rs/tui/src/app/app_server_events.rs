@@ -163,7 +163,15 @@ impl App {
                     .is_some_and(|tab_id| tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID);
             self.apply_eta_notification(eta);
             if refresh_all_sessions {
-                self.refresh_eta_sessions(app_server_client, None, self.eta.all_sessions_include_nested);
+                if self.eta.all_sessions_request_id.is_some() {
+                    self.eta.all_sessions_refresh_pending = true;
+                } else {
+                    self.refresh_eta_sessions(
+                        app_server_client,
+                        None,
+                        self.eta.all_sessions_include_nested,
+                    );
+                }
             }
             return;
         }

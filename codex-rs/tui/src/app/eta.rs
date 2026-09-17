@@ -49,6 +49,8 @@ pub(super) struct EtaState {
     pub(super) all_sessions: Vec<EtaSessionTask>,
     pub(super) all_sessions_next_cursor: Option<String>,
     pub(super) all_sessions_request_id: Option<Uuid>,
+    pub(super) all_sessions_requested_include_nested: Option<bool>,
+    pub(super) all_sessions_refresh_pending: bool,
     pub(super) all_sessions_include_nested: bool,
     pub(super) eta_request_in_flight: bool,
     pub(super) eta_error: Option<String>,
@@ -306,6 +308,7 @@ impl App {
             .len()
             .max(ETA_ALL_SESSIONS_PAGE_SIZE as usize);
         self.eta.all_sessions_request_id = Some(request_id);
+        self.eta.all_sessions_requested_include_nested = Some(include_nested);
         self.eta.all_sessions_error = None;
         self.repaint_eta_with_all_sessions_include_nested(include_nested);
         let request_handle = app_server.request_handle();
@@ -439,11 +442,14 @@ impl App {
         cursor: Option<String>,
         include_nested: bool,
         result: Result<ThreadEtaListResponse, String>,
-    ) {
+    ) -> bool {
         if self.eta.all_sessions_request_id != Some(request_id) {
-            return;
+            return false;
         }
         self.eta.all_sessions_request_id = None;
+        self.eta.all_sessions_requested_include_nested = None;
+        let refresh_pending = self.eta.all_sessions_refresh_pending;
+        self.eta.all_sessions_refresh_pending = false;
         self.eta.all_sessions_error = None;
         match result {
             Ok(response) => {
@@ -465,6 +471,7 @@ impl App {
             }
         }
         self.repaint_eta();
+        refresh_pending
     }
 
     fn merge_eta_sessions(&mut self, incoming: Vec<EtaSessionTask>) {
@@ -552,7 +559,11 @@ impl App {
     }
 
     pub(super) fn repaint_eta(&mut self) {
-        self.repaint_eta_with_all_sessions_include_nested(self.eta.all_sessions_include_nested);
+        let include_nested = self
+            .eta
+            .all_sessions_requested_include_nested
+            .unwrap_or(self.eta.all_sessions_include_nested);
+        self.repaint_eta_with_all_sessions_include_nested(include_nested);
     }
 
     fn repaint_eta_with_all_sessions_include_nested(&mut self, include_nested: bool) {

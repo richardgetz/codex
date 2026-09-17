@@ -2917,7 +2917,22 @@ impl App {
                 include_nested,
                 result,
             } => {
-                self.apply_eta_sessions(request_id, cursor, include_nested, result);
+                let refresh_pending =
+                    self.apply_eta_sessions(request_id, cursor, include_nested, result);
+                if refresh_pending
+                    && self
+                        .chat_widget
+                        .active_tab_id_for_active_view(crate::app::eta_view::ETA_VIEW_ID)
+                        .is_some_and(|tab_id| {
+                            tab_id == crate::app::eta_view::ETA_ALL_SESSIONS_TAB_ID
+                        })
+                {
+                    self.refresh_eta_sessions(
+                        app_server,
+                        None,
+                        self.eta.all_sessions_include_nested,
+                    );
+                }
             }
             AppEvent::RefreshEta { root_thread_id } => {
                 self.refresh_eta(app_server, root_thread_id, None);
