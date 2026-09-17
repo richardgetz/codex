@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-17/eta-all-sessions-ui#2c5904f57d"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Preserve task-keyed All Sessions navigation while retained ETA rows refresh, show inline status states, and guard session resume."
+  decision: "Keep the All Sessions presentation state in the app, reconstruct nested rows parent-before-child, and dispatch only an allowlisted resume target after confirmation when leaving an active session."
+  constraints:
+    - "Keep the existing ETA tabs and app-server pagination contract."
+    - "Do not infer task lifecycle from idle time or wall-clock time."
+    - "Keep the UI follow-up under the repository change-size limit."
+    - "Retain UTC or configured timezone formatting for displayed timestamps."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/event_dispatch.rs"
+    - "codex-rs/tui/src/app/app_server_events.rs"
+    - "codex-rs/tui/src/app_event.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-worker"
+    model: "gpt-5"
