@@ -163,7 +163,10 @@ impl App {
                     self.active_turn_id_for_thread(active).await.is_some()
                         || self
                             .team_activity
-                            .status_for_root(active, self.config.team.worker_max_concurrent)
+                            .status_for_root(
+                                self.primary_thread_id.unwrap_or(active),
+                                self.config.team.worker_max_concurrent,
+                            )
                             .is_some_and(|status| {
                                 status.workers_working > 0 || status.in_flight_operations > 0
                             })

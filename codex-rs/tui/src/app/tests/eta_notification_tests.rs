@@ -193,17 +193,31 @@ async fn eta_root_view_state_isolated_between_selected_roots() {
 async fn resume_eta_session_confirms_when_worker_is_working() -> color_eyre::Result<()> {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let active_root = ThreadId::new();
+    let displayed_worker = ThreadId::new();
     let worker_thread = ThreadId::new();
     let target_root = ThreadId::new();
-    app.active_thread_id = Some(active_root);
+    app.active_thread_id = Some(displayed_worker);
     app.primary_thread_id = Some(active_root);
     app.team_activity.replace_thread_metadata(
         Some(active_root),
-        [(active_root, None), (worker_thread, Some(active_root))],
+        [
+            (active_root, None),
+            (displayed_worker, Some(active_root)),
+            (worker_thread, Some(active_root)),
+        ],
     );
     app.team_activity
         .observe(&ThreadActivityUpdatedNotification {
             thread_id: active_root.to_string(),
+            root_thread_id: active_root.to_string(),
+            activity: codex_app_server_protocol::ThreadActivity::Idle,
+            pause_state: codex_app_server_protocol::ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 0,
+        });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: displayed_worker.to_string(),
             root_thread_id: active_root.to_string(),
             activity: codex_app_server_protocol::ThreadActivity::Idle,
             pause_state: codex_app_server_protocol::ThreadPauseState::Running,
