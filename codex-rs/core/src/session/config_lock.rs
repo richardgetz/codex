@@ -135,6 +135,8 @@ fn save_session_resolved_fields(sc: &SessionConfiguration, lock_config: &mut Con
         freshness_minimum_minutes: Some(
             sc.original_config_do_not_use.eta.freshness_minimum_minutes,
         ),
+        use_local_timezone: Some(sc.original_config_do_not_use.eta.use_local_timezone),
+        timezone: sc.original_config_do_not_use.eta.timezone.clone(),
     });
 }
 
@@ -635,6 +637,36 @@ sandbox_private_desktop = false
             "{message}"
         );
         assert!(message.contains("model = "), "{message}");
+    }
+
+    #[test]
+    fn lock_validation_accepts_legacy_eta_lock_with_custom_freshness() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.eta]
+freshness_minimum_minutes = 45
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy ETA lock with custom freshness should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.eta]
+freshness_minimum_minutes = 45
+use_local_timezone = false
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("regenerated ETA lock with display defaults should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("legacy custom freshness and regenerated display defaults should match");
     }
 
     #[test]

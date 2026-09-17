@@ -139,11 +139,21 @@ fn config_lock_for_comparison(
     {
         lockfile.config.decision_provenance = None;
     }
-    // ETA freshness defaults to fifteen minutes and was added after older lockfile shapes.
-    // Treat an explicit default as the same effective setting as a legacy omission.
+    // ETA freshness defaults to fifteen minutes and display time zone fields were added after
+    // older lockfile shapes. Normalize each added default independently so a legacy lock with a
+    // custom freshness window remains equivalent to a regenerated lock.
+    if let Some(eta) = lockfile.config.eta.as_mut() {
+        if eta.freshness_minimum_minutes == Some(DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES) {
+            eta.freshness_minimum_minutes = None;
+        }
+        if eta.use_local_timezone == Some(false) {
+            eta.use_local_timezone = None;
+        }
+    }
     if lockfile.config.eta.as_ref().is_some_and(|eta| {
-        eta.freshness_minimum_minutes
-            .is_none_or(|minutes| minutes == DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES)
+        eta.freshness_minimum_minutes.is_none()
+            && eta.use_local_timezone.is_none()
+            && eta.timezone.is_none()
     }) {
         lockfile.config.eta = None;
     }

@@ -1,3 +1,4 @@
+use super::super::eta_time::EtaTimestampFormatter;
 use super::EtaAccuracy;
 use super::EtaOverall;
 use super::EtaRevision;
@@ -12,6 +13,7 @@ use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::Renderable;
 use codex_protocol::ThreadId;
 use crossterm::event::KeyCode;
+use jiff::tz::TimeZone;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
@@ -168,7 +170,7 @@ fn expanded_history_renders_lifecycle_timestamps() {
     let lifecycle_lines = render(&view, 96, 24)
         .lines()
         .filter(|line| line.contains("Started:") || line.contains("Ended:"))
-        .map(str::trim)
+        .map(|line| line.trim_matches([' ', '"']))
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!("eta_history_lifecycle_timestamps", lifecycle_lines);
@@ -183,6 +185,23 @@ fn overall_finish_range_uses_fixed_snapshot_time_in_utc() {
         AppEventSender::new(tx),
     );
     insta::assert_snapshot!("eta_finish_range_utc", render(&view, 96, 24));
+}
+
+#[test]
+fn history_renders_named_timezone_timestamps() {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut view = EtaView::new_with_state_and_timestamp_formatter(
+        snapshot(),
+        RuntimeKeymap::defaults().list,
+        AppEventSender::new(tx),
+        "history",
+        None,
+        EtaTimestampFormatter::with_timezone(
+            TimeZone::get("America/New_York").expect("known time zone"),
+        ),
+    );
+    view.handle_key_event(KeyCode::Enter.into());
+    insta::assert_snapshot!("eta_history_named_timezone", render(&view, 96, 24));
 }
 
 #[test]

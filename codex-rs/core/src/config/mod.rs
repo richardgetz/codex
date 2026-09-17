@@ -1619,11 +1619,16 @@ pub struct CurrentTimeReminderConfig {
 }
 
 /// Event-driven ETA reminder settings shared by a root session and its workers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EtaConfig {
     /// Minimum age of an unchanged estimate before a freshness reminder is delivered. A known
     /// upper estimate may extend this to one quarter of that estimate.
     pub freshness_minimum_minutes: u64,
+    /// Display ETA timestamps in the system's local time zone instead of UTC.
+    pub use_local_timezone: bool,
+    /// Optional IANA time zone name used for ETA timestamps. This takes precedence over
+    /// `use_local_timezone` when set.
+    pub timezone: Option<String>,
 }
 
 pub const DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES: u64 = 15;
@@ -1632,6 +1637,8 @@ impl Default for EtaConfig {
     fn default() -> Self {
         Self {
             freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
+            use_local_timezone: false,
+            timezone: None,
         }
     }
 }
@@ -3401,9 +3408,8 @@ fn resolve_current_time_reminder_config(
 }
 
 fn resolve_eta_config(config_toml: &ConfigToml) -> std::io::Result<EtaConfig> {
-    let freshness_minimum_minutes = config_toml
-        .eta
-        .as_ref()
+    let eta = config_toml.eta.as_ref();
+    let freshness_minimum_minutes = eta
         .and_then(|config| config.freshness_minimum_minutes)
         .unwrap_or(DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES);
     if freshness_minimum_minutes == 0 || freshness_minimum_minutes > 52_560_000 {
@@ -3412,8 +3418,28 @@ fn resolve_eta_config(config_toml: &ConfigToml) -> std::io::Result<EtaConfig> {
             "eta.freshness_minimum_minutes must be between 1 and 52560000 minutes",
         ));
     }
+    let use_local_timezone = eta
+        .and_then(|config| config.use_local_timezone)
+        .unwrap_or(false);
+    let timezone = eta.and_then(|config| config.timezone.clone());
+    if let Some(timezone) = timezone.as_deref() {
+        if timezone.trim().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "eta.timezone must be a non-empty IANA time zone name",
+            ));
+        }
+        jiff::tz::TimeZone::get(timezone).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("eta.timezone must be a valid IANA time zone name ({timezone:?}): {error}"),
+            )
+        })?;
+    }
     Ok(EtaConfig {
         freshness_minimum_minutes,
+        use_local_timezone,
+        timezone,
     })
 }
 

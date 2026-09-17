@@ -233,6 +233,7 @@ mod background_requests;
 mod config_persistence;
 mod connector_mentions;
 mod eta;
+mod eta_time;
 mod eta_view;
 mod event_dispatch;
 mod exit_summary;

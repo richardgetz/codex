@@ -4,6 +4,7 @@
 //! snapshot into these private rows, and refreshes the view when a read or update notification
 //! arrives. No elapsed time is inferred here; every value shown comes from the stored snapshot.
 
+use super::eta_time::EtaTimestampFormatter;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -168,6 +169,7 @@ pub(super) struct EtaView {
     app_event_tx: AppEventSender,
     requested_history_cursor: Option<String>,
     collapsed_task_ids: HashSet<String>,
+    timestamp_formatter: EtaTimestampFormatter,
 }
 
 impl EtaView {
@@ -186,6 +188,24 @@ impl EtaView {
         tab_id: &str,
         selected_idx: Option<usize>,
     ) -> Self {
+        Self::new_with_state_and_timestamp_formatter(
+            snapshot,
+            keymap,
+            app_event_tx,
+            tab_id,
+            selected_idx,
+            EtaTimestampFormatter::utc(),
+        )
+    }
+
+    pub(super) fn new_with_state_and_timestamp_formatter(
+        snapshot: EtaSnapshot,
+        keymap: ListKeymap,
+        app_event_tx: AppEventSender,
+        tab_id: &str,
+        selected_idx: Option<usize>,
+        timestamp_formatter: EtaTimestampFormatter,
+    ) -> Self {
         let mut view = Self {
             snapshot,
             tab: match tab_id {
@@ -202,6 +222,7 @@ impl EtaView {
             app_event_tx,
             requested_history_cursor: None,
             collapsed_task_ids: HashSet::new(),
+            timestamp_formatter,
         };
         view.clamp_selection();
         view

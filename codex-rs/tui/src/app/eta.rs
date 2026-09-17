@@ -6,6 +6,7 @@
 
 use super::App;
 use super::AppServerSession;
+use super::eta_time::EtaTimestampFormatter;
 use super::eta_view::ETA_ACTIVE_TAB_ID;
 use super::eta_view::ETA_VIEW_ID;
 use super::eta_view::EtaAccuracy;
@@ -62,14 +63,16 @@ impl App {
         let selected_idx = self
             .chat_widget
             .selected_index_for_present_view(ETA_VIEW_ID);
-        self.chat_widget
-            .show_bottom_pane_view(Box::new(EtaView::new_with_state(
+        self.chat_widget.show_bottom_pane_view(Box::new(
+            EtaView::new_with_state_and_timestamp_formatter(
                 snapshot,
                 self.keymap.list.clone(),
                 self.app_event_tx.clone(),
                 tab_id,
                 selected_idx,
-            )));
+                EtaTimestampFormatter::from_config(&self.config.eta),
+            ),
+        ));
         self.refresh_eta(app_server, root_thread_id, None);
     }
 
@@ -230,12 +233,13 @@ impl App {
             .chat_widget
             .active_tab_id_for_active_view(ETA_VIEW_ID)
             .unwrap_or(ETA_ACTIVE_TAB_ID);
-        let view = EtaView::new_with_state(
+        let view = EtaView::new_with_state_and_timestamp_formatter(
             snapshot,
             self.keymap.list.clone(),
             self.app_event_tx.clone(),
             tab_id,
             selected_idx,
+            EtaTimestampFormatter::from_config(&self.config.eta),
         );
         self.chat_widget
             .replace_bottom_pane_view_if_present(ETA_VIEW_ID, Box::new(view));

@@ -1301,20 +1301,6 @@
       },
       "type": "object"
     },
-    "EtaConfigToml": {
-      "additionalProperties": false,
-      "description": "Event-driven ETA reminder settings.",
-      "properties": {
-        "freshness_minimum_minutes": {
-          "description": "Minimum age of an unchanged estimate before the owning agent receives a freshness reminder; a known upper estimate may extend this to one quarter. Defaults to 15 minutes.",
-          "format": "uint64",
-          "maximum": 52560000.0,
-          "minimum": 1.0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
     "EnablementConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1353,6 +1339,28 @@
         "exclude"
       ],
       "type": "string"
+    },
+    "EtaConfigToml": {
+      "additionalProperties": false,
+      "description": "Event-driven ETA reminder settings.",
+      "properties": {
+        "freshness_minimum_minutes": {
+          "description": "Minimum age of an unchanged estimate before the owning agent receives a freshness reminder. A known upper estimate may extend this to one quarter of that estimate. Defaults to 15 minutes.",
+          "format": "uint64",
+          "maximum": 52560000.0,
+          "minimum": 1.0,
+          "type": "integer"
+        },
+        "timezone": {
+          "description": "Optional IANA time zone name used for ETA timestamps. This takes precedence over `use_local_timezone` when set.",
+          "type": "string"
+        },
+        "use_local_timezone": {
+          "description": "Display ETA timestamps in the system's local time zone instead of UTC. Defaults to `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "ExecPolicyRulesetMode": {
       "enum": [
@@ -7255,6 +7263,15 @@
       ],
       "description": "Mode-scoped visibility rules for skills, MCPs/apps, and plugins."
     },
+    "eta": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/EtaConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Event-driven freshness and overdue reminders for explicit task estimates."
+    },
     "exec_policy": {
       "allOf": [
         {
@@ -7775,14 +7792,6 @@
         }
       },
       "type": "object"
-    },
-    "eta": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/EtaConfigToml"
-        }
-      ],
-      "description": "Event-driven freshness and overdue reminders for explicit task estimates."
     },
     "feedback": {
       "allOf": [
