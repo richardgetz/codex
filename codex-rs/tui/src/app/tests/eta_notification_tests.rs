@@ -10,9 +10,13 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadEtaAccuracy;
 use codex_app_server_protocol::ThreadEtaOverall;
+use codex_app_server_protocol::ThreadEtaListResponse;
+use codex_app_server_protocol::ThreadEtaSessionInfo;
+use codex_app_server_protocol::ThreadEtaSessionTask;
 use codex_app_server_protocol::ThreadEtaStatus;
 use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_protocol::ThreadId;
 
 fn saved_state(tab_id: &str, selected_task_id: Option<&str>) -> EtaViewState {
@@ -50,6 +54,43 @@ fn known_session_task(root_thread_id: ThreadId) -> EtaSessionTask {
     }
 }
 
+fn api_session_task(root_thread_id: ThreadId, task_id: &str) -> ThreadEtaSessionTask {
+    ThreadEtaSessionTask {
+        task_id: task_id.to_string(),
+        root_thread_id: root_thread_id.to_string(),
+        owner_thread_id: root_thread_id.to_string(),
+        parent_task_id: None,
+        title: "Updated task".to_string(),
+        status: ThreadEtaStatus::Active,
+        current_lower_seconds: Some(1),
+        current_upper_seconds: Some(2),
+        original_lower_seconds: Some(1),
+        original_upper_seconds: Some(2),
+        created_at: 1,
+        started_at: Some(1),
+        terminal_at: None,
+        actual_elapsed_seconds: None,
+        updated_at: 2,
+        is_stale: false,
+        accuracy: ThreadEtaAccuracy::Unknown,
+        revisions: Vec::new(),
+        session: ThreadEtaSessionInfo {
+            thread_id: root_thread_id.to_string(),
+            title: "Updated session".to_string(),
+            name: None,
+            preview: None,
+            created_at: 1,
+            updated_at: 2,
+            archived_at: None,
+            cwd: LegacyAppPathString::from_string("/tmp"),
+        },
+        nested_task_count: 0,
+        active_nested_task_count: 0,
+        nested_lower_seconds: None,
+        nested_upper_seconds: None,
+    }
+}
+
 #[tokio::test]
 async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_eyre::Result<()> {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -58,8 +99,17 @@ async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_ey
     let root_thread_id = started.session.thread_id;
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
+    app.apply_eta_view_state(
+        root_thread_id.to_string(),
+        saved_state(ETA_ALL_SESSIONS_TAB_ID, None),
+    );
 
     app.open_eta(&app_server);
+    assert_eq!(
+        app.chat_widget
+            .active_tab_id_for_active_view(crate::app::eta_view::ETA_VIEW_ID),
+        Some(ETA_ALL_SESSIONS_TAB_ID)
+    );
     let previous_request_id = app
         .eta
         .all_sessions_request_id
@@ -187,6 +237,83 @@ async fn eta_root_view_state_isolated_between_selected_roots() {
             .view_state_for_root(second_root, ETA_ALL_SESSIONS_TAB_ID),
         Some(all_sessions_state)
     );
+}
+
+#[tokio::test]
+async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let root_thread_id = ThreadId::new();
+    let tail_root_thread_id = ThreadId::new();
+    app.eta.root_thread_id = Some(root_thread_id);
+    app.apply_eta_view_state(
+        root_thread_id.to_string(),
+        EtaViewState {
+            tab_id: ETA_ALL_SESSIONS_TAB_ID.to_string(),
+            selected_session: Some((
+                tail_root_thread_id.to_string(),
+                "tail-task".to_string(),
+            )),
+            ..Default::default()
+        },
+    );
+
+    let first_page_request_id = uuid::Uuid::new_v4();
+    app.eta.all_sessions_request_id = Some(first_page_request_id);
+    app.apply_eta_sessions(
+        first_page_request_id,
+        None,
+        false,
+        Ok(ThreadEtaListResponse {
+            data: vec![api_session_task(root_thread_id, "head-task")],
+            next_cursor: Some("tail-cursor".to_string()),
+        }),
+    );
+
+    let tail_page_request_id = uuid::Uuid::new_v4();
+    app.eta.all_sessions_request_id = Some(tail_page_request_id);
+    app.apply_eta_sessions(
+        tail_page_request_id,
+        Some("tail-cursor".to_string()),
+        false,
+        Ok(ThreadEtaListResponse {
+            data: vec![api_session_task(tail_root_thread_id, "tail-task")],
+            next_cursor: None,
+        }),
+    );
+
+    app.eta.all_sessions_refresh_preserve_existing = true;
+    let request_id = uuid::Uuid::new_v4();
+    app.eta.all_sessions_request_id = Some(request_id);
+
+    app.apply_eta_sessions(
+        request_id,
+        None,
+        false,
+        Ok(ThreadEtaListResponse {
+            data: vec![api_session_task(root_thread_id, "head-task")],
+            next_cursor: None,
+        }),
+    );
+
+    assert_eq!(app.eta.all_sessions.len(), 2);
+    assert_eq!(
+        app.eta
+            .all_sessions
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["head-task", "tail-task"]
+    );
+    assert_eq!(app.eta.all_sessions_next_cursor, None);
+    assert!(app.eta.all_sessions_has_loaded_cursor_page);
+    assert_eq!(
+        app.eta
+            .all_sessions_view_state
+            .as_ref()
+            .and_then(|state| state.selected_session.clone()),
+        Some((tail_root_thread_id.to_string(), "tail-task".to_string()))
+    );
+    assert!(!app.eta.all_sessions_refresh_preserve_existing);
 }
 
 #[tokio::test]

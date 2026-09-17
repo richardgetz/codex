@@ -46,6 +46,8 @@ pub(super) struct EtaState {
     pub(super) all_sessions: Vec<EtaSessionTask>,
     pub(super) all_sessions_next_cursor: Option<String>,
     pub(super) all_sessions_request_id: Option<Uuid>,
+    pub(super) all_sessions_has_loaded_cursor_page: bool,
+    pub(super) all_sessions_refresh_preserve_existing: bool,
     pub(super) all_sessions_include_nested: bool,
     pub(super) eta_request_in_flight: bool,
     pub(super) eta_error: Option<String>,
@@ -285,9 +287,29 @@ impl App {
         cursor: Option<String>,
         include_nested: bool,
     ) {
+        self.eta.all_sessions_refresh_preserve_existing = false;
+        self.schedule_eta_sessions_refresh(app_server, cursor, include_nested);
+    }
+
+    pub(super) fn refresh_eta_sessions_preserving_loaded(
+        &mut self,
+        app_server: &AppServerSession,
+        include_nested: bool,
+    ) {
+        self.eta.all_sessions_refresh_preserve_existing = true;
+        self.schedule_eta_sessions_refresh(app_server, None, include_nested);
+    }
+
+    fn schedule_eta_sessions_refresh(
+        &mut self,
+        app_server: &AppServerSession,
+        cursor: Option<String>,
+        include_nested: bool,
+    ) {
         let request_id = Uuid::new_v4();
         self.eta.all_sessions_request_id = Some(request_id);
         self.eta.all_sessions_error = None;
+        self.repaint_eta();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -359,7 +381,9 @@ impl App {
         if self.eta.all_sessions_request_id != Some(request_id) {
             return;
         }
+        let preserve_existing = self.eta.all_sessions_refresh_preserve_existing;
         self.eta.all_sessions_request_id = None;
+        self.eta.all_sessions_refresh_preserve_existing = false;
         self.eta.all_sessions_error = None;
         match result {
             Ok(response) => {
@@ -368,11 +392,19 @@ impl App {
                     .into_iter()
                     .map(session_task_from_api)
                     .collect::<Vec<_>>();
-                if cursor.is_some() && self.eta.all_sessions_include_nested == include_nested {
+                let preserve_loaded = self.eta.all_sessions_include_nested == include_nested
+                    && (cursor.is_some()
+                        || (preserve_existing && self.eta.all_sessions_has_loaded_cursor_page));
+                if preserve_loaded {
                     self.merge_eta_sessions(incoming);
                 } else {
                     self.eta.all_sessions = incoming;
                 }
+                self.eta.all_sessions_has_loaded_cursor_page = if preserve_loaded {
+                    self.eta.all_sessions_has_loaded_cursor_page || cursor.is_some()
+                } else {
+                    cursor.is_some()
+                };
                 self.eta.all_sessions_include_nested = include_nested;
                 self.eta.all_sessions_next_cursor = response.next_cursor;
             }
