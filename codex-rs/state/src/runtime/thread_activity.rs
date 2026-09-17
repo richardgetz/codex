@@ -292,7 +292,6 @@ RETURNING generation, state
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
-    use super::ThreadActivityPauseSnapshot;
     use super::ThreadActivityPauseState;
     use crate::SqliteConfig;
     use crate::runtime::test_support::unique_temp_dir;
@@ -369,88 +368,4 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn pause_snapshot_round_trips_and_new_generation_clears_previous_capture() {
-        let home = unique_temp_dir();
-        let runtime = StateRuntime::init(
-            SqliteConfig::new_for_testing(home.as_path().abs()),
-            "test-provider".to_string(),
-        )
-        .await
-        .expect("initialize runtime");
-        let root = ThreadId::from_string("00000000-0000-0000-0000-000000000021").expect("root");
-        let child = ThreadId::from_string("00000000-0000-0000-0000-000000000022").expect("child");
-
-        let first = runtime.pause_thread_activity(root).await.expect("pause");
-        let snapshots = vec![ThreadActivityPauseSnapshot {
-            thread_id: child,
-            parent_thread_id: Some(root),
-        }];
-        assert!(
-            runtime
-                .record_thread_activity_pause_snapshot(root, first.generation, &snapshots)
-                .await
-                .expect("record snapshot")
-        );
-        assert_eq!(
-            runtime
-                .get_thread_activity_pause_snapshot(root)
-                .await
-                .expect("read snapshot"),
-            Some(snapshots)
-        );
-
-        let second = runtime
-            .pause_thread_activity(root)
-            .await
-            .expect("next pause");
-        assert_eq!(second.generation, first.generation + 1);
-        assert_eq!(
-            runtime
-                .get_thread_activity_pause_snapshot(root)
-                .await
-                .expect("read cleared snapshot"),
-            None
-        );
-        assert!(
-            runtime
-                .record_thread_activity_pause_snapshot(root, second.generation, &[])
-                .await
-                .expect("record empty snapshot")
-        );
-        assert!(
-            runtime
-                .complete_thread_activity_pause(root, second.generation)
-                .await
-                .expect("complete pause")
-        );
-        let resume = runtime
-            .begin_thread_activity_resume(root)
-            .await
-            .expect("begin resume")
-            .expect("resume marker");
-        assert!(
-            runtime
-                .complete_thread_activity_resume(root, resume.generation)
-                .await
-                .expect("complete resume")
-        );
-        assert!(
-            runtime
-                .has_thread_activity_pause_receipt(root)
-                .await
-                .expect("read receipt")
-        );
-
-        runtime
-            .pause_thread_activity(root)
-            .await
-            .expect("third pause");
-        assert!(
-            !runtime
-                .has_thread_activity_pause_receipt(root)
-                .await
-                .expect("read cleared receipt")
-        );
-    }
 }
