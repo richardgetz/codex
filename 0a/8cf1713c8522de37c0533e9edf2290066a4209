@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-17/eta-refresh-loaded-depth#0a8cf1713c"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Rebuild cursor-less All Sessions refreshes to the currently loaded depth."
+  decision: "Fetch bounded pages through the returned cursors until the existing loaded row count, with a one-page minimum, deduplicate root/task identities, replace the cache in endpoint order, and leave cursor-page append behavior unchanged. Keep requested nested mode presentation-only until a successful response."
+  constraints:
+    - "Cursor-less refreshes must reconcile reordering, deletions, nested projections, retention, and updated rows instead of merging stale tail entries."
+    - "Each request remains bounded to the normal 50-row page size and refresh work is bounded by the existing loaded depth."
+    - "A failed refresh preserves the prior rows and include-nested mode while exposing the error."
+    - "Selection remains keyed by root thread and task across replacement."
+    - "Keep All Sessions-only ThreadEtaUpdated routing, immediate loading repaint, source-only worker scope, and no Rust/Cargo/just commands."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/app_server_events.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
