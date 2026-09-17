@@ -27,6 +27,151 @@ async fn runtime() -> (Arc<StateRuntime>, ThreadId) {
 }
 
 #[tokio::test]
+async fn all_session_eta_list_cursor_returns_every_task_across_pages() {
+    let (runtime, root) = runtime().await;
+    let root_metadata = crate::runtime::test_support::test_thread_metadata(
+        runtime.sqlite.home(),
+        root,
+        runtime.sqlite.home().to_path_buf(),
+    );
+    runtime
+        .upsert_thread(&root_metadata)
+        .await
+        .expect("persist root metadata");
+    let now = at(1_700_000_000);
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("parent", "Parent", Some((10, 20)))],
+            now,
+        )
+        .await
+        .expect("create parent");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[TaskEstimateMutation {
+                action: TaskEstimateAction::Create,
+                task_id: Some("child".to_string()),
+                title: Some("Child".to_string()),
+                parent_task_id: Some("parent".to_string()),
+                depends_on_task_ids: None,
+                estimate: Some(TaskEstimateRange {
+                    lower_seconds: Some(3),
+                    upper_seconds: Some(5),
+                }),
+                reason: None,
+                owner_thread_id: None,
+            }],
+            now + Duration::seconds(1),
+        )
+        .await
+        .expect("create child");
+
+    let top_level = runtime
+        .list_task_estimate_sessions(None, Some(1), false)
+        .await
+        .expect("list top-level ETA tasks");
+    assert_eq!(top_level.rows.len(), 1);
+    assert_eq!(top_level.rows[0].task_id, "parent");
+    assert_eq!(top_level.rows[0].nested_task_count, 1);
+    assert_eq!(top_level.rows[0].active_nested_task_count, 1);
+    assert_eq!(top_level.rows[0].nested_lower_seconds, Some(3));
+    assert_eq!(top_level.rows[0].nested_upper_seconds, Some(5));
+    assert!(top_level.next_cursor.is_none());
+
+    let expanded = runtime
+        .list_task_estimate_sessions(None, Some(1), true)
+        .await
+        .expect("list nested ETA tasks");
+    assert_eq!(expanded.rows.len(), 1);
+    assert_eq!(expanded.rows[0].task_id, "child");
+    let cursor = expanded.next_cursor.as_deref();
+    assert!(cursor.is_some());
+    let second_page = runtime
+        .list_task_estimate_sessions(cursor, Some(1), true)
+        .await
+        .expect("list second ETA page");
+    assert_eq!(second_page.rows.len(), 1);
+    assert_eq!(second_page.rows[0].task_id, "parent");
+    assert!(second_page.next_cursor.is_none());
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn eta_history_pruning_removes_old_terminal_rows_only() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("old", "Old", Some((1, 2)))],
+            now,
+        )
+        .await
+        .expect("create old task");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Start, "old")],
+            now,
+        )
+        .await
+        .expect("start old task");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Complete, "old")],
+            now + Duration::seconds(1),
+        )
+        .await
+        .expect("complete old task");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[create("active", "Active", Some((1, 2)))],
+            now,
+        )
+        .await
+        .expect("create active task");
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Start, "active")],
+            now,
+        )
+        .await
+        .expect("start active task");
+
+    let removed = runtime
+        .prune_task_estimate_history(30, now + Duration::days(31))
+        .await
+        .expect("prune ETA history");
+    assert_eq!(removed, 1);
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now + Duration::days(31), None, None)
+        .await
+        .expect("read retained ETA tasks");
+    assert_eq!(
+        snapshot
+            .active
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["active"]
+    );
+    assert!(snapshot.history.is_empty());
+    runtime.close().await;
+}
+
+#[tokio::test]
 async fn eta_freshness_minimum_is_root_owned_and_persistent() {
     let (runtime, root) = runtime().await;
     assert_eq!(

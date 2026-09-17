@@ -35,6 +35,9 @@ pub(super) const MAX_REVISIONS_PER_TASK: usize = 32;
 const DEFAULT_HISTORY_LIMIT: usize = 50;
 const MAX_HISTORY_LIMIT: usize = 100;
 
+#[path = "task_estimate_sessions.rs"]
+mod task_estimate_sessions;
+
 #[derive(Clone)]
 pub struct TaskEstimateStore {
     pool: Arc<SqlitePool>,

@@ -63,6 +63,8 @@ pub use model::TaskEstimateMutation;
 pub use model::TaskEstimateOverall;
 pub use model::TaskEstimateRange;
 pub use model::TaskEstimateRevision;
+pub use model::TaskEstimateSessionPage;
+pub use model::TaskEstimateSessionRow;
 pub use model::TaskEstimateSnapshot;
 pub use model::TaskEstimateStatus;
 pub use model::TaskEstimateUpdateResult;

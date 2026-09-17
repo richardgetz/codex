@@ -1351,6 +1351,11 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "history_retention_days": {
+          "description": "Number of days to retain terminal ETA tasks in the cross-session history. `0` keeps terminal history indefinitely. Defaults to 30 days.",
+          "format": "uint64",
+          "type": "integer"
+        },
         "timezone": {
           "description": "Optional IANA time zone name used for ETA timestamps. This takes precedence over `use_local_timezone` when set.",
           "type": "string"

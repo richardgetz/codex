@@ -39,6 +39,8 @@ pub use task_estimate::TaskEstimateMutation;
 pub use task_estimate::TaskEstimateOverall;
 pub use task_estimate::TaskEstimateRange;
 pub use task_estimate::TaskEstimateRevision;
+pub use task_estimate::TaskEstimateSessionPage;
+pub use task_estimate::TaskEstimateSessionRow;
 pub use task_estimate::TaskEstimateSnapshot;
 pub use task_estimate::TaskEstimateStatus;
 pub use task_estimate::TaskEstimateUpdateResult;

@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use similar::TextDiff;
 
 use crate::config::DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES;
+use crate::config::DEFAULT_ETA_HISTORY_RETENTION_DAYS;
 
 pub(crate) const CONFIG_LOCK_VERSION: u32 = 1;
 
@@ -149,11 +150,15 @@ fn config_lock_for_comparison(
         if eta.use_local_timezone == Some(false) {
             eta.use_local_timezone = None;
         }
+        if eta.history_retention_days == Some(DEFAULT_ETA_HISTORY_RETENTION_DAYS) {
+            eta.history_retention_days = None;
+        }
     }
     if lockfile.config.eta.as_ref().is_some_and(|eta| {
         eta.freshness_minimum_minutes.is_none()
             && eta.use_local_timezone.is_none()
             && eta.timezone.is_none()
+            && eta.history_retention_days.is_none()
     }) {
         lockfile.config.eta = None;
     }

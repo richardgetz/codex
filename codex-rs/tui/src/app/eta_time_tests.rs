@@ -8,6 +8,7 @@ fn config(use_local_timezone: bool, timezone: Option<&str>) -> EtaConfig {
         freshness_minimum_minutes: 15,
         use_local_timezone,
         timezone: timezone.map(str::to_string),
+        history_retention_days: 30,
     }
 }
 

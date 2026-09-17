@@ -101,3 +101,7 @@ Durable Team activity pause generations are appended as
 remains through an interrupted continue, and is cleared only after Core acknowledges an
 explicit release.
 `0062_rick_thread_activity_pause_snapshots.sql` records exact active thread/turn snapshots and retry receipts while preserving conservative legacy-marker recovery.
+
+Cross-session ETA task navigation indexes are appended as
+`0063_rick_eta_cross_session_index.sql`; the keyset ordering and terminal-only retention
+queries use these indexes without changing the existing root-scoped projection.
