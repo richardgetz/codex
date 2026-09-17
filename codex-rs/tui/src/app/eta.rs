@@ -556,6 +556,7 @@ fn session_task_from_api(task: codex_app_server_protocol::ThreadEtaSessionTask) 
         },
         current_lower_seconds: task.current_lower_seconds,
         current_upper_seconds: task.current_upper_seconds,
+        is_stale: task.is_stale,
         session: EtaSessionInfo {
             thread_id: task.session.thread_id,
             title: task.session.title,

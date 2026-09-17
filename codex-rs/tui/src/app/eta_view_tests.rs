@@ -150,6 +150,7 @@ fn session_task(
         status: EtaTaskStatus::Active,
         current_lower_seconds: Some(30),
         current_upper_seconds: Some(90),
+        is_stale: false,
         session: EtaSessionInfo {
             thread_id: root_thread_id.to_string(),
             title: "Release session".to_string(),
@@ -187,9 +188,11 @@ fn view() -> EtaView {
 fn all_sessions_view() -> EtaView {
     let root = "00000000-0000-0000-0000-000000000001";
     let second_root = "00000000-0000-0000-0000-000000000003";
+    let mut stale_child = session_task("child", root, Some("root"), "Run checks", 0);
+    stale_child.is_stale = true;
     let rows = vec![
         session_task("root", root, None, "Prepare release", 1),
-        session_task("child", root, Some("root"), "Run checks", 0),
+        stale_child,
         session_task("other", second_root, None, "Publish notes", 0),
     ];
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -399,7 +402,14 @@ fn all_sessions_nested_and_narrow_layout_have_snapshots() {
         .filter(|line| line.contains("Prepare release") || line.contains("Run checks"))
         .collect::<Vec<_>>()
         .join("\n");
+    assert!(rows.contains("active · ⚠"));
     insta::assert_snapshot!("eta_all_sessions_nested_rows", rows);
+    let narrow_rows = render(&view, 48, 24);
+    let narrow_stale_row = narrow_rows
+        .lines()
+        .find(|line| line.contains("Run") && line.contains("⚠"))
+        .expect("narrow stale task row");
+    assert!(narrow_stale_row.contains("⚠"));
     insta::assert_debug_snapshot!(
         "eta_all_sessions_narrow_columns",
         super::eta_view_render::session_column_widths(48),

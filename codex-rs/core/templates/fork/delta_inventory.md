@@ -63,7 +63,10 @@ release or merge rules.
   read timestamp using each root's persisted freshness policy, freezes overdue
   rows with `is_stale`, keeps terminal ranges frozen, projects nested summaries
   with the same semantics, and serializes session cwd through
-  `LegacyAppPathString`.
+  `LegacyAppPathString`. `thread/eta/list` seeds NULL root policies from
+  authoritative config. The TUI refreshes retained rows for updates from
+  the selected root as well as other roots and marks stale rows with a warning
+  in All Sessions.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`

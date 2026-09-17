@@ -156,9 +156,7 @@ impl App {
 
         if let ServerNotification::ThreadEtaUpdated(eta) = &notification {
             let eta_root = ThreadId::from_string(&eta.root_thread_id).ok();
-            let refresh_all_sessions = eta_root
-                .zip(self.eta.root_thread_id)
-                .is_some_and(|(updated_root, selected_root)| updated_root != selected_root)
+            let refresh_all_sessions = eta_root.is_some()
                 && self
                     .chat_widget
                     .active_tab_id_for_active_view(super::eta_view::ETA_VIEW_ID)

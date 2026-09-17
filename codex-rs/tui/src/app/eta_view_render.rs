@@ -400,7 +400,15 @@ impl EtaView {
                 session.push_str(" · current");
             }
             let session = fit_text(&session, session_width);
-            let status = fit_text(task.status.label(), status_width);
+            let mut status = task.status.label().to_string();
+            if task.is_stale {
+                if status.width() + 4 > status_width {
+                    status = format!("⚠ {status}");
+                } else {
+                    status.push_str(" · ⚠");
+                }
+            }
+            let status = fit_text(&status, status_width);
             let remaining = if task.nested_task_count > 0 {
                 let own = format_range(task.current_lower_seconds, task.current_upper_seconds);
                 let nested = format_range(task.nested_lower_seconds, task.nested_upper_seconds);
@@ -421,6 +429,8 @@ impl EtaView {
             let line = truncate_line_with_ellipsis_if_overflow(line, width);
             lines.push(if self.state.selected_idx == Some(display_idx) {
                 line.patch_style(accent_style())
+            } else if task.is_stale {
+                line.yellow()
             } else {
                 line
             });
@@ -437,6 +447,13 @@ impl EtaView {
         let mut lines = vec![Line::from("Session task details".bold())];
         lines.push(detail_line("Task", task.title.trim()));
         lines.push(detail_line("Status", status));
+        if task.is_stale {
+            lines.push(
+                "⚠ May be outdated; the saved estimate remains visible until its owner updates it."
+                    .yellow()
+                    .into(),
+            );
+        }
         lines.push(detail_line("Session", &session_label(task)));
         if let Some(preview) = task
             .session

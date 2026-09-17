@@ -147,6 +147,7 @@ pub(super) struct EtaSessionTask {
     pub(super) status: EtaTaskStatus,
     pub(super) current_lower_seconds: Option<i64>,
     pub(super) current_upper_seconds: Option<i64>,
+    pub(super) is_stale: bool,
     pub(super) session: EtaSessionInfo,
     pub(super) nested_task_count: u32,
     pub(super) active_nested_task_count: u32,
