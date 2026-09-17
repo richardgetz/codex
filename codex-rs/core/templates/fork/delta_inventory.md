@@ -64,7 +64,9 @@ release or merge rules.
   rows with `is_stale`, keeps terminal ranges frozen, projects nested summaries
   with the same semantics, and serializes session cwd through
   `LegacyAppPathString`. `thread/eta/list` seeds NULL root policies from
-  authoritative config. The TUI refreshes retained rows for updates from
+  authoritative config and remains the retention-maintenance path, while
+  `thread/eta/read` stays side-effect free. The TUI refreshes retained rows for
+  updates from
   the selected root as well as other roots and marks stale rows with a warning
   in All Sessions.
 

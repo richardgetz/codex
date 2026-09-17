@@ -232,9 +232,7 @@ impl ThreadEtaRequestProcessor {
         let configured_freshness_minimum_seconds =
             self.configured_freshness_minimum_seconds().await;
         state_db
-            .initialize_missing_eta_freshness_minimum_seconds(
-                configured_freshness_minimum_seconds,
-            )
+            .initialize_missing_eta_freshness_minimum_seconds(configured_freshness_minimum_seconds)
             .await
             .map_err(|err| internal_error(format!("failed to initialize ETA freshness: {err}")))?;
         let generated_at = Utc::now();
