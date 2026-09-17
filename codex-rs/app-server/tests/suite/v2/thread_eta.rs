@@ -95,6 +95,40 @@ async fn list(app: &mut TestAppServer, include_nested: bool) -> Result<ThreadEta
     .await
 }
 
+fn state_create_task(
+    task_id: &str,
+    title: &str,
+    lower_seconds: i64,
+    upper_seconds: i64,
+) -> TaskEstimateMutation {
+    TaskEstimateMutation {
+        action: TaskEstimateAction::Create,
+        task_id: Some(task_id.to_string()),
+        title: Some(title.to_string()),
+        parent_task_id: None,
+        depends_on_task_ids: None,
+        estimate: Some(TaskEstimateRange {
+            lower_seconds: Some(lower_seconds),
+            upper_seconds: Some(upper_seconds),
+        }),
+        reason: None,
+        owner_thread_id: None,
+    }
+}
+
+fn state_start_task(task_id: &str) -> TaskEstimateMutation {
+    TaskEstimateMutation {
+        action: TaskEstimateAction::Start,
+        task_id: Some(task_id.to_string()),
+        title: None,
+        parent_task_id: None,
+        depends_on_task_ids: None,
+        estimate: None,
+        reason: None,
+        owner_thread_id: None,
+    }
+}
+
 fn assert_terminal_history(task: &ThreadEtaTask) {
     assert_eq!(task.status, ThreadEtaStatus::Completed);
     assert_eq!(task.original_lower_seconds, Some(10));
@@ -269,6 +303,120 @@ async fn thread_eta_rpc_persists_terminal_history_without_starting_a_turn() -> R
         .expect("mock response server should expose requests");
     assert!(requests.is_empty(), "ETA RPCs must not start a model turn");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_eta_list_seeds_missing_root_freshness_from_config() -> Result<()> {
+    let responses_server = create_mock_responses_server_repeating_assistant("unused").await;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_root_config(
+            "suppress_unstable_features_warning = true\n[eta]\nfreshness_minimum_minutes = 1",
+        )
+        .enable_feature(Feature::Sqlite)
+        .write(codex_home.path())?;
+
+    let root_without_policy = ThreadId::new();
+    let root_with_policy = ThreadId::new();
+    let started_at = Utc::now() - ChronoDuration::seconds(120);
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    for root_thread_id in [root_without_policy, root_with_policy] {
+        let mut metadata = ThreadMetadataBuilder::new(
+            root_thread_id,
+            codex_home
+                .path()
+                .join("sessions")
+                .join(format!("{root_thread_id}.jsonl")),
+            started_at,
+            SessionSource::Cli,
+        );
+        metadata.cwd = codex_home.path().to_path_buf();
+        state_db
+            .upsert_thread(&metadata.build("mock_provider"))
+            .await?;
+    }
+    state_db
+        .initialize_eta_freshness_minimum_seconds(root_with_policy, 300)
+        .await?;
+    state_db
+        .apply_task_estimate_mutations(
+            root_without_policy,
+            root_without_policy,
+            &[
+                state_create_task("without-policy", "Without policy", 10, 20),
+                state_start_task("without-policy"),
+            ],
+            started_at,
+        )
+        .await?;
+    state_db
+        .apply_task_estimate_mutations(
+            root_with_policy,
+            root_with_policy,
+            &[
+                state_create_task("with-policy", "With policy", 10, 20),
+                state_start_task("with-policy"),
+            ],
+            started_at,
+        )
+        .await?;
+    state_db.close().await;
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let response = list(&mut app, false).await?;
+    let without_policy = response
+        .data
+        .iter()
+        .find(|task| task.root_thread_id == root_without_policy.to_string())
+        .expect("root without a policy should be listed");
+    assert_eq!(
+        (
+            without_policy.is_stale,
+            without_policy.current_lower_seconds,
+            without_policy.current_upper_seconds,
+        ),
+        (true, Some(10), Some(20))
+    );
+    let with_policy = response
+        .data
+        .iter()
+        .find(|task| task.root_thread_id == root_with_policy.to_string())
+        .expect("root with a policy should be listed");
+    assert_eq!(
+        (
+            with_policy.is_stale,
+            with_policy.current_lower_seconds,
+            with_policy.current_upper_seconds,
+        ),
+        (false, Some(0), Some(0))
+    );
+
+    let state_db = StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_without_policy)
+            .await?,
+        Some(60)
+    );
+    assert_eq!(
+        state_db
+            .eta_freshness_minimum_seconds(root_with_policy)
+            .await?,
+        Some(300)
+    );
+    state_db.close().await;
     Ok(())
 }
 

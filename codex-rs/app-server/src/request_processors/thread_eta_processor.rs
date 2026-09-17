@@ -230,6 +230,14 @@ impl ThreadEtaRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, codex_app_server_protocol::JSONRPCErrorError> {
         let state_db = self.state_db()?;
         self.prune_history(state_db).await?;
+        let configured_freshness_minimum_seconds =
+            self.configured_freshness_minimum_seconds().await;
+        state_db
+            .initialize_missing_eta_freshness_minimum_seconds(
+                configured_freshness_minimum_seconds,
+            )
+            .await
+            .map_err(|err| internal_error(format!("failed to initialize ETA freshness: {err}")))?;
         let generated_at = Utc::now();
         let page = state_db
             .list_task_estimate_sessions_at(
@@ -252,6 +260,24 @@ impl ThreadEtaRequestProcessor {
             }
             .into(),
         ))
+    }
+
+    async fn configured_freshness_minimum_seconds(&self) -> i64 {
+        match self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => config
+                .eta
+                .freshness_minimum_minutes
+                .saturating_mul(60)
+                .min(i64::MAX as u64) as i64,
+            Err(error) => {
+                warn!(%error, "failed to load ETA freshness policy; using default");
+                DEFAULT_FRESHNESS_MINIMUM_SECONDS
+            }
+        }
     }
 
     async fn prune_history(
@@ -306,17 +332,8 @@ impl ThreadEtaRequestProcessor {
             }
             return freshness_minimum_seconds;
         }
-        let configured_freshness_minimum_seconds = match self
-            .config_manager
-            .load_latest_config(/*fallback_cwd*/ None)
-            .await
-        {
-            Ok(config) => config.eta.freshness_minimum_minutes.saturating_mul(60),
-            Err(error) => {
-                warn!(%error, %root_thread_id, "failed to load ETA freshness policy");
-                return DEFAULT_FRESHNESS_MINIMUM_SECONDS;
-            }
-        };
+        let configured_freshness_minimum_seconds =
+            self.configured_freshness_minimum_seconds().await;
         match state_db
             .initialize_eta_freshness_minimum_seconds(
                 root_thread_id,

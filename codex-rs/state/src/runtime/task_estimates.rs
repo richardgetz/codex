@@ -744,6 +744,20 @@ impl StateRuntime {
         Ok(persisted)
     }
 
+    /// Seed missing root-owned freshness policies without replacing persisted values.
+    pub async fn initialize_missing_eta_freshness_minimum_seconds(
+        &self,
+        freshness_minimum_seconds: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE eta_roots SET freshness_minimum_seconds = ? WHERE freshness_minimum_seconds IS NULL AND EXISTS (SELECT 1 FROM eta_tasks WHERE eta_tasks.root_thread_id = eta_roots.root_thread_id)",
+        )
+        .bind(freshness_minimum_seconds.max(0))
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
     /// Read the persisted root-owned freshness minimum, if the ETA root exists.
     pub async fn eta_freshness_minimum_seconds(
         &self,
