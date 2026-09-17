@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-17/eta-all-sessions-tui#f4b6c3469e"
+  change_type: "feat"
+  scope: "TUI ETA"
+  summary: "Expose task estimates across persisted sessions with nested navigation and resume actions."
+  decision: "Add a third All Sessions tab backed by the experimental paginated ETA list, preserving task hierarchy and requiring a confirmation before resuming the active current session."
+  constraints:
+    - "Keep existing Active and History tabs and resume flow unchanged."
+    - "Use server-provided ETA ranges and metadata without inferring completion from elapsed time."
+    - "Keep list loading paginated and ignore stale responses."
+    - "Do not run Cargo or just builds/tests in the worker worktree."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/event_dispatch.rs"
+    - "codex-rs/tui/src/app_event.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-worker"
+    model: "gpt-5"
