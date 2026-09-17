@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-17/eta-refresh-pagination#b94032f28a"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Preserve loaded All Sessions ETA pages and selection during selected-root refreshes."
+  decision: "Refresh global ETA sessions only for the visible All Sessions tab, repaint the loading state when scheduling, merge refreshed rows by root/task identity, and retain cursor-loaded tail rows even when the final page has no next cursor."
+  constraints:
+    - "Automatic refreshes must not discard already loaded cursor pages or the keyed selected row."
+    - "Manual refreshes, nested-mode changes, and explicit cursor loads retain their existing replacement or merge semantics."
+    - "Keep app-server pagination bounded and deduplicate rows by root thread and task identity."
+    - "Do not infer ETA lifecycle from elapsed time or rendered activity."
+    - "Keep worker scope source-only; do not run Rust, Cargo, or just commands."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/app_server_events.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
