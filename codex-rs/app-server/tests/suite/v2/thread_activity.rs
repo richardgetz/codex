@@ -649,32 +649,10 @@ async fn run_cold_resume_case(
         }
         drop(historical_release);
 
-        for (thread_id, depth) in [
-            (ThreadId::from_string(&historical_completed.id)?, 1),
-            (ThreadId::from_string(&historical_interrupted.id)?, 1),
-        ] {
-            let mut metadata = state_db
-                .get_thread(thread_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("historical thread metadata missing"))?;
-            metadata.source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: ThreadId::from_string(&parent.id)?,
-                depth,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            })
-            .to_string();
-            state_db.upsert_thread(&metadata).await?;
-            state_db
-                .upsert_thread_spawn_edge(
-                    ThreadId::from_string(&parent.id)?,
-                    thread_id,
-                    DirectionalThreadSpawnEdgeStatus::Open,
-                )
-                .await?;
-            historical_thread_ids.push(thread_id.to_string());
-        }
+        historical_thread_ids.extend([
+            historical_completed.id.clone(),
+            historical_interrupted.id.clone(),
+        ]);
     }
     let parent_turn_request = old_server
         .send_turn_start_request(TurnStartParams {
@@ -755,6 +733,33 @@ async fn run_cold_resume_case(
         .wait_for_request_count(initial_request_count)
         .await;
 
+    // Add the completed and interrupted workers to the persisted Team graph only after the
+    // active direct/nested workers have spawned. That keeps the synthetic roots from affecting
+    // spawn-path selection while still presenting the pause boundary with idle historical edges.
+    for historical_thread_id in &historical_thread_ids {
+        let thread_id = ThreadId::from_string(historical_thread_id)?;
+        let mut metadata = state_db
+            .get_thread(thread_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("historical thread metadata missing"))?;
+        metadata.source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::from_string(&parent.id)?,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        })
+        .to_string();
+        state_db.upsert_thread(&metadata).await?;
+        state_db
+            .upsert_thread_spawn_edge(
+                ThreadId::from_string(&parent.id)?,
+                thread_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            )
+            .await?;
+    }
+
     if continue_before_exit {
         let continue_request = old_server
             .send_raw_request(
@@ -790,6 +795,15 @@ async fn run_cold_resume_case(
             .await?;
         let _: ThreadActivityPauseResponse =
             timeout(REQUEST_TIMEOUT, old_server.read_response(pause_request)).await??;
+        let captured = state_db
+            .get_thread_activity_pause_snapshot(ThreadId::from_string(&parent.id)?)
+            .await?
+            .expect("pause snapshot");
+        let captured_thread_ids = captured
+            .into_iter()
+            .map(|snapshot| snapshot.thread_id.to_string())
+            .collect::<HashSet<_>>();
+        assert_eq!(captured_thread_ids, expected_threads);
         let read_request = old_server
             .send_raw_request(
                 "thread/activity/read",
