@@ -423,7 +423,10 @@ fn all_sessions_nested_and_narrow_layout_have_snapshots() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rows.contains("active · ⚠"));
-    insta::assert_snapshot!("eta_all_sessions_nested_rows", rows);
+    insta::assert_snapshot!(rows, @r###"
+    ▾ Prepare release  [1 nested, 1 act…  release · current         active                    30s–1m (+1m–2m)
+    Run checks                        release · current         active · ⚠                30s–1m
+    "###);
     let narrow_rows = render(&view, 48, 24);
     let narrow_stale_row = narrow_rows
         .lines()

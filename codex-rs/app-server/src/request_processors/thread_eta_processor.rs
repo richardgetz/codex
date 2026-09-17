@@ -289,7 +289,7 @@ impl ThreadEtaRequestProcessor {
             Ok(config) => config.eta.history_retention_days,
             Err(error) => {
                 warn!(%error, "failed to load ETA history retention policy; using default");
-                DEFAULT_HISTORY_RETENTION_DAYS
+                DEFAULT_ETA_HISTORY_RETENTION_DAYS
             }
         };
         state_db

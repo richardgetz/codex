@@ -9,15 +9,15 @@ use crate::app::eta_view::EtaViewState;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadEtaAccuracy;
-use codex_app_server_protocol::ThreadEtaOverall;
 use codex_app_server_protocol::ThreadEtaListResponse;
+use codex_app_server_protocol::ThreadEtaOverall;
 use codex_app_server_protocol::ThreadEtaSessionInfo;
 use codex_app_server_protocol::ThreadEtaSessionTask;
 use codex_app_server_protocol::ThreadEtaStatus;
 use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
-use codex_utils_path_uri::LegacyAppPathString;
 use codex_protocol::ThreadId;
+use codex_utils_path_uri::LegacyAppPathString;
 
 fn saved_state(tab_id: &str, selected_task_id: Option<&str>) -> EtaViewState {
     EtaViewState {
@@ -116,8 +116,8 @@ async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_ey
         .expect("opening ETA should request All Sessions");
     app.handle_app_server_event(
         &app_server,
-        AppServerEvent::ServerNotification(Box::new(
-            ServerNotification::ThreadEtaUpdated(ThreadEtaUpdatedNotification {
+        AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadEtaUpdated(
+            ThreadEtaUpdatedNotification {
                 root_thread_id: root_thread_id.to_string(),
                 generated_at: 1,
                 sequence: 1,
@@ -148,17 +148,17 @@ async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_ey
                     remaining_upper_seconds: None,
                     unknown_reason: Some("test update".to_string()),
                 },
-            }),
-        )),
+            },
+        ))),
     )
     .await;
 
     assert_ne!(app.eta.all_sessions_request_id, Some(previous_request_id));
     assert_eq!(
-        app.eta.snapshot.as_ref().map(|snapshot| (
-            snapshot.root_thread_id.clone(),
-            snapshot.sequence,
-        )),
+        app.eta
+            .snapshot
+            .as_ref()
+            .map(|snapshot| (snapshot.root_thread_id.clone(), snapshot.sequence,)),
         Some((root_thread_id.to_string(), 1)),
     );
     let task = &app.eta.snapshot.as_ref().expect("ETA snapshot").active[0];
@@ -228,8 +228,7 @@ async fn eta_root_view_state_isolated_between_selected_roots() {
         Some("second-task".to_string())
     );
     assert_eq!(
-        app.eta
-            .view_state_for_root(second_root, ETA_ACTIVE_TAB_ID),
+        app.eta.view_state_for_root(second_root, ETA_ACTIVE_TAB_ID),
         None
     );
     assert_eq!(
@@ -257,16 +256,13 @@ async fn eta_notifications_coalesce_during_all_sessions_refresh() -> color_eyre:
         .eta
         .all_sessions_request_id
         .expect("nested-mode refresh should be in flight");
-    assert_eq!(
-        app.eta.all_sessions_requested_include_nested,
-        Some(true)
-    );
+    assert_eq!(app.eta.all_sessions_requested_include_nested, Some(true));
 
     for sequence in [1, 2] {
         app.handle_app_server_event(
             &app_server,
-            AppServerEvent::ServerNotification(Box::new(
-                ServerNotification::ThreadEtaUpdated(ThreadEtaUpdatedNotification {
+            AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadEtaUpdated(
+                ThreadEtaUpdatedNotification {
                     root_thread_id: root_thread_id.to_string(),
                     generated_at: sequence,
                     sequence,
@@ -277,18 +273,15 @@ async fn eta_notifications_coalesce_during_all_sessions_refresh() -> color_eyre:
                         remaining_upper_seconds: None,
                         unknown_reason: None,
                     },
-                }),
-            )),
+                },
+            ))),
         )
         .await;
     }
 
     assert_eq!(app.eta.all_sessions_request_id, Some(request_id));
     assert!(app.eta.all_sessions_refresh_pending);
-    assert_eq!(
-        app.eta.all_sessions_requested_include_nested,
-        Some(true)
-    );
+    assert_eq!(app.eta.all_sessions_requested_include_nested, Some(true));
 
     app_server.shutdown().await?;
     Ok(())
@@ -305,10 +298,7 @@ async fn eta_auto_refresh_replaces_loaded_depth_and_preserves_selection() {
         root_thread_id.to_string(),
         EtaViewState {
             tab_id: ETA_ALL_SESSIONS_TAB_ID.to_string(),
-            selected_session: Some((
-                tail_root_thread_id.to_string(),
-                "tail-task".to_string(),
-            )),
+            selected_session: Some((tail_root_thread_id.to_string(), "tail-task".to_string())),
             ..Default::default()
         },
     );

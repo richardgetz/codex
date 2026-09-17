@@ -71,9 +71,7 @@ impl EtaState {
             .or_else(|| {
                 self.view_state
                     .as_ref()
-                    .filter(|state| {
-                        state.tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID
-                    })
+                    .filter(|state| state.tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID)
                     .map(|state| state.tab_id.clone())
             })
             .or_else(|| {
@@ -377,9 +375,7 @@ impl App {
             } else {
                 request_handle
                     .request_typed::<ThreadEtaListResponse>(ClientRequest::ThreadEtaList {
-                        request_id: RequestId::String(format!(
-                            "thread-eta-list-{request_id}-0"
-                        )),
+                        request_id: RequestId::String(format!("thread-eta-list-{request_id}-0")),
                         params: ThreadEtaListParams {
                             cursor: cursor.clone(),
                             limit: Some(ETA_ALL_SESSIONS_PAGE_SIZE),
@@ -527,7 +523,9 @@ impl App {
         if state.tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID {
             self.eta.all_sessions_view_state = Some(state.clone());
         } else if let Ok(root_thread_id) = ThreadId::from_string(&root_thread_id) {
-            self.eta.root_view_states.insert(root_thread_id, state.clone());
+            self.eta
+                .root_view_states
+                .insert(root_thread_id, state.clone());
         }
         self.eta.view_state = Some(state);
     }
