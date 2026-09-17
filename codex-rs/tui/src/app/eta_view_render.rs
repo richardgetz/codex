@@ -19,6 +19,7 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 const ETA_AGENT_WIDTH: usize = 12;
+const ETA_SESSION_WIDTH: usize = 24;
 const ETA_STATUS_WIDTH: usize = 24;
 const ETA_TIMING_WIDTH: usize = 22;
 const ETA_COLUMN_GAP: usize = 2;
@@ -38,6 +39,12 @@ impl EtaView {
         if self.tab == EtaTab::History && self.snapshot.next_cursor.is_some() {
             spans.extend(["  pgdn".bold(), " more history".dim()]);
         }
+        if self.tab == EtaTab::AllSessions {
+            spans.extend(["  r".bold(), " resume".dim()]);
+            if self.all_sessions_next_cursor.is_some() {
+                spans.extend(["  pgdn".bold(), " more sessions".dim()]);
+            }
+        }
         spans.into()
     }
 
@@ -49,7 +56,14 @@ impl EtaView {
                 candidate.label().dim()
             }
         };
-        vec![tab(EtaTab::Active), "  ".into(), tab(EtaTab::History)].into()
+        vec![
+            tab(EtaTab::Active),
+            "  ".into(),
+            tab(EtaTab::History),
+            "  ".into(),
+            tab(EtaTab::AllSessions),
+        ]
+        .into()
     }
 
     fn render_overall_lines(&self) -> Vec<Line<'static>> {
@@ -76,6 +90,17 @@ impl EtaView {
     }
 
     fn render_table_header(&self, title_width: usize) -> Line<'static> {
+        if self.tab == EtaTab::AllSessions {
+            return Line::from(vec![
+                format!("{:<title_width$}", "Task").bold(),
+                " ".repeat(ETA_COLUMN_GAP).into(),
+                format!("{:<width$}", "Session", width = ETA_SESSION_WIDTH).bold(),
+                " ".repeat(ETA_COLUMN_GAP).into(),
+                format!("{:<width$}", "Status", width = ETA_STATUS_WIDTH).bold(),
+                " ".repeat(ETA_COLUMN_GAP).into(),
+                format!("{:<ETA_TIMING_WIDTH$}", "Remaining").bold(),
+            ]);
+        }
         let trailing = if self.tab == EtaTab::Active {
             "Remaining"
         } else {
@@ -93,6 +118,9 @@ impl EtaView {
     }
 
     fn render_table_rows(&self, width: usize) -> Vec<Line<'static>> {
+        if self.tab == EtaTab::AllSessions {
+            return self.render_all_session_rows(width);
+        }
         let rows = self.ordered_indices();
         let title_width = table_title_width(width);
         let agent_width = ETA_AGENT_WIDTH;
@@ -163,6 +191,9 @@ impl EtaView {
     }
 
     fn render_details(&self, width: usize) -> Vec<Line<'static>> {
+        if self.tab == EtaTab::AllSessions {
+            return self.render_all_session_details(width);
+        }
         let Some(task) = self.selected_task() else {
             return vec!["No task selected.".dim().into()];
         };
@@ -259,6 +290,121 @@ impl EtaView {
             .map(|line| truncate_line_with_ellipsis_if_overflow(line, width))
             .collect()
     }
+
+    fn render_all_session_rows(&self, width: usize) -> Vec<Line<'static>> {
+        let rows = self.ordered_session_indices();
+        let title_width = session_table_title_width(width);
+        let mut lines = Vec::with_capacity(rows.len());
+        let mut previous_root: Option<&str> = None;
+        for (display_idx, task_idx) in rows.into_iter().enumerate() {
+            let task = &self.session_tasks()[task_idx];
+            if previous_root != Some(task.root_thread_id.as_str()) {
+                let session_label = session_label(task);
+                let heading = format!(
+                    "Session: {session_label}  {}",
+                    short_id(&task.root_thread_id)
+                );
+                lines.push(truncate_line_with_ellipsis_if_overflow(
+                    Line::from(heading.bold()),
+                    width,
+                ));
+                previous_root = Some(task.root_thread_id.as_str());
+            }
+            let depth = self.session_task_depth(task_idx);
+            let has_children = task.nested_task_count > 0;
+            let marker = if has_children {
+                if !self.all_sessions_include_nested
+                    || self
+                        .collapsed_session_task_ids
+                        .contains(&(task.root_thread_id.clone(), task.task_id.clone()))
+                {
+                    "▸ "
+                } else {
+                    "▾ "
+                }
+            } else {
+                "  "
+            };
+            let indent = "  ".repeat(depth);
+            let prefix = format!("{indent}{marker}");
+            let nested_badge = (task.nested_task_count > 0)
+                .then(|| format!("  [{} nested]", task.nested_task_count))
+                .unwrap_or_default();
+            let title = fit_text(
+                &format!("{prefix}{}{nested_badge}", task.title.trim()),
+                title_width,
+            );
+            let current = ThreadId::from_string(&task.session.thread_id)
+                .ok()
+                .is_some_and(|thread_id| self.current_thread_id == Some(thread_id));
+            let mut session = session_label(task);
+            if current {
+                session.push_str(" · current");
+            }
+            let session = fit_text(&session, ETA_SESSION_WIDTH);
+            let status = fit_text(task.status.label(), ETA_STATUS_WIDTH);
+            let remaining = if task.nested_task_count > 0 {
+                let own = format_range(task.current_lower_seconds, task.current_upper_seconds);
+                let nested = format_range(task.nested_lower_seconds, task.nested_upper_seconds);
+                format!("{own} (+{nested})")
+            } else {
+                format_range(task.current_lower_seconds, task.current_upper_seconds)
+            };
+            let remaining = fit_text(&remaining, ETA_TIMING_WIDTH);
+            let line = Line::from(vec![
+                Span::from(format!("{title:<title_width$}")),
+                " ".repeat(ETA_COLUMN_GAP).into(),
+                Span::from(format!("{session:<ETA_SESSION_WIDTH$}")),
+                " ".repeat(ETA_COLUMN_GAP).into(),
+                Span::from(format!("{status:<ETA_STATUS_WIDTH$}")),
+                " ".repeat(ETA_COLUMN_GAP).into(),
+                Span::from(format!("{remaining:<ETA_TIMING_WIDTH$}")),
+            ]);
+            let line = truncate_line_with_ellipsis_if_overflow(line, width);
+            lines.push(if self.state.selected_idx == Some(display_idx) {
+                line.patch_style(accent_style())
+            } else {
+                line
+            });
+        }
+        lines
+    }
+
+    fn render_all_session_details(&self, width: usize) -> Vec<Line<'static>> {
+        let Some(task) = self.selected_session_task() else {
+            return vec!["No session task selected.".dim().into()];
+        };
+        let session = &task.session;
+        let status = task.status.label();
+        let mut lines = vec![Line::from("Session task details".bold())];
+        lines.push(detail_line("Task", task.title.trim()));
+        lines.push(detail_line("Status", status));
+        lines.push(detail_line("Session", &session_label(task)));
+        lines.push(detail_line("Session ID", &short_id(&session.thread_id)));
+        lines.push(detail_line("Working directory", &session.cwd));
+        lines
+            .into_iter()
+            .map(|line| truncate_line_with_ellipsis_if_overflow(line, width))
+            .collect()
+    }
+
+    fn all_session_scroll_offset(&self) -> usize {
+        let rows = self.ordered_session_indices();
+        let mut offset = 0;
+        let mut previous_root: Option<&str> = None;
+        for (display_idx, task_idx) in rows.into_iter().enumerate() {
+            if display_idx >= self.state.scroll_top {
+                break;
+            }
+            let task = &self.session_tasks()[task_idx];
+            if previous_root != Some(task.root_thread_id.as_str()) {
+                offset += 1;
+                previous_root = Some(task.root_thread_id.as_str());
+            }
+            offset += 1;
+        }
+        offset
+    }
 }
 
 impl Renderable for EtaView {
@@ -291,20 +437,36 @@ impl Renderable for EtaView {
         ])
         .areas(content_area);
         Line::from("Task estimates".bold()).render(inset(header_area), buf);
-        let mut summary = vec![Line::from(vec![
-            format!(
-                "{} active   {} history   updated {}",
-                self.snapshot.active.len(),
-                self.snapshot.history.len(),
-                if self.snapshot.generated_at > 0 {
-                    self.timestamp_formatter.format(self.snapshot.generated_at)
-                } else {
-                    "unknown".to_string()
-                },
-            )
-            .dim(),
-        ])];
-        summary.extend(self.render_overall_lines());
+        let mut summary = if self.tab == EtaTab::AllSessions {
+            vec![Line::from(
+                format!(
+                    "{} tasks   {} nested loaded",
+                    self.all_sessions.len(),
+                    self.all_sessions
+                        .iter()
+                        .map(|task| task.nested_task_count)
+                        .sum::<u32>(),
+                )
+                .dim(),
+            )]
+        } else {
+            vec![Line::from(
+                format!(
+                    "{} active   {} history   updated {}",
+                    self.snapshot.active.len(),
+                    self.snapshot.history.len(),
+                    if self.snapshot.generated_at > 0 {
+                        self.timestamp_formatter.format(self.snapshot.generated_at)
+                    } else {
+                        "unknown".to_string()
+                    },
+                )
+                .dim(),
+            )]
+        };
+        if self.tab != EtaTab::AllSessions {
+            summary.extend(self.render_overall_lines());
+        }
         Paragraph::new(summary).render(inset(summary_area), buf);
         self.render_tabs().render(inset(tabs_area), buf);
         Line::from(
@@ -316,7 +478,11 @@ impl Renderable for EtaView {
 
         let body_area = inset(body_area);
         let width = body_area.width as usize;
-        let title_width = table_title_width(width);
+        let title_width = if self.tab == EtaTab::AllSessions {
+            session_table_title_width(width)
+        } else {
+            table_title_width(width)
+        };
         let expanded_table_height =
             (1 + self.visible_rows() as u16).min(body_area.height.saturating_sub(1).max(1));
         let [table_area, detail_area] = if self.expanded {
@@ -330,9 +496,14 @@ impl Renderable for EtaView {
         };
         let mut table_lines = vec![self.render_table_header(title_width)];
         let rows = self.render_table_rows(width);
+        let scroll_top = if self.tab == EtaTab::AllSessions {
+            self.all_session_scroll_offset()
+        } else {
+            self.state.scroll_top
+        };
         table_lines.extend(
             rows.into_iter()
-                .skip(self.state.scroll_top)
+                .skip(scroll_top)
                 .take(table_area.height.saturating_sub(1) as usize),
         );
         Paragraph::new(table_lines).render(table_area, buf);
@@ -355,6 +526,29 @@ fn table_title_width(width: usize) -> usize {
             ETA_AGENT_WIDTH + ETA_STATUS_WIDTH + ETA_TIMING_WIDTH + (ETA_COLUMN_GAP * 3),
         )
         .max(8)
+}
+
+fn session_table_title_width(width: usize) -> usize {
+    width
+        .saturating_sub(
+            ETA_SESSION_WIDTH + ETA_STATUS_WIDTH + ETA_TIMING_WIDTH + (ETA_COLUMN_GAP * 3),
+        )
+        .max(8)
+}
+
+fn session_label(task: &super::EtaSessionTask) -> String {
+    if let Some(name) = task
+        .session
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        return name.trim().to_string();
+    }
+    if !task.session.title.trim().is_empty() {
+        return task.session.title.trim().to_string();
+    }
+    short_id(&task.root_thread_id)
 }
 
 fn active_remaining_label(task: &super::EtaTask) -> String {

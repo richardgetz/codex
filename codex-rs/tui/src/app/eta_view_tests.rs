@@ -2,6 +2,8 @@ use super::super::eta_time::EtaTimestampFormatter;
 use super::EtaAccuracy;
 use super::EtaOverall;
 use super::EtaRevision;
+use super::EtaSessionInfo;
+use super::EtaSessionTask;
 use super::EtaSnapshot;
 use super::EtaTask;
 use super::EtaTaskStatus;
@@ -133,6 +135,34 @@ fn known_finish_snapshot() -> EtaSnapshot {
     snapshot
 }
 
+fn session_task(
+    task_id: &str,
+    root_thread_id: &str,
+    parent_task_id: Option<&str>,
+    title: &str,
+    nested_task_count: u32,
+) -> EtaSessionTask {
+    EtaSessionTask {
+        task_id: task_id.to_string(),
+        root_thread_id: root_thread_id.to_string(),
+        parent_task_id: parent_task_id.map(str::to_string),
+        title: title.to_string(),
+        status: EtaTaskStatus::Active,
+        current_lower_seconds: Some(30),
+        current_upper_seconds: Some(90),
+        session: EtaSessionInfo {
+            thread_id: root_thread_id.to_string(),
+            title: "Release session".to_string(),
+            name: Some("release".to_string()),
+            cwd: "/tmp/release".to_string(),
+        },
+        nested_task_count,
+        active_nested_task_count: nested_task_count,
+        nested_lower_seconds: Some(60),
+        nested_upper_seconds: Some(120),
+    }
+}
+
 fn render(view: &EtaView, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
     terminal
@@ -147,6 +177,30 @@ fn view() -> EtaView {
         snapshot(),
         RuntimeKeymap::defaults().list,
         AppEventSender::new(tx),
+    )
+}
+
+fn all_sessions_view() -> EtaView {
+    let root = "00000000-0000-0000-0000-000000000001";
+    let second_root = "00000000-0000-0000-0000-000000000003";
+    let rows = vec![
+        session_task("root", root, None, "Prepare release", 1),
+        session_task("child", root, Some("root"), "Run checks", 0),
+        session_task("other", second_root, None, "Publish notes", 0),
+    ];
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    EtaView::new_with_state_and_all_sessions(
+        snapshot(),
+        RuntimeKeymap::defaults().list,
+        AppEventSender::new(tx),
+        "all-sessions",
+        None,
+        EtaTimestampFormatter::utc(),
+        rows,
+        None,
+        true,
+        false,
+        ThreadId::from_string(root).ok(),
     )
 }
 
@@ -261,4 +315,25 @@ fn history_page_down_requests_next_cursor_once() {
     ));
     view.handle_key_event(KeyCode::PageDown.into());
     assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn all_sessions_are_grouped_and_nested_rows_toggle() {
+    let mut view = all_sessions_view();
+    insta::assert_debug_snapshot!(view.ordered_session_indices(), @r###"[0, 1, 2]"###);
+    let rendered = render(&view, 112, 24);
+    assert!(rendered.contains("Session: release"));
+    assert!(rendered.contains("[1 nested]"));
+    view.handle_key_event(KeyCode::Enter.into());
+    assert!(!render(&view, 112, 24).contains("Run checks"));
+    view.handle_key_event(KeyCode::Enter.into());
+    assert!(render(&view, 112, 24).contains("Run checks"));
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    view.app_event_tx = AppEventSender::new(tx);
+    view.handle_key_event(KeyCode::Char('r').into());
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ResumeEtaSession { thread_id })
+            if thread_id == ThreadId::from_string("00000000-0000-0000-0000-000000000001").unwrap()
+    ));
 }

@@ -371,10 +371,23 @@ pub(crate) enum AppEvent {
         cursor: Option<String>,
         result: Result<codex_app_server_protocol::ThreadEtaReadResponse, String>,
     },
+    ThreadEtaSessionsLoaded {
+        request_id: Uuid,
+        cursor: Option<String>,
+        include_nested: bool,
+        result: Result<codex_app_server_protocol::ThreadEtaListResponse, String>,
+    },
     /// Load the next explicitly requested history page for the ETA view.
     LoadEtaHistory {
         root_thread_id: ThreadId,
         cursor: String,
+    },
+    LoadEtaSessions {
+        cursor: Option<String>,
+        include_nested: bool,
+    },
+    ResumeEtaSession {
+        thread_id: ThreadId,
     },
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.
     AgentPickerThreadsLoaded {

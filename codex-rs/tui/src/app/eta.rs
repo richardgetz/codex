@@ -12,14 +12,20 @@ use super::eta_view::ETA_VIEW_ID;
 use super::eta_view::EtaAccuracy;
 use super::eta_view::EtaOverall;
 use super::eta_view::EtaRevision;
+use super::eta_view::EtaSessionInfo;
+use super::eta_view::EtaSessionTask;
 use super::eta_view::EtaSnapshot;
 use super::eta_view::EtaTask;
 use super::eta_view::EtaTaskStatus;
 use super::eta_view::EtaView;
 use crate::app_event::AppEvent;
+use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadEtaAccuracy;
+use codex_app_server_protocol::ThreadEtaListParams;
+use codex_app_server_protocol::ThreadEtaListResponse;
 use codex_app_server_protocol::ThreadEtaReadParams;
 use codex_app_server_protocol::ThreadEtaReadResponse;
 use codex_app_server_protocol::ThreadEtaStatus;
@@ -35,9 +41,36 @@ pub(super) struct EtaState {
     pub(super) snapshot: Option<EtaSnapshot>,
     pub(super) request_id: Option<Uuid>,
     pub(super) root_thread_id: Option<ThreadId>,
+    pub(super) all_sessions: Vec<EtaSessionTask>,
+    pub(super) all_sessions_next_cursor: Option<String>,
+    pub(super) all_sessions_request_id: Option<Uuid>,
+    pub(super) all_sessions_include_nested: bool,
 }
 
 impl App {
+    pub(super) fn show_eta_resume_confirmation(&mut self, thread_id: ThreadId) {
+        let id = thread_id.to_string();
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            title: Some("Resume active session?".to_string()),
+            items: vec![
+                SelectionItem {
+                    name: "Resume current session".to_string(),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::ResumeSessionByIdOrName(id.clone()));
+                    })],
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Cancel".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+    }
+
     pub(super) fn open_eta(&mut self, app_server: &AppServerSession) {
         let Some(root_thread_id) = self
             .primary_thread_id
@@ -63,17 +96,22 @@ impl App {
         let selected_idx = self
             .chat_widget
             .selected_index_for_present_view(ETA_VIEW_ID);
-        self.chat_widget.show_bottom_pane_view(Box::new(
-            EtaView::new_with_state_and_timestamp_formatter(
+        self.chat_widget
+            .show_bottom_pane_view(Box::new(EtaView::new_with_state_and_all_sessions(
                 snapshot,
                 self.keymap.list.clone(),
                 self.app_event_tx.clone(),
                 tab_id,
                 selected_idx,
                 EtaTimestampFormatter::from_config(&self.config.eta),
-            ),
-        ));
+                self.eta.all_sessions.clone(),
+                self.eta.all_sessions_next_cursor.clone(),
+                self.eta.all_sessions_include_nested,
+                self.eta.all_sessions_request_id.is_some(),
+                self.current_displayed_thread_id(),
+            )));
         self.refresh_eta(app_server, root_thread_id, None);
+        self.refresh_eta_sessions(app_server, None, self.eta.all_sessions_include_nested);
     }
 
     pub(super) fn refresh_eta(
@@ -103,6 +141,37 @@ impl App {
                 root_thread_id,
                 request_id,
                 cursor,
+                result,
+            });
+        });
+    }
+
+    pub(super) fn refresh_eta_sessions(
+        &mut self,
+        app_server: &AppServerSession,
+        cursor: Option<String>,
+        include_nested: bool,
+    ) {
+        let request_id = Uuid::new_v4();
+        self.eta.all_sessions_request_id = Some(request_id);
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed::<ThreadEtaListResponse>(ClientRequest::ThreadEtaList {
+                    request_id: RequestId::String(format!("thread-eta-list-{request_id}")),
+                    params: ThreadEtaListParams {
+                        cursor: cursor.clone(),
+                        limit: Some(50),
+                        include_nested,
+                    },
+                })
+                .await
+                .map_err(|error| error.to_string());
+            app_event_tx.send(AppEvent::ThreadEtaSessionsLoaded {
+                request_id,
+                cursor,
+                include_nested,
                 result,
             });
         });
@@ -150,6 +219,58 @@ impl App {
             }
         }
         self.repaint_eta();
+    }
+
+    pub(super) fn apply_eta_sessions(
+        &mut self,
+        request_id: Uuid,
+        cursor: Option<String>,
+        include_nested: bool,
+        result: Result<ThreadEtaListResponse, String>,
+    ) {
+        if self.eta.all_sessions_request_id != Some(request_id) {
+            return;
+        }
+        self.eta.all_sessions_request_id = None;
+        match result {
+            Ok(response) => {
+                let incoming = response
+                    .data
+                    .into_iter()
+                    .map(session_task_from_api)
+                    .collect::<Vec<_>>();
+                if cursor.is_some() && self.eta.all_sessions_include_nested == include_nested {
+                    self.merge_eta_sessions(incoming);
+                } else {
+                    self.eta.all_sessions = incoming;
+                }
+                self.eta.all_sessions_include_nested = include_nested;
+                self.eta.all_sessions_next_cursor = response.next_cursor;
+            }
+            Err(error) => {
+                if self
+                    .chat_widget
+                    .active_tab_id_for_active_view(ETA_VIEW_ID)
+                    .is_some()
+                {
+                    self.chat_widget
+                        .add_error_message(format!("Failed to load ETA sessions: {error}"));
+                }
+            }
+        }
+        self.repaint_eta();
+    }
+
+    fn merge_eta_sessions(&mut self, incoming: Vec<EtaSessionTask>) {
+        for task in incoming {
+            if let Some(existing) = self.eta.all_sessions.iter_mut().find(|existing| {
+                existing.task_id == task.task_id && existing.root_thread_id == task.root_thread_id
+            }) {
+                *existing = task;
+            } else {
+                self.eta.all_sessions.push(task);
+            }
+        }
     }
 
     pub(super) fn apply_eta_notification(&mut self, notification: &ThreadEtaUpdatedNotification) {
@@ -233,13 +354,18 @@ impl App {
             .chat_widget
             .active_tab_id_for_active_view(ETA_VIEW_ID)
             .unwrap_or(ETA_ACTIVE_TAB_ID);
-        let view = EtaView::new_with_state_and_timestamp_formatter(
+        let view = EtaView::new_with_state_and_all_sessions(
             snapshot,
             self.keymap.list.clone(),
             self.app_event_tx.clone(),
             tab_id,
             selected_idx,
             EtaTimestampFormatter::from_config(&self.config.eta),
+            self.eta.all_sessions.clone(),
+            self.eta.all_sessions_next_cursor.clone(),
+            self.eta.all_sessions_include_nested,
+            self.eta.all_sessions_request_id.is_some(),
+            self.current_displayed_thread_id(),
         );
         self.chat_widget
             .replace_bottom_pane_view_if_present(ETA_VIEW_ID, Box::new(view));
@@ -333,6 +459,35 @@ fn task_from_api(task: ThreadEtaTask) -> EtaTask {
                 actor_thread_id: revision.actor_thread_id,
             })
             .collect(),
+    }
+}
+
+fn session_task_from_api(task: codex_app_server_protocol::ThreadEtaSessionTask) -> EtaSessionTask {
+    EtaSessionTask {
+        task_id: task.task_id,
+        root_thread_id: task.root_thread_id,
+        parent_task_id: task.parent_task_id,
+        title: task.title,
+        status: match task.status {
+            ThreadEtaStatus::Pending => EtaTaskStatus::Pending,
+            ThreadEtaStatus::Active => EtaTaskStatus::Active,
+            ThreadEtaStatus::Blocked => EtaTaskStatus::Blocked,
+            ThreadEtaStatus::Completed => EtaTaskStatus::Completed,
+            ThreadEtaStatus::Cancelled => EtaTaskStatus::Cancelled,
+            ThreadEtaStatus::Unknown => EtaTaskStatus::Unknown,
+        },
+        current_lower_seconds: task.current_lower_seconds,
+        current_upper_seconds: task.current_upper_seconds,
+        session: EtaSessionInfo {
+            thread_id: task.session.thread_id,
+            title: task.session.title,
+            name: task.session.name,
+            cwd: task.session.cwd,
+        },
+        nested_task_count: task.nested_task_count,
+        active_nested_task_count: task.active_nested_task_count,
+        nested_lower_seconds: task.nested_lower_seconds,
+        nested_upper_seconds: task.nested_upper_seconds,
     }
 }
 
