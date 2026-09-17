@@ -381,7 +381,9 @@ fn all_sessions_loading_error_and_empty_states_have_snapshots() {
             .expect("inline all-sessions status");
         match label {
             "loading" => insta::assert_snapshot!(line, @"Loading retained sessions…"),
-            "error" => insta::assert_snapshot!(line, @"Unable to load retained sessions: server unavailable · press r to retry"),
+            "error" => {
+                insta::assert_snapshot!(line, @"Unable to load retained sessions: server unavailable · press r to retry")
+            }
             "empty" => insta::assert_snapshot!(line, @"No retained ETA sessions found."),
             _ => unreachable!("unknown ETA status snapshot"),
         }

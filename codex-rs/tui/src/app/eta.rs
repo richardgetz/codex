@@ -154,8 +154,8 @@ impl App {
             .chat_widget
             .selected_index_for_present_view(ETA_VIEW_ID);
         let view_state = self.eta.view_state.clone();
-        self.chat_widget
-            .show_bottom_pane_view(Box::new(EtaView::new_with_state_and_all_sessions_and_status(
+        self.chat_widget.show_bottom_pane_view(Box::new(
+            EtaView::new_with_state_and_all_sessions_and_status(
                 snapshot,
                 self.keymap.list.clone(),
                 self.app_event_tx.clone(),
@@ -166,12 +166,14 @@ impl App {
                 self.eta.all_sessions_next_cursor.clone(),
                 self.eta.all_sessions_include_nested,
                 self.eta.all_sessions_request_id.is_some(),
-                self.primary_thread_id.or(self.current_displayed_thread_id()),
+                self.primary_thread_id
+                    .or(self.current_displayed_thread_id()),
                 self.eta.eta_request_in_flight,
                 self.eta.eta_error.clone(),
                 self.eta.all_sessions_error.clone(),
                 view_state,
-            )));
+            ),
+        ));
         self.refresh_eta(app_server, root_thread_id, None);
         self.refresh_eta_sessions(app_server, None, self.eta.all_sessions_include_nested);
     }
@@ -363,13 +365,13 @@ impl App {
         self.repaint_eta();
     }
 
-    pub(super) fn apply_eta_view_state(
-        &mut self,
-        root_thread_id: String,
-        state: EtaViewState,
-    ) {
+    pub(super) fn apply_eta_view_state(&mut self, root_thread_id: String, state: EtaViewState) {
         if state.tab_id != super::eta_view::ETA_ALL_SESSIONS_TAB_ID
-            && self.eta.root_thread_id.as_ref().is_none_or(|root| root.to_string() != root_thread_id)
+            && self
+                .eta
+                .root_thread_id
+                .as_ref()
+                .is_none_or(|root| root.to_string() != root_thread_id)
         {
             return;
         }
@@ -436,7 +438,8 @@ impl App {
             self.eta.all_sessions_next_cursor.clone(),
             self.eta.all_sessions_include_nested,
             self.eta.all_sessions_request_id.is_some(),
-            self.primary_thread_id.or(self.current_displayed_thread_id()),
+            self.primary_thread_id
+                .or(self.current_displayed_thread_id()),
             self.eta.eta_request_in_flight,
             self.eta.eta_error.clone(),
             self.eta.all_sessions_error.clone(),

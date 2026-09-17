@@ -1354,6 +1354,7 @@
         "history_retention_days": {
           "description": "Number of days to retain terminal ETA tasks in the cross-session history. `0` keeps terminal history indefinitely. Defaults to 30 days.",
           "format": "uint64",
+          "minimum": 0.0,
           "type": "integer"
         },
         "timezone": {

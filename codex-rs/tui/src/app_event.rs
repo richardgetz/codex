@@ -67,12 +67,12 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 
+use crate::app::eta_view::EtaViewState;
 use crate::history_cell::HistoryCell;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice_effects::VoiceEffectPreset;
 use crate::resume_picker::SessionTarget;
-use crate::app::eta_view::EtaViewState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestorablePermissionSelection {

@@ -333,8 +333,7 @@ impl EtaView {
             return vec!["No retained ETA sessions found.".dim().into()];
         }
         let rows = self.ordered_session_indices();
-        let (title_width, session_width, status_width, timing_width) =
-            session_column_widths(width);
+        let (title_width, session_width, status_width, timing_width) = session_column_widths(width);
         let mut lines = Vec::with_capacity(rows.len() + 1);
         if self.all_sessions_request_in_flight {
             lines.push("Refreshing retained sessions…".dim().into());

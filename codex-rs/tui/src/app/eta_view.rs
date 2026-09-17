@@ -302,11 +302,7 @@ impl EtaView {
     ) -> Self {
         let saved = view_state.unwrap_or_default();
         let collapsed_task_ids = saved.collapsed_task_ids.iter().cloned().collect();
-        let collapsed_session_task_ids = saved
-            .collapsed_session_task_ids
-            .iter()
-            .cloned()
-            .collect();
+        let collapsed_session_task_ids = saved.collapsed_session_task_ids.iter().cloned().collect();
         let saved_selected_idx = saved.selected_task_id.as_deref().and_then(|task_id| {
             let tasks = match saved.tab_id.as_str() {
                 ETA_HISTORY_TAB_ID => snapshot.history.as_slice(),
@@ -527,7 +523,10 @@ impl EtaView {
             if root_order.insert(root, next).is_none() {
                 roots.push(root);
             }
-            children.entry((root, task.parent_task_id.as_deref())).or_default().push(idx);
+            children
+                .entry((root, task.parent_task_id.as_deref()))
+                .or_default()
+                .push(idx);
         }
         let mut ordered = Vec::with_capacity(tasks.len());
         let mut seen = HashSet::with_capacity(tasks.len());
