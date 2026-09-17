@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-17/eta-global-freshness#27a860e8f7"
+  change_type: "fix"
+  scope: "eta"
+  summary: "Seed missing per-root freshness policies before global ETA listing."
+  decision: "Initialize only ETA roots with tasks whose freshness policy is NULL from authoritative server configuration, preserving saved root policies before projecting ranges."
+  constraints:
+    - "Do not overwrite an existing root-owned freshness policy."
+    - "Keep global list projection consistent with cold root reads."
+    - "Limit the change to state initialization, app-server list wiring, and focused coverage."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimates.rs::StateRuntime::initialize_missing_eta_freshness_minimum_seconds"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs::ThreadEtaRequestProcessor::list"
+    - "codex-rs/app-server/tests/suite/v2/thread_eta.rs::thread_eta_list_seeds_missing_root_freshness_from_config"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
