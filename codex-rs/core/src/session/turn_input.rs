@@ -418,7 +418,13 @@ async fn start_if_idle(
 
     let turn_state = {
         let mut active_turn = session.active_turn.lock().await;
-        if active_turn.is_some() {
+        if active_turn.is_some()
+            || (kind == TurnStartKind::Recovery
+                && session
+                    .turn_finalization_in_flight
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    > 0)
+        {
             return Ok(TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::NotIdle,
             });

@@ -72,20 +72,8 @@ release or merge rules.
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
   the mutable launcher and misreporting Inbound readiness.
-- Team activity pause intent is durable in the state database (migration
-  `0061_rick_thread_activity_pauses.sql`, with active-at-pause snapshots in
-  `0062_rick_thread_activity_pause_snapshots.sql`). A successful app-server
-  `thread/activity/pause` records a generation and the exact unfinished loaded
-  Team threads active at the pause boundary, waits for Core to apply the
-  process-local Lead-tree gate, then marks the generation ready for continue;
-  cold root resume restores that gate before retained work is admitted, while
-  explicit `thread/activity/continue` restores only captured workers plus their
-  validated ancestor chain and keeps the marker until Core acknowledges the
-  release. A successful snapshot-aware continue leaves a durable completion
-  receipt so idempotent later continues cannot fall back to scanning historical
-  workers; a new pause replaces that receipt with its next generation. Legacy
-  markers without a snapshot release only the root gate, so historical
-  interrupted workers are never resurrected automatically.
+- Team activity pause intent is durable in the state database (`0061_rick_thread_activity_pauses.sql`; exact active-at-pause snapshots and retry receipts use `0062_rick_thread_activity_pause_snapshots.sql`). `thread/activity/pause` records a generation, applies the process-local Lead-tree gate, and persists each non-idle loaded Team thread with its exact durable unfinished turn; blocked operations remain captured for blocker reporting. It then marks ready; cold root resume restores the gate, while explicit `thread/activity/continue` restores only captured turns plus validated ancestors and keeps the marker until Core acknowledges release.
+  Receipts preserve those exact turns across cold retries, so later work on captured threads and uncaptured or historical workers are never substituted. A new pause replaces the receipt. Legacy markers without snapshots release only the root gate, so historical interrupted workers are not resurrected automatically.
   Interrupted recovery remains paused and
   reports blockers; terminal work and already-launched external commands are
   never replayed. Markerless recovery now assesses the latest persisted turn,
@@ -354,8 +342,7 @@ release or merge rules.
 - Session-scoped cooperative activity pause:
   - `/pause` and `/continue` pause or release the current Lead tree, including
     loaded direct and nested ThreadSpawn Workers; a viewed Worker resolves to
-    its Lead root. Thread registration is fenced with pause snapshot publication,
-    and new children reconcile the root state before admitting work.
+    its Lead root. New children reconcile the root state before admitting work.
   - The process-local pause gates future model/tool starts, usage-reset wakeups,
     and Lead oversight deadlines. Already-admitted side-effectful operations
     may finish at a cooperative boundary; external subprocesses or remote jobs
@@ -862,7 +849,7 @@ release or merge rules.
   age-plus-force form.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
   Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
-- Verify cold Team `/continue` loads only recoverable unfinished descendants captured at the pause boundary plus their open ancestors, leaves idle or historical open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a captured child has missing or inconsistent ancestry. Legacy pause markers without a snapshot must release only the root gate and never rediscover historical interrupted workers; after a successful snapshot-aware continue, repeated continues must remain no-ops across restart until a new pause begins.
+- Verify cold Team `/continue` loads only recoverable unfinished descendants captured at the pause boundary plus their open ancestors, leaves idle or historical open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a captured child has missing or inconsistent ancestry. Legacy pause markers without a snapshot must release only the root gate; later turn admission must end the completed receipt epoch without UUID or wall-clock inference.
   Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without
@@ -1065,8 +1052,7 @@ release or merge rules.
   lifecycle identifiers are not treated as durable rollout or thread-resume
   receipts.
 - Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
-  newly loaded descendants, fence child registration with active-at-pause
-  snapshot publication, gate future model/tool starts and automatic Lead or
+  newly loaded descendants, gate future model/tool starts and automatic Lead or
   usage wakes, preserve retained work without synthetic turns, and report
   running/pausing/paused separately from idle/working/waiting activity. Confirm
   `/pause` waits for the Core gate acknowledgement before exposing a ready

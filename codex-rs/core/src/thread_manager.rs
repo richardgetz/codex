@@ -136,6 +136,7 @@ pub struct TeamActivityRecoveryPlan {
     pub recoverable_turns: Vec<(ThreadId, String)>,
     /// Persisted operations whose external effects are not known to be complete.
     pub blockers: Vec<String>,
+    pub unfinished_turn_ids: HashMap<ThreadId, String>,
 }
 // Reject pathological selected cwd values at the environment-selection boundary.
 const MAX_TURN_ENVIRONMENT_CWD_BYTES: usize = 8 * 1024;
@@ -1602,19 +1603,66 @@ impl ThreadManager {
             .await
     }
 
-    /// Inspects only the threads captured at a durable pause boundary.
-    ///
-    /// The caller supplies a snapshot rather than letting recovery rediscover every open graph
-    /// edge. This keeps completed, cleaned-up, and idle historical workers out of a later
-    /// `/continue` while retaining the same persisted-turn safety checks for captured threads.
     pub async fn team_activity_recovery_plan_for_threads(
         &self,
-        _root_thread_id: ThreadId,
+        root_thread_id: ThreadId,
         thread_ids: &[ThreadId],
     ) -> CodexResult<TeamActivityRecoveryPlan> {
+        self.team_activity_recovery_plan_for_targets(root_thread_id, thread_ids, None)
+            .await
+    }
+
+    pub async fn team_activity_recovery_plan_for_turns(
+        &self,
+        root_thread_id: ThreadId,
+        turns: &[(ThreadId, String)],
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        let turn_ids = turns.iter().cloned().collect::<HashMap<_, _>>();
+        let thread_ids = turns
+            .iter()
+            .map(|(thread_id, _)| *thread_id)
+            .collect::<Vec<_>>();
+        self.team_activity_recovery_plan_for_targets(root_thread_id, &thread_ids, Some(&turn_ids))
+            .await
+    }
+
+    async fn team_activity_recovery_plan_for_targets(
+        &self,
+        root_thread_id: ThreadId,
+        thread_ids: &[ThreadId],
+        turn_ids: Option<&HashMap<ThreadId, String>>,
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        let graph_store = self.state.agent_graph_store().ok_or_else(|| {
+            CodexErr::Fatal(
+                "cannot inspect Team recovery: agent graph store unavailable".to_string(),
+            )
+        })?;
+        let all_descendant_ids = graph_store
+            .list_thread_spawn_descendants(root_thread_id, None)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let open_descendant_ids = graph_store
+            .list_thread_spawn_descendants(
+                root_thread_id,
+                Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?
+            .into_iter()
+            .collect::<HashSet<_>>();
         let mut seen_thread_ids = HashSet::new();
         let mut plan = TeamActivityRecoveryPlan::default();
         for thread_id in thread_ids.iter().copied() {
+            if thread_id != root_thread_id && !open_descendant_ids.contains(&thread_id) {
+                if all_descendant_ids.contains(&thread_id) {
+                    continue;
+                }
+                return Err(CodexErr::InvalidRequest(format!(
+                    "captured Team child {thread_id} is no longer a descendant of {root_thread_id}"
+                )));
+            }
             if !seen_thread_ids.insert(thread_id) {
                 continue;
             }
@@ -1697,7 +1745,11 @@ impl ThreadManager {
                     Err(error) => return Err(error),
                 },
             };
-            append_persisted_recovery(&mut plan, thread_id, &items);
+            if let Some(turn_id) = turn_ids.and_then(|turn_ids| turn_ids.get(&thread_id)) {
+                append_persisted_recovery_turn(&mut plan, thread_id, &items, turn_id);
+            } else {
+                append_persisted_recovery(&mut plan, thread_id, &items);
+            }
         }
         Ok(plan)
     }
@@ -1775,25 +1827,25 @@ impl ThreadManager {
         .get_multi_agent_version())
     }
 
-    /// Reconcile only the Team threads captured as active at a paused root's boundary.
+    /// Reconcile open persisted Team descendants under a paused root.
     ///
-    /// Existing sessions are retained, terminal edges are ignored, and only captured workers that
+    /// Existing sessions are retained, terminal edges are ignored, and only unloaded workers that
     /// own recoverable turns (plus the open ancestors needed to load them) are restored through the
-    /// same AgentControl rollout path used by explicit agent resume. Idle or historical open edges
-    /// remain persisted for on-demand followup. The caller must keep the root paused until this
-    /// method and its subsequent ContinueActivity acknowledgement complete.
+    /// same AgentControl rollout path used by explicit agent resume. Idle open edges remain
+    /// persisted for on-demand followup. The caller must keep the root paused until this method
+    /// and its subsequent ContinueActivity acknowledgement complete.
     pub async fn restore_paused_team(
         &self,
         root_thread_id: ThreadId,
         pause_snapshot: &[ThreadActivityPauseSnapshot],
     ) -> CodexResult<Vec<ThreadId>> {
         self.get_thread(root_thread_id).await?;
-        let snapshot_thread_ids = pause_snapshot
+        let snapshot_turns = pause_snapshot
             .iter()
-            .map(|snapshot| snapshot.thread_id)
+            .map(|snapshot| (snapshot.thread_id, snapshot.turn_id.clone()))
             .collect::<Vec<_>>();
         let plan = self
-            .team_activity_recovery_plan_for_threads(root_thread_id, &snapshot_thread_ids)
+            .team_activity_recovery_plan_for_turns(root_thread_id, &snapshot_turns)
             .await?;
         if !plan.blockers.is_empty() {
             return Err(CodexErr::InvalidRequest(format!(
@@ -1819,14 +1871,6 @@ impl ThreadManager {
                 CodexErr::Fatal(format!("failed to load paused Team descendants: {err}"))
             })?;
         let open_descendant_ids = descendant_ids.iter().copied().collect::<HashSet<_>>();
-        let snapshot_parent_by_thread = pause_snapshot
-            .iter()
-            .filter_map(|snapshot| {
-                snapshot
-                    .parent_thread_id
-                    .map(|parent_thread_id| (snapshot.thread_id, parent_thread_id))
-            })
-            .collect::<HashMap<_, _>>();
         let mut recoverable_thread_ids = Vec::new();
         for (thread_id, _) in &plan.recoverable_turns {
             if !recoverable_thread_ids.contains(thread_id) {
@@ -1863,13 +1907,6 @@ impl ThreadManager {
                     "cannot restore Team child {thread_id}: persisted parent is missing"
                 ))
             })?;
-            if let Some(expected_parent_thread_id) = snapshot_parent_by_thread.get(&thread_id)
-                && *expected_parent_thread_id != parent_thread_id
-            {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "cannot restore Team child {thread_id}: captured parent {expected_parent_thread_id} does not match persisted parent {parent_thread_id}"
-                )));
-            }
             if parent_thread_id != root_thread_id
                 && !open_descendant_ids.contains(&parent_thread_id)
             {
@@ -3211,9 +3248,6 @@ impl ThreadManagerState {
             }
         };
 
-        // Keep registration inside the same fence as pause snapshot collection. This lets a
-        // pause either capture the child or complete before registration, instead of leaving a
-        // newly inserted child out of the durable active-at-pause snapshot.
         {
             let _activity_update_guard = agent_control.lock_root_activity_pause_update().await;
             let mut threads = self.threads.write().await;
@@ -3378,15 +3412,32 @@ fn append_persisted_recovery(
     append_recovery_turn(plan, thread_id, turn, Some(items));
 }
 
-fn append_latest_recovery(
+fn append_persisted_recovery_turn(
+    plan: &mut TeamActivityRecoveryPlan,
+    thread_id: ThreadId,
+    items: &[RolloutItem],
+    turn_id: &str,
+) {
+    let turns = codex_app_server_protocol::build_turns_from_rollout_items(items);
+    append_recovery_turn_by_id(plan, thread_id, &turns, turn_id, Some(items));
+}
+
+fn append_recovery_turn_by_id(
     plan: &mut TeamActivityRecoveryPlan,
     thread_id: ThreadId,
     turns: &[Turn],
+    turn_id: &str,
+    raw_items: Option<&[RolloutItem]>,
 ) {
-    let Some(turn) = turns.last() else {
+    let Some(turn) = turns.last().filter(|turn| turn.id == turn_id) else {
+        if !turns.iter().any(|turn| turn.id == turn_id) {
+            plan.blockers.push(format!(
+                "thread {thread_id}: captured turn {turn_id} is missing from persisted history"
+            ));
+        }
         return;
     };
-    append_recovery_turn(plan, thread_id, turn, None);
+    append_recovery_turn(plan, thread_id, turn, raw_items);
 }
 
 fn append_recovery_turn(
@@ -3401,6 +3452,7 @@ fn append_recovery_turn(
     ) {
         return;
     }
+    plan.unfinished_turn_ids.insert(thread_id, turn.id.clone());
     let mut blockers = turn
         .items
         .iter()

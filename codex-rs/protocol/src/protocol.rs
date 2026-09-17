@@ -740,11 +740,8 @@ pub enum Op {
     /// Durable pause recovery uses the acknowledgement before allowing `/continue` to claim it.
     PauseActivityWithAck { reply: oneshot::Sender<()> },
 
-    /// Pause a manually controlled agent tree and return the activity snapshot captured before
-    /// Core applies the gate. Durable pause recovery persists this snapshot before releasing the
-    /// root so a later `/continue` cannot resurrect historical interrupted workers.
     PauseActivityWithSnapshotAck {
-        reply: oneshot::Sender<CodexResult<Vec<(ThreadId, Option<ThreadId>, ThreadActivity)>>>,
+        reply: oneshot::Sender<CodexResult<ThreadActivitySnapshot>>,
     },
 
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
@@ -2571,6 +2568,15 @@ pub enum ThreadActivity {
     Working,
     Waiting,
 }
+
+#[derive(Debug, Clone)]
+pub struct ThreadActivitySnapshotEntry {
+    pub thread_id: ThreadId,
+    pub activity: ThreadActivity,
+    pub turn_id: Option<String>,
+}
+
+pub type ThreadActivitySnapshot = Vec<ThreadActivitySnapshotEntry>;
 
 /// Why a thread is waiting instead of actively executing.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

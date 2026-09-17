@@ -71,17 +71,21 @@ fn recovery_test_turn(id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> T
 }
 
 #[test]
-fn team_recovery_uses_only_the_latest_unfinished_turn() {
+fn team_recovery_exact_turn_ignores_a_later_unfinished_turn() {
     let thread_id = ThreadId::new();
     let mut plan = TeamActivityRecoveryPlan::default();
-    let turns = vec![
-        recovery_test_turn("interrupted", TurnStatus::Interrupted, Vec::new()),
-        recovery_test_turn("completed", TurnStatus::Completed, Vec::new()),
+    let items = vec![
+        recovery_test_turn("captured-turn", TurnStatus::Interrupted, Vec::new()),
+        recovery_test_turn("later-turn", TurnStatus::InProgress, Vec::new()),
     ];
-    append_latest_recovery(&mut plan, thread_id, &turns);
-
+    append_recovery_turn_by_id(&mut plan, thread_id, &items, "captured-turn", None);
     assert!(plan.recoverable_turns.is_empty());
-    assert!(plan.blockers.is_empty());
+    assert!(plan.unfinished_turn_ids.is_empty());
+
+    let mut missing_plan = TeamActivityRecoveryPlan::default();
+    append_recovery_turn_by_id(&mut missing_plan, thread_id, &items, "missing-turn", None);
+    assert!(missing_plan.recoverable_turns.is_empty());
+    assert_eq!(missing_plan.blockers.len(), 1);
 }
 
 #[test]
