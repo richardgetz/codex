@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-17/eta-terminal-history-retention#5075587d29"
+  change_type: "feat"
+  scope: "eta"
+  summary: "Retain terminal ETA history across sessions with bounded configurable cleanup."
+  decision: "Persist a default 30-day terminal-history policy with 0 meaning unlimited, add indexed cross-session task storage and pruning, and keep grouping or dependency ancestors referenced by retained work."
+  constraints:
+    - "Never prune unfinished tasks."
+    - "Preserve terminal ancestors needed by retained parent or dependency relationships."
+    - "Keep retention configuration replayable through config locks with the existing 30-day default."
+    - "Do not expose the app-server thread/eta/list endpoint in this stage."
+    - "Keep model guidance explicit about grouping versus dependency relationships."
+    - "Keep migration 0063 append-only and preserve existing ETA root projections."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/config/src/config_toml.rs::EtaConfigToml"
+    - "codex-rs/core/src/config/mod.rs::EtaConfig"
+    - "codex-rs/state/migrations/0063_rick_eta_cross_session_index.sql"
+    - "codex-rs/state/src/runtime/task_estimate_sessions.rs::TaskEstimateStore::prune_history"
+    - "codex-rs/state/src/runtime/task_estimates.rs"
+    - "codex-rs/core/src/tools/handlers/eta.rs::EtaHandler::spec"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5.6"
