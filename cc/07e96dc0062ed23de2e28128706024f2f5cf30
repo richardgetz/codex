@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-17/eta-read-side-effects#cc07e96dc0"
+  change_type: "fix"
+  scope: "eta"
+  summary: "Keep thread/eta/read side-effect free while retaining list maintenance pruning."
+  decision: "Remove global history pruning from thread/eta/read so root validation and snapshot reads cannot mutate retained rows; leave configured retention enforcement on thread/eta/list."
+  constraints:
+    - "Do not alter ETA projection or retention semantics for global listings."
+    - "Keep unknown-root reads from deleting retained terminal history."
+    - "Limit changes to the app-server processor and focused integration coverage."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs::ThreadEtaRequestProcessor::read"
+    - "codex-rs/app-server/tests/suite/v2/thread_eta.rs::thread_eta_read_does_not_prune_terminal_history"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
