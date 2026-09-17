@@ -66,9 +66,10 @@ release or merge rules.
   `LegacyAppPathString`. `thread/eta/list` seeds NULL root policies from
   authoritative config and remains the retention-maintenance path, while
   `thread/eta/read` stays side-effect free. The TUI refreshes retained rows for
-  updates from
-  the selected root as well as other roots and marks stale rows with a warning
-  in All Sessions.
+  updates from the selected root as well as other roots only while All Sessions
+  is visible, repaints loading immediately, and merges by root/task while
+  preserving loaded cursor-tail rows and keyed selection; stale rows remain
+  marked with a warning.
 
 - Fork distribution and release contract:
   `@rickgetz/codex`/`codex-rick`, `-rick.<counter>` versions and `rick-v...`

@@ -309,6 +309,7 @@ impl App {
         let request_id = Uuid::new_v4();
         self.eta.all_sessions_request_id = Some(request_id);
         self.eta.all_sessions_error = None;
+        self.eta.all_sessions_include_nested = include_nested;
         self.repaint_eta();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();

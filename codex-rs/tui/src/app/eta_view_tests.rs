@@ -346,6 +346,26 @@ fn all_sessions_are_grouped_and_nested_rows_toggle() {
 }
 
 #[test]
+fn all_sessions_error_retries_before_resuming_selected_task() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut view = all_sessions_view();
+    view.app_event_tx = AppEventSender::new(tx);
+    view.handle_key_event(KeyCode::Down.into());
+    while rx.try_recv().is_ok() {}
+    view.all_sessions_error = Some("server unavailable".to_string());
+
+    view.handle_key_event(KeyCode::Char('r').into());
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::LoadEtaSessions {
+            cursor: None,
+            include_nested: true,
+        })
+    ));
+}
+
+#[test]
 fn all_sessions_loading_error_and_empty_states_have_snapshots() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let make = |in_flight, error| {

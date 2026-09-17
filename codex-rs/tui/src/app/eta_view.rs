@@ -925,7 +925,10 @@ impl BottomPaneView for EtaView {
                 code: KeyCode::Char('r' | 'R'),
                 modifiers: KeyModifiers::NONE,
                 ..
-            } if self.tab == EtaTab::AllSessions && self.selected_session_task().is_some() => {
+            } if self.tab == EtaTab::AllSessions
+                && self.all_sessions_error.is_none()
+                && self.selected_session_task().is_some() =>
+            {
                 self.resume_selected_session()
             }
             KeyEvent {
