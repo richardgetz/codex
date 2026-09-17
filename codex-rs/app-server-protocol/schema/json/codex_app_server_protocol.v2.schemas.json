@@ -19264,6 +19264,187 @@
       ],
       "type": "object"
     },
+    "ThreadEtaSessionInfo": {
+      "description": "Persisted root-session metadata attached to a task in the cross-session ETA navigator.",
+      "properties": {
+        "archivedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "cwd": {
+          "$ref": "#/definitions/LegacyAppPathString"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "description": "Root thread id to pass to `thread/resume`.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "createdAt",
+        "cwd",
+        "threadId",
+        "title",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
+    "ThreadEtaSessionTask": {
+      "description": "A lightweight task-first row spanning persisted ETA roots.",
+      "properties": {
+        "activeNestedTaskCount": {
+          "description": "Number of transitive child tasks that are not terminal.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "actualElapsedSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "createdAt": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "currentLowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currentUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "isStale": {
+          "description": "Whether this active row exceeded its root's persisted freshness window.",
+          "type": "boolean"
+        },
+        "nestedLowerSeconds": {
+          "description": "Sum of remaining ranges for active transitive children; unknown when any active child is unknown.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nestedTaskCount": {
+          "description": "Number of transitive child tasks, including terminal children retained in history.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "nestedUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "originalLowerSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "originalUpperSeconds": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ownerThreadId": {
+          "type": "string"
+        },
+        "parentTaskId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rootThreadId": {
+          "type": "string"
+        },
+        "session": {
+          "$ref": "#/definitions/ThreadEtaSessionInfo"
+        },
+        "startedAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/ThreadEtaStatus"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "terminalAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "activeNestedTaskCount",
+        "createdAt",
+        "isStale",
+        "nestedTaskCount",
+        "ownerThreadId",
+        "rootThreadId",
+        "session",
+        "status",
+        "taskId",
+        "title",
+        "updatedAt"
+      ],
+      "type": "object"
+    },
     "ThreadEtaSnapshot": {
       "description": "Read-only root-scoped ETA projection returned by `thread/eta/read`.",
       "properties": {
