@@ -34,9 +34,12 @@ use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_protocol::ThreadId;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use uuid::Uuid;
 
 pub(super) const ETA_HISTORY_PAGE_SIZE: u32 = 50;
+// Keep each list request below the app-server's bounded history/list maximum.
+const ETA_ALL_SESSIONS_PAGE_SIZE: u32 = 50;
 
 #[derive(Default)]
 pub(super) struct EtaState {
@@ -46,8 +49,6 @@ pub(super) struct EtaState {
     pub(super) all_sessions: Vec<EtaSessionTask>,
     pub(super) all_sessions_next_cursor: Option<String>,
     pub(super) all_sessions_request_id: Option<Uuid>,
-    pub(super) all_sessions_has_loaded_cursor_page: bool,
-    pub(super) all_sessions_refresh_preserve_existing: bool,
     pub(super) all_sessions_include_nested: bool,
     pub(super) eta_request_in_flight: bool,
     pub(super) eta_error: Option<String>,
@@ -287,17 +288,7 @@ impl App {
         cursor: Option<String>,
         include_nested: bool,
     ) {
-        self.eta.all_sessions_refresh_preserve_existing = false;
         self.schedule_eta_sessions_refresh(app_server, cursor, include_nested);
-    }
-
-    pub(super) fn refresh_eta_sessions_preserving_loaded(
-        &mut self,
-        app_server: &AppServerSession,
-        include_nested: bool,
-    ) {
-        self.eta.all_sessions_refresh_preserve_existing = true;
-        self.schedule_eta_sessions_refresh(app_server, None, include_nested);
     }
 
     fn schedule_eta_sessions_refresh(
@@ -307,24 +298,94 @@ impl App {
         include_nested: bool,
     ) {
         let request_id = Uuid::new_v4();
+        // A cursor-less refresh rebuilds the depth already visible, while the first request still
+        // loads one normal page when no rows have been retained yet.
+        let target_count = self
+            .eta
+            .all_sessions
+            .len()
+            .max(ETA_ALL_SESSIONS_PAGE_SIZE as usize);
         self.eta.all_sessions_request_id = Some(request_id);
         self.eta.all_sessions_error = None;
-        self.eta.all_sessions_include_nested = include_nested;
-        self.repaint_eta();
+        self.repaint_eta_with_all_sessions_include_nested(include_nested);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = request_handle
-                .request_typed::<ThreadEtaListResponse>(ClientRequest::ThreadEtaList {
-                    request_id: RequestId::String(format!("thread-eta-list-{request_id}")),
-                    params: ThreadEtaListParams {
-                        cursor: cursor.clone(),
-                        limit: Some(50),
-                        include_nested,
-                    },
-                })
-                .await
-                .map_err(|error| error.to_string());
+            let result = if cursor.is_none() {
+                let mut cursor = None;
+                let mut page_index = 0;
+                let mut pages_fetched = 0;
+                let mut rows = Vec::new();
+                let mut seen_rows = HashSet::new();
+                let mut seen_cursors = HashSet::new();
+                loop {
+                    let limit = target_count
+                        .saturating_sub(rows.len())
+                        .min(ETA_ALL_SESSIONS_PAGE_SIZE as usize)
+                        .max(1) as u32;
+                    let response = request_handle
+                        .request_typed::<ThreadEtaListResponse>(ClientRequest::ThreadEtaList {
+                            request_id: RequestId::String(format!(
+                                "thread-eta-list-{request_id}-{page_index}"
+                            )),
+                            params: ThreadEtaListParams {
+                                cursor: cursor.clone(),
+                                limit: Some(limit),
+                                include_nested,
+                            },
+                        })
+                        .await
+                        .map_err(|error| error.to_string());
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(error) => break Err(error),
+                    };
+                    pages_fetched += 1;
+                    let page_empty = response.data.is_empty();
+                    for task in response.data {
+                        let key = (task.root_thread_id.clone(), task.task_id.clone());
+                        if seen_rows.insert(key) {
+                            rows.push(task);
+                        }
+                    }
+                    let next_cursor = response.next_cursor;
+                    if rows.len() >= target_count {
+                        rows.truncate(target_count);
+                        break Ok(ThreadEtaListResponse {
+                            data: rows,
+                            next_cursor,
+                        });
+                    }
+                    if page_empty || next_cursor.is_none() || pages_fetched >= target_count {
+                        break Ok(ThreadEtaListResponse {
+                            data: rows,
+                            next_cursor,
+                        });
+                    }
+                    let Some(next_cursor_value) = next_cursor else {
+                        unreachable!("checked next_cursor above");
+                    };
+                    if !seen_cursors.insert(next_cursor_value.clone()) {
+                        break Err("server returned a repeated ETA cursor".to_string());
+                    }
+                    cursor = Some(next_cursor_value);
+                    page_index += 1;
+                }
+            } else {
+                request_handle
+                    .request_typed::<ThreadEtaListResponse>(ClientRequest::ThreadEtaList {
+                        request_id: RequestId::String(format!(
+                            "thread-eta-list-{request_id}-0"
+                        )),
+                        params: ThreadEtaListParams {
+                            cursor: cursor.clone(),
+                            limit: Some(ETA_ALL_SESSIONS_PAGE_SIZE),
+                            include_nested,
+                        },
+                    })
+                    .await
+                    .map_err(|error| error.to_string())
+            };
             app_event_tx.send(AppEvent::ThreadEtaSessionsLoaded {
                 request_id,
                 cursor,
@@ -382,9 +443,7 @@ impl App {
         if self.eta.all_sessions_request_id != Some(request_id) {
             return;
         }
-        let preserve_existing = self.eta.all_sessions_refresh_preserve_existing;
         self.eta.all_sessions_request_id = None;
-        self.eta.all_sessions_refresh_preserve_existing = false;
         self.eta.all_sessions_error = None;
         match result {
             Ok(response) => {
@@ -393,19 +452,11 @@ impl App {
                     .into_iter()
                     .map(session_task_from_api)
                     .collect::<Vec<_>>();
-                let preserve_loaded = self.eta.all_sessions_include_nested == include_nested
-                    && (cursor.is_some()
-                        || (preserve_existing && self.eta.all_sessions_has_loaded_cursor_page));
-                if preserve_loaded {
+                if cursor.is_some() && self.eta.all_sessions_include_nested == include_nested {
                     self.merge_eta_sessions(incoming);
                 } else {
                     self.eta.all_sessions = incoming;
                 }
-                self.eta.all_sessions_has_loaded_cursor_page = if preserve_loaded {
-                    self.eta.all_sessions_has_loaded_cursor_page || cursor.is_some()
-                } else {
-                    cursor.is_some()
-                };
                 self.eta.all_sessions_include_nested = include_nested;
                 self.eta.all_sessions_next_cursor = response.next_cursor;
             }
@@ -501,6 +552,10 @@ impl App {
     }
 
     pub(super) fn repaint_eta(&mut self) {
+        self.repaint_eta_with_all_sessions_include_nested(self.eta.all_sessions_include_nested);
+    }
+
+    fn repaint_eta_with_all_sessions_include_nested(&mut self, include_nested: bool) {
         let Some(root_thread_id) = self.eta.root_thread_id else {
             return;
         };
@@ -534,7 +589,7 @@ impl App {
             EtaTimestampFormatter::from_config(&self.config.eta),
             self.eta.all_sessions.clone(),
             self.eta.all_sessions_next_cursor.clone(),
-            self.eta.all_sessions_include_nested,
+            include_nested,
             self.eta.all_sessions_request_id.is_some(),
             self.primary_thread_id
                 .or(self.current_displayed_thread_id()),

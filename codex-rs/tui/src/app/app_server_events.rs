@@ -163,10 +163,7 @@ impl App {
                     .is_some_and(|tab_id| tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID);
             self.apply_eta_notification(eta);
             if refresh_all_sessions {
-                self.refresh_eta_sessions_preserving_loaded(
-                    app_server_client,
-                    self.eta.all_sessions_include_nested,
-                );
+                self.refresh_eta_sessions(app_server_client, None, self.eta.all_sessions_include_nested);
             }
             return;
         }

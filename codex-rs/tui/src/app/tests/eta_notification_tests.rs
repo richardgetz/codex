@@ -240,10 +240,11 @@ async fn eta_root_view_state_isolated_between_selected_roots() {
 }
 
 #[tokio::test]
-async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
+async fn eta_auto_refresh_replaces_loaded_depth_and_preserves_selection() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let root_thread_id = ThreadId::new();
     let tail_root_thread_id = ThreadId::new();
+    let removed_root_thread_id = ThreadId::new();
     app.eta.root_thread_id = Some(root_thread_id);
     app.apply_eta_view_state(
         root_thread_id.to_string(),
@@ -264,7 +265,10 @@ async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
         None,
         false,
         Ok(ThreadEtaListResponse {
-            data: vec![api_session_task(root_thread_id, "head-task")],
+            data: vec![
+                api_session_task(root_thread_id, "head-task"),
+                api_session_task(removed_root_thread_id, "removed-task"),
+            ],
             next_cursor: Some("tail-cursor".to_string()),
         }),
     );
@@ -281,7 +285,6 @@ async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
         }),
     );
 
-    app.eta.all_sessions_refresh_preserve_existing = true;
     let request_id = uuid::Uuid::new_v4();
     app.eta.all_sessions_request_id = Some(request_id);
 
@@ -290,7 +293,10 @@ async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
         None,
         false,
         Ok(ThreadEtaListResponse {
-            data: vec![api_session_task(root_thread_id, "head-task")],
+            data: vec![
+                api_session_task(tail_root_thread_id, "tail-task"),
+                api_session_task(root_thread_id, "head-task"),
+            ],
             next_cursor: None,
         }),
     );
@@ -302,10 +308,9 @@ async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
             .iter()
             .map(|task| task.task_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["head-task", "tail-task"]
+        vec!["tail-task", "head-task"]
     );
     assert_eq!(app.eta.all_sessions_next_cursor, None);
-    assert!(app.eta.all_sessions_has_loaded_cursor_page);
     assert_eq!(
         app.eta
             .all_sessions_view_state
@@ -313,7 +318,18 @@ async fn eta_auto_refresh_preserves_loaded_tail_and_selection() {
             .and_then(|state| state.selected_session.clone()),
         Some((tail_root_thread_id.to_string(), "tail-task".to_string()))
     );
-    assert!(!app.eta.all_sessions_refresh_preserve_existing);
+
+    let rows_before_error = app.eta.all_sessions.clone();
+    let error_request_id = uuid::Uuid::new_v4();
+    app.eta.all_sessions_request_id = Some(error_request_id);
+    app.apply_eta_sessions(
+        error_request_id,
+        None,
+        true,
+        Err("refresh failed".to_string()),
+    );
+    assert_eq!(app.eta.all_sessions, rows_before_error);
+    assert!(!app.eta.all_sessions_include_nested);
 }
 
 #[tokio::test]
