@@ -3008,6 +3008,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             user_shell_override,
         } = request;
+        let activity_control = agent_control.clone();
         let StartThreadOptions {
             config,
             allow_provider_model_fallback,
@@ -3179,7 +3180,7 @@ impl ThreadManagerState {
             session.services.mcp_runtime.enable_full_access_form_input();
         }
         let new_thread = self
-            .finalize_thread_spawn(session, io, tracked_session_source)
+            .finalize_thread_spawn(session, io, tracked_session_source, activity_control)
             .await?;
         new_thread.thread.emit_thread_ready_lifecycle().await;
         if source_changed_during_startup.load(Ordering::Acquire) {
@@ -3196,6 +3197,7 @@ impl ThreadManagerState {
         session: Arc<Session>,
         io: SessionIo,
         session_source: SessionSource,
+        agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
         let thread_id = session.thread_id();
         let event = io.next_event().await?;
@@ -3209,7 +3211,11 @@ impl ThreadManagerState {
             }
         };
 
+        // Keep registration inside the same fence as pause snapshot collection. This lets a
+        // pause either capture the child or complete before registration, instead of leaving a
+        // newly inserted child out of the durable active-at-pause snapshot.
         {
+            let _activity_update_guard = agent_control.lock_root_activity_pause_update().await;
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
                 let thread = Arc::new(CodexThread::new(

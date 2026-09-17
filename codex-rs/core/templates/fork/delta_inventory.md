@@ -354,7 +354,8 @@ release or merge rules.
 - Session-scoped cooperative activity pause:
   - `/pause` and `/continue` pause or release the current Lead tree, including
     loaded direct and nested ThreadSpawn Workers; a viewed Worker resolves to
-    its Lead root. New children reconcile the root state before admitting work.
+    its Lead root. Thread registration is fenced with pause snapshot publication,
+    and new children reconcile the root state before admitting work.
   - The process-local pause gates future model/tool starts, usage-reset wakeups,
     and Lead oversight deadlines. Already-admitted side-effectful operations
     may finish at a cooperative boundary; external subprocesses or remote jobs
@@ -1064,7 +1065,8 @@ release or merge rules.
   lifecycle identifiers are not treated as durable rollout or thread-resume
   receipts.
 - Verify `/pause` and `/continue` affect only the selected Lead tree, reconcile
-  newly loaded descendants, gate future model/tool starts and automatic Lead or
+  newly loaded descendants, fence child registration with active-at-pause
+  snapshot publication, gate future model/tool starts and automatic Lead or
   usage wakes, preserve retained work without synthetic turns, and report
   running/pausing/paused separately from idle/working/waiting activity. Confirm
   `/pause` waits for the Core gate acknowledgement before exposing a ready

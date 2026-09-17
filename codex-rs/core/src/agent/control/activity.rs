@@ -37,6 +37,15 @@ impl AgentControl {
             .await
     }
 
+    /// Serialize thread-manager registration with the root pause snapshot boundary.
+    pub(crate) async fn lock_root_activity_pause_update(
+        &self,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        Arc::clone(&self.root_activity_pause_update)
+            .lock_owned()
+            .await
+    }
+
     /// Atomically admit one model/tool operation with the root pause toggle. A pause request that
     /// acquires the update lock first prevents this increment; an operation that acquires it
     /// first is considered already in flight and is allowed to finish at its next boundary.

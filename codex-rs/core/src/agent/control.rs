@@ -201,7 +201,7 @@ pub(crate) struct AgentControl {
     pub(crate) handoff_suspended_threads: Arc<StdMutex<HashSet<ThreadId>>>,
     /// Wakes the handoff coordinator after an admission or completion delivery finishes.
     pub(crate) handoff_admission_notify: Arc<Notify>,
-    /// Serializes manual pause publication with child startup reconciliation.
+    /// Serializes manual pause publication with child registration and startup reconciliation.
     root_activity_pause_update: Arc<Mutex<()>>,
     /// Serializes descendant activity state propagation and preserves toggle order.
     root_activity_pause_propagation: Arc<Mutex<()>>,
