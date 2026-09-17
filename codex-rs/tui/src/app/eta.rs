@@ -33,6 +33,7 @@ use codex_app_server_protocol::ThreadEtaStatus;
 use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_protocol::ThreadId;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub(super) const ETA_HISTORY_PAGE_SIZE: u32 = 50;
@@ -50,6 +51,53 @@ pub(super) struct EtaState {
     pub(super) eta_error: Option<String>,
     pub(super) all_sessions_error: Option<String>,
     pub(super) view_state: Option<EtaViewState>,
+    pub(super) root_view_states: HashMap<ThreadId, EtaViewState>,
+    pub(super) all_sessions_view_state: Option<EtaViewState>,
+}
+
+impl EtaState {
+    pub(super) fn view_state_for_open(
+        &self,
+        root_thread_id: ThreadId,
+        active_tab_id: Option<&str>,
+    ) -> (String, Option<EtaViewState>) {
+        let tab_id = active_tab_id
+            .map(str::to_string)
+            .or_else(|| {
+                self.view_state
+                    .as_ref()
+                    .filter(|state| {
+                        state.tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID
+                    })
+                    .map(|state| state.tab_id.clone())
+            })
+            .or_else(|| {
+                self.root_view_states
+                    .get(&root_thread_id)
+                    .map(|state| state.tab_id.clone())
+            })
+            .unwrap_or_else(|| super::eta_view::ETA_ACTIVE_TAB_ID.to_string());
+        let state = self.view_state_for_root(root_thread_id, &tab_id);
+        (tab_id, state)
+    }
+
+    pub(super) fn view_state_for_root(
+        &self,
+        root_thread_id: ThreadId,
+        tab_id: &str,
+    ) -> Option<EtaViewState> {
+        if tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID {
+            self.all_sessions_view_state
+                .as_ref()
+                .filter(|state| state.tab_id == tab_id)
+                .cloned()
+        } else {
+            self.root_view_states
+                .get(&root_thread_id)
+                .filter(|state| state.tab_id == tab_id)
+                .cloned()
+        }
+    }
 }
 
 impl App {
@@ -111,7 +159,15 @@ impl App {
                 .active_thread_id
                 .filter(|active| *active != target.thread_id)
             {
-                Some(active) => self.active_turn_id_for_thread(active).await.is_some(),
+                Some(active) => {
+                    self.active_turn_id_for_thread(active).await.is_some()
+                        || self
+                            .team_activity
+                            .status_for_root(active, self.config.team.worker_max_concurrent)
+                            .is_some_and(|status| {
+                                status.workers_working > 0 || status.in_flight_operations > 0
+                            })
+                }
                 None => false,
             };
             if (self.active_thread_id == Some(target.thread_id)
@@ -136,6 +192,7 @@ impl App {
             return;
         };
 
+        let previous_root_thread_id = self.eta.root_thread_id;
         self.eta.root_thread_id = Some(root_thread_id);
         self.eta.eta_request_in_flight = true;
         self.eta.eta_error = None;
@@ -146,26 +203,33 @@ impl App {
             .clone()
             .filter(|snapshot| snapshot.root_thread_id == root_thread_id.to_string())
             .unwrap_or_else(|| empty_snapshot(root_thread_id));
-        let tab_id = self
+        let active_tab_id = self
             .chat_widget
             .active_tab_id_for_active_view(ETA_VIEW_ID)
-            .unwrap_or(ETA_ACTIVE_TAB_ID);
-        let selected_idx = self
-            .chat_widget
-            .selected_index_for_present_view(ETA_VIEW_ID);
-        let view_state = self.eta.view_state.clone();
+            .map(str::to_string);
+        let (tab_id, view_state) = self
+            .eta
+            .view_state_for_open(root_thread_id, active_tab_id.as_deref());
+        let selected_idx = if previous_root_thread_id == Some(root_thread_id) {
+            self.chat_widget
+                .selected_index_for_present_view(ETA_VIEW_ID)
+        } else {
+            None
+        };
+        let all_sessions_request_in_flight = self.eta.all_sessions_request_id.is_some()
+            || tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID;
         self.chat_widget.show_bottom_pane_view(Box::new(
             EtaView::new_with_state_and_all_sessions_and_status(
                 snapshot,
                 self.keymap.list.clone(),
                 self.app_event_tx.clone(),
-                tab_id,
+                &tab_id,
                 selected_idx,
                 EtaTimestampFormatter::from_config(&self.config.eta),
                 self.eta.all_sessions.clone(),
                 self.eta.all_sessions_next_cursor.clone(),
                 self.eta.all_sessions_include_nested,
-                self.eta.all_sessions_request_id.is_some(),
+                all_sessions_request_in_flight,
                 self.primary_thread_id
                     .or(self.current_displayed_thread_id()),
                 self.eta.eta_request_in_flight,
@@ -366,14 +430,10 @@ impl App {
     }
 
     pub(super) fn apply_eta_view_state(&mut self, root_thread_id: String, state: EtaViewState) {
-        if state.tab_id != super::eta_view::ETA_ALL_SESSIONS_TAB_ID
-            && self
-                .eta
-                .root_thread_id
-                .as_ref()
-                .is_none_or(|root| root.to_string() != root_thread_id)
-        {
-            return;
+        if state.tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID {
+            self.eta.all_sessions_view_state = Some(state.clone());
+        } else if let Ok(root_thread_id) = ThreadId::from_string(&root_thread_id) {
+            self.eta.root_view_states.insert(root_thread_id, state.clone());
         }
         self.eta.view_state = Some(state);
     }
@@ -420,18 +480,20 @@ impl App {
         {
             return;
         }
-        let selected_idx = self
-            .chat_widget
-            .selected_index_for_present_view(ETA_VIEW_ID);
         let tab_id = self
             .chat_widget
             .active_tab_id_for_active_view(ETA_VIEW_ID)
-            .unwrap_or(ETA_ACTIVE_TAB_ID);
+            .map(str::to_string)
+            .unwrap_or_else(|| ETA_ACTIVE_TAB_ID.to_string());
+        let selected_idx = self
+            .chat_widget
+            .selected_index_for_present_view(ETA_VIEW_ID);
+        let view_state = self.eta.view_state_for_root(root_thread_id, &tab_id);
         let view = EtaView::new_with_state_and_all_sessions_and_status(
             snapshot,
             self.keymap.list.clone(),
             self.app_event_tx.clone(),
-            tab_id,
+            &tab_id,
             selected_idx,
             EtaTimestampFormatter::from_config(&self.config.eta),
             self.eta.all_sessions.clone(),
@@ -443,7 +505,7 @@ impl App {
             self.eta.eta_request_in_flight,
             self.eta.eta_error.clone(),
             self.eta.all_sessions_error.clone(),
-            self.eta.view_state.clone(),
+            view_state,
         );
         self.chat_widget
             .replace_bottom_pane_view_if_present(ETA_VIEW_ID, Box::new(view));

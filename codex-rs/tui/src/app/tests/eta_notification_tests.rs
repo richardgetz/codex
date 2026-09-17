@@ -1,4 +1,11 @@
 use super::*;
+use crate::app::eta_view::ETA_ACTIVE_TAB_ID;
+use crate::app::eta_view::ETA_ALL_SESSIONS_TAB_ID;
+use crate::app::eta_view::ETA_HISTORY_TAB_ID;
+use crate::app::eta_view::EtaSessionInfo;
+use crate::app::eta_view::EtaSessionTask;
+use crate::app::eta_view::EtaTaskStatus;
+use crate::app::eta_view::EtaViewState;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadEtaAccuracy;
@@ -6,6 +13,42 @@ use codex_app_server_protocol::ThreadEtaOverall;
 use codex_app_server_protocol::ThreadEtaStatus;
 use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
+use codex_protocol::ThreadId;
+
+fn saved_state(tab_id: &str, selected_task_id: Option<&str>) -> EtaViewState {
+    EtaViewState {
+        tab_id: tab_id.to_string(),
+        selected_task_id: selected_task_id.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+fn known_session_task(root_thread_id: ThreadId) -> EtaSessionTask {
+    EtaSessionTask {
+        task_id: "target-task".to_string(),
+        root_thread_id: root_thread_id.to_string(),
+        parent_task_id: None,
+        title: "Target session".to_string(),
+        status: EtaTaskStatus::Active,
+        current_lower_seconds: Some(1),
+        current_upper_seconds: Some(2),
+        is_stale: false,
+        session: EtaSessionInfo {
+            thread_id: root_thread_id.to_string(),
+            title: "Target session".to_string(),
+            name: None,
+            preview: None,
+            created_at: 1,
+            updated_at: 1,
+            archived_at: None,
+            cwd: "/tmp".to_string(),
+        },
+        nested_task_count: 0,
+        active_nested_task_count: 0,
+        nested_lower_seconds: None,
+        nested_upper_seconds: None,
+    }
+}
 
 #[tokio::test]
 async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_eyre::Result<()> {
@@ -71,6 +114,131 @@ async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_ey
     let task = &app.eta.snapshot.as_ref().expect("ETA snapshot").active[0];
     assert_eq!(task.task_id, "selected-task");
     assert!(task.is_stale);
+
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn opening_saved_all_sessions_shows_loading_before_response() -> color_eyre::Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let started = app_server.start_thread(&app.config).await?;
+    let root_thread_id = started.session.thread_id;
+    app.enqueue_primary_thread_session(started.session, started.turns)
+        .await?;
+    app.apply_eta_view_state(
+        root_thread_id.to_string(),
+        saved_state(ETA_ALL_SESSIONS_TAB_ID, None),
+    );
+
+    app.open_eta(&app_server);
+
+    let status = render_bottom_popup(&app.chat_widget, 80)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("Loading retained sessions"))
+        .expect("All Sessions should show loading before the first response");
+    insta::assert_snapshot!(status, @"Loading retained sessions…");
+
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn eta_root_view_state_isolated_between_selected_roots() {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let first_root = ThreadId::new();
+    let second_root = ThreadId::new();
+    let all_sessions_state = EtaViewState {
+        selected_session: Some((first_root.to_string(), "retained-task".to_string())),
+        ..saved_state(ETA_ALL_SESSIONS_TAB_ID, None)
+    };
+
+    app.apply_eta_view_state(
+        first_root.to_string(),
+        saved_state(ETA_ACTIVE_TAB_ID, Some("first-task")),
+    );
+    app.apply_eta_view_state(first_root.to_string(), all_sessions_state.clone());
+    app.apply_eta_view_state(
+        second_root.to_string(),
+        saved_state(ETA_HISTORY_TAB_ID, Some("second-task")),
+    );
+
+    assert_eq!(
+        app.eta
+            .view_state_for_root(first_root, ETA_ACTIVE_TAB_ID)
+            .and_then(|state| state.selected_task_id),
+        Some("first-task".to_string())
+    );
+    assert_eq!(
+        app.eta
+            .view_state_for_root(second_root, ETA_HISTORY_TAB_ID)
+            .and_then(|state| state.selected_task_id),
+        Some("second-task".to_string())
+    );
+    assert_eq!(
+        app.eta
+            .view_state_for_root(second_root, ETA_ACTIVE_TAB_ID),
+        None
+    );
+    assert_eq!(
+        app.eta
+            .view_state_for_root(second_root, ETA_ALL_SESSIONS_TAB_ID),
+        Some(all_sessions_state)
+    );
+}
+
+#[tokio::test]
+async fn resume_eta_session_confirms_when_worker_is_working() -> color_eyre::Result<()> {
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let active_root = ThreadId::new();
+    let worker_thread = ThreadId::new();
+    let target_root = ThreadId::new();
+    app.active_thread_id = Some(active_root);
+    app.primary_thread_id = Some(active_root);
+    app.team_activity.replace_thread_metadata(
+        Some(active_root),
+        [(active_root, None), (worker_thread, Some(active_root))],
+    );
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: active_root.to_string(),
+            root_thread_id: active_root.to_string(),
+            activity: codex_app_server_protocol::ThreadActivity::Idle,
+            pause_state: codex_app_server_protocol::ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 0,
+        });
+    app.team_activity
+        .observe(&ThreadActivityUpdatedNotification {
+            thread_id: worker_thread.to_string(),
+            root_thread_id: active_root.to_string(),
+            activity: codex_app_server_protocol::ThreadActivity::Working,
+            pause_state: codex_app_server_protocol::ThreadPauseState::Running,
+            wait_reason: None,
+            in_flight_operations: 1,
+        });
+    app.eta.all_sessions = vec![known_session_task(target_root)];
+
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let control = app
+        .resume_eta_session_target(
+            &mut tui,
+            &mut app_server,
+            crate::resume_picker::SessionTarget {
+                path: None,
+                thread_id: target_root,
+                cwd: None,
+                history_mode: None,
+            },
+            false,
+        )
+        .await?;
+
+    assert!(matches!(control, AppRunControl::Continue));
+    assert!(render_bottom_popup(&app.chat_widget, 80).contains("Resume another active session?"));
 
     app_server.shutdown().await?;
     Ok(())
