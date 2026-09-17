@@ -154,6 +154,10 @@ fn session_task(
             thread_id: root_thread_id.to_string(),
             title: "Release session".to_string(),
             name: Some("release".to_string()),
+            preview: Some("Prepare the release artifacts".to_string()),
+            created_at: 1_699_999_900,
+            updated_at: 1_700_000_030,
+            archived_at: None,
             cwd: "/tmp/release".to_string(),
         },
         nested_task_count,
@@ -333,7 +337,70 @@ fn all_sessions_are_grouped_and_nested_rows_toggle() {
     view.handle_key_event(KeyCode::Char('r').into());
     assert!(matches!(
         rx.try_recv(),
-        Ok(AppEvent::ResumeEtaSession { thread_id })
-            if thread_id == ThreadId::from_string("00000000-0000-0000-0000-000000000001").unwrap()
+        Ok(AppEvent::ResumeEtaSessionTarget { target })
+            if target.thread_id == ThreadId::from_string("00000000-0000-0000-0000-000000000001").unwrap()
     ));
+}
+
+#[test]
+fn all_sessions_loading_error_and_empty_states_have_snapshots() {
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let make = |in_flight, error| {
+        EtaView::new_with_state_and_all_sessions_and_status(
+            snapshot(),
+            RuntimeKeymap::defaults().list,
+            AppEventSender::new(tx.clone()),
+            "all-sessions",
+            None,
+            EtaTimestampFormatter::utc(),
+            Vec::new(),
+            None,
+            false,
+            in_flight,
+            None,
+            false,
+            None,
+            error,
+            None,
+        )
+    };
+    for (label, view) in [
+        ("loading", make(true, None)),
+        ("error", make(false, Some("server unavailable".to_string()))),
+        ("empty", make(false, None)),
+    ] {
+        let rendered = render(&view, 80, 16);
+        let line = rendered
+            .lines()
+            .map(str::trim)
+            .find(|line| {
+                line.contains("Loading retained")
+                    || line.contains("Unable to load retained")
+                    || line.contains("No retained ETA")
+            })
+            .expect("inline all-sessions status");
+        match label {
+            "loading" => insta::assert_snapshot!(line, @"Loading retained sessions…"),
+            "error" => insta::assert_snapshot!(line, @"Unable to load retained sessions: server unavailable · press r to retry"),
+            "empty" => insta::assert_snapshot!(line, @"No retained ETA sessions found."),
+            _ => unreachable!("unknown ETA status snapshot"),
+        }
+    }
+}
+
+#[test]
+fn all_sessions_nested_and_narrow_layout_have_snapshots() {
+    let view = all_sessions_view();
+    let rows = render(&view, 112, 24)
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("Prepare release") || line.contains("Run checks"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("eta_all_sessions_nested_rows", rows);
+    insta::assert_debug_snapshot!(
+        "eta_all_sessions_narrow_columns",
+        super::eta_view_render::session_column_widths(48),
+        @r###"(8, 8, 8, 10)"###
+    );
 }

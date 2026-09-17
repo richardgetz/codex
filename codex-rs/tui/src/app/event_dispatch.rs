@@ -44,6 +44,10 @@ impl App {
                     | AppEvent::ThreadEtaSessionsLoaded { .. }
                     | AppEvent::LoadEtaHistory { .. }
                     | AppEvent::LoadEtaSessions { .. }
+                    | AppEvent::RefreshEta { .. }
+                    | AppEvent::EtaViewStateChanged { .. }
+                    | AppEvent::ResumeEtaSessionTarget { .. }
+                    | AppEvent::ResumeEtaSessionConfirmed { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -2915,6 +2919,15 @@ impl App {
             } => {
                 self.apply_eta_sessions(request_id, cursor, include_nested, result);
             }
+            AppEvent::RefreshEta { root_thread_id } => {
+                self.refresh_eta(app_server, root_thread_id, None);
+            }
+            AppEvent::EtaViewStateChanged {
+                root_thread_id,
+                state,
+            } => {
+                self.apply_eta_view_state(root_thread_id, state);
+            }
             AppEvent::LoadEtaHistory {
                 root_thread_id,
                 cursor,
@@ -2929,7 +2942,12 @@ impl App {
             }
             AppEvent::ResumeEtaSession { thread_id } => {
                 if self.active_thread_id == Some(thread_id) && !self.thread_unavailable(thread_id) {
-                    self.show_eta_resume_confirmation(thread_id);
+                    self.show_eta_resume_confirmation(crate::resume_picker::SessionTarget {
+                        path: None,
+                        thread_id,
+                        cwd: None,
+                        history_mode: None,
+                    });
                 } else {
                     let target_session = crate::resume_picker::SessionTarget {
                         path: None,
@@ -2944,6 +2962,16 @@ impl App {
                         return Ok(AppRunControl::Exit(reason));
                     }
                 }
+            }
+            AppEvent::ResumeEtaSessionTarget { target } => {
+                return self
+                    .resume_eta_session_target(tui, app_server, target, false)
+                    .await;
+            }
+            AppEvent::ResumeEtaSessionConfirmed { target } => {
+                return self
+                    .resume_eta_session_target(tui, app_server, target, true)
+                    .await;
             }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);

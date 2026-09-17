@@ -40,7 +40,8 @@ impl EtaView {
             spans.extend(["  pgdn".bold(), " more history".dim()]);
         }
         if self.tab == EtaTab::AllSessions {
-            spans.extend(["  r".bold(), " resume".dim()]);
+            spans.extend(["  r".bold(), " resume/retry".dim()]);
+            spans.extend(["  n".bold(), " nested/flat".dim()]);
             if self.all_sessions_next_cursor.is_some() {
                 spans.extend(["  pgdn".bold(), " more sessions".dim()]);
             }
@@ -89,18 +90,21 @@ impl EtaView {
         lines
     }
 
-    fn render_table_header(&self, title_width: usize) -> Line<'static> {
+    fn render_table_header(&self, width: usize) -> Line<'static> {
         if self.tab == EtaTab::AllSessions {
+            let (title_width, session_width, status_width, timing_width) =
+                session_column_widths(width);
             return Line::from(vec![
                 format!("{:<title_width$}", "Task").bold(),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                format!("{:<width$}", "Session", width = ETA_SESSION_WIDTH).bold(),
+                format!("{:<width$}", "Session", width = session_width).bold(),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                format!("{:<width$}", "Status", width = ETA_STATUS_WIDTH).bold(),
+                format!("{:<width$}", "Status", width = status_width).bold(),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                format!("{:<ETA_TIMING_WIDTH$}", "Remaining").bold(),
+                format!("{:<width$}", "Remaining", width = timing_width).bold(),
             ]);
         }
+        let title_width = table_title_width(width);
         let trailing = if self.tab == EtaTab::Active {
             "Remaining"
         } else {
@@ -121,10 +125,33 @@ impl EtaView {
         if self.tab == EtaTab::AllSessions {
             return self.render_all_session_rows(width);
         }
+        if self.tasks().is_empty() {
+            if self.eta_request_in_flight {
+                return vec!["Loading task estimates…".dim().into()];
+            }
+            if let Some(error) = self.eta_error.as_deref() {
+                return vec![
+                    format!("Unable to load task estimates: {error} · press r to retry")
+                        .red()
+                        .into(),
+                ];
+            }
+            return vec!["No task estimates recorded for this session.".dim().into()];
+        }
         let rows = self.ordered_indices();
         let title_width = table_title_width(width);
         let agent_width = ETA_AGENT_WIDTH;
-        let mut lines = Vec::with_capacity(rows.len());
+        let mut lines = Vec::with_capacity(rows.len() + 1);
+        if self.eta_request_in_flight {
+            lines.push("Refreshing task estimates…".dim().into());
+        }
+        if let Some(error) = self.eta_error.as_deref() {
+            lines.push(
+                format!("Last refresh failed: {error} · press r to retry")
+                    .red()
+                    .into(),
+            );
+        }
         for (display_idx, task_idx) in rows.into_iter().enumerate() {
             let task = &self.tasks()[task_idx];
             let depth = self.task_depth(task_idx);
@@ -292,9 +319,33 @@ impl EtaView {
     }
 
     fn render_all_session_rows(&self, width: usize) -> Vec<Line<'static>> {
+        if self.all_sessions.is_empty() {
+            if self.all_sessions_request_in_flight {
+                return vec!["Loading retained sessions…".dim().into()];
+            }
+            if let Some(error) = self.all_sessions_error.as_deref() {
+                return vec![
+                    format!("Unable to load retained sessions: {error} · press r to retry")
+                        .red()
+                        .into(),
+                ];
+            }
+            return vec!["No retained ETA sessions found.".dim().into()];
+        }
         let rows = self.ordered_session_indices();
-        let title_width = session_table_title_width(width);
-        let mut lines = Vec::with_capacity(rows.len());
+        let (title_width, session_width, status_width, timing_width) =
+            session_column_widths(width);
+        let mut lines = Vec::with_capacity(rows.len() + 1);
+        if self.all_sessions_request_in_flight {
+            lines.push("Refreshing retained sessions…".dim().into());
+        }
+        if let Some(error) = self.all_sessions_error.as_deref() {
+            lines.push(
+                format!("Last refresh failed: {error} · press r to retry")
+                    .red()
+                    .into(),
+            );
+        }
         let mut previous_root: Option<&str> = None;
         for (display_idx, task_idx) in rows.into_iter().enumerate() {
             let task = &self.session_tasks()[task_idx];
@@ -328,21 +379,29 @@ impl EtaView {
             let indent = "  ".repeat(depth);
             let prefix = format!("{indent}{marker}");
             let nested_badge = (task.nested_task_count > 0)
-                .then(|| format!("  [{} nested]", task.nested_task_count))
+                .then(|| {
+                    format!(
+                        "  [{} nested{}]",
+                        task.nested_task_count,
+                        (task.active_nested_task_count > 0)
+                            .then(|| format!(", {} active", task.active_nested_task_count))
+                            .unwrap_or_default()
+                    )
+                })
                 .unwrap_or_default();
             let title = fit_text(
                 &format!("{prefix}{}{nested_badge}", task.title.trim()),
                 title_width,
             );
-            let current = ThreadId::from_string(&task.session.thread_id)
-                .ok()
-                .is_some_and(|thread_id| self.current_thread_id == Some(thread_id));
+            let current = self
+                .current_thread_id
+                .is_some_and(|thread_id| thread_id.to_string() == task.root_thread_id);
             let mut session = session_label(task);
             if current {
                 session.push_str(" · current");
             }
-            let session = fit_text(&session, ETA_SESSION_WIDTH);
-            let status = fit_text(task.status.label(), ETA_STATUS_WIDTH);
+            let session = fit_text(&session, session_width);
+            let status = fit_text(task.status.label(), status_width);
             let remaining = if task.nested_task_count > 0 {
                 let own = format_range(task.current_lower_seconds, task.current_upper_seconds);
                 let nested = format_range(task.nested_lower_seconds, task.nested_upper_seconds);
@@ -350,15 +409,15 @@ impl EtaView {
             } else {
                 format_range(task.current_lower_seconds, task.current_upper_seconds)
             };
-            let remaining = fit_text(&remaining, ETA_TIMING_WIDTH);
+            let remaining = fit_text(&remaining, timing_width);
             let line = Line::from(vec![
                 Span::from(format!("{title:<title_width$}")),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                Span::from(format!("{session:<ETA_SESSION_WIDTH$}")),
+                Span::from(format!("{session:<session_width$}")),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                Span::from(format!("{status:<ETA_STATUS_WIDTH$}")),
+                Span::from(format!("{status:<status_width$}")),
                 " ".repeat(ETA_COLUMN_GAP).into(),
-                Span::from(format!("{remaining:<ETA_TIMING_WIDTH$}")),
+                Span::from(format!("{remaining:<timing_width$}")),
             ]);
             let line = truncate_line_with_ellipsis_if_overflow(line, width);
             lines.push(if self.state.selected_idx == Some(display_idx) {
@@ -380,8 +439,41 @@ impl EtaView {
         lines.push(detail_line("Task", task.title.trim()));
         lines.push(detail_line("Status", status));
         lines.push(detail_line("Session", &session_label(task)));
+        if let Some(preview) = task
+            .session
+            .preview
+            .as_deref()
+            .filter(|preview| !preview.trim().is_empty())
+        {
+            lines.push(detail_line("Preview", preview.trim()));
+        }
         lines.push(detail_line("Session ID", &short_id(&session.thread_id)));
         lines.push(detail_line("Working directory", &session.cwd));
+        if session.created_at > 0 {
+            lines.push(detail_line(
+                "Created",
+                &self.timestamp_formatter.format(session.created_at),
+            ));
+        }
+        if session.updated_at > 0 {
+            lines.push(detail_line(
+                "Updated",
+                &self.timestamp_formatter.format(session.updated_at),
+            ));
+        }
+        if let Some(archived_at) = session.archived_at {
+            lines.push(detail_line(
+                "Archived",
+                &self.timestamp_formatter.format(archived_at),
+            ));
+        }
+        lines.push(detail_line(
+            "Nested",
+            &format!(
+                "{} total · {} active",
+                task.nested_task_count, task.active_nested_task_count
+            ),
+        ));
         lines
             .into_iter()
             .map(|line| truncate_line_with_ellipsis_if_overflow(line, width))
@@ -440,12 +532,17 @@ impl Renderable for EtaView {
         let mut summary = if self.tab == EtaTab::AllSessions {
             vec![Line::from(
                 format!(
-                    "{} tasks   {} nested loaded",
+                    "{} tasks   {} nested loaded   mode: {}",
                     self.all_sessions.len(),
                     self.all_sessions
                         .iter()
-                        .map(|task| task.nested_task_count)
-                        .sum::<u32>(),
+                        .filter(|task| task.parent_task_id.is_some())
+                        .count(),
+                    if self.all_sessions_include_nested {
+                        "nested"
+                    } else {
+                        "top-level"
+                    },
                 )
                 .dim(),
             )]
@@ -478,11 +575,6 @@ impl Renderable for EtaView {
 
         let body_area = inset(body_area);
         let width = body_area.width as usize;
-        let title_width = if self.tab == EtaTab::AllSessions {
-            session_table_title_width(width)
-        } else {
-            table_title_width(width)
-        };
         let expanded_table_height =
             (1 + self.visible_rows() as u16).min(body_area.height.saturating_sub(1).max(1));
         let [table_area, detail_area] = if self.expanded {
@@ -494,7 +586,7 @@ impl Renderable for EtaView {
         } else {
             Layout::vertical([Constraint::Fill(1), Constraint::Length(0)]).areas(body_area)
         };
-        let mut table_lines = vec![self.render_table_header(title_width)];
+        let mut table_lines = vec![self.render_table_header(width)];
         let rows = self.render_table_rows(width);
         let scroll_top = if self.tab == EtaTab::AllSessions {
             self.all_session_scroll_offset()
@@ -536,6 +628,27 @@ fn session_table_title_width(width: usize) -> usize {
         .max(8)
 }
 
+fn session_column_widths(width: usize) -> (usize, usize, usize, usize) {
+    if width < 56 {
+        return (8, 8, 8, 10);
+    }
+    if width < 96 {
+        let session = 16;
+        let status = 16;
+        let timing = 18;
+        let title = width
+            .saturating_sub(session + status + timing + (ETA_COLUMN_GAP * 3))
+            .max(8);
+        return (title, session, status, timing);
+    }
+    (
+        session_table_title_width(width),
+        ETA_SESSION_WIDTH,
+        ETA_STATUS_WIDTH,
+        ETA_TIMING_WIDTH,
+    )
+}
+
 fn session_label(task: &super::EtaSessionTask) -> String {
     if let Some(name) = task
         .session
@@ -547,6 +660,14 @@ fn session_label(task: &super::EtaSessionTask) -> String {
     }
     if !task.session.title.trim().is_empty() {
         return task.session.title.trim().to_string();
+    }
+    if let Some(preview) = task
+        .session
+        .preview
+        .as_deref()
+        .filter(|preview| !preview.trim().is_empty())
+    {
+        return preview.trim().to_string();
     }
     short_id(&task.root_thread_id)
 }

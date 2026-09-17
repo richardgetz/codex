@@ -18,6 +18,7 @@ use super::eta_view::EtaSnapshot;
 use super::eta_view::EtaTask;
 use super::eta_view::EtaTaskStatus;
 use super::eta_view::EtaView;
+use super::eta_view::EtaViewState;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -45,18 +46,27 @@ pub(super) struct EtaState {
     pub(super) all_sessions_next_cursor: Option<String>,
     pub(super) all_sessions_request_id: Option<Uuid>,
     pub(super) all_sessions_include_nested: bool,
+    pub(super) eta_request_in_flight: bool,
+    pub(super) eta_error: Option<String>,
+    pub(super) all_sessions_error: Option<String>,
+    pub(super) view_state: Option<EtaViewState>,
 }
 
 impl App {
-    pub(super) fn show_eta_resume_confirmation(&mut self, thread_id: ThreadId) {
-        let id = thread_id.to_string();
+    pub(super) fn show_eta_resume_confirmation(
+        &mut self,
+        target: crate::resume_picker::SessionTarget,
+    ) {
+        let target = target.clone();
         self.chat_widget.show_selection_view(SelectionViewParams {
-            title: Some("Resume active session?".to_string()),
+            title: Some("Resume another active session?".to_string()),
             items: vec![
                 SelectionItem {
-                    name: "Resume current session".to_string(),
+                    name: "Resume selected session".to_string(),
                     actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::ResumeSessionByIdOrName(id.clone()));
+                        tx.send(AppEvent::ResumeEtaSessionConfirmed {
+                            target: target.clone(),
+                        });
                     })],
                     dismiss_on_select: true,
                     ..Default::default()
@@ -71,6 +81,50 @@ impl App {
         });
     }
 
+    pub(super) async fn resume_eta_session_target(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        target: crate::resume_picker::SessionTarget,
+        confirmed: bool,
+    ) -> color_eyre::Result<AppRunControl> {
+        let target_is_known = self.eta.all_sessions.iter().any(|task| {
+            task.root_thread_id == target.thread_id.to_string()
+                && task.session.thread_id == target.thread_id.to_string()
+        });
+        if !target_is_known {
+            self.chat_widget.add_error_message(
+                "That ETA session is no longer available. Refresh All Sessions and try again."
+                    .to_string(),
+            );
+            return Ok(AppRunControl::Continue);
+        }
+        if self.reconnect.offline {
+            self.chat_widget.add_error_message(
+                "Session resume is unavailable while disconnected; retry after reconnect."
+                    .to_string(),
+            );
+            return Ok(AppRunControl::Continue);
+        }
+        if !confirmed {
+            let leaving_active_session = match self
+                .active_thread_id
+                .filter(|active| *active != target.thread_id)
+            {
+                Some(active) => self.active_turn_id_for_thread(active).await.is_some(),
+                None => false,
+            };
+            if (self.active_thread_id == Some(target.thread_id)
+                && !self.thread_unavailable(target.thread_id))
+                || leaving_active_session
+            {
+                self.show_eta_resume_confirmation(target);
+                return Ok(AppRunControl::Continue);
+            }
+        }
+        self.resume_target_session(tui, app_server, target).await
+    }
+
     pub(super) fn open_eta(&mut self, app_server: &AppServerSession) {
         let Some(root_thread_id) = self
             .primary_thread_id
@@ -83,6 +137,9 @@ impl App {
         };
 
         self.eta.root_thread_id = Some(root_thread_id);
+        self.eta.eta_request_in_flight = true;
+        self.eta.eta_error = None;
+        self.eta.all_sessions_error = None;
         let snapshot = self
             .eta
             .snapshot
@@ -96,8 +153,9 @@ impl App {
         let selected_idx = self
             .chat_widget
             .selected_index_for_present_view(ETA_VIEW_ID);
+        let view_state = self.eta.view_state.clone();
         self.chat_widget
-            .show_bottom_pane_view(Box::new(EtaView::new_with_state_and_all_sessions(
+            .show_bottom_pane_view(Box::new(EtaView::new_with_state_and_all_sessions_and_status(
                 snapshot,
                 self.keymap.list.clone(),
                 self.app_event_tx.clone(),
@@ -108,7 +166,11 @@ impl App {
                 self.eta.all_sessions_next_cursor.clone(),
                 self.eta.all_sessions_include_nested,
                 self.eta.all_sessions_request_id.is_some(),
-                self.current_displayed_thread_id(),
+                self.primary_thread_id.or(self.current_displayed_thread_id()),
+                self.eta.eta_request_in_flight,
+                self.eta.eta_error.clone(),
+                self.eta.all_sessions_error.clone(),
+                view_state,
             )));
         self.refresh_eta(app_server, root_thread_id, None);
         self.refresh_eta_sessions(app_server, None, self.eta.all_sessions_include_nested);
@@ -123,6 +185,8 @@ impl App {
         let request_id = Uuid::new_v4();
         self.eta.request_id = Some(request_id);
         self.eta.root_thread_id = Some(root_thread_id);
+        self.eta.eta_request_in_flight = true;
+        self.eta.eta_error = None;
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -154,6 +218,7 @@ impl App {
     ) {
         let request_id = Uuid::new_v4();
         self.eta.all_sessions_request_id = Some(request_id);
+        self.eta.all_sessions_error = None;
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -190,6 +255,7 @@ impl App {
             return;
         }
         self.eta.request_id = None;
+        self.eta.eta_request_in_flight = false;
         match result {
             Ok(response) => {
                 let incoming = snapshot_from_api(response.snapshot);
@@ -208,14 +274,7 @@ impl App {
                 }
             }
             Err(error) => {
-                if self
-                    .chat_widget
-                    .active_tab_id_for_active_view(ETA_VIEW_ID)
-                    .is_some()
-                {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to load ETA: {error}"));
-                }
+                self.eta.eta_error = Some(error);
             }
         }
         self.repaint_eta();
@@ -232,6 +291,7 @@ impl App {
             return;
         }
         self.eta.all_sessions_request_id = None;
+        self.eta.all_sessions_error = None;
         match result {
             Ok(response) => {
                 let incoming = response
@@ -248,14 +308,7 @@ impl App {
                 self.eta.all_sessions_next_cursor = response.next_cursor;
             }
             Err(error) => {
-                if self
-                    .chat_widget
-                    .active_tab_id_for_active_view(ETA_VIEW_ID)
-                    .is_some()
-                {
-                    self.chat_widget
-                        .add_error_message(format!("Failed to load ETA sessions: {error}"));
-                }
+                self.eta.all_sessions_error = Some(error);
             }
         }
         self.repaint_eta();
@@ -310,6 +363,19 @@ impl App {
         self.repaint_eta();
     }
 
+    pub(super) fn apply_eta_view_state(
+        &mut self,
+        root_thread_id: String,
+        state: EtaViewState,
+    ) {
+        if state.tab_id != super::eta_view::ETA_ALL_SESSIONS_TAB_ID
+            && self.eta.root_thread_id.as_ref().is_none_or(|root| root.to_string() != root_thread_id)
+        {
+            return;
+        }
+        self.eta.view_state = Some(state);
+    }
+
     fn merge_eta_history(&mut self, incoming: EtaSnapshot) {
         let Some(snapshot) = self.eta.snapshot.as_mut() else {
             self.eta.snapshot = Some(incoming);
@@ -337,9 +403,14 @@ impl App {
     }
 
     pub(super) fn repaint_eta(&mut self) {
-        let Some(snapshot) = self.eta.snapshot.clone() else {
+        let Some(root_thread_id) = self.eta.root_thread_id else {
             return;
         };
+        let snapshot = self
+            .eta
+            .snapshot
+            .clone()
+            .unwrap_or_else(|| empty_snapshot(root_thread_id));
         if self
             .chat_widget
             .active_tab_id_for_active_view(ETA_VIEW_ID)
@@ -354,7 +425,7 @@ impl App {
             .chat_widget
             .active_tab_id_for_active_view(ETA_VIEW_ID)
             .unwrap_or(ETA_ACTIVE_TAB_ID);
-        let view = EtaView::new_with_state_and_all_sessions(
+        let view = EtaView::new_with_state_and_all_sessions_and_status(
             snapshot,
             self.keymap.list.clone(),
             self.app_event_tx.clone(),
@@ -365,7 +436,11 @@ impl App {
             self.eta.all_sessions_next_cursor.clone(),
             self.eta.all_sessions_include_nested,
             self.eta.all_sessions_request_id.is_some(),
-            self.current_displayed_thread_id(),
+            self.primary_thread_id.or(self.current_displayed_thread_id()),
+            self.eta.eta_request_in_flight,
+            self.eta.eta_error.clone(),
+            self.eta.all_sessions_error.clone(),
+            self.eta.view_state.clone(),
         );
         self.chat_widget
             .replace_bottom_pane_view_if_present(ETA_VIEW_ID, Box::new(view));
@@ -482,6 +557,10 @@ fn session_task_from_api(task: codex_app_server_protocol::ThreadEtaSessionTask) 
             thread_id: task.session.thread_id,
             title: task.session.title,
             name: task.session.name,
+            preview: task.session.preview,
+            created_at: task.session.created_at,
+            updated_at: task.session.updated_at,
+            archived_at: task.session.archived_at,
             cwd: task.session.cwd,
         },
         nested_task_count: task.nested_task_count,
