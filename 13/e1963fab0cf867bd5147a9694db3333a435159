@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-history#13e1963fab"
+  change_type: feature
+  scope: eta
+  summary: Add configurable terminal-history retention and a paginated task-first cross-session ETA projection.
+  decision: Persist ETA rows, prune only old terminal tasks, and expose root metadata plus nested summaries through experimental thread/eta/list.
+  constraints:
+    - Keep unfinished tasks and terminal grouping rows referenced by unfinished children.
+    - Preserve UTC Unix-second API timestamps and existing root-scoped ETA behavior.
+    - Keep the cross-session source additions under the repository change-size guidance.
+  intent_priority: must
+  code_locations:
+    - codex-rs/state
+    - codex-rs/config
+    - codex-rs/core
+    - codex-rs/app-server-protocol
+    - codex-rs/app-server
+    - codex-rs/tui
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
