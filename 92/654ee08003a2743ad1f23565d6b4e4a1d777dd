@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-17/eta-all-sessions-navigator#92654ee080"
+  change_type: "feat"
+  scope: "cross-session ETA navigation"
+  summary: "Expose retained ETA tasks across sessions and let users safely resume the session associated with a task."
+  decision: "Present a task-first All Sessions tab with nested-task controls, bounded pagination, timezone-aware timestamps, and confirmation before leaving an active session."
+  constraints:
+    - "Keep current-session Active and History behavior intact."
+    - "Use the existing session resume path and require confirmation when current work is active."
+    - "Keep API pagination bounded and preserve terminal-history retention."
+    - "Update the fork delta inventory and generated schemas in the same PR."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-protocol/src/protocol/v2.rs"
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6-astra"
