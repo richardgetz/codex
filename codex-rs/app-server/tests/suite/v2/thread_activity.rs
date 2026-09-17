@@ -14,11 +14,11 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::TurnStartParams;
-use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
@@ -596,7 +596,10 @@ async fn run_cold_resume_case(
             let completed: TurnCompletedNotification =
                 old_server.read_notification("turn/completed").await?;
             if completed.thread_id == historical_completed.id {
-                assert_eq!(completed.turn.status, codex_app_server_protocol::TurnStatus::Completed);
+                assert_eq!(
+                    completed.turn.status,
+                    codex_app_server_protocol::TurnStatus::Completed
+                );
                 break;
             }
         }
@@ -629,11 +632,8 @@ async fn run_cold_resume_case(
                 turn_id: historical_interrupted_turn.id.clone(),
             })
             .await?;
-        let _: TurnInterruptResponse = timeout(
-            REQUEST_TIMEOUT,
-            old_server.read_response(interrupt_request),
-        )
-        .await??;
+        let _: TurnInterruptResponse =
+            timeout(REQUEST_TIMEOUT, old_server.read_response(interrupt_request)).await??;
         loop {
             let completed: TurnCompletedNotification =
                 old_server.read_notification("turn/completed").await?;
@@ -769,7 +769,10 @@ async fn run_cold_resume_case(
             .await?;
         let _: ThreadActivityContinueResponse =
             timeout(REQUEST_TIMEOUT, old_server.read_response(continue_request)).await??;
-        assert_eq!(responses_server.requests().await.len(), initial_request_count);
+        assert_eq!(
+            responses_server.requests().await.len(),
+            initial_request_count
+        );
         let read_request = old_server
             .send_raw_request(
                 "thread/activity/read",
@@ -846,7 +849,10 @@ async fn run_cold_resume_case(
         .await?;
     let _: ThreadResumeResponse =
         timeout(REQUEST_TIMEOUT, resumed.read_response(resume_request)).await??;
-    assert_eq!(responses_server.requests().await.len(), initial_request_count);
+    assert_eq!(
+        responses_server.requests().await.len(),
+        initial_request_count
+    );
     if !pause_before_exit {
         let read_request = resumed
             .send_raw_request(

@@ -11,3 +11,9 @@ CREATE TABLE thread_activity_pause_snapshots (
 
 CREATE INDEX idx_thread_activity_pause_snapshots_root_generation
 ON thread_activity_pause_snapshots (root_thread_id, generation);
+
+CREATE TABLE thread_activity_pause_receipts (
+    root_thread_id TEXT PRIMARY KEY NOT NULL,
+    generation INTEGER NOT NULL,
+    completed_at_ms INTEGER NOT NULL
+);

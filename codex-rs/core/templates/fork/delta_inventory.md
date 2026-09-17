@@ -81,8 +81,11 @@ release or merge rules.
   cold root resume restores that gate before retained work is admitted, while
   explicit `thread/activity/continue` restores only captured workers plus their
   validated ancestor chain and keeps the marker until Core acknowledges the
-  release. Legacy markers without a snapshot release only the root gate, so
-  historical interrupted workers are never resurrected automatically.
+  release. A successful snapshot-aware continue leaves a durable completion
+  receipt so idempotent later continues cannot fall back to scanning historical
+  workers; a new pause replaces that receipt with its next generation. Legacy
+  markers without a snapshot release only the root gate, so historical
+  interrupted workers are never resurrected automatically.
   Interrupted recovery remains paused and
   reports blockers; terminal work and already-launched external commands are
   never replayed. Markerless recovery now assesses the latest persisted turn,
@@ -858,7 +861,7 @@ release or merge rules.
   age-plus-force form.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
   Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
-- Verify cold Team `/continue` loads only recoverable unfinished descendants captured at the pause boundary plus their open ancestors, leaves idle or historical open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a captured child has missing or inconsistent ancestry. Legacy pause markers without a snapshot must release only the root gate and never rediscover historical interrupted workers.
+- Verify cold Team `/continue` loads only recoverable unfinished descendants captured at the pause boundary plus their open ancestors, leaves idle or historical open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a captured child has missing or inconsistent ancestry. Legacy pause markers without a snapshot must release only the root gate and never rediscover historical interrupted workers; after a successful snapshot-aware continue, repeated continues must remain no-ops across restart until a new pause begins.
   Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without

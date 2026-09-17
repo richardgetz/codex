@@ -36,7 +36,6 @@ pub struct ThreadActivityPause {
     pub state: ThreadActivityPauseState,
 }
 
-/// One thread captured as unfinished work at a durable Team pause boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ThreadActivityPauseSnapshot {
     pub thread_id: ThreadId,
@@ -71,15 +70,15 @@ RETURNING generation, state
             .bind(root_thread_id.to_string())
             .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM thread_activity_pause_receipts WHERE root_thread_id = ?")
+            .bind(root_thread_id.to_string())
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         pause_from_row(&row, root_thread_id)
     }
 
-    /// Persist the pre-pause unfinished Team snapshot before exposing the pause as ready.
-    ///
-    /// An empty slice is meaningful: it records that the pause had no active work. A missing
-    /// snapshot flag on an older row remains distinguishable and is handled conservatively by
-    /// recovery so historical interrupted workers are never resurrected by accident.
+    /// Persist the unfinished Team snapshot before exposing the pause as ready.
     pub async fn record_thread_activity_pause_snapshot(
         &self,
         root_thread_id: ThreadId,
@@ -121,9 +120,6 @@ RETURNING generation, state
     }
 
     /// Read the current pause's captured unfinished Team snapshot.
-    ///
-    /// `None` means the marker predates snapshot persistence (or the capture failed), while
-    /// `Some(empty)` means a new pause explicitly captured no active workers.
     pub async fn get_thread_activity_pause_snapshot(
         &self,
         root_thread_id: ThreadId,
@@ -233,16 +229,16 @@ RETURNING generation, state
         generation: i64,
     ) -> anyhow::Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let result = sqlx::query(
-            "DELETE FROM thread_activity_pauses WHERE root_thread_id = ? AND generation = ? AND state = 'resuming'",
+        let snapshot_captured = sqlx::query_scalar::<_, i64>(
+            "DELETE FROM thread_activity_pauses WHERE root_thread_id = ? AND generation = ? AND state = 'resuming' RETURNING snapshot_captured",
         )
         .bind(root_thread_id.to_string())
         .bind(generation)
-        .execute(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        if result.rows_affected() != 1 {
+        let Some(snapshot_captured) = snapshot_captured else {
             return Ok(false);
-        }
+        };
         sqlx::query(
             "DELETE FROM thread_activity_pause_snapshots WHERE root_thread_id = ? AND generation = ?",
         )
@@ -250,8 +246,32 @@ RETURNING generation, state
         .bind(generation)
         .execute(&mut *tx)
         .await?;
+        if snapshot_captured != 0 {
+            sqlx::query(
+                "INSERT INTO thread_activity_pause_receipts (root_thread_id, generation, completed_at_ms) VALUES (?, ?, ?) ON CONFLICT(root_thread_id) DO UPDATE SET generation = excluded.generation, completed_at_ms = excluded.completed_at_ms",
+            )
+            .bind(root_thread_id.to_string())
+            .bind(generation)
+            .bind(Utc::now().timestamp_millis())
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         Ok(true)
+    }
+
+    /// Whether this root completed a snapshot-aware pause generation.
+    pub async fn has_thread_activity_pause_receipt(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        Ok(sqlx::query_scalar::<_, i64>(
+            "SELECT EXISTS(SELECT 1 FROM thread_activity_pause_receipts WHERE root_thread_id = ?)",
+        )
+        .bind(root_thread_id.to_string())
+        .fetch_one(self.pool.as_ref())
+        .await?
+            != 0)
     }
 
     pub async fn get_thread_activity_pause(
@@ -272,8 +292,8 @@ RETURNING generation, state
 #[cfg(test)]
 mod tests {
     use super::StateRuntime;
-    use super::ThreadActivityPauseState;
     use super::ThreadActivityPauseSnapshot;
+    use super::ThreadActivityPauseState;
     use crate::SqliteConfig;
     use crate::runtime::test_support::unique_temp_dir;
     use codex_protocol::ThreadId;
@@ -380,7 +400,10 @@ mod tests {
             Some(snapshots)
         );
 
-        let second = runtime.pause_thread_activity(root).await.expect("next pause");
+        let second = runtime
+            .pause_thread_activity(root)
+            .await
+            .expect("next pause");
         assert_eq!(second.generation, first.generation + 1);
         assert_eq!(
             runtime
@@ -388,6 +411,46 @@ mod tests {
                 .await
                 .expect("read cleared snapshot"),
             None
+        );
+        assert!(
+            runtime
+                .record_thread_activity_pause_snapshot(root, second.generation, &[])
+                .await
+                .expect("record empty snapshot")
+        );
+        assert!(
+            runtime
+                .complete_thread_activity_pause(root, second.generation)
+                .await
+                .expect("complete pause")
+        );
+        let resume = runtime
+            .begin_thread_activity_resume(root)
+            .await
+            .expect("begin resume")
+            .expect("resume marker");
+        assert!(
+            runtime
+                .complete_thread_activity_resume(root, resume.generation)
+                .await
+                .expect("complete resume")
+        );
+        assert!(
+            runtime
+                .has_thread_activity_pause_receipt(root)
+                .await
+                .expect("read receipt")
+        );
+
+        runtime
+            .pause_thread_activity(root)
+            .await
+            .expect("third pause");
+        assert!(
+            !runtime
+                .has_thread_activity_pause_receipt(root)
+                .await
+                .expect("read cleared receipt")
         );
     }
 }

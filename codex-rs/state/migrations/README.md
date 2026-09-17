@@ -104,4 +104,6 @@ explicit release.
 Active-at-pause Team thread snapshots are appended as
 `0062_rick_thread_activity_pause_snapshots.sql`; each durable generation records the
 unfinished loaded threads captured before the root gate, while legacy markers remain
-distinguishable for conservative recovery.
+distinguishable for conservative recovery. The same migration records completed
+snapshot-aware continue receipts so later idempotent continues do not re-enter legacy
+markerless recovery; starting a new pause clears the previous receipt.

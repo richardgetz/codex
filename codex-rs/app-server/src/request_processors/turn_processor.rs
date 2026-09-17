@@ -14,8 +14,8 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
-use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::ThreadActivity;
+use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_skills::system_cache_root_dir;
@@ -1228,12 +1228,12 @@ impl TurnRequestProcessor {
             .filter(|(thread_id, _, activity)| {
                 *thread_id != root_thread_id && *activity != ThreadActivity::Idle
             })
-            .map(|(thread_id, parent_thread_id, _)| {
-                codex_state::ThreadActivityPauseSnapshot {
+            .map(
+                |(thread_id, parent_thread_id, _)| codex_state::ThreadActivityPauseSnapshot {
                     thread_id,
                     parent_thread_id,
-                }
-            })
+                },
+            )
             .collect::<Vec<_>>();
         if root_was_active {
             snapshots.push(codex_state::ThreadActivityPauseSnapshot {
@@ -1242,11 +1242,7 @@ impl TurnRequestProcessor {
             });
         }
         let captured = state_db
-            .record_thread_activity_pause_snapshot(
-                root_thread_id,
-                marker.generation,
-                &snapshots,
-            )
+            .record_thread_activity_pause_snapshot(root_thread_id, marker.generation, &snapshots)
             .await
             .map_err(|err| {
                 internal_error(format!(
@@ -1312,6 +1308,30 @@ impl TurnRequestProcessor {
             })?;
         let markerless_recovery = existing_marker.is_none();
         let existing_marker = if existing_marker.is_none() {
+            if state_db
+                .has_thread_activity_pause_receipt(root_thread_id)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to read Team activity continue receipt for {root_thread_id}: {error}"
+                    ))
+                })?
+            {
+                let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
+                    invalid_request(format!(
+                        "cannot continue Team activity for {root_thread_id}: root runtime is not loaded ({error})"
+                    ))
+                })?;
+                root_thread
+                    .continue_activity_with_ack()
+                    .await
+                    .map_err(|error| {
+                        internal_error(format!(
+                            "failed to reapply Team activity continue for {root_thread_id}: {error}"
+                        ))
+                    })?;
+                return Ok(ThreadActivityContinueResponse {});
+            }
             let recovery_needed = self
                 .team_activity_recovery_needed(root_thread_id)
                 .await
