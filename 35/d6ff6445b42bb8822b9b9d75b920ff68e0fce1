@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-17/eta-scroll-status-prefix#35d6ff6445"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Keep All Sessions selection aligned when refresh or error status rows are visible."
+  decision: "Include prepended loading and error lines in the scroll offset only when scrolling past the first task, while preserving the inline status display at the top and empty-state behavior."
+  constraints:
+    - "Nonzero All Sessions scroll positions must skip status prefixes before task and session-heading rows."
+    - "Top-of-list rendering must continue to show loading and error status lines."
+    - "Empty All Sessions states must retain their single status line without being skipped."
+    - "Keep the existing keyed selection and grouped row layout unchanged."
+    - "Keep worker scope source-only; do not run Rust, Cargo, or just commands."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
