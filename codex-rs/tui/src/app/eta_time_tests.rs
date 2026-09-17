@@ -21,7 +21,7 @@ fn timestamp(value: &str) -> i64 {
 #[test]
 fn default_formatter_renders_utc() {
     let formatter = EtaTimestampFormatter::from_config_with_system_timezone(
-        &config(false, None),
+        &config(/*use_local_timezone*/ false, /*timezone*/ None),
         TimeZone::get("America/New_York").expect("known time zone"),
     );
     assert_eq!(
@@ -33,7 +33,7 @@ fn default_formatter_renders_utc() {
 #[test]
 fn local_mode_uses_injected_system_timezone_without_environment_changes() {
     let formatter = EtaTimestampFormatter::from_config_with_system_timezone(
-        &config(true, None),
+        &config(/*use_local_timezone*/ true, /*timezone*/ None),
         TimeZone::get("America/Los_Angeles").expect("known time zone"),
     );
     assert_eq!(
@@ -45,7 +45,10 @@ fn local_mode_uses_injected_system_timezone_without_environment_changes() {
 #[test]
 fn named_timezone_takes_precedence_and_applies_dst() {
     let formatter = EtaTimestampFormatter::from_config_with_system_timezone(
-        &config(true, Some("America/New_York")),
+        &config(
+            /*use_local_timezone*/ true,
+            /*timezone*/ Some("America/New_York"),
+        ),
         TimeZone::get("Asia/Tokyo").expect("known time zone"),
     );
     assert_eq!(
@@ -61,7 +64,10 @@ fn named_timezone_takes_precedence_and_applies_dst() {
 #[test]
 fn invalid_named_timezone_falls_back_to_utc_for_unvalidated_runtime_config() {
     let formatter = EtaTimestampFormatter::from_config_with_system_timezone(
-        &config(false, Some("Mars/Olympus")),
+        &config(
+            /*use_local_timezone*/ false,
+            /*timezone*/ Some("Mars/Olympus"),
+        ),
         TimeZone::get("America/New_York").expect("known time zone"),
     );
     assert_eq!(

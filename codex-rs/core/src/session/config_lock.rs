@@ -640,6 +640,36 @@ sandbox_private_desktop = false
     }
 
     #[test]
+    fn lock_validation_accepts_legacy_eta_lock_with_custom_freshness() {
+        let expected: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.eta]
+freshness_minimum_minutes = 45
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("legacy ETA lock with custom freshness should deserialize");
+        let actual: ConfigLockfileToml = toml::from_str(&format!(
+            r#"
+version = 1
+codex_version = "{}"
+
+[config.eta]
+freshness_minimum_minutes = 45
+use_local_timezone = false
+"#,
+            env!("CARGO_PKG_VERSION")
+        ))
+        .expect("regenerated ETA lock with display defaults should deserialize");
+
+        validate_config_lock_replay(&expected, &actual, ConfigLockReplayOptions::default())
+            .expect("legacy custom freshness and regenerated display defaults should match");
+    }
+
+    #[test]
     fn lock_validation_accepts_legacy_false_opt_in_provenance_setting() {
         let expected: ConfigLockfileToml = toml::from_str(&format!(
             r#"
