@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-17/eta-view-state-worker-guard#1cdd95540d"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Keep ETA loading and per-root view state isolated while confirming resumes that would leave active Worker work."
+  decision: "Mark All Sessions as loading before its first request, select root-scoped Active/History state by root ID while keeping All Sessions global, and consult cached Team activity before switching away from a root with active or in-flight Workers."
+  constraints:
+    - "Keep current-session Active and History behavior and snapshot sequence guards unchanged."
+    - "Preserve All Sessions global selection/state across root changes."
+    - "Do not infer Worker liveness from elapsed time or ETA rows; use cached Team activity."
+    - "Preserve the existing current-target unavailable confirmation guard."
+    - "Preserve bounded app-server pagination and existing resume flow after confirmation."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
