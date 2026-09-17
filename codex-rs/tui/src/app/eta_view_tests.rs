@@ -366,6 +366,21 @@ fn all_sessions_error_retries_before_resuming_selected_task() {
 }
 
 #[test]
+fn all_sessions_scroll_offset_accounts_for_status_prefixes() {
+    let mut view = all_sessions_view();
+    assert_eq!(view.all_session_scroll_offset(), 0);
+
+    view.state.scroll_top = 1;
+    assert_eq!(view.all_session_scroll_offset(), 2);
+
+    view.all_sessions_request_in_flight = true;
+    assert_eq!(view.all_session_scroll_offset(), 3);
+
+    view.all_sessions_error = Some("server unavailable".to_string());
+    assert_eq!(view.all_session_scroll_offset(), 4);
+}
+
+#[test]
 fn all_sessions_loading_error_and_empty_states_have_snapshots() {
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let make = |in_flight, error| {

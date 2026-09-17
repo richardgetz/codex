@@ -498,7 +498,17 @@ impl EtaView {
 
     fn all_session_scroll_offset(&self) -> usize {
         let rows = self.ordered_session_indices();
-        let mut offset = 0;
+        let status_lines = if self.all_sessions.is_empty() {
+            0
+        } else {
+            usize::from(self.all_sessions_request_in_flight)
+                + usize::from(self.all_sessions_error.is_some())
+        };
+        let mut offset = if self.state.scroll_top > 0 {
+            status_lines
+        } else {
+            0
+        };
         let mut previous_root: Option<&str> = None;
         for (display_idx, task_idx) in rows.into_iter().enumerate() {
             if display_idx >= self.state.scroll_top {
