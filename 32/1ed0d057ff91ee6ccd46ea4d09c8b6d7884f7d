@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-17/eta-config-lock-compat#9c6251a7ca"
+  change_type: "fix"
+  scope: "eta-config-lock"
+  summary: "Keep legacy ETA config locks replayable after adding display timezone fields."
+  decision: "Normalize each ETA default field independently during lock comparison, retain custom freshness values, and cover a legacy custom-freshness lock against a regenerated lock."
+  constraints:
+    - "Preserve persisted and wire ETA timestamps as integer Unix seconds."
+    - "Keep UTC and omitted display timezone settings equivalent to legacy lock omissions."
+    - "Do not discard non-default freshness or explicit timezone overrides."
+    - "Keep the fix limited to compatibility normalization and test argument clarity."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/config_lock.rs::config_lock_for_comparison"
+    - "codex-rs/core/src/session/config_lock.rs::lock_validation_accepts_legacy_eta_lock_with_custom_freshness"
+    - "codex-rs/tui/src/app/eta_time_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-worker"
+    model: "unknown"
