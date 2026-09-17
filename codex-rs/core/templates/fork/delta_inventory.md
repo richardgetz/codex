@@ -64,10 +64,11 @@ release or merge rules.
   rows with `is_stale`, keeps terminal ranges frozen, projects nested summaries
   with the same semantics, and serializes session cwd through
   `LegacyAppPathString`. `thread/eta/list` seeds NULL root policies from
-  authoritative config and remains the retention-maintenance path, while
-  `thread/eta/read` stays side-effect free. The TUI refreshes retained rows for
-  updates from the selected root as well as other roots only while All Sessions
-  is visible, repaints loading immediately, coalesces notifications during an
+  authoritative config; global retention pruning runs only through
+  `thread/eta/list`, while `thread/eta/read` stays side-effect free. The TUI
+  refreshes retained rows for updates from the selected root as well as other
+  roots only while All Sessions is visible, repaints loading immediately,
+  coalesces notifications during an
   in-flight request, and replaces cursor-less refreshes through the loaded
   depth in endpoint order while explicit cursor pages append by root/task;
   keyed selection survives refreshes and stale rows remain marked with a
