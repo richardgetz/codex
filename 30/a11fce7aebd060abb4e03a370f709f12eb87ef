@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-17/eta-refresh-coalesce#30a11fce7a"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Coalesce ETA notifications while an All Sessions list refresh is in flight."
+  decision: "Track the requested nested mode separately until a successful response, repaint it during the request, latch notifications while a list request is active, and issue one follow-up refresh after completion."
+  constraints:
+    - "ThreadEtaUpdated must not supersede an in-flight nested-mode toggle or repaint the old mode."
+    - "A failed refresh preserves the prior rows and persisted include-nested mode while exposing the error."
+    - "Rapid notifications coalesce into one follow-up All Sessions refresh."
+    - "Keep All Sessions-only automatic routing and bounded cursor pagination."
+    - "Update the fork inventory for the visible refresh and coalescing contract."
+    - "Keep worker scope source-only; do not run Rust, Cargo, or just commands."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/app_server_events.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/event_dispatch.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
