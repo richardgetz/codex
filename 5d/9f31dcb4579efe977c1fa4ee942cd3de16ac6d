@@ -1,0 +1,25 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-refresh-stale#5d9f31dcb457"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Refresh retained ETA rows on selected-root updates and preserve stale state in All Sessions."
+  decision: "Refresh the All Sessions cache after every parseable ETA update while applying root snapshots first, and carry persisted stale status into the TUI with the existing warning marker, yellow styling, and detail explanation."
+  constraints:
+    - "Keep Active and History root snapshot application and sequence guards unchanged."
+    - "Do not infer ETA staleness from idle time or wall-clock time."
+    - "Keep the stale warning visible in narrow All Sessions layouts and on selected rows."
+    - "Preserve bounded app-server pagination and existing resume behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/app_server_events.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view.rs"
+    - "codex-rs/tui/src/app/eta_view_render.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+    - "codex-rs/tui/src/app/tests.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
