@@ -308,7 +308,7 @@ async fn thread_activity_cold_resume_reconciles_direct_and_nested_workers() -> R
     run_cold_resume_case(
         /*pause_before_exit*/ true,
         ThreadHistoryMode::Legacy,
-        false,
+        true,
         /*multi_agent_v2*/ false,
     )
     .await
@@ -595,7 +595,7 @@ async fn run_cold_resume_case(
     })
     .await??;
 
-    let expected_threads =
+    let mut expected_threads =
         HashSet::from([parent.id.clone(), child_id.clone(), grandchild_id.clone()]);
     let terminal_thread_id = ThreadId::new();
     let state_db = StateRuntime::init(
@@ -611,13 +611,26 @@ async fn run_cold_resume_case(
         )
         .await?;
     let mut started_threads = HashSet::new();
+    let mut historical_turn_id = None;
     while started_threads.len() < expected_threads.len() {
         let started: TurnStartedNotification = old_server.read_notification("turn/started").await?;
         if expected_threads.contains(&started.thread_id) {
+            if pause_before_exit && started.thread_id == child_id {
+                historical_turn_id = Some(started.turn.id);
+            }
             started_threads.insert(started.thread_id);
         }
     }
     responses_server.wait_for_request_count(5).await;
+    if pause_before_exit {
+        old_server
+            .interrupt_turn_and_wait_for_aborted(
+                child_id.clone(),
+                historical_turn_id.expect("direct turn started"),
+                REQUEST_TIMEOUT,
+            )
+            .await?;
+    }
 
     if continue_before_exit {
         let continue_request = old_server
@@ -670,12 +683,27 @@ async fn run_cold_resume_case(
                     ThreadPauseState::Pausing | ThreadPauseState::Paused
                 )
         }));
+        expected_threads.remove(&child_id);
         assert!(
             paused
                 .activities
                 .iter()
                 .any(|entry| entry.pause_state == ThreadPauseState::Pausing)
         );
+    } else {
+        expected_threads = HashSet::from([parent.id.clone()]);
+    }
+
+    if continue_before_exit && pause_before_exit {
+        let continue_request = old_server
+            .send_raw_request(
+                "thread/activity/continue",
+                Some(json!({"threadId": parent.id.clone()})),
+            )
+            .await?;
+        let _: ThreadActivityContinueResponse =
+            timeout(REQUEST_TIMEOUT, old_server.read_response(continue_request)).await??;
+        assert_eq!(responses_server.requests().await.len(), 5);
     }
 
     // Teardown while the three model streams remain unfinished. With an explicit pause, the
@@ -706,12 +734,12 @@ async fn run_cold_resume_case(
             .await?;
         let activity: ThreadActivityReadResponse =
             timeout(REQUEST_TIMEOUT, resumed.read_response(read_request)).await??;
-        assert!(
-            activity
-                .activities
-                .iter()
-                .all(|entry| entry.pause_state != ThreadPauseState::Paused)
-        );
+        let loaded_threads = activity
+            .activities
+            .iter()
+            .map(|entry| entry.thread_id.to_string())
+            .collect::<HashSet<_>>();
+        assert_eq!(loaded_threads, expected_threads);
     }
 
     let continue_request = resumed
@@ -722,21 +750,19 @@ async fn run_cold_resume_case(
         .await?;
     let _: ThreadActivityContinueResponse =
         timeout(REQUEST_TIMEOUT, resumed.read_response(continue_request)).await??;
-    responses_server.wait_for_request_count(8).await;
+    responses_server
+        .wait_for_request_count(5 + expected_threads.len())
+        .await;
     let recovered_requests = responses_server.requests().await;
-    for thread_id in &expected_threads {
-        let count = recovered_requests[5..]
-            .iter()
-            .filter(|request| request_thread_id(request).as_deref() == Some(thread_id.as_str()))
-            .count();
-        assert_eq!(count, 1, "worker {thread_id} should resume exactly once");
-    }
-    let terminal_thread_id = terminal_thread_id.to_string();
-    assert!(
-        recovered_requests[5..]
-            .iter()
-            .all(|request| request_thread_id(request).as_deref()
-                != Some(terminal_thread_id.as_str()))
+    assert_eq!(
+        (
+            recovered_requests[5..].len(),
+            recovered_requests[5..]
+                .iter()
+                .filter_map(|request| request_thread_id(request.as_slice()))
+                .collect::<HashSet<_>>(),
+        ),
+        (expected_threads.len(), expected_threads),
     );
 
     let request_count = recovered_requests.len();

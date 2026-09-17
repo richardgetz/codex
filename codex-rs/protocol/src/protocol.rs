@@ -740,6 +740,10 @@ pub enum Op {
     /// Durable pause recovery uses the acknowledgement before allowing `/continue` to claim it.
     PauseActivityWithAck { reply: oneshot::Sender<()> },
 
+    PauseActivityWithSnapshotAck {
+        reply: oneshot::Sender<CodexResult<ThreadActivitySnapshot>>,
+    },
+
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
     /// This never creates a synthetic model turn by itself.
     ContinueActivity,
@@ -1201,6 +1205,7 @@ impl Op {
             Self::ContinueUsage => "continue_usage",
             Self::PauseActivity => "pause_activity",
             Self::PauseActivityWithAck { .. } => "pause_activity_with_ack",
+            Self::PauseActivityWithSnapshotAck { .. } => "pause_activity_with_snapshot_ack",
             Self::ContinueActivity => "continue_activity",
             Self::ContinueActivityWithAck { .. } => "continue_activity_with_ack",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
@@ -2563,6 +2568,15 @@ pub enum ThreadActivity {
     Working,
     Waiting,
 }
+
+#[derive(Debug, Clone)]
+pub struct ThreadActivitySnapshotEntry {
+    pub thread_id: ThreadId,
+    pub activity: ThreadActivity,
+    pub turn_id: Option<String>,
+}
+
+pub type ThreadActivitySnapshot = Vec<ThreadActivitySnapshotEntry>;
 
 /// Why a thread is waiting instead of actively executing.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

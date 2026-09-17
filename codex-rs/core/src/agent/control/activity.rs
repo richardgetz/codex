@@ -3,6 +3,8 @@
 use super::AgentControl;
 use crate::session::session::Session;
 use codex_protocol::ThreadId;
+use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::ThreadActivitySnapshot;
 use codex_protocol::protocol::ThreadActivityUpdatedEvent;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
@@ -35,6 +37,11 @@ impl AgentControl {
             .await
     }
 
+    pub(crate) async fn lock_root_activity_pause_update(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        Arc::clone(&self.root_activity_pause_update)
+            .lock_owned()
+            .await
+    }
     /// Atomically admit one model/tool operation with the root pause toggle. A pause request that
     /// acquires the update lock first prevents this increment; an operation that acquires it
     /// first is considered already in flight and is allowed to finish at its next boundary.
@@ -56,6 +63,20 @@ impl AgentControl {
         self.set_root_activity(true).await
     }
 
+    pub(crate) async fn pause_activity_for_subtree_with_snapshot(
+        &self,
+    ) -> CodexResult<ThreadActivitySnapshot> {
+        let _update_guard = self.root_activity_pause_update.lock().await;
+        let snapshots = match self.collect_pause_snapshot().await {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                let _ = self.set_root_activity_locked(true).await;
+                return Err(error);
+            }
+        };
+        self.set_root_activity_locked(true).await;
+        Ok(snapshots)
+    }
     /// Release a manual pause for the root thread and every loaded ThreadSpawn descendant.
     ///
     /// Retained usage waits and mailbox work are released through their existing schedulers. No
@@ -84,6 +105,9 @@ impl AgentControl {
 
     async fn set_root_activity(&self, paused: bool) -> Vec<ThreadActivityUpdatedEvent> {
         let _update_guard = self.root_activity_pause_update.lock().await;
+        self.set_root_activity_locked(paused).await
+    }
+    async fn set_root_activity_locked(&self, paused: bool) -> Vec<ThreadActivityUpdatedEvent> {
         self.root_activity_paused.store(paused, Ordering::Release);
 
         let _propagation_guard = self.root_activity_pause_propagation.lock().await;
@@ -137,6 +161,20 @@ impl AgentControl {
         snapshots
     }
 
+    async fn collect_pause_snapshot(&self) -> CodexResult<ThreadActivitySnapshot> {
+        let root_thread_id = ThreadId::from(self.session_id);
+        let descendants = self.live_thread_spawn_descendants(root_thread_id).await?;
+        let mut thread_ids = Vec::with_capacity(descendants.len() + 1);
+        thread_ids.push(root_thread_id);
+        thread_ids.extend(descendants);
+        let state = self.upgrade()?;
+        let mut snapshots = Vec::with_capacity(thread_ids.len());
+        for thread_id in thread_ids {
+            let thread = state.get_thread(thread_id).await?;
+            snapshots.push(thread.session.pause_activity_snapshot().await);
+        }
+        Ok(snapshots)
+    }
     async fn loaded_root_tree_ids(&self) -> Vec<ThreadId> {
         let root_thread_id = ThreadId::from(self.session_id);
         let mut thread_ids = vec![root_thread_id];

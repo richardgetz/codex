@@ -3,11 +3,13 @@
 use super::new_submission_id;
 use super::session::Session;
 use crate::state::ActiveTurn;
+use crate::state::TaskKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadActivity;
+use codex_protocol::protocol::ThreadActivitySnapshotEntry;
 use codex_protocol::protocol::ThreadActivityUpdatedEvent;
 use codex_protocol::protocol::ThreadActivityWaitReason;
 use codex_protocol::protocol::ThreadPauseState;
@@ -254,6 +256,26 @@ impl Session {
             pause_state,
             wait_reason,
             in_flight_operations,
+        }
+    }
+
+    pub(crate) async fn pause_activity_snapshot(&self) -> ThreadActivitySnapshotEntry {
+        let in_flight_operations = self.activity_in_flight.load(Ordering::Acquire);
+        let active_turn = self.active_turn.lock().await;
+        let (activity, _) = self
+            .activity_for_active_turn(active_turn.as_ref(), in_flight_operations)
+            .await;
+        let turn_id = active_turn.as_ref().and_then(|active_turn| {
+            active_turn
+                .task
+                .as_ref()
+                .filter(|task| task.kind == TaskKind::Regular)
+                .map(|task| task.turn_context.sub_id.clone())
+        });
+        ThreadActivitySnapshotEntry {
+            thread_id: self.thread_id,
+            activity,
+            turn_id,
         }
     }
 

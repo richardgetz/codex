@@ -72,13 +72,8 @@ release or merge rules.
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
   the mutable launcher and misreporting Inbound readiness.
-- Team activity pause intent is durable in the state database (migration
-  `0061_rick_thread_activity_pauses.sql`). A successful app-server
-  `thread/activity/pause` records a generation, waits for Core to apply the
-  process-local Lead-tree gate, then marks the generation ready for continue;
-  cold root resume restores that gate before retained work is admitted, while
-  explicit `thread/activity/continue` reconciles open persisted descendants and
-  keeps the marker until Core acknowledges the release.
+- Team activity pause intent is durable in the state database (`0061_rick_thread_activity_pauses.sql`; exact active-at-pause snapshots and retry receipts use `0062_rick_thread_activity_pause_snapshots.sql`). `thread/activity/pause` records a generation, applies the process-local Lead-tree gate, and persists each non-idle loaded Team thread with its exact durable unfinished turn; blocked operations remain captured for blocker reporting. It then marks ready; cold root resume restores the gate, while explicit `thread/activity/continue` restores only captured turns plus validated ancestors and keeps the marker until Core acknowledges release.
+  Receipts preserve those exact turns across cold retries, so later work on captured threads and uncaptured or historical workers are never substituted. A new pause replaces the receipt. Legacy markers without snapshots release only the root gate, so historical interrupted workers are not resurrected automatically.
   Interrupted recovery remains paused and
   reports blockers; terminal work and already-launched external commands are
   never replayed. Markerless recovery now assesses the latest persisted turn,
@@ -854,7 +849,7 @@ release or merge rules.
   age-plus-force form.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
   Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
-- Verify cold Team `/continue` loads only recoverable unfinished descendants plus their open ancestors, leaves idle open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a genuinely recoverable child has missing or inconsistent ancestry.
+- Verify cold Team `/continue` loads only recoverable unfinished descendants captured at the pause boundary plus their open ancestors, leaves idle or historical open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a captured child has missing or inconsistent ancestry. Legacy pause markers without a snapshot must release only the root gate; later turn admission must end the completed receipt epoch without UUID or wall-clock inference.
   Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without

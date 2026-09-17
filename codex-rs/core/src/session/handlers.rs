@@ -1858,6 +1858,15 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(());
                     false
                 }
+                Op::PauseActivityWithSnapshotAck { reply } => {
+                    let snapshots = sess
+                        .services
+                        .agent_control
+                        .pause_activity_for_subtree_with_snapshot()
+                        .await;
+                    let _ = reply.send(snapshots);
+                    false
+                }
                 Op::ContinueActivity => {
                     continue_activity(&sess, sub.id.clone()).await;
                     false

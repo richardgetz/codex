@@ -14,6 +14,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
+use codex_protocol::protocol::ThreadActivity;
 use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
@@ -1215,10 +1216,62 @@ impl TurnRequestProcessor {
                     "failed to load Team activity root {root_thread_id} for pause: {err}"
                 ))
             })?;
-        root_thread
-            .pause_activity_with_ack(self.request_trace_context(request_id).await)
+        let snapshots = root_thread
+            .pause_activity_with_snapshot_ack(self.request_trace_context(request_id).await)
             .await
             .map_err(|err| internal_error(format!("failed to pause thread activity: {err}")))?;
+        let snapshots = snapshots
+            .into_iter()
+            .filter(|snapshot| snapshot.activity != ThreadActivity::Idle)
+            .map(|snapshot| {
+                let turn_id = snapshot.turn_id.ok_or_else(|| {
+                    invalid_request(format!(
+                        "cannot pause active Team thread {} before its turn is durable; retry /pause",
+                        snapshot.thread_id
+                    ))
+                })?;
+                Ok(codex_state::ThreadActivityPauseSnapshot {
+                    thread_id: snapshot.thread_id,
+                    turn_id,
+                })
+            })
+            .collect::<Result<Vec<_>, JSONRPCErrorError>>()?;
+        let candidate_turns = snapshots
+            .iter()
+            .map(|snapshot| (snapshot.thread_id, snapshot.turn_id.clone()))
+            .collect::<Vec<_>>();
+        let persisted_plan = self
+            .thread_manager
+            .team_activity_recovery_plan_for_turns(root_thread_id, &candidate_turns)
+            .await
+            .map_err(|error| {
+                internal_error(format!(
+                    "failed to assess Team activity pause snapshot for {root_thread_id}: {error}"
+                ))
+            })?;
+        for snapshot in &snapshots {
+            if persisted_plan.unfinished_turn_ids.get(&snapshot.thread_id)
+                != Some(&snapshot.turn_id)
+            {
+                return Err(invalid_request(format!(
+                    "cannot pause Team thread {} before turn {} is durable; retry /pause",
+                    snapshot.thread_id, snapshot.turn_id
+                )));
+            }
+        }
+        let captured = state_db
+            .record_thread_activity_pause_snapshot(root_thread_id, marker.generation, &snapshots)
+            .await
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to persist Team activity pause snapshot for {root_thread_id}: {err}"
+                ))
+            })?;
+        if !captured {
+            return Err(invalid_request(format!(
+                "Team activity changed while capturing pause snapshot for {root_thread_id}; retry /pause"
+            )));
+        }
         let applied = state_db
             .complete_thread_activity_pause(root_thread_id, marker.generation)
             .await
@@ -1271,15 +1324,68 @@ impl TurnRequestProcessor {
                     "failed to read Team activity recovery for {root_thread_id}: {err}"
                 ))
             })?;
-        let existing_marker = if existing_marker.is_none() {
-            let recovery_needed = self
-                .team_activity_recovery_needed(root_thread_id)
+        let receipt = if existing_marker.is_none() {
+            state_db
+                .get_thread_activity_pause_receipt(root_thread_id)
                 .await
                 .map_err(|error| {
-                    invalid_request(format!(
-                        "cannot assess Team activity recovery for {root_thread_id}: {error}"
+                    internal_error(format!(
+                        "failed to read Team activity continue receipt for {root_thread_id}: {error}"
                     ))
-                })?;
+                })?
+        } else {
+            None
+        };
+        let receipt_snapshot = if let Some(receipt) = receipt {
+            let plan = self
+                .thread_manager
+                .team_activity_recovery_plan_for_turns(
+                    root_thread_id,
+                    &receipt
+                        .iter()
+                        .map(|snapshot| (snapshot.thread_id, snapshot.turn_id.clone()))
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .map_err(|error| invalid_request(error.to_string()))?;
+            if !receipt
+                .iter()
+                .any(|snapshot| plan.unfinished_turn_ids.contains_key(&snapshot.thread_id))
+            {
+                if !plan.blockers.is_empty() {
+                    return Err(invalid_request(format!(
+                        "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
+                        plan.blockers.join(", ")
+                    )));
+                }
+                self.thread_manager
+                    .get_thread(root_thread_id)
+                    .await
+                    .map_err(|error| invalid_request(error.to_string()))?
+                    .continue_activity_with_ack()
+                    .await
+                    .map_err(|error| internal_error(error.to_string()))?;
+                state_db
+                    .clear_activity_pause_receipt(root_thread_id)
+                    .await
+                    .map_err(|error| internal_error(error.to_string()))?;
+                return Ok(ThreadActivityContinueResponse {});
+            }
+            Some(receipt)
+        } else {
+            None
+        };
+        let markerless_recovery = existing_marker.is_none() && receipt_snapshot.is_none();
+        let existing_marker = if existing_marker.is_none() {
+            let recovery_needed = receipt_snapshot.is_some()
+                || self
+                    .team_activity_recovery_needed(root_thread_id)
+                    .await
+                    .map_err(|error| {
+                        invalid_request(format!(
+                            "cannot assess Team activity recovery for {root_thread_id}: {error}"
+                        ))
+                    })?;
             if !recovery_needed {
                 let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
                     invalid_request(format!(
@@ -1298,14 +1404,22 @@ impl TurnRequestProcessor {
             // An interrupted session can lose the marker before the process-local gate is
             // durably recorded. Establish a fresh generation before reconciling open
             // descendants so any failure remains retryable and explicitly paused.
-            let marker = state_db
-                .pause_thread_activity(root_thread_id)
-                .await
-                .map_err(|error| {
+            let marker =
+                if receipt_snapshot.is_some() {
+                    state_db
+                        .rearm_thread_activity_pause_from_receipt(root_thread_id)
+                        .await
+                        .map_err(|error| internal_error(error.to_string()))?
+                        .ok_or_else(|| {
+                            invalid_request("Team activity receipt changed; retry /continue")
+                        })?
+                } else {
+                    state_db.pause_thread_activity(root_thread_id).await.map_err(|error| {
                     internal_error(format!(
                         "failed to persist Team activity recovery for {root_thread_id}: {error}"
                     ))
-                })?;
+                })?
+                };
             let root_thread = self.thread_manager.get_thread(root_thread_id).await.map_err(|error| {
                 invalid_request(format!(
                     "cannot recover Team activity for {root_thread_id}: root runtime is not loaded ({error})"
@@ -1356,6 +1470,15 @@ impl TurnRequestProcessor {
                 })?;
             return Ok(ThreadActivityContinueResponse {});
         };
+        if existing_marker.state == codex_state::ThreadActivityPauseState::Resuming {
+            self.thread_manager
+                .get_thread(root_thread_id)
+                .await
+                .map_err(|error| invalid_request(error.to_string()))?
+                .pause_activity_with_ack(None)
+                .await
+                .map_err(|error| invalid_request(error.to_string()))?;
+        }
         if existing_marker.state == codex_state::ThreadActivityPauseState::Pausing {
             // `/continue` is also the recovery entrypoint when `/pause` was interrupted before
             // its acknowledgement. Re-apply the idempotent root gate before making the marker
@@ -1388,19 +1511,68 @@ impl TurnRequestProcessor {
             }
         }
         if existing_marker.state == codex_state::ThreadActivityPauseState::Resuming {
-            return Err(invalid_request(format!(
-                "Team activity recovery for {root_thread_id} is already in progress; retry /continue after the runtime is ready"
-            )));
+            state_db
+                .retain_thread_activity_pause(root_thread_id, existing_marker.generation)
+                .await
+                .map_err(|error| internal_error(error.to_string()))?;
         }
-        let persisted_plan = self
-            .thread_manager
-            .team_activity_recovery_plan(root_thread_id)
-            .await
-            .map_err(|error| {
-                invalid_request(format!(
-                    "cannot assess persisted Team recovery for {root_thread_id}: {error}"
-                ))
-            })?;
+        let pause_snapshot = if markerless_recovery {
+            let persisted_plan = self
+                .thread_manager
+                .team_activity_recovery_plan_for_threads(root_thread_id, &[root_thread_id])
+                .await
+                .map_err(|error| {
+                    invalid_request(format!(
+                        "cannot assess persisted Team recovery for {root_thread_id}: {error}"
+                    ))
+                })?;
+            if !persisted_plan.blockers.is_empty() {
+                return Err(invalid_request(format!(
+                    "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
+                    persisted_plan.blockers.join(", ")
+                )));
+            }
+            persisted_plan
+                .recoverable_turns
+                .into_iter()
+                .map(
+                    |(thread_id, turn_id)| codex_state::ThreadActivityPauseSnapshot {
+                        thread_id,
+                        turn_id,
+                    },
+                )
+                .collect::<Vec<_>>()
+        } else {
+            state_db
+                .get_thread_activity_pause_snapshot(root_thread_id)
+                .await
+                .map_err(|error| {
+                    internal_error(format!(
+                        "failed to read Team activity pause snapshot for {root_thread_id}: {error}"
+                    ))
+                })?
+                .unwrap_or_default()
+        };
+        let pause_snapshot_thread_ids = pause_snapshot
+            .iter()
+            .map(|snapshot| snapshot.thread_id)
+            .collect::<Vec<_>>();
+        let pause_snapshot_turns = pause_snapshot
+            .iter()
+            .map(|snapshot| (snapshot.thread_id, snapshot.turn_id.clone()))
+            .collect::<Vec<_>>();
+        let persisted_plan = if pause_snapshot.is_empty() {
+            codex_core::TeamActivityRecoveryPlan::default()
+        } else {
+            self.thread_manager
+                .team_activity_recovery_plan_for_turns(root_thread_id, &pause_snapshot_turns)
+                .await
+                .map_err(|error| {
+                    invalid_request(format!(
+                        "cannot assess persisted Team recovery for {root_thread_id}: {error}"
+                    ))
+                })?
+        };
         if !persisted_plan.blockers.is_empty() {
             return Err(invalid_request(format!(
                 "cannot continue Team activity for {root_thread_id}: retained work needs attention ({})",
@@ -1433,7 +1605,7 @@ impl TurnRequestProcessor {
         };
         if let Err(error) = self
             .thread_manager
-            .restore_paused_team(root_thread_id)
+            .restore_paused_team(root_thread_id, &pause_snapshot)
             .await
         {
             retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
@@ -1447,7 +1619,7 @@ impl TurnRequestProcessor {
             .map(|(thread_id, _)| *thread_id)
             .collect::<HashSet<_>>();
         let blockers = self
-            .unrecoverable_activity_blockers(root_thread_id, &recoverable_thread_ids)
+            .unrecoverable_activity_blockers(&pause_snapshot_thread_ids, &recoverable_thread_ids)
             .await;
         if !blockers.is_empty() {
             retain_activity_pause_after_failure(&state_db, root_thread_id, marker.generation).await;
@@ -1494,7 +1666,7 @@ impl TurnRequestProcessor {
     ) -> anyhow::Result<bool> {
         let persisted_plan = self
             .thread_manager
-            .team_activity_recovery_plan(root_thread_id)
+            .team_activity_recovery_plan_for_threads(root_thread_id, &[root_thread_id])
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         if !persisted_plan.blockers.is_empty() {
@@ -1514,11 +1686,7 @@ impl TurnRequestProcessor {
                 return Ok(true);
             }
         }
-        let thread_ids = self
-            .thread_manager
-            .list_open_agent_subtree_thread_ids(root_thread_id)
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let thread_ids = [root_thread_id];
         for thread_id in thread_ids {
             let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
                 return Ok(true);
@@ -1539,18 +1707,11 @@ impl TurnRequestProcessor {
 
     async fn unrecoverable_activity_blockers(
         &self,
-        root_thread_id: ThreadId,
+        thread_ids: &[ThreadId],
         recoverable_thread_ids: &HashSet<ThreadId>,
     ) -> Vec<String> {
-        let Ok(thread_ids) = self
-            .thread_manager
-            .list_open_agent_subtree_thread_ids(root_thread_id)
-            .await
-        else {
-            return vec!["persistence".to_string()];
-        };
         let mut blockers = Vec::new();
-        for thread_id in thread_ids {
+        for thread_id in thread_ids.iter().copied() {
             let thread = match self.thread_manager.get_thread(thread_id).await {
                 Ok(thread) => thread,
                 Err(_) if recoverable_thread_ids.contains(&thread_id) => {

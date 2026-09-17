@@ -32,6 +32,7 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::test_codex::local_selections;
 use pretty_assertions::assert_eq;
+use std::sync::atomic::Ordering;
 use test_case::test_case;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -309,6 +310,22 @@ async fn recovery_rejects_active_turn_without_injecting_or_applying_settings() {
     );
 
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    session
+        .turn_finalization_in_flight
+        .store(1, Ordering::Release);
+    assert_eq!(
+        handle_recovery(
+            &session,
+            ThreadSettingsOverrides::default(),
+            TurnStartOptions::default(),
+            "recovered-turn".to_string(),
+        )
+        .await
+        .expect("recovery should return a typed rejection"),
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::NotIdle,
+        }
+    );
 }
 
 #[tokio::test]
@@ -1015,6 +1032,7 @@ async fn rejects_non_regular_turns() {
             )
             .await;
 
+        assert_eq!(session.pause_activity_snapshot().await.turn_id, None);
         let steer_input = vec![UserInput::Text {
             text: "steer".to_string(),
             text_elements: Vec::new(),

@@ -100,3 +100,4 @@ Durable Team activity pause generations are appended as
 `0061_rick_thread_activity_pauses.sql`; the marker records the gate application boundary,
 remains through an interrupted continue, and is cleared only after Core acknowledges an
 explicit release.
+`0062_rick_thread_activity_pause_snapshots.sql` records exact active thread/turn snapshots and retry receipts while preserving conservative legacy-marker recovery.

@@ -96,6 +96,7 @@ use codex_protocol::turn_input::StartIfIdleSubmission;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::state_db::StateDbHandle;
 use codex_skills_extension::HostSkillsService;
+use codex_state::ThreadActivityPauseSnapshot;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::LocalThreadStore;
@@ -135,6 +136,7 @@ pub struct TeamActivityRecoveryPlan {
     pub recoverable_turns: Vec<(ThreadId, String)>,
     /// Persisted operations whose external effects are not known to be complete.
     pub blockers: Vec<String>,
+    pub unfinished_turn_ids: HashMap<ThreadId, String>,
 }
 // Reject pathological selected cwd values at the environment-selection boundary.
 const MAX_TURN_ENVIRONMENT_CWD_BYTES: usize = 8 * 1024;
@@ -1595,8 +1597,75 @@ impl ThreadManager {
             )
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?;
+        let mut thread_ids = descendant_ids;
+        thread_ids.push(root_thread_id);
+        self.team_activity_recovery_plan_for_threads(root_thread_id, &thread_ids)
+            .await
+    }
+
+    pub async fn team_activity_recovery_plan_for_threads(
+        &self,
+        root_thread_id: ThreadId,
+        thread_ids: &[ThreadId],
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        self.team_activity_recovery_plan_for_targets(root_thread_id, thread_ids, None)
+            .await
+    }
+
+    pub async fn team_activity_recovery_plan_for_turns(
+        &self,
+        root_thread_id: ThreadId,
+        turns: &[(ThreadId, String)],
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        let turn_ids = turns.iter().cloned().collect::<HashMap<_, _>>();
+        let thread_ids = turns
+            .iter()
+            .map(|(thread_id, _)| *thread_id)
+            .collect::<Vec<_>>();
+        self.team_activity_recovery_plan_for_targets(root_thread_id, &thread_ids, Some(&turn_ids))
+            .await
+    }
+
+    async fn team_activity_recovery_plan_for_targets(
+        &self,
+        root_thread_id: ThreadId,
+        thread_ids: &[ThreadId],
+        turn_ids: Option<&HashMap<ThreadId, String>>,
+    ) -> CodexResult<TeamActivityRecoveryPlan> {
+        let graph_store = self.state.agent_graph_store().ok_or_else(|| {
+            CodexErr::Fatal(
+                "cannot inspect Team recovery: agent graph store unavailable".to_string(),
+            )
+        })?;
+        let all_descendant_ids = graph_store
+            .list_thread_spawn_descendants(root_thread_id, None)
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let open_descendant_ids = graph_store
+            .list_thread_spawn_descendants(
+                root_thread_id,
+                Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open),
+            )
+            .await
+            .map_err(|err| CodexErr::Fatal(format!("failed to load Team descendants: {err}")))?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let mut seen_thread_ids = HashSet::new();
         let mut plan = TeamActivityRecoveryPlan::default();
-        for thread_id in descendant_ids.into_iter().chain([root_thread_id]) {
+        for thread_id in thread_ids.iter().copied() {
+            if thread_id != root_thread_id && !open_descendant_ids.contains(&thread_id) {
+                if all_descendant_ids.contains(&thread_id) {
+                    continue;
+                }
+                return Err(CodexErr::InvalidRequest(format!(
+                    "captured Team child {thread_id} is no longer a descendant of {root_thread_id}"
+                )));
+            }
+            if !seen_thread_ids.insert(thread_id) {
+                continue;
+            }
             let stored_thread = match self
                 .state
                 .read_stored_thread(ReadThreadParams {
@@ -1676,7 +1745,11 @@ impl ThreadManager {
                     Err(error) => return Err(error),
                 },
             };
-            append_persisted_recovery(&mut plan, thread_id, &items);
+            if let Some(turn_id) = turn_ids.and_then(|turn_ids| turn_ids.get(&thread_id)) {
+                append_persisted_recovery_turn(&mut plan, thread_id, &items, turn_id);
+            } else {
+                append_persisted_recovery(&mut plan, thread_id, &items);
+            }
         }
         Ok(plan)
     }
@@ -1764,9 +1837,16 @@ impl ThreadManager {
     pub async fn restore_paused_team(
         &self,
         root_thread_id: ThreadId,
+        pause_snapshot: &[ThreadActivityPauseSnapshot],
     ) -> CodexResult<Vec<ThreadId>> {
         self.get_thread(root_thread_id).await?;
-        let plan = self.team_activity_recovery_plan(root_thread_id).await?;
+        let snapshot_turns = pause_snapshot
+            .iter()
+            .map(|snapshot| (snapshot.thread_id, snapshot.turn_id.clone()))
+            .collect::<Vec<_>>();
+        let plan = self
+            .team_activity_recovery_plan_for_turns(root_thread_id, &snapshot_turns)
+            .await?;
         if !plan.blockers.is_empty() {
             return Err(CodexErr::InvalidRequest(format!(
                 "persisted Team work needs attention before recovery: {}",
@@ -1803,14 +1883,10 @@ impl ThreadManager {
         let mut inspected_thread_ids = HashSet::new();
         let mut pending_thread_ids = recoverable_thread_ids.clone();
         while let Some(thread_id) = pending_thread_ids.pop() {
-            if thread_id == root_thread_id || loaded_thread_ids.contains(&thread_id) {
+            if thread_id == root_thread_id {
                 continue;
             }
             if !inspected_thread_ids.insert(thread_id) {
-                continue;
-            }
-            if self.get_thread(thread_id).await.is_ok() {
-                loaded_thread_ids.insert(thread_id);
                 continue;
             }
             if !open_descendant_ids.contains(&thread_id) {
@@ -1839,6 +1915,10 @@ impl ThreadManager {
                 )));
             }
             parent_by_thread.insert(thread_id, parent_thread_id);
+            if self.get_thread(thread_id).await.is_ok() {
+                loaded_thread_ids.insert(thread_id);
+                continue;
+            }
             stored_threads.insert(thread_id, stored_thread);
             if parent_thread_id != root_thread_id && !loaded_thread_ids.contains(&parent_thread_id)
             {
@@ -2965,6 +3045,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
             user_shell_override,
         } = request;
+        let activity_control = agent_control.clone();
         let StartThreadOptions {
             config,
             allow_provider_model_fallback,
@@ -3136,7 +3217,7 @@ impl ThreadManagerState {
             session.services.mcp_runtime.enable_full_access_form_input();
         }
         let new_thread = self
-            .finalize_thread_spawn(session, io, tracked_session_source)
+            .finalize_thread_spawn(session, io, tracked_session_source, activity_control)
             .await?;
         new_thread.thread.emit_thread_ready_lifecycle().await;
         if source_changed_during_startup.load(Ordering::Acquire) {
@@ -3153,6 +3234,7 @@ impl ThreadManagerState {
         session: Arc<Session>,
         io: SessionIo,
         session_source: SessionSource,
+        agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
         let thread_id = session.thread_id();
         let event = io.next_event().await?;
@@ -3167,6 +3249,7 @@ impl ThreadManagerState {
         };
 
         {
+            let _activity_update_guard = agent_control.lock_root_activity_pause_update().await;
             let mut threads = self.threads.write().await;
             if let std::collections::hash_map::Entry::Vacant(e) = threads.entry(thread_id) {
                 let thread = Arc::new(CodexThread::new(
@@ -3329,15 +3412,32 @@ fn append_persisted_recovery(
     append_recovery_turn(plan, thread_id, turn, Some(items));
 }
 
-fn append_latest_recovery(
+fn append_persisted_recovery_turn(
+    plan: &mut TeamActivityRecoveryPlan,
+    thread_id: ThreadId,
+    items: &[RolloutItem],
+    turn_id: &str,
+) {
+    let turns = codex_app_server_protocol::build_turns_from_rollout_items(items);
+    append_recovery_turn_by_id(plan, thread_id, &turns, turn_id, Some(items));
+}
+
+fn append_recovery_turn_by_id(
     plan: &mut TeamActivityRecoveryPlan,
     thread_id: ThreadId,
     turns: &[Turn],
+    turn_id: &str,
+    raw_items: Option<&[RolloutItem]>,
 ) {
-    let Some(turn) = turns.last() else {
+    let Some(turn) = turns.last().filter(|turn| turn.id == turn_id) else {
+        if !turns.iter().any(|turn| turn.id == turn_id) {
+            plan.blockers.push(format!(
+                "thread {thread_id}: captured turn {turn_id} is missing from persisted history"
+            ));
+        }
         return;
     };
-    append_recovery_turn(plan, thread_id, turn, None);
+    append_recovery_turn(plan, thread_id, turn, raw_items);
 }
 
 fn append_recovery_turn(
@@ -3352,6 +3452,7 @@ fn append_recovery_turn(
     ) {
         return;
     }
+    plan.unfinished_turn_ids.insert(thread_id, turn.id.clone());
     let mut blockers = turn
         .items
         .iter()
