@@ -1,0 +1,20 @@
+intent:
+  id: "intent/2026-09-17/eta-consolidated-validation#6a1cbb9dcb"
+  change_type: "fix"
+  scope: "eta"
+  summary: "Correct the retention fallback constant and finalize deterministic All Sessions snapshot coverage and formatting."
+  decision: "Use the shared ETA retention default, keep the nested task rendering expectation inline, and apply the repository formatter after all consolidated source fixes."
+  constraints:
+    - "Do not change retention semantics or overwrite configured retention."
+    - "Preserve stale-row and nested-task visual coverage."
+    - "Do not start another local build after the final formatting pass; use PR CI for the full rerun."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server/src/request_processors/thread_eta_processor.rs"
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/eta_view_tests.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
