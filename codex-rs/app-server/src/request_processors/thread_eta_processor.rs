@@ -334,14 +334,14 @@ impl ThreadEtaRequestProcessor {
         match state_db
             .initialize_eta_freshness_minimum_seconds(
                 root_thread_id,
-                configured_freshness_minimum_seconds.min(i64::MAX as u64) as i64,
+                configured_freshness_minimum_seconds,
             )
             .await
         {
             Ok(persisted) => persisted.clamp(0, i64::MAX),
             Err(error) => {
                 warn!(%error, %root_thread_id, "failed to persist ETA freshness policy");
-                configured_freshness_minimum_seconds.min(i64::MAX as u64) as i64
+                configured_freshness_minimum_seconds
             }
         }
     }
