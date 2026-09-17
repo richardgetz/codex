@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-17/eta-cross-session-pagination-cursor#56884c7ad4"
+  change_type: "fix"
+  scope: "eta"
+  summary: "Anchor cross-session ETA pagination cursors on the final row returned to the caller."
+  decision: "Trim the lookahead row before encoding next_cursor, so the next keyset query resumes after the last emitted task and cannot skip that task."
+  constraints:
+    - "Preserve deterministic updated_at, root_thread_id, task_id ordering and cursor parsing."
+    - "Keep nested-task filtering, retention behavior, and per-root ETA projections unchanged."
+    - "Cover multi-page traversal with a focused regression test."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/state/src/runtime/task_estimate_sessions.rs::TaskEstimateStore::list_sessions"
+    - "codex-rs/state/src/runtime/task_estimates_tests.rs::all_session_eta_list_cursor_returns_every_task_across_pages"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-5"
