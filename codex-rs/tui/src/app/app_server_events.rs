@@ -155,7 +155,24 @@ impl App {
         }
 
         if let ServerNotification::ThreadEtaUpdated(eta) = &notification {
+            let eta_root = ThreadId::from_string(&eta.root_thread_id).ok();
+            let refresh_all_sessions = eta_root.is_some()
+                && self
+                    .chat_widget
+                    .active_tab_id_for_active_view(super::eta_view::ETA_VIEW_ID)
+                    .is_some_and(|tab_id| tab_id == super::eta_view::ETA_ALL_SESSIONS_TAB_ID);
             self.apply_eta_notification(eta);
+            if refresh_all_sessions {
+                if self.eta.all_sessions_request_id.is_some() {
+                    self.eta.all_sessions_refresh_pending = true;
+                } else {
+                    self.refresh_eta_sessions(
+                        app_server_client,
+                        None,
+                        self.eta.all_sessions_include_nested,
+                    );
+                }
+            }
             return;
         }
 

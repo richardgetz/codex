@@ -101,6 +101,136 @@ async fn all_session_eta_list_cursor_returns_every_task_across_pages() {
 }
 
 #[tokio::test]
+async fn all_session_eta_list_projects_ranges_with_root_freshness() {
+    let (runtime, root) = runtime().await;
+    let root_metadata = crate::runtime::test_support::test_thread_metadata(
+        runtime.sqlite.home(),
+        root,
+        runtime.sqlite.home().to_path_buf(),
+    );
+    runtime
+        .upsert_thread(&root_metadata)
+        .await
+        .expect("persist root metadata");
+    runtime
+        .initialize_eta_freshness_minimum_seconds(root, 60)
+        .await
+        .expect("persist root freshness policy");
+    let started_at = at(1_700_000_000);
+    let mut child = create("child", "Child", Some((20, 40)));
+    child.parent_task_id = Some("parent".to_string());
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[
+                create("parent", "Parent", Some((100, 100))),
+                child,
+                transition(TaskEstimateAction::Start, "parent"),
+                transition(TaskEstimateAction::Start, "child"),
+            ],
+            started_at,
+        )
+        .await
+        .expect("create and start ETA tasks");
+
+    let fresh = runtime
+        .list_task_estimate_sessions_at(None, Some(10), true, started_at + Duration::seconds(30))
+        .await
+        .expect("read fresh projected ETA rows");
+    let fresh_child = fresh
+        .rows
+        .iter()
+        .find(|row| row.task_id == "child")
+        .expect("fresh child row");
+    assert_eq!(
+        (
+            fresh_child.current_lower_seconds,
+            fresh_child.current_upper_seconds,
+            fresh_child.is_stale,
+        ),
+        (Some(0), Some(10), false)
+    );
+    let fresh_parent = fresh
+        .rows
+        .iter()
+        .find(|row| row.task_id == "parent")
+        .expect("fresh parent row");
+    assert_eq!(
+        (
+            fresh_parent.nested_lower_seconds,
+            fresh_parent.nested_upper_seconds,
+        ),
+        (Some(0), Some(10))
+    );
+
+    let stale = runtime
+        .list_task_estimate_sessions_at(None, Some(10), true, started_at + Duration::seconds(61))
+        .await
+        .expect("read stale projected ETA rows");
+    let stale_child = stale
+        .rows
+        .iter()
+        .find(|row| row.task_id == "child")
+        .expect("stale child row");
+    assert_eq!(
+        (
+            stale_child.current_lower_seconds,
+            stale_child.current_upper_seconds,
+            stale_child.is_stale,
+        ),
+        (Some(20), Some(40), true)
+    );
+    let stale_parent = stale
+        .rows
+        .iter()
+        .find(|row| row.task_id == "parent")
+        .expect("stale parent row");
+    assert_eq!(
+        (
+            stale_parent.nested_lower_seconds,
+            stale_parent.nested_upper_seconds,
+        ),
+        (Some(20), Some(40))
+    );
+
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[
+                transition(TaskEstimateAction::Complete, "child"),
+                transition(TaskEstimateAction::Complete, "parent"),
+            ],
+            started_at + Duration::seconds(62),
+        )
+        .await
+        .expect("complete ETA tasks");
+    let terminal = runtime
+        .list_task_estimate_sessions_at(None, Some(10), true, started_at + Duration::seconds(120))
+        .await
+        .expect("read terminal projected ETA rows");
+    for task_id in ["child", "parent"] {
+        let row = terminal
+            .rows
+            .iter()
+            .find(|row| row.task_id == task_id)
+            .expect("terminal ETA row");
+        assert!(!row.is_stale);
+        let expected_range = if task_id == "child" {
+            (Some(20), Some(40))
+        } else {
+            (Some(100), Some(100))
+        };
+        assert_eq!(
+            (row.current_lower_seconds, row.current_upper_seconds),
+            expected_range
+        );
+    }
+    runtime.close().await;
+}
+
+#[tokio::test]
 async fn eta_history_pruning_removes_old_terminal_rows_only() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);

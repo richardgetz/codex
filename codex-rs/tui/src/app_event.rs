@@ -67,10 +67,12 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 
+use crate::app::eta_view::EtaViewState;
 use crate::history_cell::HistoryCell;
 use crate::realtime_voice::RealtimeMicCommand;
 use crate::realtime_voice::RealtimeVoiceCommand;
 use crate::realtime_voice_effects::VoiceEffectPreset;
+use crate::resume_picker::SessionTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RestorablePermissionSelection {
@@ -371,10 +373,40 @@ pub(crate) enum AppEvent {
         cursor: Option<String>,
         result: Result<codex_app_server_protocol::ThreadEtaReadResponse, String>,
     },
+    ThreadEtaSessionsLoaded {
+        request_id: Uuid,
+        cursor: Option<String>,
+        include_nested: bool,
+        result: Result<codex_app_server_protocol::ThreadEtaListResponse, String>,
+    },
+    /// Refresh the selected root's ETA snapshot after an inline retry request.
+    RefreshEta {
+        root_thread_id: ThreadId,
+    },
+    /// Preserve the ETA popup's stable selection and collapse state across refreshes.
+    EtaViewStateChanged {
+        root_thread_id: String,
+        state: EtaViewState,
+    },
     /// Load the next explicitly requested history page for the ETA view.
     LoadEtaHistory {
         root_thread_id: ThreadId,
         cursor: String,
+    },
+    LoadEtaSessions {
+        cursor: Option<String>,
+        include_nested: bool,
+    },
+    ResumeEtaSession {
+        thread_id: ThreadId,
+    },
+    /// Resume an allowlisted session row without requiring a second thread-list lookup.
+    ResumeEtaSessionTarget {
+        target: SessionTarget,
+    },
+    /// Resume a previously confirmed ETA session target.
+    ResumeEtaSessionConfirmed {
+        target: SessionTarget,
     },
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.
     AgentPickerThreadsLoaded {

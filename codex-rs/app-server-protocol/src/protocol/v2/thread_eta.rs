@@ -1,6 +1,7 @@
 use crate::JsonSchema;
 use crate::TS;
 use codex_experimental_api_macros::ExperimentalApi;
+use codex_utils_path_uri::LegacyAppPathString;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -103,6 +104,80 @@ pub struct ThreadEtaSnapshot {
     pub history: Vec<ThreadEtaTask>,
     pub next_cursor: Option<String>,
     pub overall: ThreadEtaOverall,
+}
+
+/// Persisted root-session metadata attached to a task in the cross-session ETA navigator.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadEtaSessionInfo {
+    /// Root thread id to pass to `thread/resume`.
+    pub thread_id: String,
+    pub title: String,
+    pub name: Option<String>,
+    pub preview: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub archived_at: Option<i64>,
+    pub cwd: LegacyAppPathString,
+}
+
+/// A lightweight task-first row spanning persisted ETA roots.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadEtaSessionTask {
+    pub task_id: String,
+    pub root_thread_id: String,
+    pub owner_thread_id: String,
+    pub parent_task_id: Option<String>,
+    pub title: String,
+    pub status: ThreadEtaStatus,
+    pub current_lower_seconds: Option<i64>,
+    pub current_upper_seconds: Option<i64>,
+    pub original_lower_seconds: Option<i64>,
+    pub original_upper_seconds: Option<i64>,
+    pub created_at: i64,
+    pub started_at: Option<i64>,
+    pub terminal_at: Option<i64>,
+    pub actual_elapsed_seconds: Option<i64>,
+    pub updated_at: i64,
+    /// Whether this active row exceeded its root's persisted freshness window.
+    pub is_stale: bool,
+    pub session: ThreadEtaSessionInfo,
+    /// Number of transitive child tasks, including terminal children retained in history.
+    pub nested_task_count: u32,
+    /// Number of transitive child tasks that are not terminal.
+    pub active_nested_task_count: u32,
+    /// Sum of remaining ranges for active transitive children; unknown when any active child is unknown.
+    pub nested_lower_seconds: Option<i64>,
+    pub nested_upper_seconds: Option<i64>,
+}
+
+/// Parameters for the task-first cross-session ETA navigator.
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadEtaListParams {
+    /// Opaque keyset cursor returned by a previous call.
+    #[ts(optional = nullable)]
+    pub cursor: Option<String>,
+    /// Optional page size, bounded by the server to 100 entries.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Include nested task rows; omitted or false returns only top-level tasks with nested counts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_nested: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct ThreadEtaListResponse {
+    pub data: Vec<ThreadEtaSessionTask>,
+    pub next_cursor: Option<String>,
 }
 
 /// Parameters for the paginated, read-only ETA projection.

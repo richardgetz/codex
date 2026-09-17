@@ -41,7 +41,13 @@ impl App {
                     | AppEvent::EndInitialHistoryReplayBuffer
                     | AppEvent::OpenEta
                     | AppEvent::ThreadEtaSnapshotLoaded { .. }
+                    | AppEvent::ThreadEtaSessionsLoaded { .. }
                     | AppEvent::LoadEtaHistory { .. }
+                    | AppEvent::LoadEtaSessions { .. }
+                    | AppEvent::RefreshEta { .. }
+                    | AppEvent::EtaViewStateChanged { .. }
+                    | AppEvent::ResumeEtaSessionTarget { .. }
+                    | AppEvent::ResumeEtaSessionConfirmed { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -2905,11 +2911,82 @@ impl App {
             } => {
                 self.apply_eta_snapshot(root_thread_id, request_id, cursor, result);
             }
+            AppEvent::ThreadEtaSessionsLoaded {
+                request_id,
+                cursor,
+                include_nested,
+                result,
+            } => {
+                let refresh_pending =
+                    self.apply_eta_sessions(request_id, cursor, include_nested, result);
+                if refresh_pending
+                    && self
+                        .chat_widget
+                        .active_tab_id_for_active_view(crate::app::eta_view::ETA_VIEW_ID)
+                        .is_some_and(|tab_id| {
+                            tab_id == crate::app::eta_view::ETA_ALL_SESSIONS_TAB_ID
+                        })
+                {
+                    self.refresh_eta_sessions(
+                        app_server,
+                        None,
+                        self.eta.all_sessions_include_nested,
+                    );
+                }
+            }
+            AppEvent::RefreshEta { root_thread_id } => {
+                self.refresh_eta(app_server, root_thread_id, None);
+            }
+            AppEvent::EtaViewStateChanged {
+                root_thread_id,
+                state,
+            } => {
+                self.apply_eta_view_state(root_thread_id, state);
+            }
             AppEvent::LoadEtaHistory {
                 root_thread_id,
                 cursor,
             } => {
                 self.refresh_eta(app_server, root_thread_id, Some(cursor));
+            }
+            AppEvent::LoadEtaSessions {
+                cursor,
+                include_nested,
+            } => {
+                self.refresh_eta_sessions(app_server, cursor, include_nested);
+            }
+            AppEvent::ResumeEtaSession { thread_id } => {
+                if self.active_thread_id == Some(thread_id) && !self.thread_unavailable(thread_id) {
+                    self.show_eta_resume_confirmation(crate::resume_picker::SessionTarget {
+                        path: None,
+                        thread_id,
+                        cwd: None,
+                        history_mode: None,
+                    });
+                } else {
+                    let target_session = crate::resume_picker::SessionTarget {
+                        path: None,
+                        thread_id,
+                        cwd: None,
+                        history_mode: None,
+                    };
+                    if let AppRunControl::Exit(reason) = self
+                        .resume_target_session(tui, app_server, target_session)
+                        .await?
+                    {
+                        return Ok(AppRunControl::Exit(reason));
+                    }
+                }
+            }
+            AppEvent::ResumeEtaSessionTarget { target } => {
+                return self
+                    .resume_eta_session_target(tui, app_server, target, false)
+                    .await;
+            }
+            AppEvent::ResumeEtaSessionConfirmed { target } => {
+                return self
+                    .resume_eta_session_target(tui, app_server, target, true)
+                    .await;
             }
             AppEvent::AgentsOverviewThreadsLoaded { request_id, result } => {
                 self.apply_agents_overview_thread_refresh(app_server, request_id, result);

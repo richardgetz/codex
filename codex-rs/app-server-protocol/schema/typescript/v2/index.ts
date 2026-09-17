@@ -498,6 +498,8 @@ export type { ThreadEtaAccuracy } from "./ThreadEtaAccuracy";
 export type { ThreadEtaAction } from "./ThreadEtaAction";
 export type { ThreadEtaOverall } from "./ThreadEtaOverall";
 export type { ThreadEtaRevision } from "./ThreadEtaRevision";
+export type { ThreadEtaSessionInfo } from "./ThreadEtaSessionInfo";
+export type { ThreadEtaSessionTask } from "./ThreadEtaSessionTask";
 export type { ThreadEtaSnapshot } from "./ThreadEtaSnapshot";
 export type { ThreadEtaStatus } from "./ThreadEtaStatus";
 export type { ThreadEtaTask } from "./ThreadEtaTask";

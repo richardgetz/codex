@@ -2,6 +2,8 @@
 
 #[path = "tests/daybreak_tests.rs"]
 mod daybreak_tests;
+#[path = "tests/eta_notification_tests.rs"]
+mod eta_notification_tests;
 
 #[path = "tests/advanced_reasoning_tests.rs"]
 mod advanced_reasoning_tests;

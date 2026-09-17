@@ -1309,6 +1309,9 @@ impl MessageProcessor {
             ClientRequest::ThreadEtaUpdate { params, .. } => {
                 self.thread_eta_processor.update(params).await
             }
+            ClientRequest::ThreadEtaList { params, .. } => {
+                self.thread_eta_processor.list(params).await
+            }
             ClientRequest::ThreadQueueAdd { params, .. } => self
                 .thread_queue_processor
                 .add(params)
