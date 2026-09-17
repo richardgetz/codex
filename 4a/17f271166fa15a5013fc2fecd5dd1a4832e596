@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-17/eta-primary-root-worker-guard#4a17f27116"
+  change_type: "fix"
+  scope: "tui"
+  summary: "Guard ETA session switches using the current primary root's cached Worker activity."
+  decision: "When the visible thread is a side Worker, resolve TeamActivityStatus from the current primary/root thread before allowing a cross-session ETA resume, while retaining the active-turn fallback and existing current-target guard."
+  constraints:
+    - "Preserve confirmation for an active Lead or active/in-flight direct or nested Worker."
+    - "Do not infer liveness from ETA timestamps, elapsed time, or rendered rows."
+    - "Keep the existing unavailable/current-target safety guard and resume path unchanged."
+    - "Keep the focused test source-only and avoid Rust/Cargo/just validation in the Worker worktree."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/tui/src/app/eta.rs"
+    - "codex-rs/tui/src/app/tests/eta_notification_tests.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-5.6"
