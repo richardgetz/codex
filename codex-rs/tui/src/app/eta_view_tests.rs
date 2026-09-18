@@ -448,9 +448,6 @@ fn all_sessions_nested_and_narrow_layout_have_snapshots() {
         .find(|line| line.contains("Run") && line.contains("⚠"))
         .expect("narrow stale task row");
     assert!(narrow_stale_row.contains("⚠"));
-    insta::assert_debug_snapshot!(
-        "eta_all_sessions_narrow_columns",
-        super::eta_view_render::session_column_widths(48),
-        @r###"(8, 8, 8, 10)"###
-    );
+    let narrow_columns = super::eta_view_render::session_column_widths(48);
+    insta::assert_debug_snapshot!(narrow_columns, @r###"(8, 8, 8, 10)"###);
 }

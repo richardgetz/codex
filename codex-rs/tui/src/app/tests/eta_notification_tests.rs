@@ -18,6 +18,7 @@ use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_protocol::ThreadId;
 use codex_utils_path_uri::LegacyAppPathString;
+use pretty_assertions::assert_eq;
 
 fn saved_state(tab_id: &str, selected_task_id: Option<&str>) -> EtaViewState {
     EtaViewState {
@@ -72,8 +73,6 @@ fn api_session_task(root_thread_id: ThreadId, task_id: &str) -> ThreadEtaSession
         actual_elapsed_seconds: None,
         updated_at: 2,
         is_stale: false,
-        accuracy: ThreadEtaAccuracy::Unknown,
-        revisions: Vec::new(),
         session: ThreadEtaSessionInfo {
             thread_id: root_thread_id.to_string(),
             title: "Updated session".to_string(),
@@ -184,7 +183,8 @@ async fn opening_saved_all_sessions_shows_loading_before_response() -> color_eyr
 
     app.open_eta(&app_server);
 
-    let status = render_bottom_popup(&app.chat_widget, 80)
+    let popup = render_bottom_popup(&app.chat_widget, 80);
+    let status = popup
         .lines()
         .map(str::trim)
         .find(|line| line.contains("Loading retained sessions"))

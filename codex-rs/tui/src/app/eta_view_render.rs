@@ -496,7 +496,7 @@ impl EtaView {
             .collect()
     }
 
-    fn all_session_scroll_offset(&self) -> usize {
+    pub(super) fn all_session_scroll_offset(&self) -> usize {
         let rows = self.ordered_session_indices();
         let status_lines = if self.all_sessions.is_empty() {
             0
@@ -654,7 +654,7 @@ fn session_table_title_width(width: usize) -> usize {
         .max(8)
 }
 
-fn session_column_widths(width: usize) -> (usize, usize, usize, usize) {
+pub(super) fn session_column_widths(width: usize) -> (usize, usize, usize, usize) {
     if width < 56 {
         return (8, 8, 8, 10);
     }
