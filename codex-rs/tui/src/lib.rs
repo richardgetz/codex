@@ -528,9 +528,13 @@ async fn start_app_server(
         match connection {
             Ok(app_server) => return Ok(app_server),
             Err(err) if matches!(target, AppServerTarget::LocalDaemon { .. }) => {
-                tracing::debug!(%err, "local daemon connection failed; starting embedded app server");
-                *target = AppServerTarget::Embedded;
-                *state_db = init_state_db_for_app_server_target(&config, target).await?;
+                tracing::warn!(
+                    %err,
+                    "selected local daemon connection failed; refusing embedded fallback"
+                );
+                return Err(err.wrap_err(
+                    "failed to connect to the selected local app-server daemon; refusing to start a competing embedded server",
+                ));
             }
             Err(err) => return Err(err),
         }

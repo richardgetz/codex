@@ -24,8 +24,9 @@ new terminal or clearing variables there does not clear the running daemon's
 environment; per-client environment isolation is not provided.
 An invocation that sets `CODEX_EXEC_SERVER_URL` skips implicit daemon attachment
 so its executor selection is preserved. If an implicitly discovered daemon cannot
-initialize the connection, the TUI starts an embedded server instead. Explicit
-`--remote` endpoints remain authoritative and report connection failures.
+initialize the connection, the TUI reports the connection failure instead of
+starting a competing embedded server. Explicit `--remote` endpoints remain
+authoritative and report connection failures.
 
 ## Commands
 

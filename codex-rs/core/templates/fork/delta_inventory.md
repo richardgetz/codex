@@ -88,6 +88,9 @@ release or merge rules.
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
+- When an implicitly selected local daemon socket fails to connect, the TUI
+  reports the failure instead of starting a competing embedded server; an
+  initially selected or explicitly requested embedded target remains unchanged.
 - App-server daemon lifecycle and apply responses expose nullable
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
@@ -840,6 +843,9 @@ release or merge rules.
   process only after a suspended all-node receipt, records start/recovery
   failures durably, restores exact turn ids, and requires explicit recover
   before retrying an unresolved attempt without enabling remote control.
+- Verify a discovered local daemon connection failure remains visible and does
+  not silently switch the TUI to an embedded server; preserve initial embedded
+  selection and explicit remote or embedded overrides.
 - Verify daemon lifecycle and apply status keep `runningManagedCodexVersion`
   tied to the active PID/start record, return null for legacy/reused or
   launcher-generation races, and never use a current shim read or generic
