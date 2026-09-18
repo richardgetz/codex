@@ -234,7 +234,7 @@ mod config_persistence;
 mod connector_mentions;
 mod eta;
 mod eta_time;
-mod eta_view;
+pub(crate) mod eta_view;
 mod event_dispatch;
 mod exit_summary;
 mod experimental_features;

@@ -5,6 +5,7 @@
 //! state, or wall-clock time.
 
 use super::App;
+use super::AppRunControl;
 use super::AppServerSession;
 use super::eta_time::EtaTimestampFormatter;
 use super::eta_view::ETA_ACTIVE_TAB_ID;
@@ -22,6 +23,7 @@ use super::eta_view::EtaViewState;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::tui;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadEtaAccuracy;
@@ -727,7 +729,7 @@ fn session_task_from_api(task: codex_app_server_protocol::ThreadEtaSessionTask) 
             created_at: task.session.created_at,
             updated_at: task.session.updated_at,
             archived_at: task.session.archived_at,
-            cwd: task.session.cwd,
+            cwd: task.session.cwd.to_string(),
         },
         nested_task_count: task.nested_task_count,
         active_nested_task_count: task.active_nested_task_count,
