@@ -149,7 +149,17 @@ release or merge rules.
 - Main-checkout Rust build coordination: one designated build owner runs
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
-  targets/worktrees are preserved.
+  targets/worktrees are preserved. Validation batches edits before the
+  expensive command, distinguishes package/target selection from test-name
+  filtering, records the exact command/source revision/session or log, runs
+  required code generation once per source revision, and waits on the
+  existing command session's supported bounded wait when no terminal-event wake
+  is already available and appropriate, without rapid unchanged polling or
+  inferred completion. Process/output watchers are not treated as a new model
+  turn; `write_stdin` and `wait_agent` do not subscribe an idle worker to an
+  arbitrary command, and Goal/Team mode is not enabled solely as a workaround.
+  Absent a callback, the limitation is reported and an explicit check is
+  required.
 - App-server v2 handoff recovery fences replacement writes until the durable
   graph is loaded and pause state restored, while read/status/recover requests
   remain available; exact turn admission occurs only after all receipt nodes load.
@@ -792,7 +802,14 @@ release or merge rules.
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source
   freeze with exact-revision handoff, and preservation of active
-  targets/worktrees.
+  targets/worktrees. Verify validation still batches edits before expensive
+  commands, keeps package/target selection distinct from test-name filters,
+  records command identity plus source revision and session/log evidence,
+  performs required code generation only once per source revision, and uses
+  supported completion waits without rapid unchanged polling or inferred
+  completion. Process/output watchers must not be treated as automatic model
+  wakes, arbitrary commands must not subscribe idle workers, and missing
+  callbacks require an explicit check.
 
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
