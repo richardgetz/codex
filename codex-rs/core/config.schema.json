@@ -5222,8 +5222,8 @@
           "type": "boolean"
         },
         "whimsy": {
-          "default": true,
-          "description": "Enable decorative effects such as Astra composer stars. Also requires animations. Defaults to `true`.",
+          "default": false,
+          "description": "Enable decorative effects such as Astra composer stars. Also requires animations. Defaults to `false`; set `[tui].whimsy = true` to opt in.",
           "type": "boolean"
         }
       },
