@@ -2079,8 +2079,8 @@ pub struct Tui {
     pub animations: bool,
 
     /// Enable decorative effects such as Astra composer stars. Also requires animations.
-    /// Defaults to `true`.
-    #[serde(default = "default_true")]
+    /// Defaults to `false`; set `[tui].whimsy = true` to opt in.
+    #[serde(default = "default_false")]
     pub whimsy: bool,
 
     /// Show startup tooltips in the TUI welcome screen.
@@ -2278,6 +2278,10 @@ pub struct TuiStatusTokenUsageServiceTierRate {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_false() -> bool {
+    false
 }
 
 const fn default_daily_spend_retention_days() -> u32 {

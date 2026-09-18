@@ -217,8 +217,12 @@ release or merge rules.
   - Team Lead usage-limit history coalesces identical rendered errors while
     preserving distinct reset/account messages; lifecycle handling and later
     recovery remain unchanged.
-  - Prompt-composer sparkle animation uses background tinting so decorative
-    braille glyphs do not enter terminal selection or clipboard text.
+  - Prompt-composer Astra sparkles retain the original braille glyph renderer
+    when explicitly enabled with `[tui].whimsy = true`; `whimsy` defaults to
+    `false`, while the existing `tui.animations` gate still applies. On an
+    upstream refresh, adopt any native selection-safe visual implementation
+    that preserves the sparkle appearance without changing this fork gate or
+    default.
   - `[team.worker].max_concurrent` optionally sets a positive, atomic ceiling
     for active direct Workers per Lead across V1 and V2. Pending starts reserve
     capacity, followups reacquire it, completed or aborted Workers release it,
@@ -1135,8 +1139,11 @@ release or merge rules.
   edges.
   Verify Team Lead usage-limit history coalesces identical errors without
   dropping turn lifecycle handling or distinct reset/account messages.
-  Verify prompt-composer sparkles change only cell backgrounds and never write
-  decorative glyphs into terminal selection or clipboard text.
+  Verify prompt-composer sparkles remain disabled by default, can be enabled
+  with `[tui].whimsy = true`, retain the original glyph appearance when enabled,
+  and continue to honor `tui.animations`. If upstream supplies a native
+  selection-safe renderer, adopt that visual fix while preserving the fork's
+  config gate and off default.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.
