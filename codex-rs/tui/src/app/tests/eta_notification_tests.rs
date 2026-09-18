@@ -113,6 +113,20 @@ async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_ey
         .eta
         .all_sessions_request_id
         .expect("opening ETA should request All Sessions");
+    // Settle the initial request before delivering the notification. The live handler coalesces
+    // notifications that arrive while a list request is in flight, so the refresh assertion below
+    // must exercise the idle request path rather than that intentional coalescing path.
+    let include_nested = app.eta.all_sessions_include_nested;
+    app.apply_eta_sessions(
+        previous_request_id,
+        None,
+        include_nested,
+        Ok(ThreadEtaListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        }),
+    );
+    assert_eq!(app.eta.all_sessions_request_id, None);
     app.handle_app_server_event(
         &app_server,
         AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadEtaUpdated(
