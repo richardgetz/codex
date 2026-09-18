@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+assertion_line: 97
+expression: rendered
+---
+0,0 ⠁ fg=(47,38,65)
+4,0 ⠈ fg=(50,41,68)
+14,0 ⠄ fg=(45,35,62)
+1,1 ⠁ fg=(128,116,148)
+13,1 ⠠ fg=(91,81,110)
+15,1 ⠁ fg=(85,75,104)
+18,1 ⠄ fg=(140,129,162)
+7,2 ⢀ fg=(61,51,79)
+8,2 ⠐ fg=(54,45,72)
+17,2 ⠄ fg=(120,109,141)

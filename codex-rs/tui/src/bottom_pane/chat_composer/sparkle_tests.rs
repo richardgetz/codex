@@ -60,6 +60,44 @@ fn sparkle_keeps_the_existing_composer_layout() {
 }
 
 #[test]
+fn sparkle_renders_fixed_phase_glyph_snapshot() {
+    let area = Rect::new(
+        /*x*/ 0,
+        /*y*/ 0,
+        /*width*/ 24,
+        /*height*/ 3,
+    );
+    let mut buffer = Buffer::empty(area);
+    buffer.set_style(area, Style::default().bg(rgb_color((36, 27, 53))));
+    render_stars(
+        area,
+        /*cursor*/ None,
+        Duration::from_millis(1250),
+        /*foreground*/ (230, 216, 255),
+        &mut buffer,
+    );
+    let rendered = buffer
+        .content
+        .iter()
+        .enumerate()
+        .filter_map(|(index, cell)| {
+            let symbol = cell.symbol();
+            if !DOTS.contains(&symbol) {
+                return None;
+            }
+            let x = area.x + (index as u16 % area.width);
+            let y = area.y + (index as u16 / area.width);
+            let Color::Rgb(r, g, b) = cell.fg else {
+                return None;
+            };
+            Some(format!("{x},{y} {symbol} fg=({r},{g},{b})"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("astra_fixed_phase_glyphs", rendered);
+}
+
+#[test]
 fn sparkle_preserves_content_cursor_and_background() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 3,
