@@ -341,7 +341,12 @@ fn all_sessions_are_grouped_and_nested_rows_toggle() {
 "###);
     let rendered = render(&view, 112, 24);
     assert!(rendered.contains("Session: release"));
-    assert!(rendered.contains("[1 nested]"));
+    let root_row = rendered
+        .lines()
+        .map(|line| line.trim_matches('"').trim())
+        .find(|line| line.contains("Prepare release"))
+        .expect("root session row");
+    assert!(root_row.contains("[1 nested,…"));
     view.handle_key_event(KeyCode::Enter.into());
     assert!(!render(&view, 112, 24).contains("Run checks"));
     view.handle_key_event(KeyCode::Enter.into());
@@ -460,5 +465,12 @@ fn all_sessions_nested_and_narrow_layout_have_snapshots() {
         .expect("narrow stale task row");
     assert!(narrow_stale_row.contains("⚠"));
     let narrow_columns = super::eta_view_render::session_column_widths(48);
-    insta::assert_debug_snapshot!(narrow_columns, @r###"(8, 8, 8, 10)"###);
+    insta::assert_debug_snapshot!(narrow_columns, @r###"
+(
+    8,
+    8,
+    8,
+    10,
+)
+"###);
 }
