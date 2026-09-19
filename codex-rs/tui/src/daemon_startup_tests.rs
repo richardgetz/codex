@@ -24,7 +24,8 @@ async fn daemon_connection_rejects_unprotected_socket_before_handshake() -> colo
 }
 
 #[tokio::test]
-async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::Result<()> {
+async fn daemon_startup_reports_connection_failures_without_embedded_fallback()
+-> color_eyre::Result<()> {
     for scenario in ["missing socket", "failed handshake", "explicit endpoint"] {
         let home = TempDir::new()?;
         let config = ConfigBuilder::default()
@@ -69,17 +70,9 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
         )
         .await;
         reject_handshake.abort();
-        if scenario == "explicit endpoint" {
-            assert!(result.is_err());
-            assert_eq!(target, original_target);
-            assert!(state_db.is_none());
-        } else {
-            let server = AppServerSession::new(result?, target.thread_params_mode());
-            assert!(server.uses_embedded_app_server());
-            assert_eq!(target, AppServerTarget::Embedded);
-            assert!(state_db.is_some());
-            server.shutdown().await?;
-        }
+        assert!(result.is_err());
+        assert_eq!(target, original_target);
+        assert!(state_db.is_none());
     }
     Ok(())
 }

@@ -97,6 +97,8 @@ mod selected_environment;
 mod server_diagnostics;
 #[cfg(not(target_os = "windows"))]
 mod session_end;
+#[cfg(unix)]
+mod shared_thread_unix;
 mod skills_list;
 mod sleep;
 mod thread_activity;

@@ -2144,7 +2144,7 @@ fn config_toml_deserializes_model_availability_nux() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
-            whimsy: true,
+            whimsy: false,
             show_tooltips: true,
             auto_recap: true,
             disable_paste_burst: None,
@@ -5164,7 +5164,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
-            whimsy: true,
+            whimsy: false,
             show_tooltips: true,
             auto_recap: true,
             disable_paste_burst: None,
@@ -5214,6 +5214,32 @@ async fn runtime_config_resolves_disable_paste_burst() -> anyhow::Result<()> {
 
         assert_eq!(config.disable_paste_burst, expected, "config: {toml}");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_tui_whimsy_default_and_opt_in() -> anyhow::Result<()> {
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+    assert!(!config.tui_whimsy);
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tui: Some(Tui {
+                whimsy: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        tempdir()?.abs(),
+    )
+    .await?;
+    assert!(config.tui_whimsy);
     Ok(())
 }
 

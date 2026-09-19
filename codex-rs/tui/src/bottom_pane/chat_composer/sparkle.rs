@@ -1,8 +1,9 @@
 //! Sparse Astra stars on the existing composer surface, fading with the terminal's colors.
 //! `enabled_foreground` owns eligibility, including late-arriving terminal colors.
-//! Rendering owns frame scheduling, so hidden composers do not keep animating. Stars are painted
-//! into otherwise blank cell backgrounds while keeping their space symbols, so terminal selection
-//! and clipboard copies contain only the composer's actual text.
+//! Rendering owns frame scheduling, so hidden composers do not keep animating. The original glyph
+//! sparkles remain opt-in through `tui.whimsy`, which is disabled by default so ordinary terminal
+//! copies stay clean. If upstream gains a native selection-safe sparkle renderer, adopt that
+//! visual improvement on refresh while preserving this fork gate and default.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -20,15 +21,13 @@ use super::ChatComposer;
 use super::popup_state::ActivePopup;
 use crate::bottom_pane::BottomPane;
 use crate::color::blend;
-use crate::style::user_message_bg_rgb;
 use crate::terminal_palette::StdoutColorLevel;
-use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
 use crate::terminal_palette::effective_stdout_color_level;
 use crate::terminal_palette::rgb_color;
 
 const FRAME_TICK: Duration = Duration::from_millis(150);
-const STAR_BACKGROUND_ALPHA: f32 = 0.25;
+const DOTS: [&str; 8] = ["⠁", "⠂", "⠄", "⠈", "⠐", "⠠", "⡀", "⢀"];
 static ASTRA_MODEL: LazyLock<Regex> = LazyLock::new(|| match Regex::new(r"(?i)\bastra\b") {
     Ok(regex) => regex,
     Err(error) => panic!("invalid Astra model regex: {error}"),
@@ -79,17 +78,7 @@ impl ChatComposer {
         if let Some(sparkle) = &self.astra_sparkle
             && let Some(foreground) = sparkle.enabled_foreground()
         {
-            let Some(terminal_bg) = default_bg() else {
-                return;
-            };
-            render_stars(
-                area,
-                cursor,
-                sparkle.started.elapsed(),
-                foreground,
-                user_message_bg_rgb(terminal_bg),
-                buf,
-            );
+            render_stars(area, cursor, sparkle.started.elapsed(), foreground, buf);
             if let Some(requester) = &self.frame_requester {
                 requester.schedule_frame_in(FRAME_TICK);
             }
@@ -102,7 +91,6 @@ fn render_stars(
     cursor: Option<(u16, u16)>,
     elapsed: Duration,
     foreground: (u8, u8, u8),
-    base_background: (u8, u8, u8),
     buf: &mut Buffer,
 ) {
     let time = elapsed.as_secs_f32();
@@ -127,12 +115,7 @@ fn render_stars(
             let Color::Rgb(r, g, b) = cell.bg else {
                 continue;
             };
-            // Effort bursts and other overlays own their tinted backgrounds; leave those pixels
-            // untouched so the sparkle layer cannot wash out an active effect.
-            if (r, g, b) != base_background {
-                continue;
-            }
-            // A stable coordinate hash gives each star its own period and phase.
+            // A stable coordinate hash gives each star its own dot, period, and phase.
             let mut hash = u64::from(y - area.y) * 65537 + u64::from(x - area.x);
             hash = (hash ^ (hash >> 16)).wrapping_mul(0x45d9f3b);
             hash = (hash ^ (hash >> 16)).wrapping_mul(0x45d9f3b);
@@ -146,13 +129,9 @@ fn render_stars(
             if brightness < 0.04 {
                 continue;
             }
-            // Keep the cell's space symbol intact: terminal selection copies cell symbols, so
-            // using a decorative glyph here would leak stars into copied composer text.
-            buf[(x, y)].set_bg(rgb_color(blend(
-                foreground,
-                (r, g, b),
-                brightness * STAR_BACKGROUND_ALPHA,
-            )));
+            buf[(x, y)]
+                .set_symbol(DOTS[(hash / 161 % 8) as usize])
+                .set_fg(rgb_color(blend(foreground, (r, g, b), brightness)));
         }
     }
 }

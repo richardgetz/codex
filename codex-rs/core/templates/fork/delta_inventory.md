@@ -88,6 +88,9 @@ release or merge rules.
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
+- When an implicitly selected local daemon socket fails to connect, the TUI
+  reports the failure instead of starting a competing embedded server; an
+  initially selected or explicitly requested embedded target remains unchanged.
 - App-server daemon lifecycle and apply responses expose nullable
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
@@ -146,7 +149,17 @@ release or merge rules.
 - Main-checkout Rust build coordination: one designated build owner runs
   serialized Cargo/`just` validation against one shared target/cache after
   source integration; worker worktrees remain source-only, and active
-  targets/worktrees are preserved.
+  targets/worktrees are preserved. Validation batches edits before the
+  expensive command, distinguishes package/target selection from test-name
+  filtering, records the exact command/source revision/session or log, runs
+  required code generation once per source revision, and waits on the
+  existing command session's supported bounded wait when no terminal-event wake
+  is already available and appropriate, without rapid unchanged polling or
+  inferred completion. Process/output watchers are not treated as a new model
+  turn; `write_stdin` and `wait_agent` do not subscribe an idle worker to an
+  arbitrary command, and Goal/Team mode is not enabled solely as a workaround.
+  Absent a callback, the limitation is reported and an explicit check is
+  required.
 - App-server v2 handoff recovery fences replacement writes until the durable
   graph is loaded and pause state restored, while read/status/recover requests
   remain available; exact turn admission occurs only after all receipt nodes load.
@@ -217,8 +230,12 @@ release or merge rules.
   - Team Lead usage-limit history coalesces identical rendered errors while
     preserving distinct reset/account messages; lifecycle handling and later
     recovery remain unchanged.
-  - Prompt-composer sparkle animation uses background tinting so decorative
-    braille glyphs do not enter terminal selection or clipboard text.
+  - Prompt-composer Astra sparkles retain the original braille glyph renderer
+    when explicitly enabled with `[tui].whimsy = true`; `whimsy` defaults to
+    `false`, while the existing `tui.animations` gate still applies. On an
+    upstream refresh, adopt any native selection-safe visual implementation
+    that preserves the sparkle appearance without changing this fork gate or
+    default.
   - `[team.worker].max_concurrent` optionally sets a positive, atomic ceiling
     for active direct Workers per Lead across V1 and V2. Pending starts reserve
     capacity, followups reacquire it, completed or aborted Workers release it,
@@ -785,7 +802,14 @@ release or merge rules.
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source
   freeze with exact-revision handoff, and preservation of active
-  targets/worktrees.
+  targets/worktrees. Verify validation still batches edits before expensive
+  commands, keeps package/target selection distinct from test-name filters,
+  records command identity plus source revision and session/log evidence,
+  performs required code generation only once per source revision, and uses
+  supported completion waits without rapid unchanged polling or inferred
+  completion. Process/output watchers must not be treated as automatic model
+  wakes, arbitrary commands must not subscribe idle workers, and missing
+  callbacks require an explicit check.
 
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
@@ -836,6 +860,9 @@ release or merge rules.
   process only after a suspended all-node receipt, records start/recovery
   failures durably, restores exact turn ids, and requires explicit recover
   before retrying an unresolved attempt without enabling remote control.
+- Verify a discovered local daemon connection failure remains visible and does
+  not silently switch the TUI to an embedded server; preserve initial embedded
+  selection and explicit remote or embedded overrides.
 - Verify daemon lifecycle and apply status keep `runningManagedCodexVersion`
   tied to the active PID/start record, return null for legacy/reused or
   launcher-generation races, and never use a current shim read or generic
@@ -1135,8 +1162,11 @@ release or merge rules.
   edges.
   Verify Team Lead usage-limit history coalesces identical errors without
   dropping turn lifecycle handling or distinct reset/account messages.
-  Verify prompt-composer sparkles change only cell backgrounds and never write
-  decorative glyphs into terminal selection or clipboard text.
+  Verify prompt-composer sparkles remain disabled by default, can be enabled
+  with `[tui].whimsy = true`, retain the original glyph appearance when enabled,
+  and continue to honor `tui.animations`. If upstream supplies a native
+  selection-safe renderer, adopt that visual fix while preserving the fork's
+  config gate and off default.
   Verify `codex-mcp-server`
   handles `ThreadActivityUpdated` exhaustively, forwards the notification, and
   continues waiting for real turn completion.

@@ -316,21 +316,38 @@ fn history_page_down_requests_next_cursor_once() {
     );
     view.handle_key_event(KeyCode::Right.into());
     view.handle_key_event(KeyCode::PageDown.into());
-    assert!(matches!(
-        rx.try_recv(),
-        Ok(AppEvent::LoadEtaHistory { cursor, .. }) if cursor == "history-next"
-    ));
+    let history_requests = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::LoadEtaHistory { cursor, .. } => Some(cursor),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(history_requests, vec!["history-next".to_string()]);
     view.handle_key_event(KeyCode::PageDown.into());
-    assert!(rx.try_recv().is_err());
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .all(|event| { !matches!(event, AppEvent::LoadEtaHistory { .. }) })
+    );
 }
 
 #[test]
 fn all_sessions_are_grouped_and_nested_rows_toggle() {
     let mut view = all_sessions_view();
-    insta::assert_debug_snapshot!(view.ordered_session_indices(), @r###"[0, 1, 2]"###);
+    insta::assert_debug_snapshot!(view.ordered_session_indices(), @r###"
+[
+    0,
+    1,
+    2,
+]
+"###);
     let rendered = render(&view, 112, 24);
     assert!(rendered.contains("Session: release"));
-    assert!(rendered.contains("[1 nested]"));
+    let root_row = rendered
+        .lines()
+        .map(|line| line.trim_matches('"').trim())
+        .find(|line| line.contains("Prepare release"))
+        .expect("root session row");
+    assert!(root_row.contains("[1 nested,…"));
     view.handle_key_event(KeyCode::Enter.into());
     assert!(!render(&view, 112, 24).contains("Run checks"));
     view.handle_key_event(KeyCode::Enter.into());
@@ -410,7 +427,7 @@ fn all_sessions_loading_error_and_empty_states_have_snapshots() {
         let rendered = render(&view, 80, 16);
         let line = rendered
             .lines()
-            .map(str::trim)
+            .map(|line| line.trim_matches('"').trim())
             .find(|line| {
                 line.contains("Loading retained")
                     || line.contains("Unable to load retained")
@@ -433,14 +450,14 @@ fn all_sessions_nested_and_narrow_layout_have_snapshots() {
     let view = all_sessions_view();
     let rows = render(&view, 112, 24)
         .lines()
-        .map(str::trim)
+        .map(|line| line.trim_matches('"').trim())
         .filter(|line| line.contains("Prepare release") || line.contains("Run checks"))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rows.contains("active · ⚠"));
     insta::assert_snapshot!(rows, @r###"
-    ▾ Prepare release  [1 nested, 1 act…  release · current         active                    30s–1m (+1m–2m)
-    Run checks                        release · current         active · ⚠                30s–1m
+    ▾ Prepare release  [1 nested,…  release · current         active                    30s–1m (+1m–2m)
+    Run checks                  release · current         active · ⚠                30s–1m
     "###);
     let narrow_rows = render(&view, 48, 24);
     let narrow_stale_row = narrow_rows
@@ -448,9 +465,13 @@ fn all_sessions_nested_and_narrow_layout_have_snapshots() {
         .find(|line| line.contains("Run") && line.contains("⚠"))
         .expect("narrow stale task row");
     assert!(narrow_stale_row.contains("⚠"));
-    insta::assert_debug_snapshot!(
-        "eta_all_sessions_narrow_columns",
-        super::eta_view_render::session_column_widths(48),
-        @r###"(8, 8, 8, 10)"###
-    );
+    let narrow_columns = super::eta_view_render::session_column_widths(48);
+    insta::assert_debug_snapshot!(narrow_columns, @r###"
+(
+    8,
+    8,
+    8,
+    10,
+)
+"###);
 }

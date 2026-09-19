@@ -18,6 +18,7 @@ use codex_app_server_protocol::ThreadEtaTask;
 use codex_app_server_protocol::ThreadEtaUpdatedNotification;
 use codex_protocol::ThreadId;
 use codex_utils_path_uri::LegacyAppPathString;
+use pretty_assertions::assert_eq;
 
 fn saved_state(tab_id: &str, selected_task_id: Option<&str>) -> EtaViewState {
     EtaViewState {
@@ -72,8 +73,6 @@ fn api_session_task(root_thread_id: ThreadId, task_id: &str) -> ThreadEtaSession
         actual_elapsed_seconds: None,
         updated_at: 2,
         is_stale: false,
-        accuracy: ThreadEtaAccuracy::Unknown,
-        revisions: Vec::new(),
         session: ThreadEtaSessionInfo {
             thread_id: root_thread_id.to_string(),
             title: "Updated session".to_string(),
@@ -114,6 +113,20 @@ async fn eta_notification_refreshes_all_sessions_for_selected_root() -> color_ey
         .eta
         .all_sessions_request_id
         .expect("opening ETA should request All Sessions");
+    // Settle the initial request before delivering the notification. The live handler coalesces
+    // notifications that arrive while a list request is in flight, so the refresh assertion below
+    // must exercise the idle request path rather than that intentional coalescing path.
+    let include_nested = app.eta.all_sessions_include_nested;
+    app.apply_eta_sessions(
+        previous_request_id,
+        None,
+        include_nested,
+        Ok(ThreadEtaListResponse {
+            data: Vec::new(),
+            next_cursor: None,
+        }),
+    );
+    assert_eq!(app.eta.all_sessions_request_id, None);
     app.handle_app_server_event(
         &app_server,
         AppServerEvent::ServerNotification(Box::new(ServerNotification::ThreadEtaUpdated(
@@ -184,7 +197,8 @@ async fn opening_saved_all_sessions_shows_loading_before_response() -> color_eyr
 
     app.open_eta(&app_server);
 
-    let status = render_bottom_popup(&app.chat_widget, 80)
+    let popup = render_bottom_popup(&app.chat_widget, 80);
+    let status = popup
         .lines()
         .map(str::trim)
         .find(|line| line.contains("Loading retained sessions"))
