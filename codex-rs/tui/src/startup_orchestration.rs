@@ -195,13 +195,20 @@ pub(super) async fn run_main_inner(
     };
     let mut startup_draft = startup_draft::StartupDraft::new(initial_screen, session_action)?;
 
-    let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
-        startup_draft
-            .run_until(maybe_probe_default_daemon_socket(&codex_home))
-            .await?
-    } else {
-        None
-    };
+    let prepared_default_daemon =
+        if explicit_remote_endpoint.is_none()
+            && reuse_implicit_local_daemon
+            && std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).is_none()
+        {
+            startup_draft
+                .run_until(connect_default_daemon(&codex_home))
+                .await??
+        } else {
+            None
+        };
+    let default_daemon = prepared_default_daemon
+        .as_ref()
+        .map(|daemon| daemon.socket_path.clone());
     let app_server_target = app_server_target_for_launch(
         explicit_remote_endpoint,
         default_daemon,
@@ -622,6 +629,7 @@ pub(super) async fn run_main_inner(
         log_db,
         state_db,
         environment_manager,
+        prepared_default_daemon.map(|daemon| daemon.app_server),
         managed_worktree.clone(),
         startup_draft,
     )

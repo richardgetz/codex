@@ -88,9 +88,12 @@ release or merge rules.
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
-- When an implicitly selected local daemon socket fails to connect, the TUI
-  reports the failure instead of starting a competing embedded server; an
-  initially selected or explicitly requested embedded target remains unchanged.
+- Implicit local-daemon startup performs one authoritative WebSocket and
+  initialize handshake and reuses that client for the TUI, including picker and
+  direct-ID resume. A missing socket still selects the embedded server, while
+  an existing socket that fails the handshake reports the failure instead of
+  starting a competing embedded server; explicit remote and embedded targets
+  remain unchanged.
 - App-server daemon lifecycle and apply responses expose nullable
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
@@ -819,6 +822,11 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify implicit local-daemon startup performs one bounded handshake that is
+  reused for picker and direct-ID resume, preserves embedded startup when no
+  socket exists, and fails closed when an existing endpoint is stale or rejects
+  initialize. Verify explicit remote/embedded targets, executor selection, and
+  security/config overrides retain their existing target selection.
 - Verify session-scoped ETA tasks retain composite root/task identity keys,
   explicit terminal history and immutable explicit start/terminal timestamps,
   bounded revisions, dependency-aware unknown

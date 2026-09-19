@@ -184,3 +184,109 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     assert!(!methods.iter().any(|method| method == "turn/start"));
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn implicit_daemon_resume_picker_and_direct_id_share_one_connection() -> Result<()> {
+    for (extra_args, expected_lookup) in [
+        (vec!["resume"], "thread/list"),
+        (
+            vec!["resume", "00000000-0000-0000-0000-000000000001"],
+            "thread/read",
+        ),
+    ] {
+        let repo_root = codex_utils_cargo_bin::repo_root()?;
+        let codex_home = tempfile::tempdir_in("/tmp")?;
+        write_test_config(codex_home.path(), &repo_root)?;
+        let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
+        let listener = UnixListener::bind(socket_path.as_path())?;
+        let server_cwd = repo_root.clone();
+        let thread = json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "sessionId": "00000000-0000-0000-0000-000000000001",
+            "preview": "resume fixture",
+            "ephemeral": false,
+            "modelProvider": "openai",
+            "createdAt": 1,
+            "updatedAt": 2,
+            "status": {"type": "idle", "activeFlags": []},
+            "cwd": server_cwd.clone(),
+            "cliVersion": "0.0.0",
+            "source": "cli",
+            "turns": []
+        });
+        let (lookup_tx, lookup_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut accepted = 0;
+            let mut socket = loop {
+                let (stream, _) = listener.accept().await?;
+                accepted += 1;
+                match tokio_tungstenite::accept_async(stream).await {
+                    Ok(socket) => break socket,
+                    Err(_) => continue,
+                }
+            };
+            let mut methods = Vec::new();
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
+                    continue;
+                };
+                let method = request.method.as_str();
+                methods.push(method.to_string());
+                let result = match method {
+                    "initialize" => json!({"userAgent": "implicit-resume-test"}),
+                    "account/read" => {
+                        json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": false})
+                    }
+                    "account/switch" => json!({}),
+                    "model/list" => json!({"data": [], "nextCursor": null}),
+                    "configRequirements/read" => json!({"requirements": null}),
+                    "skills/list" => json!({"data": []}),
+                    "thread/goal/get" => json!({"goal": null}),
+                    "thread/loaded/list" => json!({"data": [], "nextCursor": null}),
+                    "thread/list" => json!({"data": [thread.clone()], "nextCursor": null}),
+                    "thread/read" => json!({"thread": thread.clone()}),
+                    "thread/resume" => json!({
+                        "thread": thread.clone(),
+                        "model": "gpt-5.6-terra",
+                        "modelProvider": "openai",
+                        "serviceTier": null,
+                        "cwd": server_cwd.clone(),
+                        "approvalPolicy": "never",
+                        "approvalsReviewer": "user",
+                        "sandbox": {"type": "readOnly"},
+                        "reasoningEffort": null
+                    }),
+                    _ => json!({}),
+                };
+                socket
+                    .send(Message::Text(
+                        json!({"id": request.id, "result": result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await?;
+                if method == "thread/resume" {
+                    lookup_tx.send(()).ok();
+                }
+            }
+            Ok::<_, anyhow::Error>((accepted, methods))
+        });
+
+        let mut terminal = PtyCodex::start(&repo_root, codex_home, &extra_args)?;
+        terminal.wait_for_startup()?;
+        if expected_lookup == "thread/list" {
+            terminal.wait_for_screen("resume fixture")?;
+            terminal.write_input(b"\r")?;
+        }
+        tokio::time::timeout(Duration::from_secs(30), lookup_rx).await??;
+        drop(terminal);
+
+        let (accepted, methods) = tokio::time::timeout(Duration::from_secs(5), server).await???;
+        assert_eq!(accepted, 1, "resume mode {extra_args:?} opened a second daemon connection");
+        assert!(methods.iter().any(|method| method == expected_lookup));
+        assert!(methods.iter().any(|method| method == "thread/resume"));
+    }
+    Ok(())
+}
