@@ -24,9 +24,12 @@ use core_test_support::streaming_sse::start_streaming_sse_server;
 use futures::SinkExt;
 use futures::StreamExt;
 use serde_json::Value;
+use std::future::Future;
 use std::path::Path;
 use std::process::Stdio;
 use tempfile::TempDir;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::BufReader;
 use tokio::net::UnixStream;
 use tokio::process::Child;
 use tokio::process::Command;
@@ -47,6 +50,7 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test]
 async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
+    let deadline = PhaseDeadline::new();
     let (release_response, response_gate) = tokio::sync::oneshot::channel();
     let (release_steer, steer_gate) = tokio::sync::oneshot::channel();
     let (release_follow_up, follow_up_gate) = tokio::sync::oneshot::channel();
@@ -85,22 +89,66 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
         .join("app-server-control")
         .join("shared-thread.sock");
     std::fs::create_dir_all(socket_path.parent().context("socket parent")?)?;
-    let mut process = spawn_unix_server(codex_home.path(), &socket_path).await?;
+    let mut process = deadline
+        .run(
+            "spawn Unix app-server",
+            spawn_unix_server(codex_home.path(), &socket_path),
+        )
+        .await?;
 
-    let mut client_a = connect_unix(&socket_path).await?;
-    let mut client_b = connect_unix(&socket_path).await?;
-    initialize(&mut client_a, 1, "shared-client-a").await?;
-    initialize(&mut client_b, 2, "shared-client-b").await?;
+    let mut client_a = deadline
+        .run("connect Unix client A", connect_unix(&socket_path))
+        .await?;
+    let mut client_b = deadline
+        .run("connect Unix client B", connect_unix(&socket_path))
+        .await?;
+    deadline
+        .run(
+            "initialize Unix client A",
+            initialize(&mut client_a, 1, "shared-client-a"),
+        )
+        .await?;
+    deadline
+        .run(
+            "initialize Unix client B",
+            initialize(&mut client_b, 2, "shared-client-b"),
+        )
+        .await?;
 
-    let thread_id = start_thread(&mut client_a, 3).await?;
-    let active_turn = start_turn(&mut client_a, 4, &thread_id, "start").await?;
-    responses_server.wait_for_request_count(1).await;
+    let thread_id = deadline
+        .run("client A thread/start", start_thread(&mut client_a, 3))
+        .await?;
+    let active_turn = deadline
+        .run(
+            "client A turn/start",
+            start_turn(&mut client_a, 4, &thread_id, "start"),
+        )
+        .await?;
+    deadline
+        .run(
+            "waiting for the first model request",
+            async {
+                responses_server.wait_for_request_count(1).await;
+                Ok(())
+            },
+        )
+        .await?;
 
-    let read = read_thread(&mut client_b, 5, &thread_id, false).await?;
+    let read = deadline
+        .run(
+            "client B thread/read while active",
+            read_thread(&mut client_b, 5, &thread_id, false),
+        )
+        .await?;
     assert_eq!(read.thread.id, thread_id);
     assert!(matches!(read.thread.status, ThreadStatus::Active { .. }));
 
-    let steered_turn = start_turn(&mut client_b, 6, &thread_id, "steer").await?;
+    let steered_turn = deadline
+        .run(
+            "client B turn/start steering active turn",
+            start_turn(&mut client_b, 6, &thread_id, "steer"),
+        )
+        .await?;
     assert_eq!(steered_turn.id, active_turn.id);
 
     release_response
@@ -109,28 +157,46 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
     release_steer
         .send(())
         .expect("the steered model response should still be gated");
-    wait_for_turn_notification(
-        &mut client_b,
-        "turn/completed",
-        &thread_id,
-        &active_turn.id,
-    )
-    .await?;
+    deadline
+        .run(
+            "client B turn/completed after steering",
+            wait_for_turn_notification(
+                &mut client_b,
+                "turn/completed",
+                &thread_id,
+                &active_turn.id,
+            ),
+        )
+        .await?;
 
-    let follow_up_turn = start_turn(&mut client_b, 7, &thread_id, "follow up").await?;
+    let follow_up_turn = deadline
+        .run(
+            "client B follow-up turn/start",
+            start_turn(&mut client_b, 7, &thread_id, "follow up"),
+        )
+        .await?;
     assert_ne!(follow_up_turn.id, active_turn.id);
     release_follow_up
         .send(())
         .expect("the follow-up model response should still be gated");
-    wait_for_turn_notification(
-        &mut client_b,
-        "turn/completed",
-        &thread_id,
-        &follow_up_turn.id,
-    )
-    .await?;
+    deadline
+        .run(
+            "client B follow-up turn/completed",
+            wait_for_turn_notification(
+                &mut client_b,
+                "turn/completed",
+                &thread_id,
+                &follow_up_turn.id,
+            ),
+        )
+        .await?;
 
-    let final_read = read_thread(&mut client_b, 8, &thread_id, true).await?;
+    let final_read = deadline
+        .run(
+            "client B final thread/read",
+            read_thread(&mut client_b, 8, &thread_id, true),
+        )
+        .await?;
     assert_eq!(final_read.thread.id, thread_id);
     assert!(final_read
         .thread
@@ -161,14 +227,29 @@ async fn spawn_unix_server(codex_home: &Path, socket_path: &Path) -> Result<Chil
         .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
         .env("HOME", codex_home)
+        .env(
+            "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
+            codex_home.join("managed_config.toml"),
+        )
         .env("RUST_LOG", "warn");
     let mut process = process
         .kill_on_drop(true)
         .spawn()
         .context("failed to spawn Unix app-server")?;
+
+    let stderr = process
+        .stderr
+        .take()
+        .context("failed to capture Unix app-server stderr")?;
+    tokio::spawn(async move {
+        let mut stderr_reader = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = stderr_reader.next_line().await {
+            eprintln!("[Unix app-server stderr] {line}");
+        }
+    });
 
     let deadline = Instant::now() + READ_TIMEOUT;
     loop {
@@ -182,6 +263,33 @@ async fn spawn_unix_server(codex_home: &Path, socket_path: &Path) -> Result<Chil
             bail!("timed out waiting for Unix app-server socket");
         }
         sleep(Duration::from_millis(25)).await;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PhaseDeadline {
+    deadline: Instant,
+}
+
+impl PhaseDeadline {
+    fn new() -> Self {
+        Self {
+            deadline: Instant::now() + READ_TIMEOUT.saturating_sub(Duration::from_secs(5)),
+        }
+    }
+
+    async fn run<T, F>(&self, phase: &str, future: F) -> Result<T>
+    where
+        F: Future<Output = Result<T>>,
+    {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("timed out before {phase}");
+        }
+        timeout(remaining, future)
+            .await
+            .with_context(|| format!("timed out during {phase}"))?
+            .with_context(|| format!("phase {phase} failed"))
     }
 }
 
