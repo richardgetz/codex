@@ -15,6 +15,7 @@ use crate::session::GitEnrichmentPolicy;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
+use crate::session::handoff_preflight::HandoffPreflight;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::tasks::InterruptedTurnHistoryMarker;
@@ -90,6 +91,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::turn_input::HandoffBlocker;
 use codex_protocol::turn_input::NotSubmittedReason;
 use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
@@ -1745,10 +1747,28 @@ impl ThreadManager {
                     Err(error) => return Err(error),
                 },
             };
-            if let Some(turn_id) = turn_ids.and_then(|turn_ids| turn_ids.get(&thread_id)) {
-                append_persisted_recovery_turn(&mut plan, thread_id, &items, turn_id);
+            let allow_live_model_tool_call = if let Some(turn_id) =
+                turn_ids.and_then(|turn_ids| turn_ids.get(&thread_id))
+            {
+                match self.get_thread(thread_id).await {
+                    Ok(thread) => {
+                        live_model_turn_can_reconcile(&thread.handoff_preflight().await, turn_id)
+                    }
+                    Err(_) => false,
+                }
             } else {
-                append_persisted_recovery(&mut plan, thread_id, &items);
+                false
+            };
+            if let Some(turn_id) = turn_ids.and_then(|turn_ids| turn_ids.get(&thread_id)) {
+                append_persisted_recovery_turn(
+                    &mut plan,
+                    thread_id,
+                    &items,
+                    turn_id,
+                    allow_live_model_tool_call,
+                );
+            } else {
+                append_persisted_recovery(&mut plan, thread_id, &items, false);
             }
         }
         Ok(plan)
@@ -2010,23 +2030,24 @@ impl ThreadManager {
                     cyber_access_program: None,
                 })
                 .await?;
-            match submission {
-                StartIfIdleSubmission::Started {
-                    turn_id: started_turn_id,
-                } if started_turn_id == turn_id => {}
+            let preflight = match &submission {
                 StartIfIdleSubmission::NotSubmitted {
-                    reason: NotSubmittedReason::NotIdle,
-                } => {}
-                StartIfIdleSubmission::NotSubmitted { reason } => {
-                    return Err(CodexErr::InvalidRequest(format!(
+                    reason: NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn,
+                } => Some(thread.handoff_preflight().await),
+                _ => None,
+            };
+            if !recovery_submission_is_reconciled(&submission, &turn_id, preflight.as_ref()) {
+                let message = match submission {
+                    StartIfIdleSubmission::Started { .. } => {
+                        format!(
+                            "cannot recover unfinished Team turn {turn_id} for thread {thread_id}"
+                        )
+                    }
+                    StartIfIdleSubmission::NotSubmitted { reason } => format!(
                         "cannot recover unfinished Team turn {turn_id} for thread {thread_id}: Core declined recovery ({reason:?})"
-                    )));
-                }
-                StartIfIdleSubmission::Started { .. } => {
-                    return Err(CodexErr::InvalidRequest(format!(
-                        "cannot recover unfinished Team turn {turn_id} for thread {thread_id}"
-                    )));
-                }
+                    ),
+                };
+                return Err(CodexErr::InvalidRequest(message));
             }
         }
         Ok(restored)
@@ -3404,12 +3425,19 @@ fn append_persisted_recovery(
     plan: &mut TeamActivityRecoveryPlan,
     thread_id: ThreadId,
     items: &[RolloutItem],
+    allow_live_model_tool_call: bool,
 ) {
     let turns = codex_app_server_protocol::build_turns_from_rollout_items(items);
     let Some(turn) = turns.last() else {
         return;
     };
-    append_recovery_turn(plan, thread_id, turn, Some(items));
+    append_recovery_turn(
+        plan,
+        thread_id,
+        turn,
+        Some(items),
+        allow_live_model_tool_call,
+    );
 }
 
 fn append_persisted_recovery_turn(
@@ -3417,9 +3445,17 @@ fn append_persisted_recovery_turn(
     thread_id: ThreadId,
     items: &[RolloutItem],
     turn_id: &str,
+    allow_live_model_tool_call: bool,
 ) {
     let turns = codex_app_server_protocol::build_turns_from_rollout_items(items);
-    append_recovery_turn_by_id(plan, thread_id, &turns, turn_id, Some(items));
+    append_recovery_turn_by_id(
+        plan,
+        thread_id,
+        &turns,
+        turn_id,
+        Some(items),
+        allow_live_model_tool_call,
+    );
 }
 
 fn append_recovery_turn_by_id(
@@ -3428,6 +3464,7 @@ fn append_recovery_turn_by_id(
     turns: &[Turn],
     turn_id: &str,
     raw_items: Option<&[RolloutItem]>,
+    allow_live_model_tool_call: bool,
 ) {
     let Some(turn) = turns.last().filter(|turn| turn.id == turn_id) else {
         if !turns.iter().any(|turn| turn.id == turn_id) {
@@ -3437,7 +3474,7 @@ fn append_recovery_turn_by_id(
         }
         return;
     };
-    append_recovery_turn(plan, thread_id, turn, raw_items);
+    append_recovery_turn(plan, thread_id, turn, raw_items, allow_live_model_tool_call);
 }
 
 fn append_recovery_turn(
@@ -3445,6 +3482,7 @@ fn append_recovery_turn(
     thread_id: ThreadId,
     turn: &Turn,
     raw_items: Option<&[RolloutItem]>,
+    allow_live_model_tool_call: bool,
 ) {
     if !matches!(
         turn.status,
@@ -3460,6 +3498,7 @@ fn append_recovery_turn(
         .collect::<Vec<_>>();
     if let Some(items) = raw_items
         && let Some(blocker) = persisted_response_item_blocker(items, &turn.id)
+        && !(allow_live_model_tool_call && blocker == "unfinished model tool call")
     {
         blockers.push(blocker);
     }
@@ -3469,6 +3508,36 @@ fn append_recovery_turn(
         for blocker in blockers {
             plan.blockers.push(format!("thread {thread_id}: {blocker}"));
         }
+    }
+}
+
+/// A retained regular model turn can be reconciled in place when its live owner still holds the
+/// exact captured turn. Mailbox work is safe to leave queued because the active turn owns the
+/// scheduler boundary; every other process-local blocker still requires explicit attention.
+fn live_model_turn_can_reconcile(preflight: &HandoffPreflight, turn_id: &str) -> bool {
+    preflight.was_running
+        && preflight.turn_id.as_deref() == Some(turn_id)
+        && preflight.blockers.iter().all(|blocker| {
+            matches!(
+                blocker,
+                HandoffBlocker::PendingMailbox | HandoffBlocker::LiveDescendants
+            )
+        })
+}
+
+fn recovery_submission_is_reconciled(
+    submission: &StartIfIdleSubmission,
+    turn_id: &str,
+    preflight: Option<&HandoffPreflight>,
+) -> bool {
+    match submission {
+        StartIfIdleSubmission::Started {
+            turn_id: started_turn_id,
+        } => started_turn_id == turn_id,
+        StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn,
+        } => preflight.is_some_and(|preflight| live_model_turn_can_reconcile(preflight, turn_id)),
+        StartIfIdleSubmission::NotSubmitted { .. } => false,
     }
 }
 
