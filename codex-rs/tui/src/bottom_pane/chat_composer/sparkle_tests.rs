@@ -62,10 +62,7 @@ fn sparkle_keeps_the_existing_composer_layout() {
 #[test]
 fn sparkle_renders_fixed_phase_glyph_snapshot() {
     let area = Rect::new(
-        /*x*/ 0,
-        /*y*/ 0,
-        /*width*/ 24,
-        /*height*/ 3,
+        /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 3,
     );
     let mut buffer = Buffer::empty(area);
     buffer.set_style(area, Style::default().bg(rgb_color((36, 27, 53))));
@@ -341,10 +338,12 @@ fn sparkle_waits_for_terminal_colors() {
         || {
             buffer.set_style(area, Style::default().bg(rgb_color((36, 27, 53))));
             composer.render_sparkle(area, /*cursor*/ None, &mut buffer);
-            assert!(buffer
-                .content
-                .iter()
-                .any(|cell| DOTS.contains(&cell.symbol())));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|cell| DOTS.contains(&cell.symbol()))
+            );
         },
     );
 }

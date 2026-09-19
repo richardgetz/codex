@@ -324,9 +324,10 @@ fn history_page_down_requests_next_cursor_once() {
         .collect::<Vec<_>>();
     assert_eq!(history_requests, vec!["history-next".to_string()]);
     view.handle_key_event(KeyCode::PageDown.into());
-    assert!(std::iter::from_fn(|| rx.try_recv().ok()).all(|event| {
-        !matches!(event, AppEvent::LoadEtaHistory { .. })
-    }));
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .all(|event| { !matches!(event, AppEvent::LoadEtaHistory { .. }) })
+    );
 }
 
 #[test]

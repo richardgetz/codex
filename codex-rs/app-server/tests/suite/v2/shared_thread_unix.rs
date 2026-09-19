@@ -1,8 +1,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use app_test_support::MockResponsesConfig;
 use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
+use app_test_support::MockResponsesConfig;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -127,13 +127,10 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
         )
         .await?;
     deadline
-        .run(
-            "waiting for the first model request",
-            async {
-                responses_server.wait_for_request_count(1).await;
-                Ok(())
-            },
-        )
+        .run("waiting for the first model request", async {
+            responses_server.wait_for_request_count(1).await;
+            Ok(())
+        })
         .await?;
 
     let read = deadline
@@ -146,26 +143,23 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
     assert!(matches!(read.thread.status, ThreadStatus::Active { .. }));
 
     let resumed = deadline
-        .run(
-            "client B thread/resume to subscribe while active",
-            async {
-                send_request(
-                    &mut client_b,
-                    "thread/resume",
-                    6,
-                    Some(serde_json::to_value(ThreadResumeParams {
-                        thread_id: thread_id.clone(),
-                        exclude_turns: true,
-                        ..Default::default()
-                    })?),
-                )
-                .await?;
-                let response = read_response_for_id(&mut client_b, 6).await?;
-                Ok(serde_json::from_value::<ThreadResumeResponse>(
-                    response.result,
-                )?)
-            },
-        )
+        .run("client B thread/resume to subscribe while active", async {
+            send_request(
+                &mut client_b,
+                "thread/resume",
+                6,
+                Some(serde_json::to_value(ThreadResumeParams {
+                    thread_id: thread_id.clone(),
+                    exclude_turns: true,
+                    ..Default::default()
+                })?),
+            )
+            .await?;
+            let response = read_response_for_id(&mut client_b, 6).await?;
+            Ok(serde_json::from_value::<ThreadResumeResponse>(
+                response.result,
+            )?)
+        })
         .await?;
     assert_eq!(resumed.thread.id, thread_id);
     assert!(matches!(resumed.thread.status, ThreadStatus::Active { .. }));
@@ -225,16 +219,20 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
         )
         .await?;
     assert_eq!(final_read.thread.id, thread_id);
-    assert!(final_read
-        .thread
-        .turns
-        .iter()
-        .any(|turn| turn.id == active_turn.id));
-    assert!(final_read
-        .thread
-        .turns
-        .iter()
-        .any(|turn| turn.id == follow_up_turn.id));
+    assert!(
+        final_read
+            .thread
+            .turns
+            .iter()
+            .any(|turn| turn.id == active_turn.id)
+    );
+    assert!(
+        final_read
+            .thread
+            .turns
+            .iter()
+            .any(|turn| turn.id == follow_up_turn.id)
+    );
     assert_eq!(responses_server.requests().await.len(), 3);
 
     client_a.close(None).await.context("close client A")?;
@@ -372,7 +370,11 @@ async fn start_thread(client: &mut UnixWebSocket, id: i64) -> Result<String> {
     )
     .await?;
     let response = read_response_for_id(client, id).await?;
-    Ok(serde_json::from_value::<ThreadStartResponse>(response.result)?.thread.id)
+    Ok(
+        serde_json::from_value::<ThreadStartResponse>(response.result)?
+            .thread
+            .id,
+    )
 }
 
 async fn start_turn(

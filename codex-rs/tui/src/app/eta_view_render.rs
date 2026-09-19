@@ -377,17 +377,21 @@ impl EtaView {
             };
             let indent = "  ".repeat(depth);
             let prefix = format!("{indent}{marker}");
-            let nested_badge = (task.nested_task_count > 0)
-                .then(|| {
+            let nested_badge = if task.nested_task_count > 0 {
+                {
                     format!(
                         "  [{} nested{}]",
                         task.nested_task_count,
-                        (task.active_nested_task_count > 0)
-                            .then(|| format!(", {} active", task.active_nested_task_count))
-                            .unwrap_or_default()
+                        if task.active_nested_task_count > 0 {
+                            format!(", {} active", task.active_nested_task_count)
+                        } else {
+                            Default::default()
+                        }
                     )
-                })
-                .unwrap_or_default();
+                }
+            } else {
+                Default::default()
+            };
             let title = fit_text(
                 &format!("{prefix}{}{nested_badge}", task.title.trim()),
                 title_width,

@@ -110,7 +110,7 @@ impl App {
         &mut self,
         target: crate::resume_picker::SessionTarget,
     ) {
-        let target = target.clone();
+        let target = target;
         self.chat_widget.show_selection_view(SelectionViewParams {
             title: Some("Resume another active session?".to_string()),
             items: vec![

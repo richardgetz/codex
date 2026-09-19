@@ -93,12 +93,12 @@ mod rollout_migration;
 mod safety_check_downgrade;
 #[cfg(not(target_os = "windows"))]
 mod selected_capability_stack;
-#[cfg(unix)]
-mod shared_thread_unix;
 mod selected_environment;
 mod server_diagnostics;
 #[cfg(not(target_os = "windows"))]
 mod session_end;
+#[cfg(unix)]
+mod shared_thread_unix;
 mod skills_list;
 mod sleep;
 mod thread_activity;

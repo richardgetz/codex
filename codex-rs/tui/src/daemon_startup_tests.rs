@@ -24,7 +24,8 @@ async fn daemon_connection_rejects_unprotected_socket_before_handshake() -> colo
 }
 
 #[tokio::test]
-async fn daemon_startup_reports_connection_failures_without_embedded_fallback() -> color_eyre::Result<()> {
+async fn daemon_startup_reports_connection_failures_without_embedded_fallback()
+-> color_eyre::Result<()> {
     for scenario in ["missing socket", "failed handshake", "explicit endpoint"] {
         let home = TempDir::new()?;
         let config = ConfigBuilder::default()
