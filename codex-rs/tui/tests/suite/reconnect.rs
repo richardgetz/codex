@@ -219,6 +219,7 @@ async fn implicit_daemon_resume_picker_and_direct_id_share_one_connection() -> R
         let (lookup_tx, lookup_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let mut accepted = 0;
+            let mut lookup_tx = Some(lookup_tx);
             let mut socket = loop {
                 let (stream, _) = listener.accept().await?;
                 accepted += 1;
@@ -267,7 +268,9 @@ async fn implicit_daemon_resume_picker_and_direct_id_share_one_connection() -> R
                             .into(),
                     ))
                     .await?;
-                if method == "thread/resume" {
+                if method == "thread/resume"
+                    && let Some(lookup_tx) = lookup_tx.take()
+                {
                     lookup_tx.send(()).ok();
                 }
             }

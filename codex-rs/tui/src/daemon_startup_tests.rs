@@ -110,9 +110,9 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume()
     let home = TempDir::new()?;
     let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
     std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
-    let listener = codex_uds::UnixListener::bind(socket_path.as_path()).await?;
+    let mut listener = codex_uds::UnixListener::bind(socket_path.as_path()).await?;
     let server = tokio::spawn(async move {
-        let (stream, _) = listener.accept().await?;
+        let stream = listener.accept().await?;
         let mut socket = tokio_tungstenite::accept_async(stream).await?;
         let mut methods = Vec::new();
         while let Some(message) = socket.next().await {
