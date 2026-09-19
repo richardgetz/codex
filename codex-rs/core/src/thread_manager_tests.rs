@@ -80,14 +80,7 @@ fn team_recovery_exact_turn_ignores_a_later_unfinished_turn() {
         recovery_test_turn("captured-turn", TurnStatus::Interrupted, Vec::new()),
         recovery_test_turn("later-turn", TurnStatus::InProgress, Vec::new()),
     ];
-    append_recovery_turn_by_id(
-        &mut plan,
-        thread_id,
-        &items,
-        "captured-turn",
-        None,
-        false,
-    );
+    append_recovery_turn_by_id(&mut plan, thread_id, &items, "captured-turn", None, false);
     assert!(plan.recoverable_turns.is_empty());
     assert!(plan.unfinished_turn_ids.is_empty());
 
@@ -226,7 +219,7 @@ fn team_recovery_reconciles_exact_live_turn_after_pending_trigger() {
         turn_id,
         Some(&HandoffPreflight {
             blockers: vec![HandoffBlocker::PendingApproval],
-            ..preflight.clone()
+            ..preflight
         }),
     ));
 }

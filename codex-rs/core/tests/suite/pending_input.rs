@@ -915,7 +915,8 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn restore_paused_team_with_queued_trigger_preserves_live_turn_until_continue() -> anyhow::Result<()> {
+async fn restore_paused_team_with_queued_trigger_preserves_live_turn_until_continue()
+-> anyhow::Result<()> {
     let (release_first_tx, release_first_rx) = oneshot::channel();
     let first_chunks = vec![
         chunk(ev_response_created("recovery-live")),
@@ -1003,10 +1004,7 @@ async fn restore_paused_team_with_queued_trigger_preserves_live_turn_until_conti
     let requests = server.requests().await;
     assert_eq!(requests.len(), 2);
     let first_request = from_slice::<Value>(&requests[0]).expect("parse retained turn request");
-    assert_eq!(
-        first_request["client_metadata"]["turn_id"],
-        json!(turn_id)
-    );
+    assert_eq!(first_request["client_metadata"]["turn_id"], json!(turn_id));
     let follow_up = from_slice::<Value>(&requests[1]).expect("parse follow-up request");
     assert_ne!(follow_up["client_metadata"]["turn_id"], json!(turn_id));
     let trigger_message = follow_up
@@ -1015,10 +1013,11 @@ async fn restore_paused_team_with_queued_trigger_preserves_live_turn_until_conti
         .and_then(|items| {
             items.iter().find(|item| {
                 item.get("type").and_then(Value::as_str) == Some("agent_message")
-                    && item.get("content") == Some(&json!([{
-                        "type": "input_text",
-                        "text": "queued trigger must survive recovery"
-                    }]))
+                    && item.get("content")
+                        == Some(&json!([{
+                            "type": "input_text",
+                            "text": "queued trigger must survive recovery"
+                        }]))
             })
         });
     assert!(

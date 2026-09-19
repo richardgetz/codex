@@ -2032,19 +2032,16 @@ impl ThreadManager {
                 .await?;
             let preflight = match &submission {
                 StartIfIdleSubmission::NotSubmitted {
-                    reason: NotSubmittedReason::NotIdle
-                        | NotSubmittedReason::PendingTriggerTurn,
+                    reason: NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn,
                 } => Some(thread.handoff_preflight().await),
                 _ => None,
             };
-            if !recovery_submission_is_reconciled(
-                &submission,
-                &turn_id,
-                preflight.as_ref(),
-            ) {
+            if !recovery_submission_is_reconciled(&submission, &turn_id, preflight.as_ref()) {
                 let message = match submission {
                     StartIfIdleSubmission::Started { .. } => {
-                        format!("cannot recover unfinished Team turn {turn_id} for thread {thread_id}")
+                        format!(
+                            "cannot recover unfinished Team turn {turn_id} for thread {thread_id}"
+                        )
                     }
                     StartIfIdleSubmission::NotSubmitted { reason } => format!(
                         "cannot recover unfinished Team turn {turn_id} for thread {thread_id}: Core declined recovery ({reason:?})"
@@ -3477,13 +3474,7 @@ fn append_recovery_turn_by_id(
         }
         return;
     };
-    append_recovery_turn(
-        plan,
-        thread_id,
-        turn,
-        raw_items,
-        allow_live_model_tool_call,
-    );
+    append_recovery_turn(plan, thread_id, turn, raw_items, allow_live_model_tool_call);
 }
 
 fn append_recovery_turn(
@@ -3540,9 +3531,9 @@ fn recovery_submission_is_reconciled(
     preflight: Option<&HandoffPreflight>,
 ) -> bool {
     match submission {
-        StartIfIdleSubmission::Started { turn_id: started_turn_id } => {
-            started_turn_id == turn_id
-        }
+        StartIfIdleSubmission::Started {
+            turn_id: started_turn_id,
+        } => started_turn_id == turn_id,
         StartIfIdleSubmission::NotSubmitted {
             reason: NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn,
         } => preflight.is_some_and(|preflight| live_model_turn_can_reconcile(preflight, turn_id)),
