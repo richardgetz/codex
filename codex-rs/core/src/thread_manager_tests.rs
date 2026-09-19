@@ -6,6 +6,7 @@ use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpThreadIdentity;
 use crate::rollout::RolloutRecorder;
+use crate::session::handoff_preflight::HandoffPreflight;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::build_world_state_from_turn_context;
 use crate::session::tests::make_session_and_context;
@@ -44,6 +45,7 @@ use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+use codex_protocol::turn_input::HandoffBlocker;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -78,12 +80,26 @@ fn team_recovery_exact_turn_ignores_a_later_unfinished_turn() {
         recovery_test_turn("captured-turn", TurnStatus::Interrupted, Vec::new()),
         recovery_test_turn("later-turn", TurnStatus::InProgress, Vec::new()),
     ];
-    append_recovery_turn_by_id(&mut plan, thread_id, &items, "captured-turn", None);
+    append_recovery_turn_by_id(
+        &mut plan,
+        thread_id,
+        &items,
+        "captured-turn",
+        None,
+        false,
+    );
     assert!(plan.recoverable_turns.is_empty());
     assert!(plan.unfinished_turn_ids.is_empty());
 
     let mut missing_plan = TeamActivityRecoveryPlan::default();
-    append_recovery_turn_by_id(&mut missing_plan, thread_id, &items, "missing-turn", None);
+    append_recovery_turn_by_id(
+        &mut missing_plan,
+        thread_id,
+        &items,
+        "missing-turn",
+        None,
+        false,
+    );
     assert!(missing_plan.recoverable_turns.is_empty());
     assert_eq!(missing_plan.blockers.len(), 1);
 }
@@ -104,7 +120,7 @@ fn team_recovery_blocks_unfinished_external_work_before_retry() {
             call_id: "search-1".to_string(),
         })),
     ];
-    append_persisted_recovery(&mut plan, thread_id, &items);
+    append_persisted_recovery(&mut plan, thread_id, &items, false);
 
     assert!(plan.recoverable_turns.is_empty());
     assert_eq!(plan.blockers.len(), 1);
@@ -136,7 +152,7 @@ fn team_recovery_allows_completed_empty_web_search_results() {
             results: None,
         })),
     ];
-    append_persisted_recovery(&mut plan, thread_id, &items);
+    append_persisted_recovery(&mut plan, thread_id, &items, false);
 
     assert_eq!(
         plan.recoverable_turns,
@@ -162,6 +178,7 @@ fn team_recovery_allows_latest_model_only_interruption_once() {
             }],
         ),
         None,
+        false,
     );
 
     assert_eq!(
@@ -169,6 +186,105 @@ fn team_recovery_allows_latest_model_only_interruption_once() {
         vec![(thread_id, "interrupted-model".to_string())]
     );
     assert!(plan.blockers.is_empty());
+}
+
+#[test]
+fn team_recovery_reconciles_exact_live_turn_after_pending_trigger() {
+    let turn_id = "captured-live-turn";
+    let preflight = HandoffPreflight {
+        thread_id: ThreadId::new().to_string(),
+        turn_id: Some(turn_id.to_string()),
+        was_running: true,
+        was_paused: true,
+        blockers: vec![HandoffBlocker::PendingMailbox],
+    };
+    assert!(recovery_submission_is_reconciled(
+        &StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::PendingTriggerTurn,
+        },
+        turn_id,
+        Some(&preflight),
+    ));
+    assert!(recovery_submission_is_reconciled(
+        &StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::NotIdle,
+        },
+        turn_id,
+        Some(&preflight),
+    ));
+    assert!(!recovery_submission_is_reconciled(
+        &StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::PendingTriggerTurn,
+        },
+        "different-turn",
+        Some(&preflight),
+    ));
+    assert!(!recovery_submission_is_reconciled(
+        &StartIfIdleSubmission::NotSubmitted {
+            reason: NotSubmittedReason::PendingTriggerTurn,
+        },
+        turn_id,
+        Some(&HandoffPreflight {
+            blockers: vec![HandoffBlocker::PendingApproval],
+            ..preflight.clone()
+        }),
+    ));
+}
+
+#[test]
+fn team_recovery_allows_live_model_tool_projection_only_with_exact_runtime_owner() {
+    let thread_id = ThreadId::new();
+    let turn_id = "live-model-tool-turn";
+    let items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn_id.to_string(),
+            trace_id: None,
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        })),
+        RolloutItem::ResponseItem(
+            ResponseItem::FunctionCall {
+                id: None,
+                call_id: "tool-call-1".to_string(),
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                encrypted_function_args: None,
+                internal_chat_message_metadata_passthrough: None,
+            }
+            .into(),
+        ),
+    ];
+    let preflight = HandoffPreflight {
+        thread_id: thread_id.to_string(),
+        turn_id: Some(turn_id.to_string()),
+        was_running: true,
+        was_paused: true,
+        blockers: vec![HandoffBlocker::PendingMailbox],
+    };
+    let allow_live_model_tool_call = live_model_turn_can_reconcile(&preflight, turn_id);
+    assert!(allow_live_model_tool_call);
+    let mut live_plan = TeamActivityRecoveryPlan::default();
+    append_persisted_recovery(
+        &mut live_plan,
+        thread_id,
+        &items,
+        allow_live_model_tool_call,
+    );
+    assert_eq!(
+        live_plan.recoverable_turns,
+        vec![(thread_id, turn_id.to_string())]
+    );
+    assert!(live_plan.blockers.is_empty());
+
+    let mut cold_plan = TeamActivityRecoveryPlan::default();
+    append_persisted_recovery(&mut cold_plan, thread_id, &items, false);
+    assert!(cold_plan.recoverable_turns.is_empty());
+    assert_eq!(
+        cold_plan.blockers,
+        vec![format!("thread {thread_id}: unfinished model tool call")]
+    );
 }
 
 #[test]

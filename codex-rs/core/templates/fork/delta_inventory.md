@@ -109,7 +109,12 @@ release or merge rules.
   without recursive descendant reopening.
   Unloaded V2 descendants are restored through their loaded immediate parent,
   preserving parent-owned settings, version, and ownership validation; missing
-  or inconsistent V2 lineage remains blocked for explicit recovery.
+  or inconsistent V2 lineage remains blocked for explicit recovery. Warm
+  `/continue` reconciles an exact captured regular model turn when Core reports
+  `NotIdle` or `PendingTriggerTurn`, without injecting a user turn; persisted
+  unfinished model-tool projections are bypassed only with that same live
+  exact-turn proof, while cold, mismatched, and external-operation states stay
+  blocked.
 - macOS Seatbelt GPU/Metal base-policy allowances preserve focused IOKit,
   service, and sysctl access for sandboxed MPS/MLX/PyTorch workloads with
   deny-wildcard regression coverage.
@@ -908,6 +913,7 @@ release or merge rules.
 - Verify manager-wide Codex handoff admission seals every root/descendant creation path before graph snapshot, persists prepared and per-node receipts durably, preserves exact turn IDs and manual pauses, blocks unsafe callbacks/tools/external operations without replay, and leaves the old runtime active with visible `NeedsAttention` state on any partial or persistence failure.
   Verify replacement inbound pollers cannot claim state-database rows before graph load, pause restoration, exact-turn admission, and successful Completed persistence; rows remain pending after failed recovery attempts and are delivered only after an explicit successful retry.
 - Verify cold Team `/continue` loads only recoverable unfinished descendants captured at the pause boundary plus their open ancestors, leaves idle or historical open edges unloaded for on-demand followup, keeps V1 restoration shallow, preserves loaded-tree pause gates and exact turn IDs, and fails closed when a captured child has missing or inconsistent ancestry. Legacy pause markers without a snapshot must release only the root gate; later turn admission must end the completed receipt epoch without UUID or wall-clock inference.
+  Verify warm Team `/continue` accepts `NotIdle`/`PendingTriggerTurn` only when the exact captured regular turn is still live, preserves queued trigger mail and turn identity across one continue, and never suppresses pending approval, user-input, tool, command, MCP, persistence, or mismatched-turn blockers.
   Verify late inter-agent and legacy completion callbacks use the manager-owned durable database even for cold targets, survive replacement, and requeue cleanly when a sealed submission reaches the session loop; incompatible envelopes remain pending with visible version attention and bounded retry.
 - Verify `[team]` rejects enabled configurations without both complete profiles,
   remains disabled by default, and `/team` state survives resume/fork without

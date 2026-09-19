@@ -29,7 +29,9 @@ use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::CyberAccessProgram;
+use codex_protocol::turn_input::HandoffBlocker;
 use codex_protocol::user_input::UserInput;
+use codex_state::ThreadActivityPauseSnapshot;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
@@ -910,6 +912,121 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
     assert_two_responses_input_snapshot("pending_input_queued_mail_after_reasoning", &requests);
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restore_paused_team_with_queued_trigger_preserves_live_turn_until_continue() -> anyhow::Result<()> {
+    let (release_first_tx, release_first_rx) = oneshot::channel();
+    let first_chunks = vec![
+        chunk(ev_response_created("recovery-live")),
+        gated_chunk(
+            release_first_rx,
+            vec![
+                responses::ev_assistant_message("recovery-live-message", "finished once"),
+                ev_completed("recovery-live"),
+            ],
+        ),
+    ];
+    let (server, _completions) = start_streaming_sse_server(vec![
+        first_chunks,
+        response_completed_chunks("recovery-trigger"),
+    ])
+    .await;
+    let test = test_codex()
+        .with_config(|config| config.update_plan_enabled = true)
+        .with_model("gpt-5.4")
+        .build_with_streaming_server(&server)
+        .await?;
+    let codex = Arc::clone(&test.codex);
+
+    let submission = codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "keep the active turn through recovery".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let TurnInputSubmission::Started { turn_id } = submission else {
+        panic!("initial model turn should start");
+    };
+    server.wait_for_request_count(1).await;
+
+    codex.submit(Op::PauseActivity).await?;
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::try_from("/root/worker").expect("worker path should parse"),
+                AgentPath::root(),
+                Vec::new(),
+                "queued trigger must survive recovery".to_string(),
+                /*trigger_turn*/ true,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
+    codex.submit(Op::RealtimeConversationListVoices).await?;
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
+    })
+    .await;
+    codex.flush_rollout().await?;
+
+    let recovery = test
+        .thread_manager
+        .restore_paused_team(
+            codex.id(),
+            &[ThreadActivityPauseSnapshot {
+                thread_id: codex.id(),
+                turn_id: turn_id.clone(),
+            }],
+        )
+        .await?;
+    assert!(recovery.is_empty());
+    let preflight = codex.handoff_preflight().await;
+    assert_eq!(preflight.turn_id.as_deref(), Some(turn_id.as_str()));
+    assert!(preflight.was_running);
+    assert!(preflight.was_paused);
+    assert!(preflight.blockers.contains(&HandoffBlocker::PendingMailbox));
+    assert_eq!(server.requests().await.len(), 1);
+
+    codex.submit(Op::ContinueActivity).await?;
+    release_first_tx
+        .send(())
+        .expect("release the retained first model turn");
+    wait_for_turn_complete(&codex).await;
+    wait_for_turn_complete(&codex).await;
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let first_request = from_slice::<Value>(&requests[0]).expect("parse retained turn request");
+    assert_eq!(
+        first_request["client_metadata"]["turn_id"],
+        json!(turn_id)
+    );
+    let follow_up = from_slice::<Value>(&requests[1]).expect("parse follow-up request");
+    assert_ne!(follow_up["client_metadata"]["turn_id"], json!(turn_id));
+    let trigger_message = follow_up
+        .get("input")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("type").and_then(Value::as_str) == Some("agent_message")
+                    && item.get("content") == Some(&json!([{
+                        "type": "input_text",
+                        "text": "queued trigger must survive recovery"
+                    }]))
+            })
+        });
+    assert!(
+        trigger_message.is_some(),
+        "the queued trigger should be consumed by exactly one follow-up turn"
+    );
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
