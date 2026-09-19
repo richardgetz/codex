@@ -12,6 +12,8 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
@@ -143,10 +145,35 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
     assert_eq!(read.thread.id, thread_id);
     assert!(matches!(read.thread.status, ThreadStatus::Active { .. }));
 
+    let resumed = deadline
+        .run(
+            "client B thread/resume to subscribe while active",
+            async {
+                send_request(
+                    &mut client_b,
+                    "thread/resume",
+                    6,
+                    Some(serde_json::to_value(ThreadResumeParams {
+                        thread_id: thread_id.clone(),
+                        exclude_turns: true,
+                        ..Default::default()
+                    })?),
+                )
+                .await?;
+                let response = read_response_for_id(&mut client_b, 6).await?;
+                Ok(serde_json::from_value::<ThreadResumeResponse>(
+                    response.result,
+                )?)
+            },
+        )
+        .await?;
+    assert_eq!(resumed.thread.id, thread_id);
+    assert!(matches!(resumed.thread.status, ThreadStatus::Active { .. }));
+
     let steered_turn = deadline
         .run(
             "client B turn/start steering active turn",
-            start_turn(&mut client_b, 6, &thread_id, "steer"),
+            start_turn(&mut client_b, 7, &thread_id, "steer"),
         )
         .await?;
     assert_eq!(steered_turn.id, active_turn.id);
@@ -172,7 +199,7 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
     let follow_up_turn = deadline
         .run(
             "client B follow-up turn/start",
-            start_turn(&mut client_b, 7, &thread_id, "follow up"),
+            start_turn(&mut client_b, 8, &thread_id, "follow up"),
         )
         .await?;
     assert_ne!(follow_up_turn.id, active_turn.id);
@@ -194,7 +221,7 @@ async fn two_unix_clients_share_one_thread_and_active_turn() -> Result<()> {
     let final_read = deadline
         .run(
             "client B final thread/read",
-            read_thread(&mut client_b, 8, &thread_id, true),
+            read_thread(&mut client_b, 9, &thread_id, true),
         )
         .await?;
     assert_eq!(final_read.thread.id, thread_id);
