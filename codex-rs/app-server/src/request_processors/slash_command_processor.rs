@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SlashCommandCapabilities;
 use codex_app_server_protocol::SlashCommandExecuteParams;
@@ -10,11 +11,10 @@ use codex_app_server_protocol::SlashCommandListParams;
 use codex_app_server_protocol::SlashCommandListResponse;
 use codex_app_server_protocol::SlashCommandOutput;
 use codex_app_server_protocol::SlashCommandReloadResult;
-use codex_app_server_protocol::SlashCommandResultPayload;
 use codex_app_server_protocol::SlashCommandResultKind;
 use codex_app_server_protocol::SlashCommandResultNotification;
+use codex_app_server_protocol::SlashCommandResultPayload;
 use codex_app_server_protocol::SlashCommandSpec;
-use codex_app_server_protocol::RequestId;
 
 use super::AccountRequestProcessor;
 use super::ConnectionRequestId;
@@ -201,7 +201,11 @@ fn internal_error(error: impl std::fmt::Display) -> JSONRPCErrorError {
 
 fn command_specs() -> Vec<SlashCommandSpec> {
     [
-        ("status", "show current session configuration and token usage", false),
+        (
+            "status",
+            "show current session configuration and token usage",
+            false,
+        ),
         ("spend", "show daily token usage and trends", true),
         ("usage", "show token usage", true),
         ("reload", "reload the latest installed Codex safely", false),
@@ -238,14 +242,16 @@ fn command_specs() -> Vec<SlashCommandSpec> {
         ("quit", "quit Codex", false),
     ]
     .into_iter()
-    .map(|(name, description, supports_inline_args)| SlashCommandSpec {
-        name: name.to_string(),
-        aliases: Vec::new(),
-        description: description.to_string(),
-        supports_inline_args,
-        available: matches!(name, "status" | "spend" | "usage" | "reload"),
-        unavailable_reason: (!matches!(name, "status" | "spend" | "usage" | "reload"))
-            .then(|| "This command is currently TUI-only.".to_string()),
-    })
+    .map(
+        |(name, description, supports_inline_args)| SlashCommandSpec {
+            name: name.to_string(),
+            aliases: Vec::new(),
+            description: description.to_string(),
+            supports_inline_args,
+            available: matches!(name, "status" | "spend" | "usage" | "reload"),
+            unavailable_reason: (!matches!(name, "status" | "spend" | "usage" | "reload"))
+                .then(|| "This command is currently TUI-only.".to_string()),
+        },
+    )
     .collect()
 }

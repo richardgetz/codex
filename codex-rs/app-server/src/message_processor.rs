@@ -482,10 +482,8 @@ impl MessageProcessor {
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
-        let slash_command_processor = SlashCommandRequestProcessor::new(
-            account_processor.clone(),
-            outgoing.clone(),
-        );
+        let slash_command_processor =
+            SlashCommandRequestProcessor::new(account_processor.clone(), outgoing.clone());
         let thread_eta_processor = ThreadEtaRequestProcessor::new(
             outgoing.clone(),
             state_db.clone(),
@@ -1067,13 +1065,14 @@ impl MessageProcessor {
             ClientRequest::ServerLifecycleRead { .. } => {
                 Ok(Some(self.server_lifecycle.read().into()))
             }
-            ClientRequest::SlashCommandList { params, .. } => Ok(Some(
-                self.slash_command_processor.list(params).into(),
-            )),
-            ClientRequest::SlashCommandExecute { params, .. } => self
-                .slash_command_processor
-                .execute(&request_id, params)
-                .await,
+            ClientRequest::SlashCommandList { params, .. } => {
+                Ok(Some(self.slash_command_processor.list(params).into()))
+            }
+            ClientRequest::SlashCommandExecute { params, .. } => {
+                self.slash_command_processor
+                    .execute(&request_id, params)
+                    .await
+            }
             ClientRequest::ConfigRead { params, .. } => self
                 .config_processor
                 .read(params)
