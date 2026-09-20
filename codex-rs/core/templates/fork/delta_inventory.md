@@ -94,8 +94,12 @@ release or merge rules.
 - App-server v2 exposes a host-gated slash-command catalog and bounded
   `slashCommand/execute` responses for Inbound clients. Status and spend return
   configured-account usage/rate-limit data as Markdown, while non-model results
-  are emitted through `slashCommand/result`; `/reload` reports managed-daemon
-  eligibility and never attempts an unsafe in-process restart.
+  are emitted through `slashCommand/result`; `/reload` is available only when
+  the daemon has an explicitly configured local launcher, schedules the daemon's
+  pause/checkpoint/replacement/exact-turn recovery handoff, and re-arms after a
+  launcher spawn failure. The native TUI exposes the same command and reports
+  daemon apply completion or failure; embedded and standalone-daemon sessions
+  remain unavailable because no replacement launcher is configured.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while

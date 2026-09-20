@@ -1228,6 +1228,9 @@ impl ChatWidget {
             SlashCommand::Spend => {
                 self.add_spend_output("");
             }
+            SlashCommand::Reload => {
+                self.dispatch_reload_command();
+            }
             SlashCommand::Mic => {
                 self.app_event_tx
                     .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle));
@@ -1409,6 +1412,65 @@ impl ChatWidget {
                 );
             }
         }
+    }
+
+    fn dispatch_reload_command(&mut self) {
+        let executable = match std::env::current_exe() {
+            Ok(executable) if executable.is_file() => executable,
+            Ok(executable) => {
+                self.add_error_message(format!(
+                    "`/reload` could not resolve a Codex launcher at {}.",
+                    executable.display()
+                ));
+                return;
+            }
+            Err(error) => {
+                self.add_error_message(format!(
+                    "`/reload` could not resolve the current Codex launcher: {error}."
+                ));
+                return;
+            }
+        };
+
+        self.add_info_message(
+            "`/reload` requested a managed app-server handoff.".to_string(),
+            Some(
+                "The daemon pauses active turns, replaces its configured launcher, and recovers exact turns."
+                    .to_string(),
+            ),
+        );
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::process::Command::new(executable)
+                .args(["app-server", "daemon", "apply"])
+                .stdin(std::process::Stdio::null())
+                .output()
+                .await;
+            let cell = match result {
+                Ok(output) if output.status.success() => {
+                    let summary = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    crate::history_cell::new_info_event(
+                        "Managed app-server reload completed.".to_string(),
+                        (!summary.is_empty()).then_some(summary),
+                    )
+                }
+                Ok(output) => {
+                    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    crate::history_cell::new_error_event(if detail.is_empty() {
+                        format!(
+                            "Managed app-server reload failed with status {}. Configure an explicit local Codex launcher before retrying.",
+                            output.status
+                        )
+                    } else {
+                        format!("Managed app-server reload failed: {detail}")
+                    })
+                }
+                Err(error) => crate::history_cell::new_error_event(format!(
+                    "Managed app-server reload could not start: {error}"
+                )),
+            };
+            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        });
     }
 
     /// Run an inline slash command.
@@ -2330,6 +2392,7 @@ impl ChatWidget {
             | SlashCommand::Team
             | SlashCommand::Status
             | SlashCommand::Spend
+            | SlashCommand::Reload
             | SlashCommand::Mic
             | SlashCommand::Voice
             | SlashCommand::Pwd

@@ -12,6 +12,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_app_server_transport::APP_SERVER_DAEMON_MANAGED_ENV;
+use codex_app_server_transport::APP_SERVER_DAEMON_RELOAD_ENV;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::fs;
@@ -96,8 +97,11 @@ impl PidBackend {
         if let Some((key, value)) = self.command_env() {
             command.env(key, value);
         }
-        if matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
+        if let PidCommandKind::AppServer { reload_enabled, .. } = self.command_kind {
             command.env(APP_SERVER_DAEMON_MANAGED_ENV, "1");
+            if reload_enabled {
+                command.env(APP_SERVER_DAEMON_RELOAD_ENV, "1");
+            }
         }
 
         #[cfg(unix)]
