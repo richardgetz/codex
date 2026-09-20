@@ -18337,7 +18337,7 @@
           "type": "string"
         },
         "requestId": {
-          "type": "string"
+          "$ref": "#/definitions/RequestId"
         },
         "result": {
           "$ref": "#/definitions/SlashCommandResultPayload"

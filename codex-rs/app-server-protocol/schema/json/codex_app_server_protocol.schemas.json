@@ -20623,7 +20623,7 @@
             "type": "string"
           },
           "requestId": {
-            "type": "string"
+            "$ref": "#/definitions/v2/RequestId"
           },
           "result": {
             "$ref": "#/definitions/v2/SlashCommandResultPayload"

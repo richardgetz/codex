@@ -95,11 +95,16 @@ release or merge rules.
   `slashCommand/execute` responses for Inbound clients. Status and spend return
   configured-account usage/rate-limit data as Markdown, while non-model results
   are emitted through `slashCommand/result`; `/reload` is available only when
-  the daemon has an explicitly configured local launcher, schedules the daemon's
-  pause/checkpoint/replacement/exact-turn recovery handoff, and re-arms after a
-  launcher spawn failure. The native TUI exposes the same command and reports
-  daemon apply completion or failure; embedded and standalone-daemon sessions
-  remain unavailable because no replacement launcher is configured.
+  the daemon has an explicitly configured local launcher and both managed/reload
+  markers, schedules the daemon's pause/checkpoint/replacement/exact-turn
+  recovery handoff, reports `accepted` before replacement, and exposes durable
+  `in_progress`, `completed`, and `failed` states through `/reload status` plus
+  `/reload recover`. Launcher, process, and non-applied receipt failures re-arm
+  the latch and emit a targeted result notification. Slash result notifications
+  preserve the JSON-RPC request-id type for reliable client correlation. The
+  native TUI exposes the same command, parses daemon apply status before claiming
+  completion, and reports pending/failure states; embedded and standalone-daemon
+  sessions remain unavailable because no replacement launcher is configured.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while

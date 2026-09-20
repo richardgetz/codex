@@ -3,6 +3,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SlashCommandExecuteParams;
 use codex_app_server_protocol::SlashCommandExecuteResponse;
 use codex_app_server_protocol::SlashCommandListParams;
@@ -103,6 +104,7 @@ async fn slash_reload_reports_unavailable_without_replacing_the_server() -> Resu
     let notification: SlashCommandResultNotification =
         timeout(READ_TIMEOUT, app.read_notification("slashCommand/result")).await??;
     assert_eq!(notification.command, "reload");
+    assert_eq!(notification.request_id, RequestId::Integer(1));
     assert_eq!(notification.result.command, "reload");
     assert_eq!(notification.result.ok, response.ok);
     assert_eq!(notification.result.output, response.output);

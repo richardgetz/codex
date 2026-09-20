@@ -1,4 +1,5 @@
 use crate::JsonSchema;
+use crate::RequestId;
 use crate::TS;
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +127,6 @@ pub struct SlashCommandResultPayload {
 pub struct SlashCommandResultNotification {
     pub thread_id: String,
     pub command: String,
-    pub request_id: String,
+    pub request_id: RequestId,
     pub result: SlashCommandResultPayload,
 }

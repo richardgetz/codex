@@ -39,6 +39,61 @@ struct PreparedSlashCommandArgs {
     source: SlashCommandDispatchSource,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReloadProcessOutcome {
+    Completed(Option<String>),
+    InProgress(String),
+    Failed(String),
+}
+
+fn parse_reload_process_output(
+    process_succeeded: bool,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> ReloadProcessOutcome {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if !process_succeeded {
+        return ReloadProcessOutcome::Failed(if stderr.is_empty() {
+            "the daemon exited before completing the handoff".to_string()
+        } else {
+            format!("{stderr}")
+        });
+    }
+
+    let output = match serde_json::from_slice::<serde_json::Value>(stdout) {
+        Ok(output) => output,
+        Err(error) => {
+            return ReloadProcessOutcome::Failed(format!(
+                "the daemon returned invalid handoff status: {error}"
+            ));
+        }
+    };
+    let detail = output
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let summary = String::from_utf8_lossy(stdout).trim().to_string();
+    match output.get("status").and_then(serde_json::Value::as_str) {
+        Some("applied") => {
+            ReloadProcessOutcome::Completed((!summary.is_empty()).then_some(summary))
+        }
+        Some("inProgress") => {
+            ReloadProcessOutcome::InProgress(detail.unwrap_or_else(|| {
+                "the daemon is still handing off the active session".to_string()
+            }))
+        }
+        Some("needsAttention") => ReloadProcessOutcome::Failed(
+            detail.unwrap_or_else(|| "the daemon needs explicit handoff recovery".to_string()),
+        ),
+        Some(status) => ReloadProcessOutcome::Failed(format!(
+            "the daemon returned unsupported handoff status `{status}`"
+        )),
+        None => ReloadProcessOutcome::Failed(
+            "the daemon returned no applied handoff status".to_string(),
+        ),
+    }
+}
+
 const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
@@ -1461,24 +1516,31 @@ impl ChatWidget {
                 .output()
                 .await;
             let cell = match result {
-                Ok(output) if output.status.success() => {
-                    let summary = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    crate::history_cell::new_info_event(
-                        "Managed app-server reload completed.".to_string(),
-                        (!summary.is_empty()).then_some(summary),
-                    )
-                }
-                Ok(output) => {
-                    let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                    crate::history_cell::new_error_event(if detail.is_empty() {
-                        format!(
-                            "Managed app-server reload failed with status {}. Configure an explicit local Codex launcher before retrying.",
-                            output.status
+                Ok(output) => match parse_reload_process_output(
+                    output.status.success(),
+                    &output.stdout,
+                    &output.stderr,
+                ) {
+                    ReloadProcessOutcome::Completed(summary) => {
+                        crate::history_cell::new_info_event(
+                            "Managed app-server reload completed.".to_string(),
+                            summary,
                         )
-                    } else {
-                        format!("Managed app-server reload failed: {detail}")
-                    })
-                }
+                    }
+                    ReloadProcessOutcome::InProgress(detail) => {
+                        crate::history_cell::new_info_event(
+                            "Managed app-server reload is still in progress.".to_string(),
+                            Some(format!(
+                                "{detail}; retry `/reload status` after the daemon reconnects."
+                            )),
+                        )
+                    }
+                    ReloadProcessOutcome::Failed(detail) => {
+                        crate::history_cell::new_error_event(format!(
+                            "Managed app-server reload failed: {detail}. Configure an explicit local Codex launcher or retry `/reload recover` after resolving the handoff receipt."
+                        ))
+                    }
+                },
                 Err(error) => crate::history_cell::new_error_event(format!(
                     "Managed app-server reload could not start: {error}"
                 )),
@@ -2544,6 +2606,38 @@ impl ChatWidget {
         ));
         self.bottom_pane.drain_pending_submission_state();
         false
+    }
+}
+
+#[cfg(test)]
+mod reload_tests {
+    use super::ReloadProcessOutcome;
+    use super::parse_reload_process_output;
+
+    #[test]
+    fn reload_output_requires_applied_status() {
+        assert_eq!(
+            parse_reload_process_output(true, br#"{"status":"applied"}"#, b""),
+            ReloadProcessOutcome::Completed(Some(r#"{"status":"applied"}"#.to_string()))
+        );
+        assert_eq!(
+            parse_reload_process_output(true, br#"{"status":"inProgress"}"#, b""),
+            ReloadProcessOutcome::InProgress(
+                "the daemon is still handing off the active session".to_string()
+            )
+        );
+        assert_eq!(
+            parse_reload_process_output(
+                true,
+                br#"{"status":"needsAttention","error":"recover"}"#,
+                b""
+            ),
+            ReloadProcessOutcome::Failed("recover".to_string())
+        );
+        assert!(matches!(
+            parse_reload_process_output(true, br#"{"status":"unknown"}"#, b""),
+            ReloadProcessOutcome::Failed(_)
+        ));
     }
 }
 

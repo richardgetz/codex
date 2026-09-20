@@ -19,6 +19,7 @@ use codex_app_server_protocol::SlashCommandResultKind;
 use codex_app_server_protocol::SlashCommandResultNotification;
 use codex_app_server_protocol::SlashCommandResultPayload;
 use codex_app_server_protocol::SlashCommandSpec;
+use codex_app_server_transport::APP_SERVER_DAEMON_MANAGED_ENV;
 use codex_app_server_transport::APP_SERVER_DAEMON_RELOAD_ENV;
 
 use super::AccountRequestProcessor;
@@ -29,7 +30,23 @@ use super::invalid_request;
 const MAX_OUTPUT_CHARS: usize = 20_000;
 const RELOAD_HANDOFF_DELAY: Duration = Duration::from_millis(250);
 
-type ReloadLauncher = dyn Fn(std::path::PathBuf) -> std::io::Result<()> + Send + Sync + 'static;
+type ReloadLauncher = dyn Fn(std::path::PathBuf, ReloadOperation) -> std::io::Result<tokio::process::Child>
+    + Send
+    + Sync
+    + 'static;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReloadOperation {
+    Apply,
+    Recover,
+}
+
+#[derive(Clone)]
+struct ReloadNotificationTarget {
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: ConnectionRequestId,
+    thread_id: String,
+}
 
 #[derive(Clone)]
 pub(crate) struct SlashCommandRequestProcessor {
@@ -99,7 +116,10 @@ impl SlashCommandRequestProcessor {
                     return Err(error);
                 }
             },
-            "reload" => self.reload_result().await,
+            "reload" => {
+                self.reload_result(&params.args, request_id, &thread_id)
+                    .await
+            }
             _ => SlashCommandExecuteResponse {
                 command: command.clone(),
                 ok: false,
@@ -129,45 +149,63 @@ impl SlashCommandRequestProcessor {
                 ServerNotification::SlashCommandResult(SlashCommandResultNotification {
                     thread_id: thread_id.to_string(),
                     command: result.command.clone(),
-                    request_id: request_id.request_id.to_string(),
+                    request_id: request_id.request_id.clone(),
                     result: result_payload(result),
                 }),
             )
             .await;
     }
 
-    async fn reload_result(&self) -> SlashCommandExecuteResponse {
+    async fn reload_result(
+        &self,
+        args: &str,
+        request_id: &ConnectionRequestId,
+        thread_id: &str,
+    ) -> SlashCommandExecuteResponse {
         if !daemon_reload_available() {
             return unavailable_reload_result(
                 "Reload requires an app-server process launched by the managed local daemon with an explicitly configured local Codex launcher.",
             );
+        }
+        match args.trim().to_ascii_lowercase().as_str() {
+            "status" => return self.reload_status_result().await,
+            "recover" => {}
+            "" => {}
+            operation => {
+                return failed_reload_result(format!(
+                    "Unsupported /reload operation `{operation}`; use `/reload`, `/reload status`, or `/reload recover`."
+                ));
+            }
         }
         if !reserve_reload(&self.reload_scheduled) {
             return unavailable_reload_result(
                 "A Codex reload is already scheduled for this app-server session.",
             );
         }
-        let executable = match std::env::current_exe() {
-            Ok(executable) if executable.is_file() => executable,
-            Ok(executable) => {
+        let executable = match resolve_current_executable() {
+            Ok(executable) => executable,
+            Err(reason) => {
                 self.reload_scheduled.store(false, Ordering::Release);
-                return unavailable_reload_result(&format!(
-                    "The current Codex launcher is not a file: {}.",
-                    executable.display()
-                ));
-            }
-            Err(error) => {
-                self.reload_scheduled.store(false, Ordering::Release);
-                return unavailable_reload_result(&format!(
-                    "The current Codex launcher could not be resolved: {error}."
-                ));
+                return unavailable_reload_result(&reason);
             }
         };
 
+        let operation = if args.trim().eq_ignore_ascii_case("recover") {
+            ReloadOperation::Recover
+        } else {
+            ReloadOperation::Apply
+        };
+        let reload_target = ReloadNotificationTarget {
+            outgoing: Arc::clone(&self.outgoing),
+            request_id: request_id.clone(),
+            thread_id: thread_id.to_string(),
+        };
         let _reload_task = schedule_reload(
             Arc::clone(&self.reload_scheduled),
             executable,
+            operation,
             Arc::new(spawn_reload_daemon),
+            Some(reload_target),
         );
 
         SlashCommandExecuteResponse {
@@ -176,12 +214,111 @@ impl SlashCommandRequestProcessor {
             result_kind: SlashCommandResultKind::Reload,
             output: SlashCommandOutput {
                 format: "markdown".to_string(),
-                text: "`/reload` scheduled a managed daemon handoff. The app-server will pause, replace the running Codex, and recover the exact paused turns.".to_string(),
+                text: format!(
+                    "`/reload {}` was accepted by the managed daemon. The operation is not complete yet; use `/reload status` to observe the durable handoff receipt. The daemon pauses active turns, replaces the configured launcher, and recovers exact paused turns.",
+                    if matches!(operation, ReloadOperation::Recover) {
+                        "recover"
+                    } else {
+                        "apply"
+                    }
+                ),
             },
             reload: Some(SlashCommandReloadResult {
                 eligible: true,
-                state: "scheduled".to_string(),
-                reason: Some("The daemon owns pause, replacement, exact-turn recovery, and unresolved-failure receipts.".to_string()),
+                state: "accepted".to_string(),
+                reason: Some("The daemon owns pause, replacement, exact-turn recovery, and unresolved-failure receipts; completion is reported by `/reload status`.".to_string()),
+            }),
+        }
+    }
+
+    async fn reload_status_result(&self) -> SlashCommandExecuteResponse {
+        let executable = match resolve_current_executable() {
+            Ok(executable) => executable,
+            Err(reason) => return failed_reload_result(reason),
+        };
+        let output = tokio::process::Command::new(executable)
+            .args(reload_status_command_args())
+            .stdin(Stdio::null())
+            .output()
+            .await;
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                return failed_reload_result(format!(
+                    "The daemon handoff status could not be read: {error}."
+                ));
+            }
+        };
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return failed_reload_result(if detail.is_empty() {
+                format!(
+                    "The daemon handoff status command exited with {}.",
+                    output.status
+                )
+            } else {
+                format!("The daemon handoff status could not be read: {detail}")
+            });
+        }
+        let payload: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return failed_reload_result(format!(
+                    "The daemon returned invalid handoff status JSON: {error}."
+                ));
+            }
+        };
+        let status = payload
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let handoff_id = payload.get("handoffId").and_then(serde_json::Value::as_str);
+        let detail = payload
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let (ok, state, text) = match status {
+            "applied" => (
+                true,
+                "completed",
+                "The managed daemon completed the Codex handoff and recovered exact paused turns."
+                    .to_string(),
+            ),
+            "inProgress" => (
+                true,
+                "in_progress",
+                "The managed daemon is still reconciling the Codex handoff; retry `/reload status` shortly."
+                    .to_string(),
+            ),
+            "needsAttention" => (
+                false,
+                "failed",
+                detail.clone().unwrap_or_else(|| {
+                    "The managed daemon needs explicit handoff recovery before another replacement."
+                        .to_string()
+                }),
+            ),
+            _ => (
+                false,
+                "unavailable",
+                "The managed daemon has no recognized handoff status yet.".to_string(),
+            ),
+        };
+        let operation = handoff_id
+            .map(|id| format!(" Handoff `{id}`."))
+            .unwrap_or_default();
+        SlashCommandExecuteResponse {
+            command: "reload".to_string(),
+            ok,
+            result_kind: SlashCommandResultKind::Reload,
+            output: SlashCommandOutput {
+                format: "markdown".to_string(),
+                text: bounded_output(format!("{text}{operation}")),
+            },
+            reload: Some(SlashCommandReloadResult {
+                eligible: true,
+                state: state.to_string(),
+                reason: detail,
             }),
         }
     }
@@ -269,32 +406,191 @@ fn unavailable_reload_result(reason: &str) -> SlashCommandExecuteResponse {
     }
 }
 
-fn daemon_reload_available() -> bool {
-    std::env::var_os(APP_SERVER_DAEMON_RELOAD_ENV).is_some_and(|value| value == "1")
+fn failed_reload_result(reason: impl Into<String>) -> SlashCommandExecuteResponse {
+    let reason = reason.into();
+    SlashCommandExecuteResponse {
+        command: "reload".to_string(),
+        ok: false,
+        result_kind: SlashCommandResultKind::Reload,
+        output: SlashCommandOutput {
+            format: "markdown".to_string(),
+            text: format!("`/reload` failed: {reason}"),
+        },
+        reload: Some(SlashCommandReloadResult {
+            eligible: true,
+            state: "failed".to_string(),
+            reason: Some(reason),
+        }),
+    }
 }
 
-fn spawn_reload_daemon(executable: std::path::PathBuf) -> std::io::Result<()> {
-    std::process::Command::new(executable)
-        .args(reload_command_args())
+fn daemon_reload_available() -> bool {
+    env_is_one(APP_SERVER_DAEMON_MANAGED_ENV) && env_is_one(APP_SERVER_DAEMON_RELOAD_ENV)
+}
+
+fn env_is_one(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| value == "1")
+}
+
+fn resolve_current_executable() -> Result<std::path::PathBuf, String> {
+    match std::env::current_exe() {
+        Ok(executable) if executable.is_file() => Ok(executable),
+        Ok(executable) => Err(format!(
+            "The current Codex launcher is not a file: {}.",
+            executable.display()
+        )),
+        Err(error) => Err(format!(
+            "The current Codex launcher could not be resolved: {error}."
+        )),
+    }
+}
+
+fn spawn_reload_daemon(
+    executable: std::path::PathBuf,
+    operation: ReloadOperation,
+) -> std::io::Result<tokio::process::Child> {
+    tokio::process::Command::new(executable)
+        .args(reload_command_args(operation))
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
-        .map(|_| ())
 }
 
 fn schedule_reload(
     reload_scheduled: Arc<AtomicBool>,
     executable: std::path::PathBuf,
+    operation: ReloadOperation,
     launcher: Arc<ReloadLauncher>,
+    notification_target: Option<ReloadNotificationTarget>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(RELOAD_HANDOFF_DELAY).await;
-        if let Err(error) = launcher(executable) {
-            reload_scheduled.store(false, Ordering::Release);
-            tracing::error!(%error, "failed to schedule managed Codex reload");
+        let child = match launcher(executable, operation) {
+            Ok(child) => child,
+            Err(error) => {
+                report_reload_failure(
+                    &reload_scheduled,
+                    notification_target,
+                    format!("failed to start managed Codex reload: {error}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let output = match child.wait_with_output().await {
+            Ok(output) => output,
+            Err(error) => {
+                report_reload_failure(
+                    &reload_scheduled,
+                    notification_target,
+                    format!("managed Codex reload process failed: {error}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let status = output
+            .status
+            .success()
+            .then(|| serde_json::from_slice::<serde_json::Value>(&output.stdout).ok())
+            .flatten()
+            .and_then(|value| {
+                value
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            });
+        match status.as_deref() {
+            Some("applied") => reload_scheduled.store(false, Ordering::Release),
+            Some("inProgress") => {
+                let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let detail = if detail.is_empty() {
+                    "the daemon is still reconciling the handoff".to_string()
+                } else {
+                    detail
+                };
+                report_reload_progress(&reload_scheduled, notification_target, detail).await;
+            }
+            _ => {
+                let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let reason = if !detail.is_empty() {
+                    detail
+                } else if let Some(status) = status {
+                    format!("daemon returned handoff status `{status}`")
+                } else if output.status.success() {
+                    "daemon returned no applied handoff status".to_string()
+                } else {
+                    format!("daemon exited with {}", output.status)
+                };
+                report_reload_failure(&reload_scheduled, notification_target, reason).await;
+            }
         }
     })
+}
+
+async fn report_reload_progress(
+    reload_scheduled: &AtomicBool,
+    notification_target: Option<ReloadNotificationTarget>,
+    detail: String,
+) {
+    reload_scheduled.store(false, Ordering::Release);
+    let Some(target) = notification_target else {
+        return;
+    };
+    let result = SlashCommandExecuteResponse {
+        command: "reload".to_string(),
+        ok: true,
+        result_kind: SlashCommandResultKind::Reload,
+        output: SlashCommandOutput {
+            format: "markdown".to_string(),
+            text: bounded_output(format!(
+                "`/reload` remains in progress: {detail}. Use `/reload status` or `/reload recover` after the daemon reconnects."
+            )),
+        },
+        reload: Some(SlashCommandReloadResult {
+            eligible: true,
+            state: "in_progress".to_string(),
+            reason: Some(detail),
+        }),
+    };
+    target
+        .outgoing
+        .send_server_notification_to_connections(
+            std::slice::from_ref(&target.request_id.connection_id),
+            ServerNotification::SlashCommandResult(SlashCommandResultNotification {
+                thread_id: target.thread_id,
+                command: result.command.clone(),
+                request_id: target.request_id.request_id.clone(),
+                result: result_payload(&result),
+            }),
+        )
+        .await;
+}
+
+async fn report_reload_failure(
+    reload_scheduled: &AtomicBool,
+    notification_target: Option<ReloadNotificationTarget>,
+    reason: String,
+) {
+    reload_scheduled.store(false, Ordering::Release);
+    tracing::error!(reason = %reason, "managed Codex reload did not complete");
+    let Some(target) = notification_target else {
+        return;
+    };
+    let result = failed_reload_result(reason);
+    target
+        .outgoing
+        .send_server_notification_to_connections(
+            std::slice::from_ref(&target.request_id.connection_id),
+            ServerNotification::SlashCommandResult(SlashCommandResultNotification {
+                thread_id: target.thread_id,
+                command: result.command.clone(),
+                request_id: target.request_id.request_id.clone(),
+                result: result_payload(&result),
+            }),
+        )
+        .await;
 }
 
 fn reserve_reload(reload_scheduled: &AtomicBool) -> bool {
@@ -303,8 +599,19 @@ fn reserve_reload(reload_scheduled: &AtomicBool) -> bool {
         .is_ok()
 }
 
-fn reload_command_args() -> [&'static str; 3] {
-    ["app-server", "daemon", "apply"]
+fn reload_command_args(operation: ReloadOperation) -> [&'static str; 3] {
+    [
+        "app-server",
+        "daemon",
+        match operation {
+            ReloadOperation::Apply => "apply",
+            ReloadOperation::Recover => "recover",
+        },
+    ]
+}
+
+fn reload_status_command_args() -> [&'static str; 3] {
+    ["app-server", "daemon", "apply-status"]
 }
 
 fn response_payload_json(
@@ -363,7 +670,7 @@ fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
             false,
         ),
         ("spend", "show daily token usage and trends", false),
-        ("reload", "reload the latest installed Codex safely", false),
+        ("reload", "reload the latest installed Codex safely", true),
         ("model", "switch model", true),
         ("permissions", "change permissions", true),
         ("plan", "enter plan mode", false),
@@ -426,6 +733,7 @@ fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Stdio;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicUsize;
@@ -436,6 +744,7 @@ mod tests {
 
     use super::MAX_OUTPUT_CHARS;
     use super::ReloadLauncher;
+    use super::ReloadOperation;
     use super::bounded_output;
     use super::command_specs;
     use super::reload_command_args;
@@ -444,7 +753,14 @@ mod tests {
 
     #[test]
     fn reload_uses_daemon_apply_command() {
-        assert_eq!(reload_command_args(), ["app-server", "daemon", "apply"]);
+        assert_eq!(
+            reload_command_args(ReloadOperation::Apply),
+            ["app-server", "daemon", "apply"]
+        );
+        assert_eq!(
+            reload_command_args(ReloadOperation::Recover),
+            ["app-server", "daemon", "recover"]
+        );
     }
 
     #[test]
@@ -498,16 +814,18 @@ mod tests {
         let launcher: Arc<ReloadLauncher> = {
             let launches = Arc::clone(&launches);
             let launched_path = Arc::clone(&launched_path);
-            Arc::new(move |executable| {
+            Arc::new(move |executable, _operation| {
                 launches.fetch_add(1, Ordering::AcqRel);
                 *launched_path.lock().expect("path lock") = Some(executable);
-                Ok(())
+                status_child("applied")
             })
         };
         schedule_reload(
             Arc::clone(&reload_scheduled),
             std::path::PathBuf::from("/tmp/codex-test-launcher"),
+            ReloadOperation::Apply,
             launcher,
+            None,
         )
         .await
         .expect("fake launcher task should complete");
@@ -523,18 +841,20 @@ mod tests {
             launched_path.lock().expect("path lock").as_deref(),
             Some(std::path::Path::new("/tmp/codex-test-launcher"))
         );
-        assert!(reload_scheduled.load(Ordering::Acquire));
+        assert!(!reload_scheduled.load(Ordering::Acquire));
     }
 
     #[tokio::test]
     async fn failed_injected_launcher_rearms_reload() {
         let reload_scheduled = Arc::new(AtomicBool::new(true));
         let launcher: Arc<ReloadLauncher> =
-            Arc::new(|_| Err(std::io::Error::other("fixture launch failure")));
+            Arc::new(|_, _| Err(std::io::Error::other("fixture launch failure")));
         schedule_reload(
             Arc::clone(&reload_scheduled),
             std::path::PathBuf::from("/tmp/codex-test-launcher"),
+            ReloadOperation::Apply,
             launcher,
+            None,
         )
         .await
         .expect("failed launcher task should complete");
@@ -545,5 +865,68 @@ mod tests {
         })
         .await
         .expect("failed launcher should rearm reload");
+    }
+
+    #[tokio::test]
+    async fn non_applied_daemon_status_rearms_reload() {
+        let reload_scheduled = Arc::new(AtomicBool::new(true));
+        let launcher: Arc<ReloadLauncher> = Arc::new(|_, _| status_child("needsAttention"));
+        schedule_reload(
+            Arc::clone(&reload_scheduled),
+            std::path::PathBuf::from("/tmp/codex-test-launcher"),
+            ReloadOperation::Apply,
+            launcher,
+            None,
+        )
+        .await
+        .expect("fixture daemon task should complete");
+        timeout(Duration::from_secs(1), async {
+            while reload_scheduled.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("non-applied daemon status should rearm reload");
+    }
+
+    #[tokio::test]
+    async fn in_progress_daemon_status_rearms_reload_without_failure() {
+        let reload_scheduled = Arc::new(AtomicBool::new(true));
+        let launcher: Arc<ReloadLauncher> = Arc::new(|_, _| status_child("inProgress"));
+        schedule_reload(
+            Arc::clone(&reload_scheduled),
+            std::path::PathBuf::from("/tmp/codex-test-launcher"),
+            ReloadOperation::Apply,
+            launcher,
+            None,
+        )
+        .await
+        .expect("fixture daemon task should complete");
+        timeout(Duration::from_secs(1), async {
+            while reload_scheduled.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("in-progress daemon status should rearm reload");
+    }
+
+    fn status_child(status: &str) -> std::io::Result<tokio::process::Child> {
+        #[cfg(unix)]
+        {
+            tokio::process::Command::new("sh")
+                .args(["-c", &format!("printf '{{\"status\":\"{status}\"}}'")])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
+        #[cfg(windows)]
+        {
+            tokio::process::Command::new("cmd")
+                .args(["/C", &format!("echo {{\"status\":\"{status}\"}}")])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
     }
 }
