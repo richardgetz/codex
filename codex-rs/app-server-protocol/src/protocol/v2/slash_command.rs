@@ -14,6 +14,7 @@ pub struct SlashCommandSpec {
     #[serde(default)]
     pub supports_inline_args: bool,
     pub available: bool,
+    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
 }
@@ -81,6 +82,7 @@ pub struct SlashCommandOutput {
 pub struct SlashCommandReloadResult {
     pub eligible: bool,
     pub state: String,
+    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -93,6 +95,7 @@ pub struct SlashCommandExecuteResponse {
     pub ok: bool,
     pub result_kind: SlashCommandResultKind,
     pub output: SlashCommandOutput,
+    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<SlashCommandReloadResult>,
 }
@@ -111,6 +114,7 @@ pub struct SlashCommandResultPayload {
     pub ok: bool,
     pub result_kind: SlashCommandResultKind,
     pub output: SlashCommandOutput,
+    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reload: Option<SlashCommandReloadResult>,
 }
