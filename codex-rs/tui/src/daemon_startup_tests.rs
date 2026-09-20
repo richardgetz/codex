@@ -119,21 +119,28 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume()
             let Message::Text(text) = message? else {
                 continue;
             };
-            let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
-                continue;
-            };
-            methods.push(request.method.clone());
-            assert_eq!(request.method, "initialize");
-            socket
-                .send(Message::Text(
-                    json!({
-                        "id": request.id,
-                        "result": {"userAgent": "implicit-resume-test"}
-                    })
-                    .to_string()
-                    .into(),
-                ))
-                .await?;
+            match serde_json::from_str::<JSONRPCMessage>(&text)? {
+                JSONRPCMessage::Request(request) => {
+                    methods.push(request.method.clone());
+                    assert_eq!(request.method, "initialize");
+                    socket
+                        .send(Message::Text(
+                            json!({
+                                "id": request.id,
+                                "result": {"userAgent": "implicit-resume-test"}
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await?;
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "initialized" =>
+                {
+                    break;
+                }
+                JSONRPCMessage::Notification(_) | JSONRPCMessage::Response(_) | JSONRPCMessage::Error(_) => {}
+            }
         }
         Ok::<_, color_eyre::Report>(methods)
     });

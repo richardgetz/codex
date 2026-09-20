@@ -353,7 +353,12 @@ impl PtyCodex {
                 return Ok(());
             }
             if let Some(status) = self.child.try_wait()? {
-                bail!("Codex exited while waiting for {text:?} ({status})");
+                let output_tail_start = self.output.len().saturating_sub(4096);
+                bail!(
+                    "Codex exited while waiting for {text:?} ({status}); screen:\n{}\nPTY output tail:\n{}",
+                    self.screen_contents(),
+                    String::from_utf8_lossy(&self.output[output_tail_start..]),
+                );
             }
         }
         bail!("missing {text:?}; screen:\n{}", self.screen_contents())
