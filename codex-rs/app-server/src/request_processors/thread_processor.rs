@@ -3354,17 +3354,22 @@ impl ThreadRequestProcessor {
             .thread_watch_manager
             .loaded_status_for_thread(&thread.id)
             .await;
+        let has_current_loaded_thread = if let Some(snapshot) = loaded_thread.as_ref() {
+            self.thread_manager
+                .get_thread(thread_id)
+                .await
+                .ok()
+                .is_some_and(|current| std::sync::Arc::ptr_eq(&current, snapshot))
+        } else {
+            false
+        };
         let thread_status = thread_read_status(
-            loaded_thread.is_some(),
+            has_current_loaded_thread,
             watched_status,
             has_live_in_progress_turn,
         );
-        if matches!(thread_status, ThreadStatus::NotLoaded) {
-            // `canAcceptDirectInput` is a live-thread capability. A loaded snapshot can be
-            // unloaded while the persisted read is in flight, so do not return its capability
-            // after the watcher has confirmed that the thread is no longer loaded.
-            thread.can_accept_direct_input = None;
-        }
+        thread.can_accept_direct_input =
+            normalize_thread_read_capability(&thread_status, thread.can_accept_direct_input);
 
         set_thread_status_and_interrupt_stale_turns(
             &mut thread,
@@ -6312,7 +6317,7 @@ enum ThreadReadViewError {
 }
 
 fn thread_read_status(
-    has_loaded_thread_snapshot: bool,
+    has_current_loaded_thread: bool,
     watched_status: ThreadStatus,
     has_live_in_progress_turn: bool,
 ) -> ThreadStatus {
@@ -6320,7 +6325,7 @@ fn thread_read_status(
     // be resumed or unloaded during that await, leaving the watcher status ahead of the snapshot
     // used to build the response. Never expose a loaded Active status with the persisted view's
     // nullable direct-input capability; the next resume/read can refresh the live snapshot.
-    let status = if has_loaded_thread_snapshot {
+    let status = if has_current_loaded_thread {
         watched_status
     } else {
         ThreadStatus::NotLoaded
@@ -6329,6 +6334,17 @@ fn thread_read_status(
         return ThreadStatus::NotLoaded;
     }
     resolve_thread_status(status, has_live_in_progress_turn)
+}
+
+fn normalize_thread_read_capability(
+    status: &ThreadStatus,
+    can_accept_direct_input: Option<bool>,
+) -> Option<bool> {
+    if matches!(status, ThreadStatus::NotLoaded) {
+        None
+    } else {
+        can_accept_direct_input
+    }
 }
 
 fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {
