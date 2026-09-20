@@ -88,6 +88,11 @@ release or merge rules.
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
+- App-server v2 exposes a host-gated slash-command catalog and bounded
+  `slashCommand/execute` responses for Inbound clients. Status and spend return
+  configured-account usage/rate-limit data as Markdown, while non-model results
+  are emitted through `slashCommand/result`; `/reload` reports managed-daemon
+  eligibility and never attempts an unsafe in-process restart.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while
