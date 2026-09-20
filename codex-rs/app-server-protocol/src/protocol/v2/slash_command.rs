@@ -1,7 +1,8 @@
 use crate::JsonSchema;
 use crate::RequestId;
 use crate::TS;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// A host-provided slash command available to an app-server client.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
