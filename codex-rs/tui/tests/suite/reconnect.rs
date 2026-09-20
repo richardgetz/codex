@@ -9,6 +9,8 @@ use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::net::UnixListener;
@@ -31,8 +33,9 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     let (disconnect_tx, mut disconnect_rx) = tokio::sync::oneshot::channel();
     let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
     let server_cwd = repo_root.clone();
+    let observed_methods = Arc::new(Mutex::new(Vec::new()));
+    let observed_methods_for_server = Arc::clone(&observed_methods);
     let server = tokio::spawn(async move {
-        let mut methods = Vec::new();
         let mut restore_rx = Some(restore_rx);
         let id = "00000000-0000-0000-0000-000000000001";
         let thread = json!({
@@ -63,7 +66,10 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                 let JSONRPCMessage::Request(request) = serde_json::from_str(&text)? else {
                     continue;
                 };
-                methods.push(request.method.clone());
+                observed_methods_for_server
+                    .lock()
+                    .expect("request trace lock")
+                    .push(request.method.clone());
                 if connection == 1 && request.method == "initialize" {
                     restore_rx.take().unwrap().await?;
                 }
@@ -141,7 +147,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                 }
             }
         }
-        Ok::<_, anyhow::Error>(methods)
+        Ok::<_, anyhow::Error>(())
     });
     let mut terminal = PtyCodex::start(&repo_root, codex_home, &[])?;
     terminal.wait_for_startup()?;
@@ -160,7 +166,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
         }
         ensure!(
             terminal.screen_contains(expected),
-            "missing {expected}; config fixture={config_provenance:?}; model fixture={RECONNECT_MODEL:?}; account/switch response={ACCOUNT_SWITCH_RESPONSE}; account/read response={ACCOUNT_READ_RESPONSE}; screen:\n{}",
+            "missing {expected}; observed methods={:?}; config fixture={config_provenance:?}; model fixture={RECONNECT_MODEL:?}; account/switch response={ACCOUNT_SWITCH_RESPONSE}; account/read response={ACCOUNT_READ_RESPONSE}; screen:\n{}",
+            observed_methods.lock().expect("request trace lock"),
             terminal.screen_contents()
         );
         match expected {
@@ -180,7 +187,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
         "draft was lost after recovery"
     );
     drop(terminal);
-    let methods = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), server).await???;
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 5), server).await???;
+    let methods = observed_methods.lock().expect("request trace lock");
     assert_eq!(
         methods
             .iter()
@@ -291,7 +299,8 @@ async fn implicit_daemon_resume_picker_and_direct_id_share_one_connection() -> R
             Ok::<_, anyhow::Error>((accepted, methods))
         });
 
-        let mut terminal = PtyCodex::start(&repo_root, codex_home, &extra_args)?;
+        let mut terminal =
+            PtyCodex::start_with_binary(&repo_root, codex_home, &extra_args, "codex")?;
         terminal.wait_for_startup()?;
         if expected_lookup == "thread/list" {
             terminal.wait_for_screen("resume fixture")?;

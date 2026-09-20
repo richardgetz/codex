@@ -166,6 +166,15 @@ impl PtyCodex {
         codex_home: TempDir,
         extra_args: &[&str],
     ) -> Result<Self> {
+        Self::start_with_binary(repo_root, codex_home, extra_args, "codex-tui")
+    }
+
+    pub(super) fn start_with_binary(
+        repo_root: &Path,
+        codex_home: TempDir,
+        extra_args: &[&str],
+        binary_name: &str,
+    ) -> Result<Self> {
         let mut master_fd = -1;
         let mut slave_fd = -1;
         let mut window_size = libc::winsize {
@@ -197,8 +206,7 @@ impl PtyCodex {
         let stdin = slave.try_clone().context("clone pseudo-terminal stdin")?;
         let stdout = slave.try_clone().context("clone pseudo-terminal stdout")?;
 
-        let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")
-            .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex"))?;
+        let codex = codex_utils_cargo_bin::cargo_bin(binary_name)?;
         let child = Command::new(codex)
             .args(extra_args)
             .arg("--no-alt-screen")
