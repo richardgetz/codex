@@ -88,11 +88,8 @@ async fn slash_reload_reports_unavailable_without_replacing_the_server() -> Resu
     assert_eq!(reload.state, "unavailable");
     assert!(response.output.text.contains("unavailable"));
 
-    let notification: SlashCommandResultNotification = timeout(
-        READ_TIMEOUT,
-        app.read_notification("slashCommand/result"),
-    )
-    .await??;
+    let notification: SlashCommandResultNotification =
+        timeout(READ_TIMEOUT, app.read_notification("slashCommand/result")).await??;
     assert_eq!(notification.command, "reload");
     assert_eq!(notification.result.command, "reload");
     assert_eq!(notification.result.ok, response.ok);

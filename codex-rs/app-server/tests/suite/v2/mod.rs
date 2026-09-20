@@ -91,7 +91,6 @@ mod residency;
 mod review;
 mod rollout_migration;
 mod safety_check_downgrade;
-mod slash_commands;
 #[cfg(not(target_os = "windows"))]
 mod selected_capability_stack;
 mod selected_environment;
@@ -101,6 +100,7 @@ mod session_end;
 #[cfg(unix)]
 mod shared_thread_unix;
 mod skills_list;
+mod slash_commands;
 mod sleep;
 mod thread_activity;
 mod thread_archive;
