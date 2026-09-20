@@ -88,6 +88,13 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                     }
                     "model/list" => json!({"data": [], "nextCursor": null}),
                     "configRequirements/read" => json!({"requirements": null}),
+                    "config/read" => json!({
+                        "config": {
+                            "model": RECONNECT_MODEL,
+                            "model_provider": "openai"
+                        },
+                        "origins": {}
+                    }),
                     "thread/start" | "thread/resume" => {
                         json!({"thread": thread, "model": RECONNECT_MODEL, "modelProvider": "openai",
                             "cwd": server_cwd, "approvalPolicy": "never", "approvalsReviewer": "user",
@@ -243,6 +250,13 @@ async fn implicit_daemon_resume_picker_and_direct_id_share_one_connection() -> R
                     "account/switch" => json!({}),
                     "model/list" => json!({"data": [], "nextCursor": null}),
                     "configRequirements/read" => json!({"requirements": null}),
+                    "config/read" => json!({
+                        "config": {
+                            "model": RECONNECT_MODEL,
+                            "model_provider": "openai"
+                        },
+                        "origins": {}
+                    }),
                     "skills/list" => json!({"data": []}),
                     "thread/goal/get" => json!({"goal": null}),
                     "thread/loaded/list" => json!({"data": [], "nextCursor": null}),
