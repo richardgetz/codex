@@ -42,6 +42,7 @@ fn main() -> anyhow::Result<()> {
             ExitReason::UserRequested
             | ExitReason::Archived(_)
             | ExitReason::TurnInterrupted
+            | ExitReason::FrontendReload { .. }
             | ExitReason::ThreadRemoved => false,
         };
 

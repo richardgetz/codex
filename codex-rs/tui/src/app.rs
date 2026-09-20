@@ -532,6 +532,17 @@ pub enum ExitReason {
     TurnInterrupted,
     /// The current thread was deleted, rather than disconnected.
     ThreadRemoved,
+    /// The managed app-server was replaced successfully; restart the frontend with the
+    /// configured launcher and resume this exact displayed thread.
+    FrontendReload {
+        thread_id: ThreadId,
+        launcher: PathBuf,
+        account_alias: Option<String>,
+        cwd: PathBuf,
+        model: String,
+        reasoning_effort: Option<String>,
+        service_tier: Option<String>,
+    },
     Fatal(String),
 }
 

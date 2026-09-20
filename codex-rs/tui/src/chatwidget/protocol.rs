@@ -365,7 +365,8 @@ impl ChatWidget {
             | ServerNotification::AccountLoginCompleted(_)
             | ServerNotification::ProjectChanged(_)
             | ServerNotification::ThreadProjectUpdated(_)
-            | ServerNotification::ThreadEtaUpdated(_) => {}
+            | ServerNotification::ThreadEtaUpdated(_)
+            | ServerNotification::SlashCommandResult(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
         self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;

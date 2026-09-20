@@ -526,6 +526,19 @@ client_request_definitions! {
         response: v2::ServerLifecycleReadResponse,
     },
 
+    #[experimental("slashCommand/list")]
+    SlashCommandList => "slashCommand/list" {
+        params: v2::SlashCommandListParams,
+        serialization: global_shared_read("slash_commands"),
+        response: v2::SlashCommandListResponse,
+    },
+    #[experimental("slashCommand/execute")]
+    SlashCommandExecute => "slashCommand/execute" {
+        params: v2::SlashCommandExecuteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SlashCommandExecuteResponse,
+    },
+
     #[experimental("userVerification/status")]
     UserVerificationStatus => "userVerification/status" {
         params: v2::UserVerificationStatusParams,
@@ -2031,6 +2044,8 @@ server_notification_definitions! {
     ThreadSettingsUpdated => "thread/settings/updated" (v2::ThreadSettingsUpdatedNotification),
     #[experimental("thread/activity/updated")]
     ThreadActivityUpdated => "thread/activity/updated" (v2::ThreadActivityUpdatedNotification),
+    #[experimental("slashCommand/result")]
+    SlashCommandResult => "slashCommand/result" (v2::SlashCommandResultNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     ThreadTokenUsageProjectionUpdated => "thread/tokenUsageProjection/updated" (v2::ThreadTokenUsageProjectionUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),

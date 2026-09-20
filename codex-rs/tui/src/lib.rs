@@ -1106,13 +1106,280 @@ fn restore_terminal_before_fatal_exit() {
     }
 }
 
+const FRONTEND_RELOAD_THREAD_ENV: &str = "CODEX_TUI_RELOAD_THREAD_ID";
+const FRONTEND_RELOAD_ACCOUNT_ENV: &str = "CODEX_TUI_RELOAD_ACCOUNT_ALIAS";
+const FRONTEND_RELOAD_CWD_ENV: &str = "CODEX_TUI_RELOAD_CWD";
+const FRONTEND_RELOAD_MODEL_ENV: &str = "CODEX_TUI_RELOAD_MODEL";
+const FRONTEND_RELOAD_REASONING_ENV: &str = "CODEX_TUI_RELOAD_REASONING_EFFORT";
+const FRONTEND_RELOAD_SERVICE_TIER_ENV: &str = "CODEX_TUI_RELOAD_SERVICE_TIER";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrontendReloadContext {
+    thread_id: String,
+    account_alias: Option<String>,
+    cwd: PathBuf,
+    model: String,
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
+}
+
+fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContext>> {
+    let thread = std::env::var_os(FRONTEND_RELOAD_THREAD_ENV);
+    let account = std::env::var_os(FRONTEND_RELOAD_ACCOUNT_ENV);
+    let cwd = std::env::var_os(FRONTEND_RELOAD_CWD_ENV);
+    let model = std::env::var_os(FRONTEND_RELOAD_MODEL_ENV);
+    let reasoning_effort = std::env::var_os(FRONTEND_RELOAD_REASONING_ENV);
+    let service_tier = std::env::var_os(FRONTEND_RELOAD_SERVICE_TIER_ENV);
+    if thread.is_none()
+        && account.is_none()
+        && cwd.is_none()
+        && model.is_none()
+        && reasoning_effort.is_none()
+        && service_tier.is_none()
+    {
+        return Ok(None);
+    }
+
+    // Consume the marker before any startup work so a malformed or interrupted handoff cannot
+    // silently reapply itself if the caller retries in the same process.
+    unsafe {
+        std::env::remove_var(FRONTEND_RELOAD_THREAD_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_ACCOUNT_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_CWD_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_MODEL_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_REASONING_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_SERVICE_TIER_ENV);
+    }
+
+    let thread = thread.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker omitted its thread id",
+        )
+    })?;
+    let thread = thread.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker contained a non-UTF-8 thread id",
+        )
+    })?;
+    ThreadId::from_string(thread).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Codex frontend reload marker contained an invalid thread id: {error}"),
+        )
+    })?;
+
+    let account = account.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker omitted its account alias",
+        )
+    })?;
+    let account = account.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker contained a non-UTF-8 account alias",
+        )
+    })?;
+    let cwd = cwd.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker omitted its working directory",
+        )
+    })?;
+    let cwd = PathBuf::from(cwd);
+    if !cwd.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Codex frontend reload marker contained a non-absolute working directory `{}`",
+                cwd.display()
+            ),
+        ));
+    }
+
+    let model = model.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker omitted the current model",
+        )
+    })?;
+    let model = model.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker contained a non-UTF-8 model",
+        )
+    })?;
+    if model.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker contained an empty model",
+        ));
+    }
+    let reasoning_effort = reasoning_effort
+        .map(|value| {
+            value.to_str().map(str::to_owned).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Codex frontend reload marker contained a non-UTF-8 reasoning effort",
+                )
+            })
+        })
+        .transpose()?
+        .filter(|value| !value.is_empty());
+    let service_tier = service_tier
+        .map(|value| {
+            value.to_str().map(str::to_owned).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Codex frontend reload marker contained a non-UTF-8 service tier",
+                )
+            })
+        })
+        .transpose()?
+        .filter(|value| !value.is_empty());
+
+    Ok(Some(FrontendReloadContext {
+        thread_id: thread.to_string(),
+        account_alias: (!account.is_empty()).then(|| account.to_string()),
+        cwd,
+        model: model.to_string(),
+        reasoning_effort,
+        service_tier,
+    }))
+}
+
+fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendReloadContext) {
+    cli.resume_picker = false;
+    cli.resume_last = false;
+    cli.resume_session_id = Some(context.thread_id);
+    cli.resume_show_all = false;
+    cli.resume_include_non_interactive = false;
+    // A `codex fork` or `codex agents` invocation may have populated one of these internal
+    // startup modes before the handoff marker was consumed.  The exact displayed thread must
+    // win on re-entry; otherwise startup orchestration can fork a second thread or reopen the
+    // daemon overview instead of resuming the selected thread.
+    cli.agents_overview = false;
+    cli.fork_picker = false;
+    cli.fork_last = false;
+    cli.fork_session_id = None;
+    cli.fork_show_all = false;
+    // The original invocation may have carried a prompt or image arguments. They were already
+    // submitted before the daemon handoff and must never be replayed by the replacement process.
+    cli.prompt = None;
+    cli.images.clear();
+    cli.cwd = Some(context.cwd);
+    cli.model = Some(context.model);
+    if let Some(effort) = context.reasoning_effort {
+        cli.config_overrides.raw_overrides.push(format!(
+            "model_reasoning_effort={}",
+            toml_string_literal(&effort)
+        ));
+    }
+    if let Some(service_tier) = context.service_tier {
+        cli.config_overrides.raw_overrides.push(format!(
+            "service_tier={}",
+            toml_string_literal(&service_tier)
+        ));
+    }
+    // Account switching is session-local, so restore the effective alias rather than the alias
+    // that happened to be present in the original process arguments.
+    cli.startup_account_alias = context.account_alias;
+}
+
+fn toml_string_literal(value: &str) -> String {
+    // JSON string escaping is compatible with TOML basic strings and handles quotes, control
+    // characters, and arbitrary Unicode without interpolating malformed config overrides.
+    serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
+}
+
+fn frontend_reload_args<I>(args: I) -> Vec<std::ffi::OsString>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    args.into_iter().skip(1).collect()
+}
+
+fn build_frontend_reload_command(
+    launcher: &Path,
+    context: &FrontendReloadContext,
+    args: Vec<std::ffi::OsString>,
+) -> std::process::Command {
+    let mut command = std::process::Command::new(launcher);
+    command
+        .args(args)
+        .env(FRONTEND_RELOAD_THREAD_ENV, &context.thread_id)
+        .env(
+            FRONTEND_RELOAD_ACCOUNT_ENV,
+            context.account_alias.as_deref().unwrap_or_default(),
+        )
+        .env(FRONTEND_RELOAD_CWD_ENV, &context.cwd)
+        .env(FRONTEND_RELOAD_MODEL_ENV, &context.model)
+        .env(
+            FRONTEND_RELOAD_REASONING_ENV,
+            context.reasoning_effort.as_deref().unwrap_or_default(),
+        )
+        .env(
+            FRONTEND_RELOAD_SERVICE_TIER_ENV,
+            context.service_tier.as_deref().unwrap_or_default(),
+        );
+    command
+}
+
+fn reexec_frontend(
+    launcher: &Path,
+    thread_id: ThreadId,
+    account_alias: Option<String>,
+    cwd: PathBuf,
+    model: String,
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
+) -> std::io::Error {
+    let context = FrontendReloadContext {
+        thread_id: thread_id.to_string(),
+        account_alias,
+        cwd,
+        model,
+        reasoning_effort,
+        service_tier,
+    };
+    let args = frontend_reload_args(std::env::args_os());
+    let mut command = build_frontend_reload_command(launcher, &context, args);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.exec()
+    }
+    #[cfg(windows)]
+    {
+        match command.status() {
+            Ok(status) if status.success() => std::process::exit(0),
+            Ok(status) => std::io::Error::other(format!(
+                "replacement Codex frontend exited with status {status}"
+            )),
+            Err(error) => error,
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = command;
+        std::io::Error::other("automatic Codex frontend reload is unsupported on this platform")
+    }
+}
+
 pub async fn run_main(
-    cli: Cli,
+    mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    match startup_orchestration::run_main_inner(
+    if let Some(context) = take_frontend_reload_context()? {
+        apply_frontend_reload_context(&mut cli, context);
+    }
+
+    let result = match startup_orchestration::run_main_inner(
         cli,
         arg0_paths,
         loader_overrides,
@@ -1129,7 +1396,34 @@ pub async fn run_main(
             exit_reason: ExitReason::UserRequested,
         }),
         result => result,
+    };
+    let Ok(exit_info) = &result else {
+        return result;
+    };
+    if let ExitReason::FrontendReload {
+        thread_id,
+        launcher,
+        account_alias,
+        cwd,
+        model,
+        reasoning_effort,
+        service_tier,
+    } = &exit_info.exit_reason
+    {
+        let error = reexec_frontend(
+            launcher,
+            *thread_id,
+            account_alias.clone(),
+            cwd.clone(),
+            model.clone(),
+            reasoning_effort.clone(),
+            service_tier.clone(),
+        );
+        return Ok(AppExitInfo::fatal(format!(
+            "Managed app-server reload completed, but Codex could not restart the frontend with the configured launcher: {error}"
+        )));
     }
+    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2226,6 +2520,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
+    use clap::Parser;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
@@ -2245,6 +2540,154 @@ pub(crate) mod tests {
             .codex_home(temp_dir.path().to_path_buf())
             .build()
             .await
+    }
+
+    #[test]
+    fn frontend_reload_command_preserves_context_and_client_arguments() {
+        let context = FrontendReloadContext {
+            thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
+            account_alias: Some("work".to_string()),
+            cwd: PathBuf::from("/workspace/current"),
+            model: "gpt-6".to_string(),
+            reasoning_effort: Some("high".to_string()),
+            service_tier: Some("fast".to_string()),
+        };
+        let mut command = build_frontend_reload_command(
+            Path::new("/opt/codex-rick"),
+            &context,
+            frontend_reload_args([
+                std::ffi::OsString::from("codex"),
+                std::ffi::OsString::from("--profile"),
+                std::ffi::OsString::from("work"),
+            ]),
+        );
+
+        assert_eq!(command.get_program(), Path::new("/opt/codex-rick"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                std::ffi::OsStr::new("--profile"),
+                std::ffi::OsStr::new("work")
+            ]
+        );
+        let env = command
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key, value)))
+            .collect::<Vec<_>>();
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_THREAD_ENV),
+            std::ffi::OsStr::new("019e72f4-e09a-70f2-b2c2-a153a57b8cc0")
+        )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_ACCOUNT_ENV),
+            std::ffi::OsStr::new("work")
+        )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_CWD_ENV),
+            std::ffi::OsStr::new("/workspace/current")
+        )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_MODEL_ENV),
+            std::ffi::OsStr::new("gpt-6")
+        )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_REASONING_ENV),
+            std::ffi::OsStr::new("high")
+        )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_SERVICE_TIER_ENV),
+            std::ffi::OsStr::new("fast")
+        )));
+
+        // Keep the command alive until all borrowed iterators have been consumed; this is a
+        // fake-launcher assertion only and never starts a process.
+        command.args(["--no-alt-screen"]);
+    }
+
+    #[test]
+    fn frontend_reload_context_drops_replayed_prompt_and_images() {
+        let mut cli = Cli::try_parse_from([
+            "codex",
+            "old prompt",
+            "--image",
+            "/tmp/old.png",
+            "--model",
+            "old-model",
+        ])
+        .expect("test CLI should parse");
+        cli.agents_overview = true;
+        cli.fork_picker = true;
+        cli.fork_last = true;
+        cli.fork_session_id = Some("old-thread".to_string());
+        cli.fork_show_all = true;
+        apply_frontend_reload_context(
+            &mut cli,
+            FrontendReloadContext {
+                thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
+                account_alias: None,
+                cwd: PathBuf::from("/workspace/current"),
+                model: "current-model".to_string(),
+                reasoning_effort: Some("high".to_string()),
+                service_tier: Some("fast".to_string()),
+            },
+        );
+
+        assert_eq!(cli.prompt, None);
+        assert!(cli.images.is_empty());
+        assert_eq!(
+            cli.resume_session_id.as_deref(),
+            Some("019e72f4-e09a-70f2-b2c2-a153a57b8cc0")
+        );
+        assert!(!cli.agents_overview);
+        assert!(!cli.fork_picker);
+        assert!(!cli.fork_last);
+        assert_eq!(cli.fork_session_id, None);
+        assert!(!cli.fork_show_all);
+        assert_eq!(cli.cwd.as_deref(), Some(Path::new("/workspace/current")));
+        assert_eq!(cli.startup_account_alias, None);
+        assert_eq!(cli.model.as_deref(), Some("current-model"));
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .iter()
+                .any(|override_value| override_value == "model_reasoning_effort=\"high\"")
+        );
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .iter()
+                .any(|override_value| override_value == "service_tier=\"fast\"")
+        );
+    }
+
+    #[test]
+    fn frontend_reload_context_escapes_toml_overrides() {
+        let mut cli = Cli::try_parse_from(["codex"]).expect("test CLI should parse");
+        apply_frontend_reload_context(
+            &mut cli,
+            FrontendReloadContext {
+                thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
+                account_alias: None,
+                cwd: PathBuf::from("/workspace/current"),
+                model: "current-model".to_string(),
+                reasoning_effort: Some("custom\"effort\nline".to_string()),
+                service_tier: Some("tier\\value\nline".to_string()),
+            },
+        );
+
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .iter()
+                .any(|override_value| override_value
+                    == "model_reasoning_effort=\"custom\\\"effort\\nline\"")
+        );
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .iter()
+                .any(|override_value| override_value == "service_tier=\"tier\\\\value\\nline\"")
+        );
     }
 
     #[tokio::test]

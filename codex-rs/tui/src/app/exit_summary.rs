@@ -24,11 +24,12 @@ pub struct DisconnectInfo {
 
 impl App {
     pub(super) fn exit_info(&self, exit_reason: ExitReason) -> AppExitInfo {
-        let thread_id = match exit_reason {
+        let thread_id = match &exit_reason {
             ExitReason::Archived(_) | ExitReason::ThreadRemoved => None,
             ExitReason::UserRequested | ExitReason::TurnInterrupted | ExitReason::Fatal(_) => {
                 self.chat_widget.thread_id().or(self.primary_thread_id)
             }
+            ExitReason::FrontendReload { thread_id, .. } => Some(*thread_id),
         };
         let disconnect_info = thread_id.and_then(|_| {
             let command = match &self.app_server_target {
@@ -96,6 +97,9 @@ impl AppExitInfo {
             let message = match self.exit_reason {
                 ExitReason::UserRequested | ExitReason::Archived(_) | ExitReason::ThreadRemoved => {
                     "Disconnected from this task. Any running work continues."
+                }
+                ExitReason::FrontendReload { .. } => {
+                    "Reloading Codex with the updated managed launcher."
                 }
                 ExitReason::Fatal(_) => "Disconnected from this task. Work may still be running.",
                 ExitReason::TurnInterrupted => {

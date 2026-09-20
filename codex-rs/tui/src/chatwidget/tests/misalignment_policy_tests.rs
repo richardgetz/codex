@@ -112,6 +112,7 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
     chat.remote_connection = Some(crate::status::remote_connection::RemoteConnectionStatus {
         address: "wss://remote.example.com".to_string(),
         version: "v1.0.0".to_string(),
+        is_remote: true,
     });
     chat.show_misalignment_policy_precaution();
     assert_chatwidget_snapshot!(

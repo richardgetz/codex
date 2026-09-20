@@ -5,6 +5,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+use codex_app_server_transport::APP_SERVER_DAEMON_MANAGED_ENV;
 use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
 
 use super::LaunchIdentity;
@@ -433,6 +434,10 @@ fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
     assert_eq!(
         backend.command_env(),
         Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1"))
+    );
+    assert_eq!(
+        APP_SERVER_DAEMON_MANAGED_ENV,
+        "CODEX_APP_SERVER_DAEMON_MANAGED"
     );
 }
 

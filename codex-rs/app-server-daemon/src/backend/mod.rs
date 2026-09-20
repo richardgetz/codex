@@ -23,13 +23,15 @@ pub(crate) struct BackendPaths {
     pub(crate) pid_file: PathBuf,
     pub(crate) update_pid_file: PathBuf,
     pub(crate) remote_control_enabled: bool,
+    pub(crate) reload_enabled: bool,
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
-    PidBackend::new(
+    PidBackend::new_with_reload(
         paths.codex_bin,
         paths.pid_file,
         paths.remote_control_enabled,
+        paths.reload_enabled,
     )
 }
 

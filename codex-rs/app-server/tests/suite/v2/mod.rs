@@ -100,6 +100,7 @@ mod session_end;
 #[cfg(unix)]
 mod shared_thread_unix;
 mod skills_list;
+mod slash_commands;
 mod sleep;
 mod thread_activity;
 mod thread_archive;

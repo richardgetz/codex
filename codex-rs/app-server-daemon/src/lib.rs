@@ -859,6 +859,7 @@ impl Daemon {
             pid_file: self.pid_file.clone(),
             update_pid_file: self.update_pid_file.clone(),
             remote_control_enabled: settings.remote_control_enabled,
+            reload_enabled: settings.managed_codex_path.is_some(),
         }
     }
 

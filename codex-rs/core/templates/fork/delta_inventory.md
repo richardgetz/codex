@@ -37,7 +37,10 @@ release or merge rules.
   callbacks; unchanged task revisions retain delivered trigger latches across
   policy reconfiguration, while paused callbacks rearm after `/continue`;
   pending dependency rows and grouping parents stay quiet, and child revisions
-  recompute serial/parallel aggregates without double-counting. Runtime
+  recompute serial/parallel aggregates without double-counting. An active
+  grouping parent with only terminal children now contributes its own bounded
+  estimate, so a finished nested Worker does not leave the root aggregate
+  unknown. Runtime
   removal holds the shared dispatch fence through manager removal and rejects
   absent owners so concurrent updates cannot re-arm deleted-owner callbacks. The
   root-owned freshness minimum is persisted with the ETA ledger (migration
@@ -88,6 +91,24 @@ release or merge rules.
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
   recovery without enabling remote control.
+- App-server v2 exposes a host-gated slash-command catalog and bounded
+  `slashCommand/execute` responses for Inbound clients. Status and spend return
+  configured-account usage/rate-limit data as Markdown, while non-model results
+  are emitted through `slashCommand/result`; `/reload` is available only when
+  the daemon has an explicitly configured local launcher and both managed/reload
+  markers, schedules the daemon's pause/checkpoint/replacement/exact-turn
+  recovery handoff, reports `accepted` before replacement, and exposes durable
+  `in_progress`, `completed`, and `failed` states through `/reload status` plus
+  `/reload recover`. Launcher, process, and non-applied receipt failures re-arm
+  the latch and emit a targeted result notification. Slash result notifications
+  preserve the JSON-RPC request-id type for reliable client correlation. The
+  native TUI exposes the same command, parses daemon apply status before claiming
+  completion, and reports pending/failure states. After an applied handoff it
+  cleanly closes the old client and re-execs the configured launcher, resuming the
+  exact displayed thread with its effective account alias, working directory,
+  model, reasoning effort, and service tier; prompts and images are never
+  replayed. Embedded and standalone-daemon sessions
+  remain unavailable because no replacement launcher is configured.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while

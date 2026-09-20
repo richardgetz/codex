@@ -585,7 +585,7 @@ async fn repeated_start_does_not_rewrite_original_baseline() {
 }
 
 #[tokio::test]
-async fn grouping_parent_is_not_double_counted_and_requires_explicit_completion() {
+async fn grouping_parent_is_not_double_counted_after_children_finish() {
     let (runtime, root) = runtime().await;
     let now = at(1_700_000_000);
     let mut child = create("child", "Child", Some((5, 5)));
@@ -637,8 +637,12 @@ async fn grouping_parent_is_not_double_counted_and_requires_explicit_completion(
         .await
         .expect("awaiting group snapshot");
     assert_eq!(
-        awaiting_group.overall,
-        TaskEstimateOverall::unknown("task group awaits explicit completion")
+        (
+            awaiting_group.overall.remaining_lower_seconds,
+            awaiting_group.overall.remaining_upper_seconds,
+            awaiting_group.overall.unknown_reason,
+        ),
+        (Some(92), Some(92), None),
     );
 
     runtime
@@ -655,6 +659,59 @@ async fn grouping_parent_is_not_double_counted_and_requires_explicit_completion(
         .await
         .expect("complete snapshot");
     assert_eq!(complete.overall.remaining_upper_seconds, Some(0));
+    runtime.close().await;
+}
+
+#[tokio::test]
+async fn bounded_parallel_tasks_keep_overall_after_nested_child_finishes() {
+    let (runtime, root) = runtime().await;
+    let now = at(1_700_000_000);
+    let mut child = create("nested", "Nested worker", Some((5, 9)));
+    child.parent_task_id = Some("group".to_string());
+    let mut operations = vec![create("group", "Team details", Some((20, 40))), child];
+    for index in 0..6 {
+        operations.push(create(
+            &format!("independent-{index}"),
+            "Independent work",
+            Some((5 + index, 10 + index)),
+        ));
+    }
+    operations.extend([
+        transition(TaskEstimateAction::Start, "group"),
+        transition(TaskEstimateAction::Start, "nested"),
+    ]);
+    for index in 0..6 {
+        operations.push(transition(
+            TaskEstimateAction::Start,
+            &format!("independent-{index}"),
+        ));
+    }
+    runtime
+        .apply_task_estimate_mutations(root, root, &operations, now)
+        .await
+        .expect("create and start bounded parallel tasks");
+
+    runtime
+        .apply_task_estimate_mutations(
+            root,
+            root,
+            &[transition(TaskEstimateAction::Complete, "nested")],
+            now + Duration::seconds(1),
+        )
+        .await
+        .expect("finish nested worker while group remains active");
+    let snapshot = runtime
+        .read_task_estimate_snapshot(root, now + Duration::seconds(1), None, None)
+        .await
+        .expect("read bounded parallel aggregate");
+    assert_eq!(
+        (
+            snapshot.overall.remaining_lower_seconds,
+            snapshot.overall.remaining_upper_seconds,
+            snapshot.overall.unknown_reason,
+        ),
+        (Some(19), Some(39), None),
+    );
     runtime.close().await;
 }
 

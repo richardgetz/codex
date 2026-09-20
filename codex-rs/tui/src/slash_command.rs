@@ -57,6 +57,7 @@ pub enum SlashCommand {
     Mention,
     Status,
     Spend,
+    Reload,
     Mic,
     Voice,
     Cd,
@@ -142,6 +143,9 @@ impl SlashCommand {
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Spend => "show daily estimated API spend and token trends",
+            SlashCommand::Reload => {
+                "reload the latest installed Codex through the managed app-server daemon"
+            }
             SlashCommand::Mic => "control realtime voice, microphone, and speaker devices",
             SlashCommand::Voice => {
                 "enable realtime voice, select voices, or tune client-side effects/profiles"
@@ -280,6 +284,7 @@ impl SlashCommand {
                 | SlashCommand::Mention
                 | SlashCommand::Status
                 | SlashCommand::Spend
+                | SlashCommand::Reload
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Pause
@@ -329,6 +334,7 @@ impl SlashCommand {
             | SlashCommand::Hooks
             | SlashCommand::Status
             | SlashCommand::Spend
+            | SlashCommand::Reload
             | SlashCommand::Mic
             | SlashCommand::Voice
             | SlashCommand::Pwd
@@ -424,6 +430,13 @@ mod tests {
     fn voice_command_supports_selection_arguments() {
         assert_eq!(SlashCommand::from_str("voice"), Ok(SlashCommand::Voice));
         assert!(SlashCommand::Voice.supports_inline_args());
+    }
+
+    #[test]
+    fn reload_command_is_visible_without_inline_arguments() {
+        assert_eq!(SlashCommand::from_str("reload"), Ok(SlashCommand::Reload));
+        assert!(!SlashCommand::Reload.supports_inline_args());
+        assert!(SlashCommand::Reload.available_during_task());
     }
 
     #[test]

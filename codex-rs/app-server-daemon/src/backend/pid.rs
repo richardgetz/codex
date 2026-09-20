@@ -79,12 +79,29 @@ enum PidFileState {
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 enum PidCommandKind {
-    AppServer { remote_control_enabled: bool },
+    AppServer {
+        remote_control_enabled: bool,
+        reload_enabled: bool,
+    },
     UpdateLoop,
 }
 
 impl PidBackend {
     pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf, remote_control_enabled: bool) -> Self {
+        Self::new_with_reload(
+            codex_bin,
+            pid_file,
+            remote_control_enabled,
+            /*reload_enabled*/ false,
+        )
+    }
+
+    pub(crate) fn new_with_reload(
+        codex_bin: PathBuf,
+        pid_file: PathBuf,
+        remote_control_enabled: bool,
+        reload_enabled: bool,
+    ) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
         Self {
             codex_bin,
@@ -92,6 +109,7 @@ impl PidBackend {
             lock_file,
             command_kind: PidCommandKind::AppServer {
                 remote_control_enabled,
+                reload_enabled,
             },
         }
     }
@@ -363,9 +381,11 @@ impl PidBackend {
         match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
+                ..
             } => vec!["app-server", "--remote-control", "--listen", "unix://"],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
+                ..
             } => vec!["app-server", "--listen", "unix://"],
             PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
         }
@@ -376,9 +396,11 @@ impl PidBackend {
         match self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
+                ..
             } => Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1")),
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
+                ..
             }
             | PidCommandKind::UpdateLoop => None,
         }

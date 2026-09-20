@@ -52,19 +52,6 @@ pub(super) fn compute_overall_with_freshness_minimum(
     {
         return TaskEstimateOverall::unknown("blocked task");
     }
-    let task_ids_with_children = tasks
-        .iter()
-        .filter_map(|task| task.parent_task_id.as_deref())
-        .collect::<BTreeSet<_>>();
-    if active_tasks.iter().any(|task| {
-        task_ids_with_children.contains(task.task_id.as_str())
-            && !tasks.iter().any(|child| {
-                child.parent_task_id.as_deref() == Some(task.task_id.as_str())
-                    && active_task_ids.contains(child.task_id.as_str())
-            })
-    }) {
-        return TaskEstimateOverall::unknown("task group awaits explicit completion");
-    }
     let active_children = active_tasks
         .iter()
         .filter_map(|task| task.parent_task_id.as_deref())
