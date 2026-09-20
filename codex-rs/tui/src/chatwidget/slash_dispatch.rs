@@ -1415,6 +1415,15 @@ impl ChatWidget {
     }
 
     fn dispatch_reload_command(&mut self) {
+        if self.remote_connection.as_ref().is_some_and(|connection| {
+            connection.address.starts_with("ws://") || connection.address.starts_with("wss://")
+        }) {
+            self.add_error_message(
+                "`/reload` is unavailable from a remote app-server connection; run it from the local managed Codex session."
+                    .to_string(),
+            );
+            return;
+        }
         let executable = match std::env::current_exe() {
             Ok(executable) if executable.is_file() => executable,
             Ok(executable) => {

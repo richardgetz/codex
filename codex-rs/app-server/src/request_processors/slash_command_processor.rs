@@ -68,9 +68,26 @@ impl SlashCommandRequestProcessor {
         params: SlashCommandExecuteParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let command = normalize_command(&params.command)?;
+        let thread_id = params.thread_id.clone();
         let result = match command.as_str() {
-            "status" => self.status_result().await?,
-            "spend" | "usage" => self.spend_result().await?,
+            "status" => match self.status_result().await {
+                Ok(result) => result,
+                Err(error) => {
+                    let notification = error_result(&command, &error);
+                    self.send_result_notification(request_id, &thread_id, &notification)
+                        .await;
+                    return Err(error);
+                }
+            },
+            "spend" | "usage" => match self.spend_result().await {
+                Ok(result) => result,
+                Err(error) => {
+                    let notification = error_result(&command, &error);
+                    self.send_result_notification(request_id, &thread_id, &notification)
+                        .await;
+                    return Err(error);
+                }
+            },
             "reload" => self.reload_result().await,
             _ => SlashCommandExecuteResponse {
                 command: command.clone(),
@@ -84,17 +101,28 @@ impl SlashCommandRequestProcessor {
             },
         };
 
-        self.outgoing
-            .send_server_notification(ServerNotification::SlashCommandResult(
-                SlashCommandResultNotification {
-                    thread_id: params.thread_id,
-                    command,
-                    request_id: request_id.request_id.to_string(),
-                    result: result_payload(&result),
-                },
-            ))
+        self.send_result_notification(request_id, &thread_id, &result)
             .await;
         Ok(Some(result.into()))
+    }
+
+    async fn send_result_notification(
+        &self,
+        request_id: &ConnectionRequestId,
+        thread_id: &str,
+        result: &SlashCommandExecuteResponse,
+    ) {
+        self.outgoing
+            .send_server_notification_to_connections(
+                std::slice::from_ref(&request_id.connection_id),
+                ServerNotification::SlashCommandResult(SlashCommandResultNotification {
+                    thread_id: thread_id.to_string(),
+                    command: result.command.clone(),
+                    request_id: request_id.request_id.to_string(),
+                    result: result_payload(result),
+                }),
+            )
+            .await;
     }
 
     async fn reload_result(&self) -> SlashCommandExecuteResponse {
@@ -289,6 +317,19 @@ fn result_payload(result: &SlashCommandExecuteResponse) -> SlashCommandResultPay
         result_kind: result.result_kind.clone(),
         output: result.output.clone(),
         reload: result.reload.clone(),
+    }
+}
+
+fn error_result(command: &str, error: &JSONRPCErrorError) -> SlashCommandExecuteResponse {
+    SlashCommandExecuteResponse {
+        command: command.to_string(),
+        ok: false,
+        result_kind: SlashCommandResultKind::Error,
+        output: SlashCommandOutput {
+            format: "markdown".to_string(),
+            text: format!("`/{command}` failed: {}", error.message),
+        },
+        reload: None,
     }
 }
 
