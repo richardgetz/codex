@@ -1256,6 +1256,15 @@ fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendReloadContext) 
     cli.resume_session_id = Some(context.thread_id);
     cli.resume_show_all = false;
     cli.resume_include_non_interactive = false;
+    // A `codex fork` or `codex agents` invocation may have populated one of these internal
+    // startup modes before the handoff marker was consumed.  The exact displayed thread must
+    // win on re-entry; otherwise startup orchestration can fork a second thread or reopen the
+    // daemon overview instead of resuming the selected thread.
+    cli.agents_overview = false;
+    cli.fork_picker = false;
+    cli.fork_last = false;
+    cli.fork_session_id = None;
+    cli.fork_show_all = false;
     // The original invocation may have carried a prompt or image arguments. They were already
     // submitted before the daemon handoff and must never be replayed by the replacement process.
     cli.prompt = None;
@@ -1263,18 +1272,26 @@ fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendReloadContext) 
     cli.cwd = Some(context.cwd);
     cli.model = Some(context.model);
     if let Some(effort) = context.reasoning_effort {
-        cli.config_overrides
-            .raw_overrides
-            .push(format!("model_reasoning_effort=\"{effort}\""));
+        cli.config_overrides.raw_overrides.push(format!(
+            "model_reasoning_effort={}",
+            toml_string_literal(&effort)
+        ));
     }
     if let Some(service_tier) = context.service_tier {
-        cli.config_overrides
-            .raw_overrides
-            .push(format!("service_tier=\"{service_tier}\""));
+        cli.config_overrides.raw_overrides.push(format!(
+            "service_tier={}",
+            toml_string_literal(&service_tier)
+        ));
     }
     // Account switching is session-local, so restore the effective alias rather than the alias
     // that happened to be present in the original process arguments.
     cli.startup_account_alias = context.account_alias;
+}
+
+fn toml_string_literal(value: &str) -> String {
+    // JSON string escaping is compatible with TOML basic strings and handles quotes, control
+    // characters, and arbitrary Unicode without interpolating malformed config overrides.
+    serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
 }
 
 fn frontend_reload_args<I>(args: I) -> Vec<std::ffi::OsString>
@@ -2598,6 +2615,11 @@ pub(crate) mod tests {
             "old-model",
         ])
         .expect("test CLI should parse");
+        cli.agents_overview = true;
+        cli.fork_picker = true;
+        cli.fork_last = true;
+        cli.fork_session_id = Some("old-thread".to_string());
+        cli.fork_show_all = true;
         apply_frontend_reload_context(
             &mut cli,
             FrontendReloadContext {
@@ -2616,6 +2638,11 @@ pub(crate) mod tests {
             cli.resume_session_id.as_deref(),
             Some("019e72f4-e09a-70f2-b2c2-a153a57b8cc0")
         );
+        assert!(!cli.agents_overview);
+        assert!(!cli.fork_picker);
+        assert!(!cli.fork_last);
+        assert_eq!(cli.fork_session_id, None);
+        assert!(!cli.fork_show_all);
         assert_eq!(cli.cwd.as_deref(), Some(Path::new("/workspace/current")));
         assert_eq!(cli.startup_account_alias, None);
         assert_eq!(cli.model.as_deref(), Some("current-model"));
@@ -2630,6 +2657,36 @@ pub(crate) mod tests {
                 .raw_overrides
                 .iter()
                 .any(|override_value| override_value == "service_tier=\"fast\"")
+        );
+    }
+
+    #[test]
+    fn frontend_reload_context_escapes_toml_overrides() {
+        let mut cli = Cli::try_parse_from(["codex"]).expect("test CLI should parse");
+        apply_frontend_reload_context(
+            &mut cli,
+            FrontendReloadContext {
+                thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
+                account_alias: None,
+                cwd: PathBuf::from("/workspace/current"),
+                model: "current-model".to_string(),
+                reasoning_effort: Some("custom\"effort\nline".to_string()),
+                service_tier: Some("tier\\value\nline".to_string()),
+            },
+        );
+
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .iter()
+                .any(|override_value| override_value
+                    == "model_reasoning_effort=\"custom\\\"effort\\nline\"")
+        );
+        assert!(
+            cli.config_overrides
+                .raw_overrides
+                .iter()
+                .any(|override_value| override_value == "service_tier=\"tier\\\\value\\nline\"")
         );
     }
 
