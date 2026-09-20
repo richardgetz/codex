@@ -48,6 +48,7 @@ impl App {
                     | AppEvent::EtaViewStateChanged { .. }
                     | AppEvent::ResumeEtaSessionTarget { .. }
                     | AppEvent::ResumeEtaSessionConfirmed { .. }
+                    | AppEvent::ReloadApplied { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -942,6 +943,40 @@ impl App {
             }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
+            }
+            AppEvent::ReloadApplied { launcher, summary } => {
+                let Some(thread_id) = self.current_displayed_thread_id().or(self.primary_thread_id)
+                else {
+                    self.chat_widget.add_error_message(
+                        "Managed app-server reload completed, but no active thread can be resumed."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                self.insert_history_cell(
+                    tui,
+                    Box::new(history_cell::new_info_event(
+                        "Managed app-server reload completed; restarting Codex frontend."
+                            .to_string(),
+                        summary,
+                    )),
+                );
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                return Ok(AppRunControl::Exit(ExitReason::FrontendReload {
+                    thread_id,
+                    launcher,
+                    account_alias: self.config.active_account_alias().map(str::to_owned),
+                    cwd,
+                    model: self.chat_widget.current_model().to_string(),
+                    reasoning_effort: self
+                        .chat_widget
+                        .current_reasoning_effort()
+                        .map(|effort| effort.to_string()),
+                    service_tier: self
+                        .chat_widget
+                        .current_service_tier()
+                        .map(str::to_owned),
+                }));
             }
             AppEvent::CodexOp(mut op) => {
                 if let AppCommand::OverrideTurnContext {

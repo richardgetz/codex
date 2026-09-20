@@ -636,6 +636,13 @@ pub(crate) enum AppEvent {
     #[allow(dead_code)]
     FatalExitRequest(String),
 
+    /// The managed daemon applied its replacement successfully. The app loop must shut down its
+    /// current client cleanly before the launcher re-execs the frontend on the configured binary.
+    ReloadApplied {
+        launcher: PathBuf,
+        summary: Option<String>,
+    },
+
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),

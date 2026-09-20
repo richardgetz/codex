@@ -41,7 +41,10 @@ struct PreparedSlashCommandArgs {
 
 #[derive(Debug, PartialEq, Eq)]
 enum ReloadProcessOutcome {
-    Completed(Option<String>),
+    Completed {
+        summary: Option<String>,
+        launcher: std::path::PathBuf,
+    },
     InProgress(String),
     Failed(String),
 }
@@ -75,7 +78,25 @@ fn parse_reload_process_output(
     let summary = String::from_utf8_lossy(stdout).trim().to_string();
     match output.get("status").and_then(serde_json::Value::as_str) {
         Some("applied") => {
-            ReloadProcessOutcome::Completed((!summary.is_empty()).then_some(summary))
+            let Some(launcher) = output
+                .get("managedCodexPath")
+                .and_then(serde_json::Value::as_str)
+                .map(std::path::PathBuf::from)
+            else {
+                return ReloadProcessOutcome::Failed(
+                    "the daemon omitted the configured Codex launcher path".to_string(),
+                );
+            };
+            if !launcher.is_absolute() {
+                return ReloadProcessOutcome::Failed(format!(
+                    "the daemon returned a non-absolute Codex launcher path `{}`",
+                    launcher.display()
+                ));
+            }
+            ReloadProcessOutcome::Completed {
+                summary: (!summary.is_empty()).then_some(summary),
+                launcher,
+            }
         }
         Some("inProgress") => {
             ReloadProcessOutcome::InProgress(detail.unwrap_or_else(|| {
@@ -1521,11 +1542,9 @@ impl ChatWidget {
                     &output.stdout,
                     &output.stderr,
                 ) {
-                    ReloadProcessOutcome::Completed(summary) => {
-                        crate::history_cell::new_info_event(
-                            "Managed app-server reload completed.".to_string(),
-                            summary,
-                        )
+                    ReloadProcessOutcome::Completed { summary, launcher } => {
+                        app_event_tx.send(AppEvent::ReloadApplied { launcher, summary });
+                        return;
                     }
                     ReloadProcessOutcome::InProgress(detail) => {
                         crate::history_cell::new_info_event(
@@ -2617,8 +2636,17 @@ mod reload_tests {
     #[test]
     fn reload_output_requires_applied_status() {
         assert_eq!(
-            parse_reload_process_output(true, br#"{"status":"applied"}"#, b""),
-            ReloadProcessOutcome::Completed(Some(r#"{"status":"applied"}"#.to_string()))
+            parse_reload_process_output(
+                true,
+                br#"{"status":"applied","managedCodexPath":"/opt/codex"}"#,
+                b"",
+            ),
+            ReloadProcessOutcome::Completed {
+                summary: Some(
+                    r#"{"status":"applied","managedCodexPath":"/opt/codex"}"#.to_string(),
+                ),
+                launcher: std::path::PathBuf::from("/opt/codex"),
+            }
         );
         assert_eq!(
             parse_reload_process_output(true, br#"{"status":"inProgress"}"#, b""),
@@ -2636,6 +2664,10 @@ mod reload_tests {
         );
         assert!(matches!(
             parse_reload_process_output(true, br#"{"status":"unknown"}"#, b""),
+            ReloadProcessOutcome::Failed(_)
+        ));
+        assert!(matches!(
+            parse_reload_process_output(true, br#"{"status":"applied"}"#, b""),
             ReloadProcessOutcome::Failed(_)
         ));
     }

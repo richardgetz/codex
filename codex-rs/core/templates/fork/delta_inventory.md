@@ -103,8 +103,12 @@ release or merge rules.
   the latch and emit a targeted result notification. Slash result notifications
   preserve the JSON-RPC request-id type for reliable client correlation. The
   native TUI exposes the same command, parses daemon apply status before claiming
-  completion, and reports pending/failure states; embedded and standalone-daemon
-  sessions remain unavailable because no replacement launcher is configured.
+  completion, and reports pending/failure states. After an applied handoff it
+  cleanly closes the old client and re-execs the configured launcher, resuming the
+  exact displayed thread with its effective account alias, working directory,
+  model, reasoning effort, and service tier; prompts and images are never
+  replayed. Embedded and standalone-daemon sessions
+  remain unavailable because no replacement launcher is configured.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while
