@@ -263,7 +263,8 @@ async fn implicit_daemon_resume_picker_and_direct_id_reuse_authoritative_daemon(
         let repo_root = codex_utils_cargo_bin::repo_root()?;
         let codex_home = tempfile::tempdir_in("/tmp")?;
         write_test_config(codex_home.path(), &repo_root)?;
-        let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
+        let socket_path =
+            codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
         std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
         let listener = UnixListener::bind(socket_path.as_path())?;
         let server_cwd = repo_root.clone();
@@ -281,7 +282,11 @@ async fn implicit_daemon_resume_picker_and_direct_id_reuse_authoritative_daemon(
             "source": "cli",
             "turns": []
         });
-        let expected_connections = if expected_lookup == "thread/list" { 2 } else { 1 };
+        let expected_connections = if expected_lookup == "thread/list" {
+            2
+        } else {
+            1
+        };
         let (lookup_tx, lookup_rx) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
             let mut accepted = 0;
@@ -425,13 +430,19 @@ async fn implicit_daemon_resume_picker_and_direct_id_reuse_authoritative_daemon(
             "resume mode {extra_args:?} opened an unexpected number of daemon connections"
         );
         assert_eq!(
-            methods.iter().filter(|method| *method == "initialize").count(),
+            methods
+                .iter()
+                .filter(|method| *method == "initialize")
+                .count(),
             expected_connections,
             "each authoritative daemon connection must initialize"
         );
         assert!(methods.iter().any(|method| method == expected_lookup));
         assert!(methods.iter().any(|method| method == "thread/resume"));
-        assert_eq!(resumed_thread_ids, vec!["00000000-0000-0000-0000-000000000001"]);
+        assert_eq!(
+            resumed_thread_ids,
+            vec!["00000000-0000-0000-0000-000000000001"]
+        );
         assert!(!methods.iter().any(|method| method == "thread/start"));
     }
     Ok(())

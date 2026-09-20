@@ -85,8 +85,8 @@ async fn daemon_startup_reports_connection_failures_without_embedded_fallback()
 
 #[cfg(unix)]
 #[tokio::test]
-async fn default_daemon_discovery_distinguishes_absent_and_stale_sockets()
--> color_eyre::Result<()> {
+async fn default_daemon_discovery_distinguishes_absent_and_stale_sockets() -> color_eyre::Result<()>
+{
     let home = TempDir::new()?;
     assert!(connect_default_daemon(home.path()).await?.is_none());
 
@@ -99,14 +99,18 @@ async fn default_daemon_discovery_distinguishes_absent_and_stale_sockets()
         Ok(_) => color_eyre::eyre::bail!("an existing but unavailable socket must fail closed"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("refusing to start a competing embedded server"));
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to start a competing embedded server")
+    );
     Ok(())
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn default_daemon_startup_reuses_authoritative_handshake_for_resume()
--> color_eyre::Result<()> {
+async fn default_daemon_startup_reuses_authoritative_handshake_for_resume() -> color_eyre::Result<()>
+{
     let home = TempDir::new()?;
     let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
     std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
@@ -139,7 +143,9 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume()
                 {
                     break;
                 }
-                JSONRPCMessage::Notification(_) | JSONRPCMessage::Response(_) | JSONRPCMessage::Error(_) => {}
+                JSONRPCMessage::Notification(_)
+                | JSONRPCMessage::Response(_)
+                | JSONRPCMessage::Error(_) => {}
             }
         }
         Ok::<_, color_eyre::Report>(methods)
