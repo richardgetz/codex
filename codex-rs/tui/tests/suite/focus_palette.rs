@@ -287,7 +287,7 @@ impl PtyCodex {
         );
     }
 
-    fn answer_startup_queries(&mut self) -> Result<()> {
+    pub(super) fn answer_startup_queries(&mut self) -> Result<()> {
         if !self.cursor_answered && contains_bytes(&self.output, b"\x1b[6n") {
             self.write_input(b"\x1b[1;1R")?;
             self.cursor_answered = true;
