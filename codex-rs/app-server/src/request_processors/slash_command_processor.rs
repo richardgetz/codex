@@ -356,14 +356,13 @@ fn internal_error(error: impl std::fmt::Display) -> JSONRPCErrorError {
 }
 
 fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
-    [
+    let mut commands: Vec<SlashCommandSpec> = [
         (
             "status",
             "show current session configuration and token usage",
             false,
         ),
         ("spend", "show daily token usage and trends", false),
-        ("usage", "show token usage", false),
         ("reload", "reload the latest installed Codex safely", false),
         ("model", "switch model", true),
         ("permissions", "change permissions", true),
@@ -404,10 +403,10 @@ fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
             aliases: Vec::new(),
             description: description.to_string(),
             supports_inline_args,
-            available: matches!(name, "status" | "spend" | "usage")
+            available: matches!(name, "status" | "spend")
                 || (name == "reload" && reload_available),
             unavailable_reason: (match name {
-                "status" | "spend" | "usage" => None,
+                "status" | "spend" => None,
                 "reload" if reload_available => None,
                 "reload" => Some(
                     "Reload requires an app-server process launched by the managed local daemon with an explicitly configured local Codex launcher.".to_string(),
@@ -416,7 +415,13 @@ fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
             }),
         },
     )
-    .collect()
+    .collect();
+
+    if let Some(spend) = commands.iter_mut().find(|command| command.name == "spend") {
+        spend.aliases.push("usage".to_string());
+    }
+
+    commands
 }
 
 #[cfg(test)]
@@ -462,6 +467,18 @@ mod tests {
             .expect("reload command");
         assert!(available.available);
         assert_eq!(available.unavailable_reason, None);
+    }
+
+    #[test]
+    fn usage_is_catalogued_as_spend_alias() {
+        let commands = command_specs(true);
+        let spend = commands
+            .iter()
+            .find(|command| command.name == "spend")
+            .expect("spend command");
+
+        assert_eq!(spend.aliases, vec!["usage"]);
+        assert!(commands.iter().all(|command| command.name != "usage"));
     }
 
     #[test]
