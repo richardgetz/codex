@@ -130,6 +130,18 @@ mod thread_read_status_tests {
             }
         );
     }
+
+    #[test]
+    fn unloaded_watcher_status_does_not_promote_stale_live_turn() {
+        assert_eq!(
+            thread_read_status(
+                /*has_loaded_thread_snapshot*/ true,
+                ThreadStatus::NotLoaded,
+                /*has_live_in_progress_turn*/ true,
+            ),
+            ThreadStatus::NotLoaded
+        );
+    }
 }
 
 mod thread_processor_behavior_tests {

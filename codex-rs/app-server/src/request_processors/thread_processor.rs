@@ -3359,6 +3359,12 @@ impl ThreadRequestProcessor {
             watched_status,
             has_live_in_progress_turn,
         );
+        if matches!(thread_status, ThreadStatus::NotLoaded) {
+            // `canAcceptDirectInput` is a live-thread capability. A loaded snapshot can be
+            // unloaded while the persisted read is in flight, so do not return its capability
+            // after the watcher has confirmed that the thread is no longer loaded.
+            thread.can_accept_direct_input = None;
+        }
 
         set_thread_status_and_interrupt_stale_turns(
             &mut thread,
@@ -6319,6 +6325,9 @@ fn thread_read_status(
     } else {
         ThreadStatus::NotLoaded
     };
+    if matches!(status, ThreadStatus::NotLoaded) {
+        return ThreadStatus::NotLoaded;
+    }
     resolve_thread_status(status, has_live_in_progress_turn)
 }
 

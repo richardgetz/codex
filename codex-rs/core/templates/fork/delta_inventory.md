@@ -111,8 +111,9 @@ release or merge rules.
   remain unavailable because no replacement launcher is configured.
 - `thread/read` keeps persisted snapshots marked `NotLoaded` when the live
   thread is absent, even if a concurrent resume or delayed unload leaves a
-  transient active watcher status. This prevents an active response with a
-  nullable `canAcceptDirectInput` capability during the read snapshot race.
+  transient active watcher status. It also clears the live-only
+  `canAcceptDirectInput` capability after a delayed unload, preventing an
+  active response with a nullable capability during the read snapshot race.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while
