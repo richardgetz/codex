@@ -99,6 +99,7 @@ impl PidBackend {
         }
         if let PidCommandKind::AppServer { reload_enabled, .. } = self.command_kind {
             command.env(APP_SERVER_DAEMON_MANAGED_ENV, "1");
+            command.env_remove(APP_SERVER_DAEMON_RELOAD_ENV);
             if reload_enabled {
                 command.env(APP_SERVER_DAEMON_RELOAD_ENV, "1");
             }

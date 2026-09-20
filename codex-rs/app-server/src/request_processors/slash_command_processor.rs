@@ -125,7 +125,7 @@ impl SlashCommandRequestProcessor {
             }
         };
 
-        schedule_reload(
+        let _reload_task = schedule_reload(
             Arc::clone(&self.reload_scheduled),
             executable,
             Arc::new(spawn_reload_daemon),
@@ -245,14 +245,14 @@ fn schedule_reload(
     reload_scheduled: Arc<AtomicBool>,
     executable: std::path::PathBuf,
     launcher: Arc<ReloadLauncher>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         tokio::time::sleep(RELOAD_HANDOFF_DELAY).await;
         if let Err(error) = launcher(executable) {
             reload_scheduled.store(false, Ordering::Release);
             tracing::error!(%error, "failed to schedule managed Codex reload");
         }
-    });
+    })
 }
 
 fn reserve_reload(reload_scheduled: &AtomicBool) -> bool {
@@ -423,7 +423,9 @@ mod tests {
             Arc::clone(&reload_scheduled),
             std::path::PathBuf::from("/tmp/codex-test-launcher"),
             launcher,
-        );
+        )
+        .await
+        .expect("fake launcher task should complete");
         timeout(Duration::from_secs(1), async {
             while launches.load(Ordering::Acquire) == 0 {
                 tokio::task::yield_now().await;
@@ -448,7 +450,9 @@ mod tests {
             Arc::clone(&reload_scheduled),
             std::path::PathBuf::from("/tmp/codex-test-launcher"),
             launcher,
-        );
+        )
+        .await
+        .expect("failed launcher task should complete");
         timeout(Duration::from_secs(1), async {
             while reload_scheduled.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
