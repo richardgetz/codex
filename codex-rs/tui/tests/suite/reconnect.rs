@@ -32,11 +32,13 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     let listener = UnixListener::bind(socket.as_path())?;
     let (disconnect_tx, mut disconnect_rx) = tokio::sync::oneshot::channel();
     let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
+    let (startup_ready_tx, startup_ready_rx) = tokio::sync::oneshot::channel();
     let server_cwd = repo_root.clone();
     let observed_methods = Arc::new(Mutex::new(Vec::new()));
     let observed_methods_for_server = Arc::clone(&observed_methods);
     let server = tokio::spawn(async move {
         let mut restore_rx = Some(restore_rx);
+        let mut startup_ready_tx = Some(startup_ready_tx);
         let id = "00000000-0000-0000-0000-000000000001";
         let thread = json!({
             "id": id, "sessionId": id, "preview": "", "ephemeral": false,
@@ -129,6 +131,12 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                             .into(),
                     ))
                     .await?;
+                if connection == 0
+                    && request.method == "skills/list"
+                    && let Some(startup_ready_tx) = startup_ready_tx.take()
+                {
+                    startup_ready_tx.send(()).ok();
+                }
                 if connection == 2 && request.method == "thread/resume" {
                     // Keep the recovered turn running: its output must appear without waiting
                     // for turn/completed or rebuilding the transcript.
@@ -151,6 +159,9 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     });
     let mut terminal = PtyCodex::start(&repo_root, codex_home, &[])?;
     terminal.wait_for_startup()?;
+    // `skills/list` is spawned after StartupDraft has transferred ownership to the normal App
+    // loop. Await that protocol boundary instead of matching the provisional composer text.
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 30), startup_ready_rx).await??;
     let mut disconnect_tx = Some(disconnect_tx);
     let mut restore_tx = Some(restore_tx);
     for expected in [
@@ -301,10 +312,14 @@ async fn implicit_daemon_resume_picker_and_direct_id_share_one_connection() -> R
 
         let mut terminal =
             PtyCodex::start_with_binary(&repo_root, codex_home, &extra_args, "codex")?;
-        terminal.wait_for_startup()?;
         if expected_lookup == "thread/list" {
+            // The top-level resume picker has its own screen and does not render the normal
+            // welcome banner that `wait_for_startup` expects.
+            terminal.wait_for_screen("Resume a previous session")?;
             terminal.wait_for_screen("resume fixture")?;
             terminal.write_input(b"\r")?;
+        } else {
+            terminal.wait_for_startup()?;
         }
         tokio::time::timeout(Duration::from_secs(30), lookup_rx).await??;
         drop(terminal);
