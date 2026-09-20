@@ -1,4 +1,8 @@
+use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -15,6 +19,7 @@ use codex_app_server_protocol::SlashCommandResultKind;
 use codex_app_server_protocol::SlashCommandResultNotification;
 use codex_app_server_protocol::SlashCommandResultPayload;
 use codex_app_server_protocol::SlashCommandSpec;
+use codex_app_server_transport::APP_SERVER_DAEMON_MANAGED_ENV;
 
 use super::AccountRequestProcessor;
 use super::ConnectionRequestId;
@@ -22,11 +27,13 @@ use super::OutgoingMessageSender;
 use super::invalid_request;
 
 const MAX_OUTPUT_CHARS: usize = 20_000;
+const RELOAD_HANDOFF_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 pub(crate) struct SlashCommandRequestProcessor {
     account_processor: AccountRequestProcessor,
     outgoing: Arc<OutgoingMessageSender>,
+    reload_scheduled: Arc<AtomicBool>,
 }
 
 impl SlashCommandRequestProcessor {
@@ -37,16 +44,18 @@ impl SlashCommandRequestProcessor {
         Self {
             account_processor,
             outgoing,
+            reload_scheduled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub(crate) fn list(&self, _params: SlashCommandListParams) -> SlashCommandListResponse {
+        let reload_available = daemon_reload_available();
         SlashCommandListResponse {
-            commands: command_specs(),
+            commands: command_specs(reload_available),
             capabilities: SlashCommandCapabilities {
                 status: true,
                 spend: true,
-                reload: true,
+                reload: reload_available,
             },
         }
     }
@@ -60,7 +69,7 @@ impl SlashCommandRequestProcessor {
         let result = match command.as_str() {
             "status" => self.status_result().await?,
             "spend" | "usage" => self.spend_result().await?,
-            "reload" => reload_result(),
+            "reload" => self.reload_result().await,
             _ => SlashCommandExecuteResponse {
                 command: command.clone(),
                 ok: false,
@@ -84,6 +93,61 @@ impl SlashCommandRequestProcessor {
             ))
             .await;
         Ok(Some(result.into()))
+    }
+
+    async fn reload_result(&self) -> SlashCommandExecuteResponse {
+        if !daemon_reload_available() {
+            return unavailable_reload_result(
+                "Reload requires an app-server process launched by the managed local daemon.",
+            );
+        }
+        if !self
+            .reload_scheduled
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return unavailable_reload_result(
+                "A Codex reload is already scheduled for this app-server session.",
+            );
+        }
+        let executable = match std::env::current_exe() {
+            Ok(executable) if executable.is_file() => executable,
+            Ok(executable) => {
+                self.reload_scheduled.store(false, Ordering::Release);
+                return unavailable_reload_result(&format!(
+                    "The current Codex launcher is not a file: {}.",
+                    executable.display()
+                ));
+            }
+            Err(error) => {
+                self.reload_scheduled.store(false, Ordering::Release);
+                return unavailable_reload_result(&format!(
+                    "The current Codex launcher could not be resolved: {error}."
+                ));
+            }
+        };
+
+        tokio::spawn(async move {
+            tokio::time::sleep(RELOAD_HANDOFF_DELAY).await;
+            if let Err(error) = spawn_reload_daemon(executable) {
+                tracing::error!(%error, "failed to schedule managed Codex reload");
+            }
+        });
+
+        SlashCommandExecuteResponse {
+            command: "reload".to_string(),
+            ok: true,
+            result_kind: SlashCommandResultKind::Reload,
+            output: SlashCommandOutput {
+                format: "markdown".to_string(),
+                text: "`/reload` scheduled a managed daemon handoff. The app-server will pause, replace the running Codex, and recover the exact paused turns.".to_string(),
+            },
+            reload: Some(SlashCommandReloadResult {
+                eligible: true,
+                state: "scheduled".to_string(),
+                reason: Some("The daemon owns pause, replacement, exact-turn recovery, and unresolved-failure receipts.".to_string()),
+            }),
+        }
     }
 
     async fn status_result(&self) -> Result<SlashCommandExecuteResponse, JSONRPCErrorError> {
@@ -148,13 +212,11 @@ fn normalize_command(command: &str) -> Result<String, JSONRPCErrorError> {
     Ok(normalized)
 }
 
-fn reload_result() -> SlashCommandExecuteResponse {
+fn unavailable_reload_result(reason: &str) -> SlashCommandExecuteResponse {
     let reload = SlashCommandReloadResult {
         eligible: false,
         state: "unavailable".to_string(),
-        reason: Some(
-            "Reload is available only through a managed local daemon with an explicit launcher; no live restart was attempted.".to_string(),
-        ),
+        reason: Some(reason.to_string()),
     };
     SlashCommandExecuteResponse {
         command: "reload".to_string(),
@@ -162,10 +224,28 @@ fn reload_result() -> SlashCommandExecuteResponse {
         result_kind: SlashCommandResultKind::Reload,
         output: SlashCommandOutput {
             format: "markdown".to_string(),
-            text: "`/reload` is unavailable for this app-server session.".to_string(),
+            text: format!("`/reload` is unavailable for this app-server session. {reason}"),
         },
         reload: Some(reload),
     }
+}
+
+fn daemon_reload_available() -> bool {
+    std::env::var_os(APP_SERVER_DAEMON_MANAGED_ENV).is_some_and(|value| value == "1")
+}
+
+fn spawn_reload_daemon(executable: std::path::PathBuf) -> std::io::Result<()> {
+    std::process::Command::new(executable)
+        .args(reload_command_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
+fn reload_command_args() -> [&'static str; 3] {
+    ["app-server", "daemon", "apply"]
 }
 
 fn response_payload_json(
@@ -199,7 +279,7 @@ fn internal_error(error: impl std::fmt::Display) -> JSONRPCErrorError {
     crate::error_code::internal_error(error.to_string())
 }
 
-fn command_specs() -> Vec<SlashCommandSpec> {
+fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
     [
         (
             "status",
@@ -248,10 +328,28 @@ fn command_specs() -> Vec<SlashCommandSpec> {
             aliases: Vec::new(),
             description: description.to_string(),
             supports_inline_args,
-            available: matches!(name, "status" | "spend" | "usage" | "reload"),
-            unavailable_reason: (!matches!(name, "status" | "spend" | "usage" | "reload"))
-                .then(|| "This command is currently TUI-only.".to_string()),
+            available: matches!(name, "status" | "spend" | "usage")
+                || (name == "reload" && reload_available),
+            unavailable_reason: (match name {
+                "status" | "spend" | "usage" => None,
+                "reload" if reload_available => None,
+                "reload" => Some(
+                    "Reload requires an app-server process launched by the managed local daemon."
+                        .to_string(),
+                ),
+                _ => Some("This command is currently TUI-only.".to_string()),
+            }),
         },
     )
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reload_command_args;
+
+    #[test]
+    fn reload_uses_daemon_apply_command() {
+        assert_eq!(reload_command_args(), ["app-server", "daemon", "apply"]);
+    }
 }

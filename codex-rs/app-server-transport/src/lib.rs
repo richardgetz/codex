@@ -6,6 +6,12 @@ pub use daemon_shutdown::DAEMON_SHUTDOWN_FILE_ENV;
 pub use daemon_shutdown::daemon_shutdown_signal;
 /// Only managed app-server launches accept the local socket shutdown request.
 pub const DAEMON_SHUTDOWN_SOCKET_ENV: &str = "CODEX_DAEMON_SHUTDOWN_SOCKET";
+/// Marks an app-server process launched by the local daemon's managed backend.
+///
+/// The slash-command bridge uses this marker to gate `/reload` to the daemon
+/// handoff path. Embedded and ad-hoc app-server processes must not try to
+/// replace themselves.
+pub const APP_SERVER_DAEMON_MANAGED_ENV: &str = "CODEX_APP_SERVER_DAEMON_MANAGED";
 mod outgoing_message;
 mod transport;
 

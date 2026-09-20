@@ -43,7 +43,7 @@ async fn slash_command_list_exposes_available_and_tui_only_commands() -> Result<
 
     assert!(response.capabilities.status);
     assert!(response.capabilities.spend);
-    assert!(response.capabilities.reload);
+    assert!(!response.capabilities.reload);
     let status = response
         .commands
         .iter()
@@ -59,6 +59,18 @@ async fn slash_command_list_exposes_available_and_tui_only_commands() -> Result<
     assert_eq!(
         plan.unavailable_reason.as_deref(),
         Some("This command is currently TUI-only.")
+    );
+    let reload = response
+        .commands
+        .iter()
+        .find(|command| command.name == "reload")
+        .expect("reload should be listed");
+    assert!(!reload.available);
+    assert!(
+        reload
+            .unavailable_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("managed local daemon"))
     );
     Ok(())
 }
