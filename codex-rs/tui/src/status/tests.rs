@@ -2112,6 +2112,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
     let remote_connection = RemoteConnectionStatus {
         address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock".to_string(),
         version: "v0.133.0".to_string(),
+        is_remote: false,
     };
 
     let model_slug = get_model_offline_for_tests(config.model.as_deref());

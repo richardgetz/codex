@@ -69,6 +69,17 @@ impl SlashCommandRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let command = normalize_command(&params.command)?;
         let thread_id = params.thread_id.clone();
+        if matches!(command.as_str(), "status" | "spend" | "usage")
+            && !params.args.trim().is_empty()
+        {
+            let error = invalid_request(format!(
+                "`/{command}` does not accept inline arguments in the app-server bridge"
+            ));
+            let notification = error_result(&command, &error);
+            self.send_result_notification(request_id, &thread_id, &notification)
+                .await;
+            return Err(error);
+        }
         let result = match command.as_str() {
             "status" => match self.status_result().await {
                 Ok(result) => result,
@@ -79,7 +90,7 @@ impl SlashCommandRequestProcessor {
                     return Err(error);
                 }
             },
-            "spend" | "usage" => match self.spend_result().await {
+            "spend" | "usage" => match self.spend_result(&command).await {
                 Ok(result) => result,
                 Err(error) => {
                     let notification = error_result(&command, &error);
@@ -205,7 +216,10 @@ impl SlashCommandRequestProcessor {
         })
     }
 
-    async fn spend_result(&self) -> Result<SlashCommandExecuteResponse, JSONRPCErrorError> {
+    async fn spend_result(
+        &self,
+        command: &str,
+    ) -> Result<SlashCommandExecuteResponse, JSONRPCErrorError> {
         let usage = self
             .account_processor
             .get_account_token_usage(None)
@@ -217,7 +231,7 @@ impl SlashCommandRequestProcessor {
             serde_json::to_string_pretty(&usage_json).map_err(internal_error)?,
         ));
         Ok(SlashCommandExecuteResponse {
-            command: "spend".to_string(),
+            command: command.to_string(),
             ok: true,
             result_kind: SlashCommandResultKind::Spend,
             output: SlashCommandOutput {
@@ -304,7 +318,11 @@ fn response_payload_json(
 
 fn bounded_output(mut text: String) -> String {
     if text.chars().count() > MAX_OUTPUT_CHARS {
-        text.truncate(MAX_OUTPUT_CHARS);
+        let end = text
+            .char_indices()
+            .nth(MAX_OUTPUT_CHARS)
+            .map_or(text.len(), |(index, _)| index);
+        text.truncate(end);
         text.push_str("\n\n_Output truncated by the host._");
     }
     text
@@ -344,8 +362,8 @@ fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
             "show current session configuration and token usage",
             false,
         ),
-        ("spend", "show daily token usage and trends", true),
-        ("usage", "show token usage", true),
+        ("spend", "show daily token usage and trends", false),
+        ("usage", "show token usage", false),
         ("reload", "reload the latest installed Codex safely", false),
         ("model", "switch model", true),
         ("permissions", "change permissions", true),
@@ -411,7 +429,9 @@ mod tests {
 
     use tokio::time::timeout;
 
+    use super::MAX_OUTPUT_CHARS;
     use super::ReloadLauncher;
+    use super::bounded_output;
     use super::command_specs;
     use super::reload_command_args;
     use super::reserve_reload;
@@ -442,6 +462,13 @@ mod tests {
             .expect("reload command");
         assert!(available.available);
         assert_eq!(available.unavailable_reason, None);
+    }
+
+    #[test]
+    fn bounded_output_truncates_at_a_character_boundary() {
+        let output = bounded_output("é".repeat(MAX_OUTPUT_CHARS + 1));
+        assert!(output.ends_with("_Output truncated by the host._"));
+        assert!(output.starts_with(&"é".repeat(MAX_OUTPUT_CHARS)));
     }
 
     #[tokio::test]

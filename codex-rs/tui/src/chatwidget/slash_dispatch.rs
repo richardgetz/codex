@@ -1415,9 +1415,14 @@ impl ChatWidget {
     }
 
     fn dispatch_reload_command(&mut self) {
-        if self.remote_connection.as_ref().is_some_and(|connection| {
-            connection.address.starts_with("ws://") || connection.address.starts_with("wss://")
-        }) {
+        let Some(connection) = self.remote_connection.as_ref() else {
+            self.add_error_message(
+                "`/reload` is unavailable in an embedded app-server session; use a managed local daemon with an explicit Codex launcher."
+                    .to_string(),
+            );
+            return;
+        };
+        if connection.is_remote {
             self.add_error_message(
                 "`/reload` is unavailable from a remote app-server connection; run it from the local managed Codex session."
                     .to_string(),

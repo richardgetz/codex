@@ -6,17 +6,17 @@ use url::Url;
 pub(crate) struct RemoteConnectionStatus {
     pub(crate) address: String,
     pub(crate) version: String,
+    pub(crate) is_remote: bool,
 }
 
 pub(crate) fn remote_connection_status_value(
     app_server_target: &AppServerTarget,
     server_version: Option<&str>,
 ) -> Option<RemoteConnectionStatus> {
-    let endpoint = match app_server_target {
+    let (endpoint, is_remote) = match app_server_target {
         AppServerTarget::Embedded => return None,
-        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
-            endpoint
-        }
+        AppServerTarget::LocalDaemon { endpoint } => (endpoint, false),
+        AppServerTarget::Remote { endpoint } => (endpoint, true),
     };
     let address = match endpoint {
         RemoteAppServerEndpoint::WebSocket { websocket_url, .. } => {
@@ -31,7 +31,11 @@ pub(crate) fn remote_connection_status_value(
     let version = server_version
         .map(|version| format!("v{version}"))
         .unwrap_or_else(|| "unknown".to_string());
-    Some(RemoteConnectionStatus { address, version })
+    Some(RemoteConnectionStatus {
+        address,
+        version,
+        is_remote,
+    })
 }
 
 pub(crate) fn sanitized_websocket_url(raw: &str) -> Option<Url> {
@@ -66,6 +70,7 @@ mod tests {
             Some(RemoteConnectionStatus {
                 address: "ws://127.0.0.1:4500/".to_string(),
                 version: "v1.2.3".to_string(),
+                is_remote: true,
             })
         );
 
@@ -80,6 +85,7 @@ mod tests {
             Some(RemoteConnectionStatus {
                 address: format!("unix://{}", socket_path.display()),
                 version: "unknown".to_string(),
+                is_remote: false,
             })
         );
         Ok(())
