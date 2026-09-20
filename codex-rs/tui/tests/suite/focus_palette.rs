@@ -166,6 +166,15 @@ impl PtyCodex {
         codex_home: TempDir,
         extra_args: &[&str],
     ) -> Result<Self> {
+        Self::start_with_binary(repo_root, codex_home, extra_args, "codex-tui")
+    }
+
+    pub(super) fn start_with_binary(
+        repo_root: &Path,
+        codex_home: TempDir,
+        extra_args: &[&str],
+        binary_name: &str,
+    ) -> Result<Self> {
         let mut master_fd = -1;
         let mut slave_fd = -1;
         let mut window_size = libc::winsize {
@@ -197,8 +206,7 @@ impl PtyCodex {
         let stdin = slave.try_clone().context("clone pseudo-terminal stdin")?;
         let stdout = slave.try_clone().context("clone pseudo-terminal stdout")?;
 
-        let codex = codex_utils_cargo_bin::cargo_bin("codex-tui")
-            .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex"))?;
+        let codex = codex_utils_cargo_bin::cargo_bin(binary_name)?;
         let child = Command::new(codex)
             .args(extra_args)
             .arg("--no-alt-screen")
@@ -279,7 +287,7 @@ impl PtyCodex {
         );
     }
 
-    fn answer_startup_queries(&mut self) -> Result<()> {
+    pub(super) fn answer_startup_queries(&mut self) -> Result<()> {
         if !self.cursor_answered && contains_bytes(&self.output, b"\x1b[6n") {
             self.write_input(b"\x1b[1;1R")?;
             self.cursor_answered = true;
@@ -349,11 +357,17 @@ impl PtyCodex {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         while Instant::now() < deadline {
             self.read_output(Duration::from_millis(/*millis*/ 50))?;
+            self.answer_startup_queries()?;
             if self.screen_contains(text) {
                 return Ok(());
             }
             if let Some(status) = self.child.try_wait()? {
-                bail!("Codex exited while waiting for {text:?} ({status})");
+                let output_tail_start = self.output.len().saturating_sub(4096);
+                bail!(
+                    "Codex exited while waiting for {text:?} ({status}); screen:\n{}\nPTY output tail:\n{}",
+                    self.screen_contents(),
+                    String::from_utf8_lossy(&self.output[output_tail_start..]),
+                );
             }
         }
         bail!("missing {text:?}; screen:\n{}", self.screen_contents())

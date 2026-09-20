@@ -468,6 +468,10 @@ async fn connect_remote_app_server(
     Ok(AppServerClient::Remote(app_server))
 }
 
+/// Best-effort socket discovery for archive/queue commands that open a fresh client later.
+///
+/// Interactive startup uses [`connect_default_daemon`] so its handshake client is reused rather
+/// than probing with one connection and reconnecting with another.
 async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
     let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
     #[cfg(windows)]
@@ -505,6 +509,52 @@ async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<Absolute
     }
 }
 
+/// Owns the initialized client for an implicitly selected local daemon.
+///
+/// Startup must not probe a daemon with one connection and then open a second
+/// connection after the probe.  The first connection is the authoritative
+/// startup handshake and is handed to the TUI once configuration loading is
+/// complete.
+struct PreparedDefaultDaemon {
+    socket_path: AbsolutePathBuf,
+    app_server: AppServerClient,
+}
+
+async fn connect_default_daemon(
+    codex_home: &Path,
+) -> std::io::Result<Option<PreparedDefaultDaemon>> {
+    let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home)
+        .map_err(std::io::Error::other)?;
+    match std::fs::metadata(socket_path.as_path()) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(std::io::Error::other(format!(
+                "failed to inspect the existing local app-server daemon socket at `{}`; refusing to start a competing embedded server: {err}",
+                socket_path.display()
+            )));
+        }
+    }
+
+    let target = AppServerTarget::LocalDaemon {
+        endpoint: RemoteAppServerEndpoint::UnixSocket {
+            socket_path: socket_path.clone(),
+        },
+    };
+    let app_server = app_server_connection::connect(&target)
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!(
+                "failed to connect to the existing local app-server daemon at `{}`; refusing to start a competing embedded server: {err}",
+                socket_path.display()
+            ))
+        })?;
+    Ok(Some(PreparedDefaultDaemon {
+        socket_path,
+        app_server,
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_app_server(
     target: &mut AppServerTarget,
@@ -519,10 +569,45 @@ async fn start_app_server(
     state_db: &mut Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
 ) -> color_eyre::Result<AppServerClient> {
-    let connection = if matches!(target, AppServerTarget::Embedded) {
-        None
-    } else {
-        Some(app_server_connection::connect(target).await)
+    start_app_server_with_preconnected(
+        target,
+        arg0_paths,
+        config,
+        cli_kv_overrides,
+        loader_overrides,
+        strict_config,
+        cloud_config_bundle,
+        feedback,
+        log_db,
+        state_db,
+        environment_manager,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_app_server_with_preconnected(
+    target: &mut AppServerTarget,
+    arg0_paths: Arg0DispatchPaths,
+    config: Config,
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    cloud_config_bundle: CloudConfigBundleLoader,
+    feedback: codex_feedback::CodexFeedback,
+    log_db: Option<log_db::LogDbLayer>,
+    state_db: &mut Option<StateDbHandle>,
+    environment_manager: Arc<EnvironmentManager>,
+    preconnected_local_daemon: Option<AppServerClient>,
+) -> color_eyre::Result<AppServerClient> {
+    let connection = match target {
+        AppServerTarget::Embedded => None,
+        AppServerTarget::LocalDaemon { .. } => Some(match preconnected_local_daemon {
+            Some(app_server) => Ok(app_server),
+            None => app_server_connection::connect(target).await,
+        }),
+        AppServerTarget::Remote { .. } => Some(app_server_connection::connect(target).await),
     };
     if let Some(connection) = connection {
         match connection {
@@ -1064,6 +1149,7 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     mut state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    preconnected_local_daemon: Option<AppServerClient>,
     managed_worktree: Option<ManagedTuiWorktree>,
     startup_draft: startup_draft::StartupDraft,
 ) -> color_eyre::Result<AppExitInfo> {
@@ -1117,7 +1203,7 @@ async fn run_ratatui_app(
     let startup_app_server = startup_draft
         .run_until(
             &mut tui,
-            start_app_server(
+            start_app_server_with_preconnected(
                 &mut app_server_target,
                 arg0_paths.clone(),
                 initial_config.clone(),
@@ -1129,6 +1215,7 @@ async fn run_ratatui_app(
                 log_db.clone(),
                 &mut state_db,
                 environment_manager.clone(),
+                preconnected_local_daemon,
             ),
         )
         .await;
