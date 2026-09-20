@@ -37,7 +37,10 @@ release or merge rules.
   callbacks; unchanged task revisions retain delivered trigger latches across
   policy reconfiguration, while paused callbacks rearm after `/continue`;
   pending dependency rows and grouping parents stay quiet, and child revisions
-  recompute serial/parallel aggregates without double-counting. Runtime
+  recompute serial/parallel aggregates without double-counting. An active
+  grouping parent with only terminal children now contributes its own bounded
+  estimate, so a finished nested Worker does not leave the root aggregate
+  unknown. Runtime
   removal holds the shared dispatch fence through manager removal and rejects
   absent owners so concurrent updates cannot re-arm deleted-owner callbacks. The
   root-owned freshness minimum is persisted with the ETA ledger (migration
