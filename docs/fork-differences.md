@@ -137,7 +137,9 @@ blocker reason. Explicit revision, reassignment, lifecycle, configuration, pause
 shutdown, and owner-lifecycle events cancel or rearm stale callbacks; timers do
 not poll and never infer completion or cancellation. Pending dependency rows and
 grouping parents stay quiet, while child revisions synchronously recompute
-dependency and parallel aggregates without double counting.
+dependency and parallel aggregates without double counting. Once all children
+of an active grouping parent are terminal, the parent's own bounded range is
+used as the remaining executable leaf.
 
 The model-facing tool accepts at most eight operations per call so its response
 remains bounded and returns every changed task summary. The public app-server
