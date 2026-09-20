@@ -95,6 +95,73 @@ mod background_terminal_pagination_tests {
     }
 }
 
+mod thread_read_status_tests {
+    use super::super::normalize_thread_read_capability;
+    use super::super::thread_read_status;
+    use codex_app_server_protocol::ThreadActiveFlag;
+    use codex_app_server_protocol::ThreadStatus;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn stale_active_watch_status_is_not_reported_for_unloaded_snapshot() {
+        assert_eq!(
+            thread_read_status(
+                /*has_current_loaded_thread*/ false,
+                ThreadStatus::Active {
+                    active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+                },
+                /*has_live_in_progress_turn*/ false,
+            ),
+            ThreadStatus::NotLoaded
+        );
+    }
+
+    #[test]
+    fn loaded_snapshot_keeps_active_watch_status() {
+        assert_eq!(
+            thread_read_status(
+                /*has_current_loaded_thread*/ true,
+                ThreadStatus::Active {
+                    active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+                },
+                /*has_live_in_progress_turn*/ false,
+            ),
+            ThreadStatus::Active {
+                active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+            }
+        );
+    }
+
+    #[test]
+    fn unloaded_watcher_status_does_not_promote_stale_live_turn() {
+        assert_eq!(
+            thread_read_status(
+                /*has_current_loaded_thread*/ true,
+                ThreadStatus::NotLoaded,
+                /*has_live_in_progress_turn*/ true,
+            ),
+            ThreadStatus::NotLoaded
+        );
+    }
+
+    #[test]
+    fn unloaded_thread_read_clears_live_capability() {
+        assert_eq!(
+            normalize_thread_read_capability(&ThreadStatus::NotLoaded, Some(true)),
+            None
+        );
+        assert_eq!(
+            normalize_thread_read_capability(
+                &ThreadStatus::Active {
+                    active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+                },
+                Some(true),
+            ),
+            Some(true)
+        );
+    }
+}
+
 mod thread_processor_behavior_tests {
     async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
         codex_core::read_session_meta_line(path)
