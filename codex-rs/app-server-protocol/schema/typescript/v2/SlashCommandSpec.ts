@@ -5,4 +5,4 @@
 /**
  * A host-provided slash command available to an app-server client.
  */
-export type SlashCommandSpec = { name: string, aliases?: Array<string>, description: string, supportsInlineArgs: boolean, available: boolean, unavailableReason?: string | null, };
+export type SlashCommandSpec = { name: string, aliases?: Array<string>, description: string, supportsInlineArgs: boolean, available: boolean, unavailableReason?: string, };

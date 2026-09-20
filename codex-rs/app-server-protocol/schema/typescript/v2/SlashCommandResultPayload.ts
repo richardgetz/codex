@@ -13,4 +13,4 @@ import type { SlashCommandResultKind } from "./SlashCommandResultKind";
  * response types and notification payloads as independent roots; nesting the
  * response root in the notification causes a duplicate v2 definition.
  */
-export type SlashCommandResultPayload = { command: string, ok: boolean, resultKind: SlashCommandResultKind, output: SlashCommandOutput, reload?: SlashCommandReloadResult | null, };
+export type SlashCommandResultPayload = { command: string, ok: boolean, resultKind: SlashCommandResultKind, output: SlashCommandOutput, reload?: SlashCommandReloadResult, };
