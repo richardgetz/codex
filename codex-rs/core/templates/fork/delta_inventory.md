@@ -109,6 +109,10 @@ release or merge rules.
   model, reasoning effort, and service tier; prompts and images are never
   replayed. Embedded and standalone-daemon sessions
   remain unavailable because no replacement launcher is configured.
+- `thread/read` keeps persisted snapshots marked `NotLoaded` when the live
+  thread is absent, even if a concurrent resume or delayed unload leaves a
+  transient active watcher status. This prevents an active response with a
+  nullable `canAcceptDirectInput` capability during the read snapshot race.
 - Implicit local-daemon startup performs one authoritative WebSocket and
   initialize handshake and reuses that client for the TUI, including picker and
   direct-ID resume. A missing socket still selects the embedded server, while
@@ -848,6 +852,10 @@ release or merge rules.
   socket exists, and fails closed when an existing endpoint is stale or rejects
   initialize. Verify explicit remote/embedded targets, executor selection, and
   security/config overrides retain their existing target selection.
+- Verify `thread/read` cannot combine a persisted/unloaded snapshot with an
+  active watcher status or nullable `canAcceptDirectInput`; concurrent resume
+  and delayed-unload paths must return `NotLoaded` until a live snapshot is
+  available.
 - Verify session-scoped ETA tasks retain composite root/task identity keys,
   explicit terminal history and immutable explicit start/terminal timestamps,
   bounded revisions, dependency-aware unknown

@@ -3350,15 +3350,20 @@ impl ThreadRequestProcessor {
             false
         };
 
-        let thread_status = self
+        let watched_status = self
             .thread_watch_manager
             .loaded_status_for_thread(&thread.id)
             .await;
+        let thread_status = thread_read_status(
+            loaded_thread.is_some(),
+            watched_status,
+            has_live_in_progress_turn,
+        );
 
         set_thread_status_and_interrupt_stale_turns(
             &mut thread,
             thread_status,
-            has_live_in_progress_turn,
+            /*has_live_in_progress_turn*/ false,
         );
         Ok(thread)
     }
@@ -6298,6 +6303,23 @@ enum ThreadReadViewError {
     Unsupported(&'static str),
     Internal(String),
     JsonRpc(JSONRPCErrorError),
+}
+
+fn thread_read_status(
+    has_loaded_thread_snapshot: bool,
+    watched_status: ThreadStatus,
+    has_live_in_progress_turn: bool,
+) -> ThreadStatus {
+    // A thread/read may await persisted history after observing no live thread. The thread can
+    // be resumed or unloaded during that await, leaving the watcher status ahead of the snapshot
+    // used to build the response. Never expose a loaded Active status with the persisted view's
+    // nullable direct-input capability; the next resume/read can refresh the live snapshot.
+    let status = if has_loaded_thread_snapshot {
+        watched_status
+    } else {
+        ThreadStatus::NotLoaded
+    };
+    resolve_thread_status(status, has_live_in_progress_turn)
 }
 
 fn thread_read_view_error(err: ThreadReadViewError) -> JSONRPCErrorError {

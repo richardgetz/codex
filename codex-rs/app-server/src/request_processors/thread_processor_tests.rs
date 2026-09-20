@@ -95,6 +95,43 @@ mod background_terminal_pagination_tests {
     }
 }
 
+mod thread_read_status_tests {
+    use super::super::thread_read_status;
+    use codex_app_server_protocol::ThreadActiveFlag;
+    use codex_app_server_protocol::ThreadStatus;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn stale_active_watch_status_is_not_reported_for_unloaded_snapshot() {
+        assert_eq!(
+            thread_read_status(
+                /*has_loaded_thread_snapshot*/ false,
+                ThreadStatus::Active {
+                    active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+                },
+                /*has_live_in_progress_turn*/ false,
+            ),
+            ThreadStatus::NotLoaded
+        );
+    }
+
+    #[test]
+    fn loaded_snapshot_keeps_active_watch_status() {
+        assert_eq!(
+            thread_read_status(
+                /*has_loaded_thread_snapshot*/ true,
+                ThreadStatus::Active {
+                    active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+                },
+                /*has_live_in_progress_turn*/ false,
+            ),
+            ThreadStatus::Active {
+                active_flags: vec![ThreadActiveFlag::WaitingOnUserInput],
+            }
+        );
+    }
+}
+
 mod thread_processor_behavior_tests {
     async fn forked_from_id_from_rollout(path: &Path) -> Option<String> {
         codex_core::read_session_meta_line(path)
