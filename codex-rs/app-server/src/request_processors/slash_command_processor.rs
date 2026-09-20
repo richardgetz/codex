@@ -10,6 +10,7 @@ use codex_app_server_protocol::SlashCommandListParams;
 use codex_app_server_protocol::SlashCommandListResponse;
 use codex_app_server_protocol::SlashCommandOutput;
 use codex_app_server_protocol::SlashCommandReloadResult;
+use codex_app_server_protocol::SlashCommandResultPayload;
 use codex_app_server_protocol::SlashCommandResultKind;
 use codex_app_server_protocol::SlashCommandResultNotification;
 use codex_app_server_protocol::SlashCommandSpec;
@@ -78,7 +79,7 @@ impl SlashCommandRequestProcessor {
                     thread_id: params.thread_id,
                     command,
                     request_id: request_id.request_id.to_string(),
-                    result: result.clone(),
+                    result: result_payload(&result),
                 },
             ))
             .await;
@@ -182,6 +183,16 @@ fn bounded_output(mut text: String) -> String {
         text.push_str("\n\n_Output truncated by the host._");
     }
     text
+}
+
+fn result_payload(result: &SlashCommandExecuteResponse) -> SlashCommandResultPayload {
+    SlashCommandResultPayload {
+        command: result.command.clone(),
+        ok: result.ok,
+        result_kind: result.result_kind.clone(),
+        output: result.output.clone(),
+        reload: result.reload.clone(),
+    }
 }
 
 fn internal_error(error: impl std::fmt::Display) -> JSONRPCErrorError {
