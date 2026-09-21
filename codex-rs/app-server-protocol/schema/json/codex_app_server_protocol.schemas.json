@@ -22789,6 +22789,14 @@
           },
           "state": {
             "$ref": "#/definitions/v2/ThreadHandoffState"
+          },
+          "transferStarted": {
+            "default": null,
+            "description": "Whether the coordinator crossed the durable drain boundary. `None` identifies receipts written before this marker existed and must remain conservative.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [

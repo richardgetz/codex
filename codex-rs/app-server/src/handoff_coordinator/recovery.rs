@@ -53,6 +53,12 @@ impl HandoffCoordinator {
                 receipt: receipt_from_journal(&journal),
             });
         }
+        if !journal.requires_recovery() {
+            self.refresh_startup_recovery_state().await;
+            return Ok(ThreadHandoffRecoverResponse {
+                receipt: receipt_from_journal(&journal),
+            });
+        }
 
         let mut journal = journal;
         if matches!(

@@ -85,6 +85,10 @@ pub struct HandoffJournal {
     /// Build/runtime identity used for compatibility checks on restore.
     pub runtime_version: String,
     pub state: HandoffJournalState,
+    /// Whether the coordinator crossed the durable drain boundary. `None` is retained for
+    /// journals written before this marker existed and must be classified conservatively.
+    #[serde(default)]
+    pub transfer_started: Option<bool>,
     pub nodes: Vec<HandoffNode>,
 }
 
@@ -101,6 +105,7 @@ impl HandoffJournal {
             created_at_ms: current_time_ms(),
             runtime_version: runtime_version.into(),
             state: HandoffJournalState::Prepared,
+            transfer_started: Some(false),
             nodes,
         };
         journal.persist(codex_home).await?;
@@ -161,6 +166,53 @@ impl HandoffJournal {
     /// Change the top-level state before or after a side effect.
     pub fn set_state(&mut self, state: HandoffJournalState) {
         self.state = state;
+    }
+
+    /// Mark the point after which a replacement may have to recover an interrupted transfer.
+    pub fn mark_transfer_started(&mut self) {
+        self.transfer_started = Some(true);
+    }
+
+    /// Return whether this journal still fences ordinary startup writes.
+    ///
+    /// A `NeedsAttention` journal written by current runtimes is terminal when preparation
+    /// failed before the durable drain boundary. Legacy journals have no marker, so only the
+    /// exact no-turn, never-running preparation shape is admitted as terminal. A marker that
+    /// says transfer started is still terminal when no node proves a transfer occurred; any
+    /// exact turn or transfer-state node remains fenced so its state cannot be lost.
+    pub fn requires_recovery(&self) -> bool {
+        match self.state {
+            HandoffJournalState::Completed => false,
+            HandoffJournalState::Prepared
+            | HandoffJournalState::Draining
+            | HandoffJournalState::Suspended
+            | HandoffJournalState::Restoring => true,
+            HandoffJournalState::NeedsAttention => match self.transfer_started {
+                Some(false) => !self.is_preparation_failure_shape(),
+                Some(true) | None => !self.is_failed_preparation_shape(),
+            },
+        }
+    }
+
+    fn is_preparation_failure_shape(&self) -> bool {
+        !self.nodes.is_empty()
+            && self.nodes.iter().all(|node| {
+                matches!(
+                    node.state,
+                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                )
+            })
+    }
+
+    fn is_failed_preparation_shape(&self) -> bool {
+        !self.nodes.is_empty()
+            && self.nodes.iter().all(|node| {
+                matches!(
+                    node.state,
+                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                ) && node.turn_id.is_none()
+                    && !node.was_running
+            })
     }
 
     /// Update one node's receipt without changing unrelated nodes.
@@ -247,16 +299,7 @@ impl HandoffJournal {
         Ok(Self::load_all(codex_home)
             .await?
             .into_iter()
-            .filter(|journal| {
-                matches!(
-                    journal.state,
-                    HandoffJournalState::Prepared
-                        | HandoffJournalState::Draining
-                        | HandoffJournalState::Suspended
-                        | HandoffJournalState::Restoring
-                        | HandoffJournalState::NeedsAttention
-                )
-            })
+            .filter(HandoffJournal::requires_recovery)
             .collect())
     }
 }
@@ -407,10 +450,16 @@ mod tests {
         assert!(journal.clear_node_turn_id("thread"));
         journal.set_state(HandoffJournalState::NeedsAttention);
         journal.persist(home.path()).await.expect("persist update");
-        let restored = HandoffJournal::load_pending(home.path())
+        let restored = HandoffJournal::load_all(home.path())
             .await
             .expect("load update");
         assert_eq!(restored[0], journal);
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -429,6 +478,234 @@ mod tests {
                 .await
                 .expect("load pending")
                 .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn needs_attention_epoch_does_not_block_fresh_startup() {
+        let home = tempdir().expect("temporary CODEX_HOME");
+        let mut journal = HandoffJournal::begin(home.path(), "test", vec![node("thread")])
+            .await
+            .expect("begin handoff");
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist needs-attention handoff");
+
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending handoffs")
+                .is_empty(),
+            "a terminal needs-attention receipt must not fence unrelated startup writes"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_needs_attention_epoch_remains_pending_without_positive_evidence() {
+        let home = tempdir().expect("temporary CODEX_HOME");
+        let mut journal = HandoffJournal::begin(home.path(), "test", Vec::new())
+            .await
+            .expect("begin empty handoff");
+        journal.transfer_started = None;
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist malformed needs-attention handoff");
+
+        assert_eq!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending handoffs")
+                .len(),
+            1,
+            "an empty legacy receipt has no evidence that startup can be unfenced"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_failed_preparation_shapes_are_terminal_but_retained() {
+        let home = tempdir().expect("temporary home");
+        let mut persistence = HandoffJournal::begin(home.path(), "test", vec![node("thread")])
+            .await
+            .expect("begin handoff");
+        persistence.transfer_started = None;
+        persistence.nodes[0].turn_id = None;
+        persistence.nodes[0].was_running = false;
+        persistence.nodes[0].state = HandoffNodeState::NeedsAttention;
+        persistence.nodes[0].blockers = vec![HandoffBlocker::Persistence];
+        persistence.set_state(HandoffJournalState::NeedsAttention);
+        persistence
+            .persist(home.path())
+            .await
+            .expect("persist persistence failure");
+
+        let mut parent_unavailable = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                parent_thread_id: Some("missing-parent".to_string()),
+                ..node("child")
+            }],
+        )
+        .await
+        .expect("begin parent handoff");
+        parent_unavailable.transfer_started = None;
+        parent_unavailable.nodes[0].turn_id = None;
+        parent_unavailable.nodes[0].was_running = false;
+        parent_unavailable.nodes[0].state = HandoffNodeState::NeedsAttention;
+        parent_unavailable.nodes[0].blockers = vec![HandoffBlocker::ParentUnavailable];
+        parent_unavailable.set_state(HandoffJournalState::NeedsAttention);
+        parent_unavailable
+            .persist(home.path())
+            .await
+            .expect("persist parent failure");
+
+        let all = HandoffJournal::load_all(home.path())
+            .await
+            .expect("load all");
+        assert_eq!(all.len(), 2);
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn transfer_started_or_ambiguous_needs_attention_remains_pending() {
+        let home = tempdir().expect("temporary home");
+        let mut transfer = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                state: HandoffNodeState::Suspended,
+                turn_id: Some("turn".to_string()),
+                ..node("suspended")
+            }],
+        )
+        .await
+        .expect("begin transfer");
+        transfer.mark_transfer_started();
+        transfer.set_state(HandoffJournalState::NeedsAttention);
+        transfer
+            .persist(home.path())
+            .await
+            .expect("persist transfer");
+
+        let mut ambiguous = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                was_running: true,
+                ..node("ambiguous")
+            }],
+        )
+        .await
+        .expect("begin ambiguous");
+        ambiguous.transfer_started = None;
+        ambiguous.set_state(HandoffJournalState::NeedsAttention);
+        ambiguous
+            .persist(home.path())
+            .await
+            .expect("persist ambiguous");
+
+        let pending = HandoffJournal::load_pending(home.path())
+            .await
+            .expect("load pending");
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(HandoffJournal::requires_recovery));
+    }
+
+    #[tokio::test]
+    async fn transfer_started_without_transfer_evidence_is_terminal() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                state: HandoffNodeState::NeedsAttention,
+                turn_id: None,
+                was_running: false,
+                ..node("blocked")
+            }],
+        )
+        .await
+        .expect("begin handoff");
+        journal.mark_transfer_started();
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal.persist(home.path()).await.expect("persist handoff");
+
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn contradictory_preflight_marker_remains_pending() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                state: HandoffNodeState::Suspended,
+                turn_id: Some("turn".to_string()),
+                ..node("contradictory")
+            }],
+        )
+        .await
+        .expect("begin handoff");
+        journal.transfer_started = Some(false);
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist contradictory handoff");
+
+        assert_eq!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn multiple_journals_are_sorted_and_completed_journals_are_harmless() {
+        let home = tempdir().expect("temporary home");
+        let mut completed = HandoffJournal::begin(home.path(), "test", vec![node("completed")])
+            .await
+            .expect("begin completed");
+        completed.set_state(HandoffJournalState::Completed);
+        completed
+            .persist(home.path())
+            .await
+            .expect("persist completed");
+
+        let mut active = HandoffJournal::begin(home.path(), "test", vec![node("active")])
+            .await
+            .expect("begin active");
+        active.mark_transfer_started();
+        active.set_state(HandoffJournalState::NeedsAttention);
+        active.persist(home.path()).await.expect("persist active");
+
+        let pending = HandoffJournal::load_pending(home.path())
+            .await
+            .expect("load pending");
+        assert_eq!(pending, vec![active]);
+        assert!(
+            HandoffJournal::load_all(home.path())
+                .await
+                .expect("load all")
+                .iter()
+                .any(|journal| journal.state == HandoffJournalState::Completed)
         );
     }
 }
