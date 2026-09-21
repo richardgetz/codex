@@ -35,6 +35,7 @@ codex app-server daemon start
 codex app-server daemon restart
 codex app-server daemon apply
 codex app-server daemon recover
+codex app-server daemon recover --quarantine
 codex app-server daemon apply-status
 codex app-server daemon enable-remote-control
 codex app-server daemon disable-remote-control
@@ -52,7 +53,12 @@ captured with the active app-server PID record; it is `null` for a legacy or
 unidentified process and must not be inferred from `appServerVersion` or a
 launcher read performed after startup.
 Apply, recover, and apply-status responses expose the same field while the
-handoff receipt is being reconciled.
+handoff receipt is being reconciled. `canRetry` is true only for a proven
+preparation failure that never captured a running turn (or an explicitly
+quarantined receipt), while `canQuarantine` identifies unresolved receipts
+that may be sent through the durable pause-and-quarantine flow. A receipt
+whose replacement may have started remains fenced until exact recovery or
+explicit quarantine succeeds.
 
 ## Bootstrap flow
 
@@ -201,8 +207,10 @@ termination signal after the grace window if the process is still alive.
 
 All mutating lifecycle commands are serialized per CODEX_HOME, so a concurrent
 start, restart, apply, recover, enable-remote-control, disable-remote-control,
-stop, or bootstrap does not race another in-flight lifecycle operation. An
-unresolved apply receipt blocks a new apply until recover reconciles it.
+stop, or bootstrap does not race another in-flight lifecycle operation. A
+receipt whose replacement may have started blocks a new apply until recover
+reconciles it; proven preflight failures and explicitly quarantined receipts
+remain retained for diagnostics without wedging a fresh apply.
 
 ## State
 

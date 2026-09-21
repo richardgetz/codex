@@ -227,6 +227,13 @@ pub async fn recover() -> Result<ApplyOutput> {
     Daemon::from_environment()?.recover().await
 }
 
+pub async fn quarantine() -> Result<ApplyOutput> {
+    ensure_supported_platform()?;
+    #[cfg(windows)]
+    backend::windows::ensure_not_elevated()?;
+    Daemon::from_environment()?.quarantine().await
+}
+
 pub async fn apply_status() -> Result<ApplyOutput> {
     ensure_supported_platform()?;
     Daemon::from_environment()?.apply_status().await

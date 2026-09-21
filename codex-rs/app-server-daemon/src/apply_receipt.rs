@@ -33,6 +33,13 @@ pub struct ApplyOutput {
     pub running_managed_codex_version: Option<String>,
     pub socket_path: PathBuf,
     pub app_server_version: Option<String>,
+    /// Whether an operator explicitly quarantined this unresolved handoff after durable pause.
+    pub quarantined: bool,
+    /// Whether the saved failure is proven to have stopped before backend replacement and may
+    /// be retried by starting a fresh apply attempt.
+    pub can_retry: bool,
+    /// Whether this unresolved receipt can be sent through the explicit durable quarantine flow.
+    pub can_quarantine: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -55,6 +62,12 @@ pub(crate) struct HandoffReceipt {
     pub(crate) runtime_version: String,
     pub(crate) created_at: i64,
     #[serde(default)]
+    pub(crate) quarantined: bool,
+    /// Whether the coordinator crossed its durable drain boundary. Legacy receipts omit this
+    /// marker and remain conservative during automatic recovery.
+    #[serde(default)]
+    pub(crate) transfer_started: Option<bool>,
+    #[serde(default)]
     pub(crate) nodes: Vec<serde_json::Value>,
 }
 
@@ -65,6 +78,14 @@ pub(crate) struct ApplyAttemptReceipt {
     pub(crate) phase: ApplyPhase,
     pub(crate) managed_codex_path: PathBuf,
     pub(crate) managed_codex_version: Option<String>,
+    /// Whether the old backend stop was durably entered. `None` means this receipt predates
+    /// the marker and must remain conservative until explicitly resolved.
+    #[serde(default)]
+    pub(crate) stop_started: Option<bool>,
+    /// Whether stopping the previous managed backend completed successfully. Missing or false
+    /// values are retried idempotently before replacement starts.
+    #[serde(default)]
+    pub(crate) stop_completed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<String>,
 }
@@ -80,6 +101,8 @@ impl ApplyAttemptReceipt {
             phase: ApplyPhase::Prepared,
             managed_codex_path,
             managed_codex_version,
+            stop_started: Some(false),
+            stop_completed: Some(false),
             failure: None,
         }
     }
@@ -160,6 +183,25 @@ impl ApplyAttemptReceipt {
         self.phase == ApplyPhase::Applied
     }
 
+    pub(crate) fn blocks_new_apply(&self) -> bool {
+        if self.is_resolved() {
+            return false;
+        }
+        if self.phase == ApplyPhase::NeedsAttention
+            && self.handoff.state == "needsAttention"
+            && self.handoff.quarantined
+        {
+            return false;
+        }
+        if self.phase != ApplyPhase::NeedsAttention {
+            return true;
+        }
+        match self.handoff.transfer_started {
+            Some(false) => !self.handoff.is_preparation_failure_shape(),
+            Some(true) | None => !self.handoff.is_failed_preparation_shape(),
+        }
+    }
+
     pub(crate) fn output(
         &self,
         socket_path: &Path,
@@ -199,8 +241,75 @@ impl ApplyAttemptReceipt {
             running_managed_codex_version,
             socket_path: socket_path.to_path_buf(),
             app_server_version,
+            quarantined: self.handoff.quarantined,
+            can_retry: self.phase == ApplyPhase::NeedsAttention && !self.blocks_new_apply(),
+            can_quarantine: self.phase == ApplyPhase::NeedsAttention
+                && self.handoff.state == "needsAttention"
+                && !self.handoff.quarantined
+                && self.handoff.can_quarantine()
+                && self.blocks_new_apply(),
             error: error.or_else(|| self.failure.clone()),
         }
+    }
+}
+
+impl HandoffReceipt {
+    fn is_preparation_failure_shape(&self) -> bool {
+        self.state == "needsAttention"
+            && !self.nodes.is_empty()
+            && self.nodes.iter().all(|node| {
+                let thread_id = node
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|thread_id| !thread_id.is_empty());
+                let root_thread_id = node
+                    .get("rootThreadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|root_thread_id| !root_thread_id.is_empty());
+                matches!(
+                    node.get("state").and_then(serde_json::Value::as_str),
+                    Some("planned" | "needsAttention")
+                ) && thread_id
+                    && root_thread_id
+            })
+    }
+
+    fn is_failed_preparation_shape(&self) -> bool {
+        self.state == "needsAttention"
+            && !self.nodes.is_empty()
+            && self.nodes.iter().all(|node| {
+                let thread_id = node
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|thread_id| !thread_id.is_empty());
+                let root_thread_id = node
+                    .get("rootThreadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|root_thread_id| !root_thread_id.is_empty());
+                let state = node.get("state").and_then(serde_json::Value::as_str);
+                let turn_id = node.get("turnId").and_then(serde_json::Value::as_str);
+                let was_running = node
+                    .get("wasRunning")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true);
+                matches!(state, Some("planned" | "needsAttention"))
+                    && thread_id
+                    && root_thread_id
+                    && turn_id.is_none()
+                    && !was_running
+            })
+    }
+
+    fn can_quarantine(&self) -> bool {
+        self.state == "needsAttention"
+            && !self.nodes.is_empty()
+            && self.nodes.iter().all(|node| {
+                ["threadId", "rootThreadId"].iter().all(|field| {
+                    node.get(*field)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                })
+            })
     }
 }
 
