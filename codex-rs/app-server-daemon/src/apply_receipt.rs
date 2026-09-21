@@ -246,6 +246,7 @@ impl ApplyAttemptReceipt {
             can_quarantine: self.phase == ApplyPhase::NeedsAttention
                 && self.handoff.state == "needsAttention"
                 && !self.handoff.quarantined
+                && self.handoff.can_quarantine()
                 && self.blocks_new_apply(),
             error: error.or_else(|| self.failure.clone()),
         }
@@ -257,10 +258,19 @@ impl HandoffReceipt {
         self.state == "needsAttention"
             && !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
+                let thread_id = node
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|thread_id| !thread_id.is_empty());
+                let root_thread_id = node
+                    .get("rootThreadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|root_thread_id| !root_thread_id.is_empty());
                 matches!(
                     node.get("state").and_then(serde_json::Value::as_str),
                     Some("planned" | "needsAttention")
-                )
+                ) && thread_id
+                    && root_thread_id
             })
     }
 
@@ -268,6 +278,14 @@ impl HandoffReceipt {
         self.state == "needsAttention"
             && !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
+                let thread_id = node
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|thread_id| !thread_id.is_empty());
+                let root_thread_id = node
+                    .get("rootThreadId")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|root_thread_id| !root_thread_id.is_empty());
                 let state = node.get("state").and_then(serde_json::Value::as_str);
                 let turn_id = node.get("turnId").and_then(serde_json::Value::as_str);
                 let was_running = node
@@ -275,8 +293,22 @@ impl HandoffReceipt {
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(true);
                 matches!(state, Some("planned" | "needsAttention"))
+                    && thread_id
+                    && root_thread_id
                     && turn_id.is_none()
                     && !was_running
+            })
+    }
+
+    fn can_quarantine(&self) -> bool {
+        self.state == "needsAttention"
+            && !self.nodes.is_empty()
+            && self.nodes.iter().all(|node| {
+                ["threadId", "rootThreadId"].iter().all(|field| {
+                    node.get(*field)
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| !value.is_empty())
+                })
             })
     }
 }

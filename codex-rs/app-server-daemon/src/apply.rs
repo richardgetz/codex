@@ -125,7 +125,6 @@ impl Daemon {
             && attempt.phase == ApplyPhase::NeedsAttention
             && attempt.handoff.state == "needsAttention"
             && attempt.handoff.transfer_started.is_none()
-            && attempt.stop_started.is_none()
             && attempt.blocks_new_apply()
         {
             // A legacy receipt cannot prove whether the old runtime crossed the drain boundary.
@@ -141,6 +140,27 @@ impl Daemon {
                 /*error*/ None,
                 self.running_managed_codex_version_best_effort().await,
             ));
+        }
+
+        if resolution == Some("quarantine") {
+            // Quarantine only needs the currently running coordinator and durable state DB. It
+            // must remain available after an upgrade has removed or replaced the old launcher;
+            // unlike automatic recovery, it never stops or starts a managed backend.
+            let info = match client::probe(&self.socket_path).await {
+                Ok(info) => info,
+                Err(error) => {
+                    return self
+                        .mark_needs_attention(
+                            &mut attempt,
+                            format!("cannot quarantine without a reachable app server: {error}"),
+                        )
+                        .await;
+                }
+            };
+            let managed_codex_path = attempt.managed_codex_path.clone();
+            return self
+                .recover_attempt(attempt, &managed_codex_path, info, resolution)
+                .await;
         }
 
         let settings = self.load_settings().await?;

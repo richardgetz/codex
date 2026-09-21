@@ -31,6 +31,7 @@ fn receipt(state: &str, nodes: Vec<Value>) -> HandoffReceipt {
 fn node(state: &str, turn_id: Option<&str>) -> Value {
     let mut node = serde_json::json!({
         "threadId": "thread-1",
+        "rootThreadId": "thread-1",
         "state": state,
     });
     if let Some(turn_id) = turn_id {
@@ -42,6 +43,7 @@ fn node(state: &str, turn_id: Option<&str>) -> Value {
 fn failed_preparation_node() -> Value {
     serde_json::json!({
         "threadId": "thread-1",
+        "rootThreadId": "thread-1",
         "state": "needsAttention",
         "turnId": null,
         "wasRunning": false,
@@ -224,6 +226,8 @@ fn legacy_failed_preparation_receipts_with_no_running_nodes_can_retry() {
     let receipt = ApplyAttemptReceipt {
         handoff: HandoffReceipt {
             nodes: vec![serde_json::json!({
+                "threadId": "thread-1",
+                "rootThreadId": "thread-1",
                 "state": "needsAttention",
                 "turnId": null,
                 "wasRunning": false,
@@ -247,6 +251,29 @@ fn legacy_failed_preparation_receipts_with_no_running_nodes_can_retry() {
             )
             .can_retry
     );
+}
+
+#[test]
+fn malformed_legacy_failed_preparation_receipts_remain_fenced() {
+    let receipt = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            nodes: vec![serde_json::json!({
+                "state": "needsAttention",
+                "turnId": null,
+                "wasRunning": false,
+            })],
+            ..receipt("needsAttention", Vec::new())
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: None,
+        stop_completed: None,
+        failure: Some("malformed receipt".to_string()),
+    };
+
+    assert!(receipt.blocks_new_apply());
+    assert!(!receipt.output(Path::new("socket"), None, None).can_retry);
 }
 
 #[test]
@@ -300,6 +327,7 @@ fn active_needs_attention_receipts_remain_fenced_before_stop_completes() {
         handoff: HandoffReceipt {
             nodes: vec![serde_json::json!({
                 "threadId": "thread-1",
+                "rootThreadId": "thread-1",
                 "state": "needsAttention",
                 "turnId": "turn-1",
                 "wasRunning": true,
@@ -320,6 +348,30 @@ fn active_needs_attention_receipts_remain_fenced_before_stop_completes() {
     let serialized = serde_json::to_value(output).expect("serialize apply output");
     assert_eq!(serialized["canQuarantine"], true);
     assert!(serialized.get("can_quarantine").is_none());
+}
+
+#[test]
+fn malformed_quarantine_receipts_do_not_advertise_an_unusable_action() {
+    let receipt = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            nodes: vec![serde_json::json!({
+                "state": "needsAttention",
+                "turnId": "turn-1",
+                "wasRunning": true,
+            })],
+            ..receipt("needsAttention", Vec::new())
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(false),
+        stop_completed: Some(false),
+        failure: Some("malformed receipt".to_string()),
+    };
+    let output = receipt.output(Path::new("socket"), None, None);
+    assert!(receipt.blocks_new_apply());
+    assert!(!output.can_retry);
+    assert!(!output.can_quarantine);
 }
 
 #[test]
