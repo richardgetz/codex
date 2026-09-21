@@ -1057,7 +1057,7 @@ impl App {
                             .unwrap_or_else(|| "default".to_string()),
                     ),
                     cwd,
-                    model_provider: Some(self.config.model_provider_id.clone()),
+                    model_provider: Some(self.chat_widget.config_ref().model_provider_id.clone()),
                     model: self.chat_widget.current_model().to_string(),
                     reasoning_effort: self
                         .chat_widget
@@ -1098,12 +1098,14 @@ impl App {
                     "Managed app-server reload completed; restarting Codex frontend.".to_string(),
                     Some("The replacement server recovered the exact displayed thread.".to_string()),
                 );
+                let model_provider = (!self.app_server_target.uses_remote_workspace())
+                    .then(|| self.chat_widget.config_ref().model_provider_id.clone());
                 return Ok(AppRunControl::Exit(ExitReason::FrontendReload {
                     thread_id,
                     launcher,
                     account_alias,
                     cwd,
-                    model_provider: None,
+                    model_provider,
                     model: self.chat_widget.current_model().to_string(),
                     reasoning_effort: self
                         .chat_widget
@@ -1155,12 +1157,14 @@ impl App {
                     "Refreshing the Codex frontend; the connected app-server will continue running.".to_string(),
                     Some("No prompt or tool call will be replayed.".to_string()),
                 );
+                let model_provider = (!self.app_server_target.uses_remote_workspace())
+                    .then(|| self.chat_widget.config_ref().model_provider_id.clone());
                 return Ok(AppRunControl::Exit(ExitReason::FrontendRefresh {
                     thread_id,
                     launcher,
                     account_alias,
                     cwd,
-                    model_provider: None,
+                    model_provider,
                     model: self.chat_widget.current_model().to_string(),
                     reasoning_effort: self
                         .chat_widget

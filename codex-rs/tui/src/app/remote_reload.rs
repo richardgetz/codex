@@ -105,6 +105,7 @@ impl App {
         }
 
         let request_id = app_server.next_request_id();
+        self.reconnect.last_remote_reload_terminal = None;
         let tracked_thread_id = self
             .reconnect
             .pending_remote_reload
@@ -143,6 +144,7 @@ impl App {
                     response,
                     /*allow_new_pending*/ true,
                     /*display_progress*/ true,
+                    is_status,
                 );
                 Ok(())
             }
@@ -201,6 +203,8 @@ impl App {
         {
             return;
         }
+        let is_status_request =
+            pending.status_request_id.as_ref() == Some(&notification.request_id);
         self.apply_remote_reload_payload(
             thread_id,
             notification.request_id.clone(),
@@ -209,6 +213,7 @@ impl App {
             notification.result.reload.as_ref(),
             /*allow_new_pending*/ false,
             /*display_progress*/ false,
+            is_status_request,
         );
     }
 
@@ -229,6 +234,7 @@ impl App {
         response: SlashCommandExecuteResponse,
         allow_new_pending: bool,
         display_progress: bool,
+        is_status_request: bool,
     ) {
         self.apply_remote_reload_payload(
             thread_id,
@@ -238,6 +244,7 @@ impl App {
             response.reload.as_ref(),
             allow_new_pending,
             display_progress,
+            is_status_request,
         );
     }
 
@@ -250,6 +257,7 @@ impl App {
         reload: Option<&SlashCommandReloadResult>,
         allow_new_pending: bool,
         display_progress: bool,
+        is_status_request: bool,
     ) {
         let state = remote_reload_state(reload, ok);
         let operation_request_match =
@@ -268,6 +276,20 @@ impl App {
                         && pending.status_request_id.as_ref() == Some(&request_id)
                 });
         let matches_pending = operation_request_match || status_request_match;
+        let duplicate_terminal_result = state.is_terminal()
+            && self
+                .reconnect
+                .last_remote_reload_terminal
+                .as_ref()
+                .is_some_and(|(last_thread_id, last_request_id)| {
+                    *last_thread_id == thread_id && last_request_id == &request_id
+                });
+        let present_terminal_result =
+            !duplicate_terminal_result && (matches_pending || is_status_request);
+
+        if state.is_terminal() && present_terminal_result {
+            self.reconnect.last_remote_reload_terminal = Some((thread_id, request_id.clone()));
+        }
 
         if matches!(
             state,
@@ -334,19 +356,21 @@ impl App {
                 );
             }
             RemoteReloadState::Accepted | RemoteReloadState::InProgress => {}
-            RemoteReloadState::Completed => {
-                self.chat_widget.add_info_message(message.to_string(), None);
+            RemoteReloadState::Completed => {}
+            RemoteReloadState::Unavailable => {
+                if present_terminal_result && allow_frontend_refresh {
+                    self.chat_widget.add_info_message(
+                        message.to_string(),
+                        Some("Refreshing this frontend while the connected app-server continues running.".to_string()),
+                    );
+                } else if present_terminal_result {
+                    self.chat_widget.add_error_message(message.to_string());
+                }
             }
-            RemoteReloadState::Unavailable if allow_frontend_refresh && matches_pending => {
-                self.chat_widget.add_info_message(
-                    message.to_string(),
-                    Some("Refreshing this frontend while the connected app-server continues running.".to_string()),
-                );
-            }
-            RemoteReloadState::Failed
-            | RemoteReloadState::Unavailable
-            | RemoteReloadState::Unknown => {
-                self.chat_widget.add_error_message(message.to_string());
+            RemoteReloadState::Failed | RemoteReloadState::Unknown => {
+                if present_terminal_result {
+                    self.chat_widget.add_error_message(message.to_string());
+                }
             }
         }
     }

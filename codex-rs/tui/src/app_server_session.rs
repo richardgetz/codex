@@ -4059,6 +4059,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_daemon_resume_params_preserve_effective_model_provider() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.model_provider_id = "oss-provider".to_string();
+        let local_daemon = crate::AppServerTarget::LocalDaemon {
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: PathBuf::from("/tmp/codex-local-daemon.sock"),
+            },
+        };
+
+        let params = thread_resume_params_from_config(
+            config,
+            ThreadId::new(),
+            local_daemon.thread_params_mode(),
+            /*remote_cwd_override*/ None,
+            ResumeModelSettings::OverrideFromCurrentConfig,
+        );
+
+        assert_eq!(params.model_provider.as_deref(), Some("oss-provider"));
+    }
+
+    #[tokio::test]
     async fn thread_lifecycle_params_forward_fast_default_opt_out_as_default_service_tier() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;

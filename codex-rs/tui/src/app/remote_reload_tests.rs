@@ -1,6 +1,13 @@
 use super::*;
+use crate::app::test_support::make_test_app_with_channels;
+use crate::app_event::AppEvent;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SlashCommandExecuteParams;
+use codex_app_server_protocol::SlashCommandExecuteResponse;
+use codex_app_server_protocol::SlashCommandResultKind;
+use codex_app_server_protocol::SlashCommandResultNotification;
+use codex_app_server_protocol::SlashCommandResultPayload;
+use codex_app_server_protocol::SlashCommandOutput;
 use codex_app_server_protocol::SlashCommandReloadResult;
 use codex_protocol::ThreadId;
 
@@ -10,6 +17,55 @@ fn reload(state: &str) -> SlashCommandReloadResult {
         state: state.to_string(),
         reason: None,
     }
+}
+
+fn completed_reload_response() -> SlashCommandExecuteResponse {
+    SlashCommandExecuteResponse {
+        command: "reload".to_string(),
+        ok: true,
+        result_kind: SlashCommandResultKind::Reload,
+        output: SlashCommandOutput {
+            format: "text".to_string(),
+            text: "reload complete".to_string(),
+        },
+        reload: Some(reload("completed")),
+    }
+}
+
+fn completed_reload_notification(
+    thread_id: ThreadId,
+    request_id: RequestId,
+) -> SlashCommandResultNotification {
+    SlashCommandResultNotification {
+        thread_id: thread_id.to_string(),
+        command: "reload".to_string(),
+        request_id,
+        result: SlashCommandResultPayload {
+            command: "reload".to_string(),
+            ok: true,
+            result_kind: SlashCommandResultKind::Reload,
+            output: SlashCommandOutput {
+                format: "text".to_string(),
+                text: "reload complete".to_string(),
+            },
+            reload: Some(reload("completed")),
+        },
+    }
+}
+
+fn count_reload_history_and_completion_events(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> (usize, usize) {
+    let mut history_cells = 0;
+    let mut completions = 0;
+    while let Ok(event) = events.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(_) => history_cells += 1,
+            AppEvent::RemoteReloadCompleted { .. } => completions += 1,
+            _ => {}
+        }
+    }
+    (history_cells, completions)
 }
 
 #[test]
@@ -98,6 +154,60 @@ fn remote_reload_terminal_events_are_deduplicated_after_pending_clear() {
             /*allow_frontend_refresh*/ true,
         ),
         RemoteReloadTerminalAction::Ignore
+    );
+}
+
+#[tokio::test]
+async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_order() {
+    let thread_id = ThreadId::new();
+    let request_id = RequestId::Integer(7);
+
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.reconnect.pending_remote_reload = Some(PendingRemoteReload {
+        thread_id,
+        request_id: request_id.clone(),
+        status_request_id: None,
+        allow_frontend_refresh: true,
+    });
+    app.apply_remote_reload_response(
+        thread_id,
+        request_id.clone(),
+        completed_reload_response(),
+        /*allow_new_pending*/ true,
+        /*display_progress*/ true,
+        /*is_status_request*/ false,
+    );
+    app.handle_remote_reload_notification(&completed_reload_notification(
+        thread_id,
+        request_id.clone(),
+    ));
+    assert_eq!(
+        count_reload_history_and_completion_events(&mut events),
+        (1, 1)
+    );
+
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.reconnect.pending_remote_reload = Some(PendingRemoteReload {
+        thread_id,
+        request_id: request_id.clone(),
+        status_request_id: None,
+        allow_frontend_refresh: true,
+    });
+    app.handle_remote_reload_notification(&completed_reload_notification(
+        thread_id,
+        request_id.clone(),
+    ));
+    app.apply_remote_reload_response(
+        thread_id,
+        request_id,
+        completed_reload_response(),
+        /*allow_new_pending*/ true,
+        /*display_progress*/ true,
+        /*is_status_request*/ false,
+    );
+    assert_eq!(
+        count_reload_history_and_completion_events(&mut events),
+        (1, 1)
     );
 }
 

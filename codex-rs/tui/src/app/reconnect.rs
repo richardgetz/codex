@@ -20,6 +20,11 @@ pub(super) struct ReconnectState {
     pub(super) failed: bool,
     pub(super) presentation: ReconnectPresentation,
     pub(super) pending_remote_reload: Option<PendingRemoteReload>,
+    /// Correlates the terminal response and asynchronous notification for one reload request.
+    ///
+    /// The app-server sends both forms of a slash-command result. Keep the last terminal request
+    /// long enough to suppress whichever form arrives second; a new request replaces this marker.
+    pub(super) last_remote_reload_terminal: Option<(ThreadId, codex_app_server_protocol::RequestId)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,6 +191,7 @@ impl App {
         if !self.reconnect.offline {
             self.reconnect.offline = true;
             self.reconnect.failed = false;
+            self.reconnect.last_remote_reload_terminal = None;
             self.cancel_pending_key_chord();
             self.overlay = None;
             self.commit_animation = None;
