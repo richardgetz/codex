@@ -58,6 +58,32 @@ pub struct Cli {
     #[clap(skip)]
     pub fork_show_all: bool,
 
+    /// Recover a durable frontend handoff before ordinary startup mutations.
+    ///
+    /// This is intentionally hidden from the regular help output. It is emitted in the
+    /// actionable retry command when a replacement launcher cannot be started after the old
+    /// frontend has already been fenced.
+    #[arg(
+        long = "recover-handoff",
+        hide = true,
+        value_name = "HANDOFF_ID",
+        requires = "frontend_reload_thread_id"
+    )]
+    pub frontend_reload_handoff_id: Option<String>,
+
+    /// Internal companion to `--recover-handoff`: the exact thread to reattach after recovery.
+    #[arg(
+        long = "recover-handoff-thread",
+        hide = true,
+        value_name = "THREAD_ID",
+        requires = "frontend_reload_handoff_id"
+    )]
+    pub frontend_reload_thread_id: Option<String>,
+
+    /// Internal: validated launcher used to restart the frontend after a reload.
+    #[clap(skip)]
+    pub frontend_launcher: Option<std::path::PathBuf>,
+
     #[clap(flatten)]
     pub shared: TuiSharedCliOptions,
 

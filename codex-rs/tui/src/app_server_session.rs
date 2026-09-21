@@ -98,6 +98,11 @@ use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetParams;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
+use codex_app_server_protocol::ThreadHandoffPrepareParams;
+use codex_app_server_protocol::ThreadHandoffPrepareResponse;
+use codex_app_server_protocol::ThreadHandoffReceipt;
+use codex_app_server_protocol::ThreadHandoffRecoverParams;
+use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
@@ -1362,6 +1367,36 @@ impl AppServerSession {
             .await
             .wrap_err("thread/activity/pause failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_handoff_prepare(&mut self) -> Result<ThreadHandoffReceipt> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadHandoffPrepareResponse>(ClientRequest::ThreadHandoffPrepare {
+                request_id,
+                params: ThreadHandoffPrepareParams::default(),
+            })
+            .await
+            .map(|response| response.receipt)
+            .wrap_err("thread/handoff/prepare failed in TUI")
+    }
+
+    pub(crate) async fn thread_handoff_recover(
+        &mut self,
+        handoff_id: String,
+    ) -> Result<ThreadHandoffReceipt> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed::<ThreadHandoffRecoverResponse>(ClientRequest::ThreadHandoffRecover {
+                request_id,
+                params: ThreadHandoffRecoverParams {
+                    handoff_id,
+                    resolution: None,
+                },
+            })
+            .await
+            .map(|response| response.receipt)
+            .wrap_err("thread/handoff/recover failed in TUI")
     }
 
     pub(crate) async fn thread_activity_continue(&mut self, thread_id: ThreadId) -> Result<()> {

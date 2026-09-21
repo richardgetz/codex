@@ -542,6 +542,7 @@ pub enum ExitReason {
         model: String,
         reasoning_effort: Option<String>,
         service_tier: Option<String>,
+        handoff_id: Option<String>,
     },
     Fatal(String),
 }
@@ -696,6 +697,7 @@ pub(crate) struct App {
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
     app_server_target: crate::AppServerTarget,
+    frontend_launcher: Option<PathBuf>,
     pending_startup_thread_start: bool,
     reconnect: reconnect::ReconnectState,
     /// Set when the user confirms an update; propagated on exit.

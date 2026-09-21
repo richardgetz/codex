@@ -49,6 +49,7 @@ impl App {
                     | AppEvent::ResumeEtaSessionTarget { .. }
                     | AppEvent::ResumeEtaSessionConfirmed { .. }
                     | AppEvent::ReloadApplied { .. }
+                    | AppEvent::ReloadRequested
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -976,6 +977,71 @@ impl App {
                         .chat_widget
                         .current_service_tier()
                         .map(str::to_owned),
+                    handoff_id: None,
+                }));
+            }
+            AppEvent::ReloadRequested => {
+                let Some(launcher) = self.frontend_launcher.clone() else {
+                    self.chat_widget.add_error_message(
+                        "`/reload` cannot restart this embedded session because the Codex launcher could not be resolved. Set CODEX_TUI_FRONTEND_LAUNCHER to an absolute executable path and retry."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                if !crate::launcher_is_executable(&launcher) {
+                    self.chat_widget.add_error_message(format!(
+                        "`/reload` cannot restart this embedded session because its launcher is no longer executable: {}",
+                        launcher.display()
+                    ));
+                    return Ok(AppRunControl::Continue);
+                }
+                let Some(thread_id) = self.current_displayed_thread_id().or(self.primary_thread_id)
+                else {
+                    self.chat_widget.add_error_message(
+                        "`/reload` requires an active thread so Codex can resume the exact session."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                let receipt = match app_server.thread_handoff_prepare().await {
+                    Ok(receipt) => receipt,
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Embedded reload could not prepare its handoff: {err}"));
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                if receipt.state != codex_app_server_protocol::ThreadHandoffState::Suspended {
+                    self.chat_widget.add_error_message(format!(
+                        "Embedded reload stopped before frontend restart because handoff {} is {:?}; resolve its blockers before retrying.",
+                        receipt.handoff_id, receipt.state
+                    ));
+                    return Ok(AppRunControl::Continue);
+                }
+                self.insert_history_cell(
+                    tui,
+                    Box::new(history_cell::new_info_event(
+                        "Embedded app-server handoff prepared; restarting Codex frontend."
+                            .to_string(),
+                        Some("The replacement process will recover the exact graph before startup writes.".to_string()),
+                    )),
+                );
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                return Ok(AppRunControl::Exit(ExitReason::FrontendReload {
+                    thread_id,
+                    launcher,
+                    account_alias: self.config.active_account_alias().map(str::to_owned),
+                    cwd,
+                    model: self.chat_widget.current_model().to_string(),
+                    reasoning_effort: self
+                        .chat_widget
+                        .current_reasoning_effort()
+                        .map(|effort| effort.to_string()),
+                    service_tier: self
+                        .chat_widget
+                        .current_service_tier()
+                        .map(str::to_owned),
+                    handoff_id: Some(receipt.handoff_id),
                 }));
             }
             AppEvent::CodexOp(mut op) => {

@@ -147,6 +147,7 @@ impl App {
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        frontend_launcher: Option<PathBuf>,
         startup_elapsed_before_app: Duration,
         startup_bootstrap: Option<AppServerBootstrap>,
         startup_hooks_browser: Option<HooksListEntry>,
@@ -771,6 +772,7 @@ Fix the config and retry.\n\
             feedback_audience,
             environment_manager,
             app_server_target,
+            frontend_launcher,
             reconnect: Default::default(),
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
@@ -994,7 +996,7 @@ Fix the config and retry.\n\
         #[cfg(debug_assertions)]
         let pre_loop_exit_reason: Option<ExitReason> = None;
 
-        let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
+        let mut exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
             loop {
@@ -1244,6 +1246,68 @@ Fix the config and retry.\n\
                 }
             }
         };
+        let replacement_failure = if let Ok(ExitReason::FrontendReload {
+            thread_id,
+            launcher,
+            account_alias,
+            cwd,
+            model,
+            reasoning_effort,
+            service_tier,
+            handoff_id,
+        }) = &exit_reason_result
+        {
+            Some((
+                crate::reexec_frontend(
+                    launcher,
+                    *thread_id,
+                    account_alias.clone(),
+                    cwd.clone(),
+                    model.clone(),
+                    reasoning_effort.clone(),
+                    service_tier.clone(),
+                    handoff_id.clone(),
+                ),
+                handoff_id.clone(),
+                *thread_id,
+                account_alias.clone(),
+                cwd.clone(),
+                model.clone(),
+                reasoning_effort.clone(),
+                service_tier.clone(),
+            ))
+        } else {
+            None
+        };
+        if let Some((
+            error,
+            handoff_id,
+            thread_id,
+            account_alias,
+            cwd,
+            model,
+            reasoning_effort,
+            service_tier,
+        )) = replacement_failure
+        {
+            let message = if let Some(handoff_id) = handoff_id {
+                let recovery_command = crate::frontend_reload_recovery_command(
+                    &handoff_id,
+                    thread_id,
+                    account_alias.as_deref(),
+                    &cwd,
+                    &model,
+                    reasoning_effort.as_deref(),
+                    service_tier.as_deref(),
+                );
+                format!(
+                    "Codex frontend reload could not start its replacement launcher: {error}. Handoff {handoff_id} remains durably fenced; resume it with `{recovery_command}` before starting another turn."
+                )
+            } else {
+                format!("Codex frontend reload could not start its replacement launcher: {error}")
+            };
+            exit_reason_result = Ok(ExitReason::Fatal(message));
+        }
         if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }

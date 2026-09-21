@@ -643,6 +643,9 @@ pub(crate) enum AppEvent {
         summary: Option<String>,
     },
 
+    /// Request an embedded app-server handoff before restarting the frontend.
+    ReloadRequested,
+
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),

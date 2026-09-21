@@ -1112,6 +1112,23 @@ const FRONTEND_RELOAD_CWD_ENV: &str = "CODEX_TUI_RELOAD_CWD";
 const FRONTEND_RELOAD_MODEL_ENV: &str = "CODEX_TUI_RELOAD_MODEL";
 const FRONTEND_RELOAD_REASONING_ENV: &str = "CODEX_TUI_RELOAD_REASONING_EFFORT";
 const FRONTEND_RELOAD_SERVICE_TIER_ENV: &str = "CODEX_TUI_RELOAD_SERVICE_TIER";
+const FRONTEND_RELOAD_HANDOFF_ENV: &str = "CODEX_TUI_RELOAD_HANDOFF_ID";
+const FRONTEND_RELOAD_LAUNCHER_ENV: &str = "CODEX_TUI_RELOAD_LAUNCHER";
+const FRONTEND_LAUNCHER_ENV: &str = "CODEX_TUI_FRONTEND_LAUNCHER";
+
+fn validate_frontend_reload_handoff_id(handoff_id: &str) -> std::io::Result<()> {
+    if handoff_id.is_empty()
+        || !handoff_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload handoff id must contain only letters, numbers, `-`, or `_`",
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FrontendReloadContext {
@@ -1121,6 +1138,44 @@ struct FrontendReloadContext {
     model: String,
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
+    handoff_id: Option<String>,
+    launcher: Option<PathBuf>,
+}
+
+pub(crate) fn launcher_is_executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn resolve_frontend_launcher() -> Option<PathBuf> {
+    let configured = std::env::var_os(FRONTEND_LAUNCHER_ENV).map(PathBuf::from);
+    if let Some(configured) = configured.as_deref() {
+        return launcher_is_executable(configured).then(|| configured.to_path_buf());
+    }
+
+    let argv0 = std::env::args_os().next().map(PathBuf::from);
+    if let Some(argv0) = argv0.as_deref()
+        && argv0.is_absolute()
+        && launcher_is_executable(argv0)
+    {
+        return Some(argv0.to_path_buf());
+    }
+
+    std::env::current_exe()
+        .ok()
+        .filter(|path| launcher_is_executable(path))
 }
 
 fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContext>> {
@@ -1130,25 +1185,18 @@ fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContex
     let model = std::env::var_os(FRONTEND_RELOAD_MODEL_ENV);
     let reasoning_effort = std::env::var_os(FRONTEND_RELOAD_REASONING_ENV);
     let service_tier = std::env::var_os(FRONTEND_RELOAD_SERVICE_TIER_ENV);
+    let handoff_id = std::env::var_os(FRONTEND_RELOAD_HANDOFF_ENV);
+    let launcher = std::env::var_os(FRONTEND_RELOAD_LAUNCHER_ENV);
     if thread.is_none()
         && account.is_none()
         && cwd.is_none()
         && model.is_none()
         && reasoning_effort.is_none()
         && service_tier.is_none()
+        && handoff_id.is_none()
+        && launcher.is_none()
     {
         return Ok(None);
-    }
-
-    // Consume the marker before any startup work so a malformed or interrupted handoff cannot
-    // silently reapply itself if the caller retries in the same process.
-    unsafe {
-        std::env::remove_var(FRONTEND_RELOAD_THREAD_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_ACCOUNT_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_CWD_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_MODEL_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_REASONING_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_SERVICE_TIER_ENV);
     }
 
     let thread = thread.ok_or_else(|| {
@@ -1239,6 +1287,71 @@ fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContex
         })
         .transpose()?
         .filter(|value| !value.is_empty());
+    let handoff_id = handoff_id
+        .map(|value| {
+            value.to_str().map(str::to_owned).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Codex frontend reload marker contained a non-UTF-8 handoff id",
+                )
+            })
+        })
+        .transpose()?
+        .filter(|value| !value.is_empty());
+    let launcher = launcher
+        .map(|value| {
+            let launcher = PathBuf::from(value);
+            if !launcher.is_absolute() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "Codex frontend reload marker contained a non-absolute launcher `{}`",
+                        launcher.display()
+                    ),
+                ));
+            }
+            Ok(launcher)
+        })
+        .transpose()?;
+    if handoff_id.is_some() != launcher.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker must include both handoff id and launcher",
+        ));
+    }
+    if let Some(handoff_id) = handoff_id.as_deref() {
+        validate_frontend_reload_handoff_id(handoff_id).map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("Codex frontend reload marker contained an invalid handoff id: {error}"),
+            )
+        })?;
+    }
+    if let Some(launcher) = launcher.as_deref()
+        && !launcher_is_executable(launcher)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Codex frontend reload marker contained a launcher that is not executable: `{}`",
+                launcher.display()
+            ),
+        ));
+    }
+
+    // Consume markers only after every field has been validated. A malformed inherited
+    // environment must not clear the caller's retry context or accidentally select a different
+    // session when startup is retried.
+    unsafe {
+        std::env::remove_var(FRONTEND_RELOAD_THREAD_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_ACCOUNT_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_CWD_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_MODEL_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_REASONING_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_SERVICE_TIER_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_HANDOFF_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_LAUNCHER_ENV);
+    }
 
     Ok(Some(FrontendReloadContext {
         thread_id: thread.to_string(),
@@ -1247,6 +1360,8 @@ fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContex
         model: model.to_string(),
         reasoning_effort,
         service_tier,
+        handoff_id,
+        launcher,
     }))
 }
 
@@ -1265,6 +1380,12 @@ fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendReloadContext) 
     cli.fork_last = false;
     cli.fork_session_id = None;
     cli.fork_show_all = false;
+    // The original launch mode may have requested a new worktree or an OSS provider selection.
+    // Those operations belong to the old session and must not run before the durable handoff is
+    // recovered by the replacement embedded server.
+    cli.shared.worktree = false;
+    cli.shared.oss = false;
+    cli.shared.oss_provider = None;
     // The original invocation may have carried a prompt or image arguments. They were already
     // submitted before the daemon handoff and must never be replayed by the replacement process.
     cli.prompt = None;
@@ -1286,12 +1407,128 @@ fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendReloadContext) 
     // Account switching is session-local, so restore the effective alias rather than the alias
     // that happened to be present in the original process arguments.
     cli.startup_account_alias = context.account_alias;
+    cli.frontend_reload_handoff_id = context.handoff_id;
+    cli.frontend_reload_thread_id = None;
+    cli.frontend_launcher = context.launcher;
+}
+
+fn apply_frontend_reload_cli_args(cli: &mut Cli) -> std::io::Result<()> {
+    let Some(handoff_id) = cli.frontend_reload_handoff_id.as_deref() else {
+        if cli.frontend_reload_thread_id.is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--recover-handoff-thread requires --recover-handoff",
+            ));
+        }
+        return Ok(());
+    };
+    validate_frontend_reload_handoff_id(handoff_id)?;
+
+    if let Some(thread_id) = cli.frontend_reload_thread_id.take() {
+        ThreadId::from_string(&thread_id).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("--recover-handoff-thread contained an invalid thread id: {error}"),
+            )
+        })?;
+        if let Some(existing_thread_id) = cli.resume_session_id.as_deref()
+            && existing_thread_id != thread_id
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "--recover-handoff-thread conflicts with the selected resume session",
+            ));
+        }
+        cli.resume_session_id = Some(thread_id);
+    }
+
+    if cli.resume_session_id.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--recover-handoff requires --recover-handoff-thread so Codex can reattach the exact session",
+        ));
+    }
+    if cli.prompt.is_some() || !cli.images.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "--recover-handoff cannot be combined with a prompt or images; recovery resumes the saved turn",
+        ));
+    }
+    Ok(())
+}
+
+fn display_frontend_reload_argument(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.:/@+".contains(character))
+    {
+        return value.to_string();
+    }
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+            .replace('!', "\\!")
+    )
+}
+
+pub(crate) fn frontend_reload_recovery_command(
+    handoff_id: &str,
+    thread_id: ThreadId,
+    account_alias: Option<&str>,
+    cwd: &Path,
+    model: &str,
+    reasoning_effort: Option<&str>,
+    service_tier: Option<&str>,
+) -> String {
+    let mut args = vec![
+        "codex".to_string(),
+        "--recover-handoff".to_string(),
+        display_frontend_reload_argument(handoff_id),
+        "--recover-handoff-thread".to_string(),
+        display_frontend_reload_argument(&thread_id.to_string()),
+        "--cd".to_string(),
+        display_frontend_reload_argument(&cwd.display().to_string()),
+    ];
+    if let Some(account_alias) = account_alias {
+        args.extend([
+            "--account".to_string(),
+            display_frontend_reload_argument(account_alias),
+        ]);
+    }
+    args.extend([
+        "--model".to_string(),
+        display_frontend_reload_argument(model),
+    ]);
+    if let Some(reasoning_effort) = reasoning_effort {
+        args.extend([
+            "-c".to_string(),
+            display_frontend_reload_argument(&format!(
+                "model_reasoning_effort={}",
+                toml_string_literal(reasoning_effort)
+            )),
+        ]);
+    }
+    if let Some(service_tier) = service_tier {
+        args.extend([
+            "-c".to_string(),
+            display_frontend_reload_argument(&format!(
+                "service_tier={}",
+                toml_string_literal(service_tier)
+            )),
+        ]);
+    }
+    args.join(" ")
 }
 
 fn toml_string_literal(value: &str) -> String {
     // JSON string escaping is compatible with TOML basic strings and handles quotes, control
     // characters, and arbitrary Unicode without interpolating malformed config overrides.
-    serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
+    serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"))
 }
 
 fn frontend_reload_args<I>(args: I) -> Vec<std::ffi::OsString>
@@ -1324,10 +1561,16 @@ fn build_frontend_reload_command(
             FRONTEND_RELOAD_SERVICE_TIER_ENV,
             context.service_tier.as_deref().unwrap_or_default(),
         );
+    if let Some(handoff_id) = context.handoff_id.as_deref() {
+        command.env(FRONTEND_RELOAD_HANDOFF_ENV, handoff_id);
+    }
+    if let Some(launcher) = context.launcher.as_deref() {
+        command.env(FRONTEND_RELOAD_LAUNCHER_ENV, launcher);
+    }
     command
 }
 
-fn reexec_frontend(
+pub(crate) fn reexec_frontend(
     launcher: &Path,
     thread_id: ThreadId,
     account_alias: Option<String>,
@@ -1335,7 +1578,9 @@ fn reexec_frontend(
     model: String,
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
+    handoff_id: Option<String>,
 ) -> std::io::Error {
+    let marker_launcher = handoff_id.as_ref().map(|_| launcher.to_path_buf());
     let context = FrontendReloadContext {
         thread_id: thread_id.to_string(),
         account_alias,
@@ -1343,6 +1588,8 @@ fn reexec_frontend(
         model,
         reasoning_effort,
         service_tier,
+        handoff_id,
+        launcher: marker_launcher,
     };
     let args = frontend_reload_args(std::env::args_os());
     let mut command = build_frontend_reload_command(launcher, &context, args);
@@ -1378,8 +1625,12 @@ pub async fn run_main(
     if let Some(context) = take_frontend_reload_context()? {
         apply_frontend_reload_context(&mut cli, context);
     }
+    apply_frontend_reload_cli_args(&mut cli)?;
+    if cli.frontend_launcher.is_none() {
+        cli.frontend_launcher = resolve_frontend_launcher();
+    }
 
-    let result = match startup_orchestration::run_main_inner(
+    match startup_orchestration::run_main_inner(
         cli,
         arg0_paths,
         loader_overrides,
@@ -1396,34 +1647,7 @@ pub async fn run_main(
             exit_reason: ExitReason::UserRequested,
         }),
         result => result,
-    };
-    let Ok(exit_info) = &result else {
-        return result;
-    };
-    if let ExitReason::FrontendReload {
-        thread_id,
-        launcher,
-        account_alias,
-        cwd,
-        model,
-        reasoning_effort,
-        service_tier,
-    } = &exit_info.exit_reason
-    {
-        let error = reexec_frontend(
-            launcher,
-            *thread_id,
-            account_alias.clone(),
-            cwd.clone(),
-            model.clone(),
-            reasoning_effort.clone(),
-            service_tier.clone(),
-        );
-        return Ok(AppExitInfo::fatal(format!(
-            "Managed app-server reload completed, but Codex could not restart the frontend with the configured launcher: {error}"
-        )));
     }
-    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1471,7 +1695,8 @@ async fn run_ratatui_app(
     {
         use crate::update_prompt::UpdatePromptOutcome;
 
-        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        let skip_update_prompt = cli.frontend_reload_handoff_id.is_some()
+            || cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
         if !skip_update_prompt {
             startup_draft.flush_pending_events(&mut tui).await?;
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
@@ -1513,7 +1738,7 @@ async fn run_ratatui_app(
             ),
         )
         .await;
-    let app_server_session = match startup_app_server {
+    let mut app_server_session = match startup_app_server {
         Ok(Ok(app_server)) => {
             AppServerSession::new(app_server, app_server_target.thread_params_mode())
                 .with_local_codex_home(&initial_config.codex_home)
@@ -1530,7 +1755,56 @@ async fn run_ratatui_app(
         }
     }
     .with_remote_cwd_override(remote_cwd_override.clone());
-    if let Some(provider) = manually_selected_oss_provider.as_deref() {
+    if let Some(handoff_id) = cli.frontend_reload_handoff_id.as_deref() {
+        let receipt = match startup_draft
+            .run_until(
+                &mut tui,
+                app_server_session.thread_handoff_recover(handoff_id.to_owned()),
+            )
+            .await
+        {
+            Ok(Ok(receipt)) => receipt,
+            Ok(Err(err)) => {
+                shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
+                    .await;
+                return Err(err);
+            }
+            Err(err) => {
+                shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
+                    .await;
+                return Err(err.into());
+            }
+        };
+        if receipt.state != codex_app_server_protocol::ThreadHandoffState::Completed {
+            let error = color_eyre::eyre::eyre!(
+                "embedded frontend reload handoff {handoff_id} did not complete (state: {:?}); retry recovery before starting a new turn",
+                receipt.state
+            );
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        }
+        let Some(selected_thread_id) = cli.resume_session_id.as_deref() else {
+            let error = color_eyre::eyre::eyre!(
+                "embedded frontend reload handoff {handoff_id} did not identify a thread to resume"
+            );
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        };
+        if !receipt
+            .nodes
+            .iter()
+            .any(|node| node.thread_id == selected_thread_id)
+        {
+            let error = color_eyre::eyre::eyre!(
+                "embedded frontend reload handoff {handoff_id} did not contain selected thread {selected_thread_id}"
+            );
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        }
+    }
+    if cli.frontend_reload_handoff_id.is_none()
+        && let Some(provider) = manually_selected_oss_provider.as_deref()
+    {
         match startup_draft
             .run_until(
                 &mut tui,
@@ -1596,10 +1870,13 @@ async fn run_ratatui_app(
             unreachable!("app server should exist when auth is required");
         };
         let login_status = startup_draft
-            .run_until(
-                &mut tui,
-                get_login_status(active_app_server, &initial_config),
-            )
+            .run_until(&mut tui, async {
+                if cli.frontend_reload_handoff_id.is_some() {
+                    read_login_status(active_app_server).await
+                } else {
+                    get_login_status(active_app_server, &initial_config).await
+                }
+            })
             .await;
         match login_status {
             Ok(Ok((login_status, account))) => (login_status, Some(account)),
@@ -1617,11 +1894,12 @@ async fn run_ratatui_app(
     let requires_openai_auth = startup_account
         .as_ref()
         .is_some_and(|account| account.requires_openai_auth);
-    let should_show_onboarding = should_show_onboarding(
-        login_status,
-        requires_openai_auth,
-        should_show_trust_screen_flag,
-    );
+    let should_show_onboarding = cli.frontend_reload_handoff_id.is_none()
+        && should_show_onboarding(
+            login_status,
+            requires_openai_auth,
+            should_show_trust_screen_flag,
+        );
 
     let config = if should_show_onboarding {
         if let Err(err) = startup_draft.flush_pending_events(&mut tui).await {
@@ -1974,39 +2252,43 @@ async fn run_ratatui_app(
     }
 
     let current_cwd = config.cwd.clone();
-    let fallback_cwd = match resolve_startup_resume_or_fork_cwd(
-        &mut tui,
-        &config,
-        app_server.as_mut(),
-        &session_selection,
-        cli.cwd.as_deref(),
-        remote_mode,
-        uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
-    )
-    .await
-    {
-        Ok(ResolveCwdOutcome::Continue(cwd)) => cwd,
-        Ok(ResolveCwdOutcome::ContinueAfterPrompt(cwd)) => {
-            // Another daemon client can change authentication while this prompt is open.
-            startup_account = None;
-            Some(cwd)
-        }
-        Ok(ResolveCwdOutcome::Exit) => {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-            return Ok(AppExitInfo {
-                token_usage: crate::token_usage::TokenUsage::default(),
-                thread_id: None,
-                resume_hint: None,
-                disconnect_info: None,
-                update_action: None,
-                exit_reason: ExitReason::UserRequested,
-            });
-        }
-        Err(err) => {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-            return Err(err);
+    let fallback_cwd = if cli.frontend_reload_handoff_id.is_some() {
+        Some(config.cwd.to_path_buf())
+    } else {
+        match resolve_startup_resume_or_fork_cwd(
+            &mut tui,
+            &config,
+            app_server.as_mut(),
+            &session_selection,
+            cli.cwd.as_deref(),
+            remote_mode,
+            uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
+        )
+        .await
+        {
+            Ok(ResolveCwdOutcome::Continue(cwd)) => cwd,
+            Ok(ResolveCwdOutcome::ContinueAfterPrompt(cwd)) => {
+                // Another daemon client can change authentication while this prompt is open.
+                startup_account = None;
+                Some(cwd)
+            }
+            Ok(ResolveCwdOutcome::Exit) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Ok(AppExitInfo {
+                    token_usage: crate::token_usage::TokenUsage::default(),
+                    thread_id: None,
+                    resume_hint: None,
+                    disconnect_info: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+            Err(err) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err);
+            }
         }
     };
 
@@ -2023,6 +2305,7 @@ async fn run_ratatui_app(
     ) && (cli.resume_picker || cli.fork_picker);
 
     let reloaded_config = match &session_selection {
+        _ if cli.frontend_reload_handoff_id.is_some() => Ok(config),
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             startup_draft
                 .run_until(
@@ -2105,8 +2388,12 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    config =
-        crate::app::config_for_startup_account_alias(&config, startup_account_alias.as_deref())?;
+    if cli.frontend_reload_handoff_id.is_none() {
+        config = crate::app::config_for_startup_account_alias(
+            &config,
+            startup_account_alias.as_deref(),
+        )?;
+    }
     tui.configure_realtime_voice(config.realtime.enabled);
 
     let local_settings = crate::local_settings::LocalSettings::from(&config);
@@ -2115,6 +2402,12 @@ async fn run_ratatui_app(
     tui.set_alt_screen_enabled(use_alt_screen);
     if config.model_provider_id != startup_model_provider {
         startup_account = None;
+        if cli.frontend_reload_handoff_id.is_some() {
+            return Err(std::io::Error::other(
+                "embedded frontend reload changed the model provider before handoff recovery completed",
+            )
+            .into());
+        }
         if matches!(&app_server_target, AppServerTarget::Embedded) {
             // App-server providers are fixed at startup, so onboarding cannot
             // reuse a server initialized before it persisted another provider.
@@ -2175,15 +2468,16 @@ async fn run_ratatui_app(
     let startup_prefetch_started_at = Instant::now();
     let startup_prefetch = startup_draft
         .run_until(&mut tui, async {
-            tokio::join!(
-                async {
-                    match startup_account {
-                        Some(account) => app_server.bootstrap_with_account(&config, account).await,
-                        None => app_server.bootstrap(&config).await,
-                    }
-                },
-                load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
-            )
+            let startup_bootstrap = match startup_account {
+                Some(account) => app_server.bootstrap_with_account(&config, account).await,
+                None => app_server.bootstrap(&config).await,
+            };
+            let startup_hooks_entry = if cli.frontend_reload_handoff_id.is_some() {
+                None
+            } else {
+                Some(load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd).await)
+            };
+            (startup_bootstrap, startup_hooks_entry)
         })
         .await;
     let (startup_bootstrap, startup_hooks_entry) = match startup_prefetch {
@@ -2205,14 +2499,19 @@ async fn run_ratatui_app(
         }
     };
     let startup_elapsed_before_app = startup_prefetch_started_at.elapsed();
-    let startup_hooks_review = maybe_run_startup_hooks_review(
-        &mut app_server,
-        &mut tui,
-        &config,
-        bypass_hook_trust_for_startup_review,
-        startup_hooks_entry,
-    )
-    .await;
+    let startup_hooks_review = match startup_hooks_entry {
+        None => Ok(StartupHooksReviewOutcome::Continue),
+        Some(startup_hooks_entry) => {
+            maybe_run_startup_hooks_review(
+                &mut app_server,
+                &mut tui,
+                &config,
+                bypass_hook_trust_for_startup_review,
+                startup_hooks_entry,
+            )
+            .await
+        }
+    };
     let startup_hooks_browser = match startup_hooks_review {
         Err(err) => {
             shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
@@ -2240,6 +2539,7 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        cli.frontend_launcher.clone(),
         startup_elapsed_before_app,
         startup_bootstrap,
         startup_hooks_browser,
@@ -2327,6 +2627,12 @@ async fn get_login_status(
     app_server
         .switch_account(config.active_account_alias().map(str::to_string))
         .await?;
+    read_login_status(app_server).await
+}
+
+async fn read_login_status(
+    app_server: &mut AppServerSession,
+) -> color_eyre::Result<(LoginStatus, GetAccountResponse)> {
     let account = app_server.read_account().await?;
     let login_status = match &account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AuthMode::ApiKey),
@@ -2551,6 +2857,8 @@ pub(crate) mod tests {
             model: "gpt-6".to_string(),
             reasoning_effort: Some("high".to_string()),
             service_tier: Some("fast".to_string()),
+            handoff_id: Some("handoff-1".to_string()),
+            launcher: Some(PathBuf::from("/opt/codex-rick")),
         };
         let mut command = build_frontend_reload_command(
             Path::new("/opt/codex-rick"),
@@ -2598,10 +2906,65 @@ pub(crate) mod tests {
             std::ffi::OsStr::new(FRONTEND_RELOAD_SERVICE_TIER_ENV),
             std::ffi::OsStr::new("fast")
         )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_HANDOFF_ENV),
+            std::ffi::OsStr::new("handoff-1")
+        )));
+        assert!(env.contains(&(
+            std::ffi::OsStr::new(FRONTEND_RELOAD_LAUNCHER_ENV),
+            std::ffi::OsStr::new("/opt/codex-rick")
+        )));
 
         // Keep the command alive until all borrowed iterators have been consumed; this is a
         // fake-launcher assertion only and never starts a process.
         command.args(["--no-alt-screen"]);
+    }
+
+    #[test]
+    fn frontend_reload_recovery_cli_parses_and_selects_exact_thread() {
+        let mut cli = Cli::try_parse_from([
+            "codex",
+            "--recover-handoff",
+            "handoff-1",
+            "--recover-handoff-thread",
+            "019e72f4-e09a-70f2-b2c2-a153a57b8cc0",
+            "--account",
+            "work",
+            "--cd",
+            "/workspace/current",
+            "--model",
+            "gpt-6",
+        ])
+        .expect("recovery CLI should parse");
+
+        apply_frontend_reload_cli_args(&mut cli).expect("recovery CLI should validate");
+        assert_eq!(cli.frontend_reload_handoff_id.as_deref(), Some("handoff-1"));
+        assert_eq!(
+            cli.resume_session_id.as_deref(),
+            Some("019e72f4-e09a-70f2-b2c2-a153a57b8cc0")
+        );
+        assert_eq!(cli.frontend_reload_thread_id, None);
+        assert_eq!(cli.startup_account_alias.as_deref(), Some("work"));
+        assert_eq!(cli.cwd, Some(PathBuf::from("/workspace/current")));
+        assert_eq!(cli.model.as_deref(), Some("gpt-6"));
+    }
+
+    #[test]
+    fn frontend_reload_recovery_command_preserves_session_context() {
+        let command = frontend_reload_recovery_command(
+            "handoff-1",
+            ThreadId::from_string("019e72f4-e09a-70f2-b2c2-a153a57b8cc0").expect("valid thread id"),
+            Some("work"),
+            Path::new("/workspace/current project"),
+            "gpt-6",
+            Some("high"),
+            Some("fast"),
+        );
+
+        assert_eq!(
+            command,
+            "codex --recover-handoff handoff-1 --recover-handoff-thread 019e72f4-e09a-70f2-b2c2-a153a57b8cc0 --cd \"/workspace/current project\" --account work --model gpt-6 -c \"model_reasoning_effort=\\\"high\\\"\" -c \"service_tier=\\\"fast\\\"\""
+        );
     }
 
     #[test]
@@ -2629,6 +2992,8 @@ pub(crate) mod tests {
                 model: "current-model".to_string(),
                 reasoning_effort: Some("high".to_string()),
                 service_tier: Some("fast".to_string()),
+                handoff_id: None,
+                launcher: None,
             },
         );
 
@@ -2645,6 +3010,8 @@ pub(crate) mod tests {
         assert!(!cli.fork_show_all);
         assert_eq!(cli.cwd.as_deref(), Some(Path::new("/workspace/current")));
         assert_eq!(cli.startup_account_alias, None);
+        assert_eq!(cli.frontend_reload_handoff_id, None);
+        assert_eq!(cli.frontend_launcher, None);
         assert_eq!(cli.model.as_deref(), Some("current-model"));
         assert!(
             cli.config_overrides
@@ -2661,6 +3028,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn frontend_reload_context_clears_new_worktree_and_oss_selection() {
+        let mut cli =
+            Cli::try_parse_from(["codex", "--worktree", "--oss", "--local-provider", "ollama"])
+                .expect("test CLI should parse");
+        apply_frontend_reload_context(
+            &mut cli,
+            FrontendReloadContext {
+                thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
+                account_alias: None,
+                cwd: PathBuf::from("/workspace/current"),
+                model: "current-model".to_string(),
+                reasoning_effort: None,
+                service_tier: None,
+                handoff_id: Some("handoff-1".to_string()),
+                launcher: Some(PathBuf::from("/opt/codex-rick")),
+            },
+        );
+        assert!(!cli.shared.worktree);
+        assert!(!cli.shared.oss);
+        assert_eq!(cli.shared.oss_provider, None);
+    }
+
+    #[test]
     fn frontend_reload_context_escapes_toml_overrides() {
         let mut cli = Cli::try_parse_from(["codex"]).expect("test CLI should parse");
         apply_frontend_reload_context(
@@ -2672,6 +3062,8 @@ pub(crate) mod tests {
                 model: "current-model".to_string(),
                 reasoning_effort: Some("custom\"effort\nline".to_string()),
                 service_tier: Some("tier\\value\nline".to_string()),
+                handoff_id: None,
+                launcher: None,
             },
         );
 
@@ -2688,6 +3080,150 @@ pub(crate) mod tests {
                 .iter()
                 .any(|override_value| override_value == "service_tier=\"tier\\\\value\\nline\"")
         );
+    }
+
+    #[test]
+    fn frontend_reload_launcher_requires_an_executable_file() {
+        let temp_dir = tempfile::tempdir().expect("temporary launcher directory");
+        let launcher = temp_dir.path().join("codex");
+        std::fs::write(&launcher, b"#!/bin/sh\n").expect("write launcher");
+        assert!(!launcher_is_executable(&launcher));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+                .expect("make launcher executable");
+            assert!(launcher_is_executable(&launcher));
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn frontend_reload_marker_rejects_partial_handoff_without_clearing_retry_context() {
+        let marker_names = [
+            FRONTEND_RELOAD_THREAD_ENV,
+            FRONTEND_RELOAD_ACCOUNT_ENV,
+            FRONTEND_RELOAD_CWD_ENV,
+            FRONTEND_RELOAD_MODEL_ENV,
+            FRONTEND_RELOAD_REASONING_ENV,
+            FRONTEND_RELOAD_SERVICE_TIER_ENV,
+            FRONTEND_RELOAD_HANDOFF_ENV,
+            FRONTEND_RELOAD_LAUNCHER_ENV,
+        ];
+        unsafe {
+            for name in marker_names {
+                std::env::remove_var(name);
+            }
+            std::env::set_var(
+                FRONTEND_RELOAD_THREAD_ENV,
+                "019e72f4-e09a-70f2-b2c2-a153a57b8cc0",
+            );
+            std::env::set_var(FRONTEND_RELOAD_ACCOUNT_ENV, "work");
+            std::env::set_var(FRONTEND_RELOAD_CWD_ENV, "/workspace/current");
+            std::env::set_var(FRONTEND_RELOAD_MODEL_ENV, "gpt-6");
+            std::env::set_var(FRONTEND_RELOAD_HANDOFF_ENV, "handoff-1");
+        }
+
+        let result = take_frontend_reload_context();
+        assert!(result.is_err());
+        assert_eq!(
+            std::env::var_os(FRONTEND_RELOAD_HANDOFF_ENV),
+            Some(std::ffi::OsString::from("handoff-1"))
+        );
+
+        unsafe {
+            for name in marker_names {
+                std::env::remove_var(name);
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn frontend_reload_marker_rejects_invalid_handoff_id_without_clearing_context() {
+        let marker_names = [
+            FRONTEND_RELOAD_THREAD_ENV,
+            FRONTEND_RELOAD_ACCOUNT_ENV,
+            FRONTEND_RELOAD_CWD_ENV,
+            FRONTEND_RELOAD_MODEL_ENV,
+            FRONTEND_RELOAD_REASONING_ENV,
+            FRONTEND_RELOAD_SERVICE_TIER_ENV,
+            FRONTEND_RELOAD_HANDOFF_ENV,
+            FRONTEND_RELOAD_LAUNCHER_ENV,
+        ];
+        unsafe {
+            for name in marker_names {
+                std::env::remove_var(name);
+            }
+            std::env::set_var(
+                FRONTEND_RELOAD_THREAD_ENV,
+                "019e72f4-e09a-70f2-b2c2-a153a57b8cc0",
+            );
+            std::env::set_var(FRONTEND_RELOAD_ACCOUNT_ENV, "work");
+            std::env::set_var(FRONTEND_RELOAD_CWD_ENV, "/workspace/current");
+            std::env::set_var(FRONTEND_RELOAD_MODEL_ENV, "gpt-6");
+            std::env::set_var(FRONTEND_RELOAD_HANDOFF_ENV, "../other");
+            std::env::set_var(FRONTEND_RELOAD_LAUNCHER_ENV, "/opt/codex-rick");
+        }
+
+        let result = take_frontend_reload_context();
+        assert!(result.is_err());
+        assert_eq!(
+            std::env::var_os(FRONTEND_RELOAD_HANDOFF_ENV),
+            Some(std::ffi::OsString::from("../other"))
+        );
+
+        unsafe {
+            for name in marker_names {
+                std::env::remove_var(name);
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn frontend_reload_marker_rejects_non_executable_launcher_without_clearing_context() {
+        let marker_names = [
+            FRONTEND_RELOAD_THREAD_ENV,
+            FRONTEND_RELOAD_ACCOUNT_ENV,
+            FRONTEND_RELOAD_CWD_ENV,
+            FRONTEND_RELOAD_MODEL_ENV,
+            FRONTEND_RELOAD_REASONING_ENV,
+            FRONTEND_RELOAD_SERVICE_TIER_ENV,
+            FRONTEND_RELOAD_HANDOFF_ENV,
+            FRONTEND_RELOAD_LAUNCHER_ENV,
+        ];
+        let temp_dir = TempDir::new().expect("temporary launcher directory");
+        let launcher = temp_dir.path().join("codex");
+        std::fs::write(&launcher, b"#!/bin/sh\n").expect("write launcher");
+        unsafe {
+            for name in marker_names {
+                std::env::remove_var(name);
+            }
+            std::env::set_var(
+                FRONTEND_RELOAD_THREAD_ENV,
+                "019e72f4-e09a-70f2-b2c2-a153a57b8cc0",
+            );
+            std::env::set_var(FRONTEND_RELOAD_ACCOUNT_ENV, "work");
+            std::env::set_var(FRONTEND_RELOAD_CWD_ENV, "/workspace/current");
+            std::env::set_var(FRONTEND_RELOAD_MODEL_ENV, "gpt-6");
+            std::env::set_var(FRONTEND_RELOAD_HANDOFF_ENV, "handoff-1");
+            std::env::set_var(FRONTEND_RELOAD_LAUNCHER_ENV, &launcher);
+        }
+
+        let result = take_frontend_reload_context();
+        assert!(result.is_err());
+        assert_eq!(
+            std::env::var_os(FRONTEND_RELOAD_LAUNCHER_ENV),
+            Some(launcher.into_os_string())
+        );
+
+        unsafe {
+            for name in marker_names {
+                std::env::remove_var(name);
+            }
+        }
     }
 
     #[tokio::test]

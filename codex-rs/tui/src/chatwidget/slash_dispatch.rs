@@ -59,7 +59,7 @@ fn parse_reload_process_output(
         return ReloadProcessOutcome::Failed(if stderr.is_empty() {
             "the daemon exited before completing the handoff".to_string()
         } else {
-            format!("{stderr}")
+            stderr
         });
     }
 
@@ -1492,10 +1492,7 @@ impl ChatWidget {
 
     fn dispatch_reload_command(&mut self) {
         let Some(connection) = self.remote_connection.as_ref() else {
-            self.add_error_message(
-                "`/reload` is unavailable in an embedded app-server session; use a managed local daemon with an explicit Codex launcher."
-                    .to_string(),
-            );
+            self.app_event_tx.send(AppEvent::ReloadRequested);
             return;
         };
         if connection.is_remote {
