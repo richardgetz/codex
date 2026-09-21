@@ -646,6 +646,32 @@ pub(crate) enum AppEvent {
     /// Request an embedded app-server handoff before restarting the frontend.
     ReloadRequested,
 
+    /// Ask the connected app-server to perform a managed reload operation.
+    ///
+    /// Remote sessions must forward this through `slashCommand/execute` so the
+    /// server retains ownership of pause, replacement, and exact-turn recovery.
+    RemoteReloadRequested {
+        thread_id: ThreadId,
+        args: String,
+    },
+
+    /// Re-check a remote managed reload after the client reconnects.
+    RemoteReloadStatusRequested {
+        thread_id: ThreadId,
+    },
+
+    /// The remote owner completed a managed replacement; restart this frontend with its local
+    /// launcher and reattach the same displayed thread.
+    RemoteReloadCompleted {
+        thread_id: ThreadId,
+    },
+
+    /// The connected server has no replacement launcher. Refresh only this frontend and keep the
+    /// shared server and any active work running.
+    FrontendRefreshRequested {
+        thread_id: ThreadId,
+    },
+
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),

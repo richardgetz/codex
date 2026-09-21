@@ -154,17 +154,19 @@ pub(super) async fn run_main_inner(
     }
 
     let frontend_reload_embedded = cli.frontend_reload_handoff_id.is_some();
-    let reuse_implicit_local_daemon = !frontend_reload_embedded
-        && !cli.shared.worktree
-        && !cli.oss
-        && !workload_identity_selected
-        && (cli.agents_overview
-            || can_reuse_implicit_local_daemon(
-                &daemon_cli_kv_overrides,
-                &launch_loader_overrides,
-                strict_config,
-                cli.bypass_hook_trust,
-            ));
+    let frontend_refresh_local_daemon = cli.frontend_reload_local_daemon_socket.clone();
+    let reuse_implicit_local_daemon = frontend_refresh_local_daemon.is_some()
+        || (!frontend_reload_embedded
+            && !cli.shared.worktree
+            && !cli.oss
+            && !workload_identity_selected
+            && (cli.agents_overview
+                || can_reuse_implicit_local_daemon(
+                    &daemon_cli_kv_overrides,
+                    &launch_loader_overrides,
+                    strict_config,
+                    cli.bypass_hook_trust,
+                )));
     let search_only_config_override = !workload_identity_selected
         && cli.web_search
         && startup_preflight::has_only_search_config_override(&cli_kv_overrides)
@@ -201,7 +203,15 @@ pub(super) async fn run_main_inner(
     };
     let mut startup_draft = startup_draft::StartupDraft::new(initial_screen, session_action)?;
 
-    let prepared_default_daemon = if !frontend_reload_embedded
+    let prepared_default_daemon = if let Some(socket_path) = frontend_refresh_local_daemon {
+        let socket_path = AbsolutePathBuf::from_absolute_path_checked(socket_path)
+            .map_err(std::io::Error::other)?;
+        Some(
+            startup_draft
+                .run_until(connect_daemon_at(socket_path))
+                .await??,
+        )
+    } else if !frontend_reload_embedded
         && explicit_remote_endpoint.is_none()
         && reuse_implicit_local_daemon
         && std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).is_none()
@@ -217,6 +227,12 @@ pub(super) async fn run_main_inner(
         .map(|daemon| daemon.socket_path.clone());
     let app_server_target = if frontend_reload_embedded {
         AppServerTarget::Embedded
+    } else if let Some(socket_path) = cli.frontend_reload_local_daemon_socket.as_ref() {
+        let socket_path = AbsolutePathBuf::from_absolute_path_checked(socket_path)
+            .map_err(std::io::Error::other)?;
+        AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
+        }
     } else {
         app_server_target_for_launch(
             explicit_remote_endpoint,

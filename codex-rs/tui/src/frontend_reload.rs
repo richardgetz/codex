@@ -23,6 +23,7 @@ const FRONTEND_RELOAD_REASONING_ENV: &str = "CODEX_TUI_RELOAD_REASONING_EFFORT";
 const FRONTEND_RELOAD_SERVICE_TIER_ENV: &str = "CODEX_TUI_RELOAD_SERVICE_TIER";
 const FRONTEND_RELOAD_HANDOFF_ENV: &str = "CODEX_TUI_RELOAD_HANDOFF_ID";
 const FRONTEND_RELOAD_LAUNCHER_ENV: &str = "CODEX_TUI_RELOAD_LAUNCHER";
+const FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV: &str = "CODEX_TUI_RELOAD_LOCAL_DAEMON_SOCKET";
 const FRONTEND_LAUNCHER_ENV: &str = "CODEX_TUI_FRONTEND_LAUNCHER";
 const MANAGED_PACKAGE_ROOT_ENV: &str = "CODEX_MANAGED_PACKAGE_ROOT";
 
@@ -51,6 +52,7 @@ pub(crate) struct FrontendReloadContext {
     service_tier: Option<String>,
     handoff_id: Option<String>,
     launcher: Option<PathBuf>,
+    local_daemon_socket: Option<PathBuf>,
 }
 
 pub(crate) fn launcher_is_executable(path: &Path) -> bool {
@@ -122,6 +124,7 @@ pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendR
     let service_tier = std::env::var_os(FRONTEND_RELOAD_SERVICE_TIER_ENV);
     let handoff_id = std::env::var_os(FRONTEND_RELOAD_HANDOFF_ENV);
     let launcher = std::env::var_os(FRONTEND_RELOAD_LAUNCHER_ENV);
+    let local_daemon_socket = std::env::var_os(FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV);
     if thread.is_none()
         && account.is_none()
         && cwd.is_none()
@@ -131,6 +134,7 @@ pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendR
         && service_tier.is_none()
         && handoff_id.is_none()
         && launcher.is_none()
+        && local_daemon_socket.is_none()
     {
         return Ok(None);
     }
@@ -261,6 +265,21 @@ pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendR
             Ok(launcher)
         })
         .transpose()?;
+    let local_daemon_socket = local_daemon_socket
+        .map(PathBuf::from)
+        .map(|socket| {
+            if !socket.is_absolute() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "Codex frontend reload marker contained a non-absolute local daemon socket `{}`",
+                        socket.display()
+                    ),
+                ));
+            }
+            Ok(socket)
+        })
+        .transpose()?;
     if handoff_id.is_some() != launcher.is_some() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -271,6 +290,12 @@ pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendR
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "Codex frontend reload marker omitted the effective model provider for its handoff",
+        ));
+    }
+    if handoff_id.is_some() && local_daemon_socket.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Codex frontend reload marker cannot combine an embedded handoff with a local daemon socket",
         ));
     }
     if let Some(handoff_id) = handoff_id.as_deref() {
@@ -306,6 +331,7 @@ pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendR
         std::env::remove_var(FRONTEND_RELOAD_SERVICE_TIER_ENV);
         std::env::remove_var(FRONTEND_RELOAD_HANDOFF_ENV);
         std::env::remove_var(FRONTEND_RELOAD_LAUNCHER_ENV);
+        std::env::remove_var(FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV);
     }
 
     Ok(Some(FrontendReloadContext {
@@ -318,6 +344,7 @@ pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendR
         service_tier,
         handoff_id,
         launcher,
+        local_daemon_socket,
     }))
 }
 
@@ -372,6 +399,7 @@ pub(crate) fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendRelo
     cli.frontend_reload_handoff_id = context.handoff_id;
     cli.frontend_reload_thread_id = None;
     cli.frontend_launcher = context.launcher;
+    cli.frontend_reload_local_daemon_socket = context.local_daemon_socket;
 }
 
 pub(crate) fn apply_frontend_reload_cli_args(cli: &mut Cli) -> std::io::Result<()> {
@@ -544,10 +572,13 @@ fn build_frontend_reload_command(
     if let Some(launcher) = context.launcher.as_deref() {
         command.env(FRONTEND_RELOAD_LAUNCHER_ENV, launcher);
     }
+    if let Some(socket) = context.local_daemon_socket.as_deref() {
+        command.env(FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV, socket);
+    }
     command
 }
 
-pub(crate) fn reexec_frontend(
+pub(crate) fn reexec_frontend_with_local_daemon_socket(
     launcher: &Path,
     thread_id: ThreadId,
     account_alias: Option<String>,
@@ -557,6 +588,7 @@ pub(crate) fn reexec_frontend(
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     handoff_id: Option<String>,
+    local_daemon_socket: Option<PathBuf>,
 ) -> std::io::Error {
     let marker_launcher = handoff_id.as_ref().map(|_| launcher.to_path_buf());
     let context = FrontendReloadContext {
@@ -569,6 +601,7 @@ pub(crate) fn reexec_frontend(
         service_tier,
         handoff_id,
         launcher: marker_launcher,
+        local_daemon_socket,
     };
     let args = frontend_reload_args(std::env::args_os());
     let mut command = build_frontend_reload_command(launcher, &context, args);

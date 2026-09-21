@@ -68,6 +68,8 @@ use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::SlashCommandExecuteParams;
+use codex_app_server_protocol::SlashCommandExecuteResponse;
 use codex_app_server_protocol::SwitchAccountParams;
 use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::Thread;
@@ -1992,6 +1994,26 @@ impl AppServerSession {
             .request_typed(ClientRequest::SkillsList { request_id, params })
             .await
             .wrap_err("skills/list failed in TUI")
+    }
+
+    pub(crate) async fn slash_command_execute(
+        &mut self,
+        request_id: RequestId,
+        thread_id: ThreadId,
+        command: String,
+        args: String,
+    ) -> Result<SlashCommandExecuteResponse> {
+        self.client
+            .request_typed(ClientRequest::SlashCommandExecute {
+                request_id,
+                params: SlashCommandExecuteParams {
+                    thread_id: thread_id.to_string(),
+                    command,
+                    args,
+                },
+            })
+            .await
+            .wrap_err("slashCommand/execute failed in TUI")
     }
 
     pub(crate) async fn reload_user_config(&mut self) -> Result<()> {
@@ -4034,6 +4056,31 @@ mod tests {
         assert_eq!(start.config, Some(expected_config.clone()));
         assert_eq!(resume.config, Some(expected_config.clone()));
         assert_eq!(fork.config, Some(expected_config));
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_params_preserve_effective_model_provider() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&temp_dir).await;
+        config.model_provider_id = "oss-provider".to_string();
+        let local_daemon = crate::AppServerTarget::LocalDaemon {
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::from_absolute_path_checked(
+                    temp_dir.path().join("codex-local-daemon.sock"),
+                )
+                .expect("absolute test socket path"),
+            },
+        };
+
+        let params = thread_resume_params_from_config(
+            config,
+            ThreadId::new(),
+            local_daemon.thread_params_mode(),
+            /*remote_cwd_override*/ None,
+            ResumeModelSettings::OverrideFromCurrentConfig,
+        );
+
+        assert_eq!(params.model_provider.as_deref(), Some("oss-provider"));
     }
 
     #[tokio::test]

@@ -256,6 +256,7 @@ mod rate_limit_refresh;
 mod realtime_voice_calibration;
 mod recap;
 mod reconnect;
+mod remote_reload;
 mod replay_filter;
 mod resize_reflow;
 mod resume_config;
@@ -544,6 +545,20 @@ pub enum ExitReason {
         reasoning_effort: Option<String>,
         service_tier: Option<String>,
         handoff_id: Option<String>,
+        local_daemon_socket: Option<PathBuf>,
+    },
+    /// The connected app-server remains the owner; restart only the local frontend and reconnect
+    /// to the same endpoint without pausing or replaying any server work.
+    FrontendRefresh {
+        thread_id: ThreadId,
+        launcher: PathBuf,
+        account_alias: Option<String>,
+        cwd: PathBuf,
+        model_provider: Option<String>,
+        model: String,
+        reasoning_effort: Option<String>,
+        service_tier: Option<String>,
+        local_daemon_socket: Option<PathBuf>,
     },
     Fatal(String),
 }

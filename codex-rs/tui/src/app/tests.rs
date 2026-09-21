@@ -44,6 +44,8 @@ mod plugin_catalog;
 mod rate_limits;
 #[path = "tests/recap_generation_tests.rs"]
 mod recap_generation;
+#[path = "tests/reload_provider_tests.rs"]
+mod reload_provider;
 mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;

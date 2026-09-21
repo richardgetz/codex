@@ -118,6 +118,13 @@ release or merge rules.
   marks package-managed children so unsupported vendor argv[0] fallbacks are
   refused, and unproven versioned vendor binaries are refused. Unsafe blockers remain
   in the handoff for explicit resolution.
+  Remote TUI sessions forward managed `/reload`, `/reload status`, and
+  `/reload recover` through the server-owned `slashCommand/execute` bridge,
+  correlate asynchronous results by request ID, and query durable status after
+  reconnect without invoking a local daemon CLI or replaying a prompt.
+  Shared LocalDaemon and remote frontends preserve their endpoint (including
+  the implicit local socket) and refresh only the client when the server does
+  not own a replacement launcher; server work continues without prompt replay.
   Standalone-daemon and remote sessions remain unavailable when no replacement
   launcher is configured.
 - `thread/read` keeps persisted snapshots marked `NotLoaded` when the live
@@ -905,6 +912,13 @@ release or merge rules.
   same remaining-range semantics, and preserves portable cwd wire values.
 - Verify daemon apply/recover remain restricted to explicitly configured launchers;
   standalone updater lifecycle and automatic updates remain unchanged.
+- Verify remote TUI reload forwarding preserves `slashCommand/execute` args and
+  request IDs, suppresses duplicate mutating requests while one handoff is
+  pending, and queries `/reload status` after reconnect before clearing the
+  client-side pending operation.
+- Verify shared frontend refresh keeps the original LocalDaemon socket or
+  remote endpoint/auth environment across re-exec and never starts an embedded
+  replacement server when the persistent target is unavailable.
 - Verify app-server daemon `bootstrap --codex-bin` accepts only an absolute
   local launcher path, persists the selected path for start/restart, reports its
   actual path/version, keeps custom bootstrap local unless `--remote-control` is

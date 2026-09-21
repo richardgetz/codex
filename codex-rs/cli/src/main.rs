@@ -925,6 +925,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
         | ExitReason::Archived(_)
         | ExitReason::TurnInterrupted
         | ExitReason::FrontendReload { .. }
+        | ExitReason::FrontendRefresh { .. }
         | ExitReason::ThreadRemoved => false,
     };
 

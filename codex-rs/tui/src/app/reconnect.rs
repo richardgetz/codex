@@ -19,6 +19,21 @@ pub(super) struct ReconnectState {
     pub(super) offline: bool,
     pub(super) failed: bool,
     pub(super) presentation: ReconnectPresentation,
+    pub(super) pending_remote_reload: Option<PendingRemoteReload>,
+    /// Correlates the terminal response and asynchronous notification for one reload request.
+    ///
+    /// The app-server sends both forms of a slash-command result. Keep the last terminal request
+    /// long enough to suppress whichever form arrives second; a new request replaces this marker.
+    pub(super) last_remote_reload_terminal:
+        Option<(ThreadId, codex_app_server_protocol::RequestId)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingRemoteReload {
+    pub(super) thread_id: ThreadId,
+    pub(super) request_id: codex_app_server_protocol::RequestId,
+    pub(super) status_request_id: Option<codex_app_server_protocol::RequestId>,
+    pub(super) allow_frontend_refresh: bool,
 }
 
 pub(super) struct Reconnected {
@@ -177,6 +192,7 @@ impl App {
         if !self.reconnect.offline {
             self.reconnect.offline = true;
             self.reconnect.failed = false;
+            self.reconnect.last_remote_reload_terminal = None;
             self.cancel_pending_key_chord();
             self.overlay = None;
             self.commit_animation = None;
@@ -433,6 +449,7 @@ impl App {
         self.chat_widget.add_info_message(
             "Reconnected. No input was resent. Review uncertain submissions before retrying; recovered queues remain paused.".into(), /*hint*/ None,
         );
+        self.queue_remote_reload_status_after_reconnect();
         Ok(())
     }
 }

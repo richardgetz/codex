@@ -39,82 +39,6 @@ struct PreparedSlashCommandArgs {
     source: SlashCommandDispatchSource,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum ReloadProcessOutcome {
-    Completed {
-        summary: Option<String>,
-        launcher: std::path::PathBuf,
-    },
-    InProgress(String),
-    Failed(String),
-}
-
-fn parse_reload_process_output(
-    process_succeeded: bool,
-    stdout: &[u8],
-    stderr: &[u8],
-) -> ReloadProcessOutcome {
-    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
-    if !process_succeeded {
-        return ReloadProcessOutcome::Failed(if stderr.is_empty() {
-            "the daemon exited before completing the handoff".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    let output = match serde_json::from_slice::<serde_json::Value>(stdout) {
-        Ok(output) => output,
-        Err(error) => {
-            return ReloadProcessOutcome::Failed(format!(
-                "the daemon returned invalid handoff status: {error}"
-            ));
-        }
-    };
-    let detail = output
-        .get("error")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
-    let summary = String::from_utf8_lossy(stdout).trim().to_string();
-    match output.get("status").and_then(serde_json::Value::as_str) {
-        Some("applied") => {
-            let Some(launcher) = output
-                .get("managedCodexPath")
-                .and_then(serde_json::Value::as_str)
-                .map(std::path::PathBuf::from)
-            else {
-                return ReloadProcessOutcome::Failed(
-                    "the daemon omitted the configured Codex launcher path".to_string(),
-                );
-            };
-            if !launcher.is_absolute() {
-                return ReloadProcessOutcome::Failed(format!(
-                    "the daemon returned a non-absolute Codex launcher path `{}`",
-                    launcher.display()
-                ));
-            }
-            ReloadProcessOutcome::Completed {
-                summary: (!summary.is_empty()).then_some(summary),
-                launcher,
-            }
-        }
-        Some("inProgress") => {
-            ReloadProcessOutcome::InProgress(detail.unwrap_or_else(|| {
-                "the daemon is still handing off the active session".to_string()
-            }))
-        }
-        Some("needsAttention") => ReloadProcessOutcome::Failed(
-            detail.unwrap_or_else(|| "the daemon needs explicit handoff recovery".to_string()),
-        ),
-        Some(status) => ReloadProcessOutcome::Failed(format!(
-            "the daemon returned unsupported handoff status `{status}`"
-        )),
-        None => ReloadProcessOutcome::Failed(
-            "the daemon returned no applied handoff status".to_string(),
-        ),
-    }
-}
-
 const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
@@ -1305,7 +1229,7 @@ impl ChatWidget {
                 self.add_spend_output("");
             }
             SlashCommand::Reload => {
-                self.dispatch_reload_command();
+                self.dispatch_reload_command("");
             }
             SlashCommand::Mic => {
                 self.app_event_tx
@@ -1490,78 +1414,29 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_reload_command(&mut self) {
-        let Some(connection) = self.remote_connection.as_ref() else {
+    fn dispatch_reload_command(&mut self, args: &str) {
+        let args = args.trim();
+        let Some(_connection) = self.remote_connection.as_ref() else {
+            if !args.is_empty() {
+                self.add_error_message(
+                    "`/reload status` and `/reload recover` require a persistent app-server connection; embedded reload accepts `/reload` without arguments."
+                        .to_string(),
+                );
+                return;
+            }
             self.app_event_tx.send(AppEvent::ReloadRequested);
             return;
         };
-        if connection.is_remote {
+        let Some(thread_id) = self.thread_id else {
             self.add_error_message(
-                "`/reload` is unavailable from a remote app-server connection; run it from the local managed Codex session."
+                "`/reload` requires an active thread on a persistent app-server connection."
                     .to_string(),
             );
             return;
-        }
-        let executable = match std::env::current_exe() {
-            Ok(executable) if executable.is_file() => executable,
-            Ok(executable) => {
-                self.add_error_message(format!(
-                    "`/reload` could not resolve a Codex launcher at {}.",
-                    executable.display()
-                ));
-                return;
-            }
-            Err(error) => {
-                self.add_error_message(format!(
-                    "`/reload` could not resolve the current Codex launcher: {error}."
-                ));
-                return;
-            }
         };
-
-        self.add_info_message(
-            "`/reload` requested a managed app-server handoff.".to_string(),
-            Some(
-                "The daemon pauses active turns, replaces its configured launcher, and recovers exact turns."
-                    .to_string(),
-            ),
-        );
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::process::Command::new(executable)
-                .args(["app-server", "daemon", "apply"])
-                .stdin(std::process::Stdio::null())
-                .output()
-                .await;
-            let cell = match result {
-                Ok(output) => match parse_reload_process_output(
-                    output.status.success(),
-                    &output.stdout,
-                    &output.stderr,
-                ) {
-                    ReloadProcessOutcome::Completed { summary, launcher } => {
-                        app_event_tx.send(AppEvent::ReloadApplied { launcher, summary });
-                        return;
-                    }
-                    ReloadProcessOutcome::InProgress(detail) => {
-                        crate::history_cell::new_info_event(
-                            "Managed app-server reload is still in progress.".to_string(),
-                            Some(format!(
-                                "{detail}; retry `/reload status` after the daemon reconnects."
-                            )),
-                        )
-                    }
-                    ReloadProcessOutcome::Failed(detail) => {
-                        crate::history_cell::new_error_event(format!(
-                            "Managed app-server reload failed: {detail}. Configure an explicit local Codex launcher or retry `/reload recover` after resolving the handoff receipt."
-                        ))
-                    }
-                },
-                Err(error) => crate::history_cell::new_error_event(format!(
-                    "Managed app-server reload could not start: {error}"
-                )),
-            };
-            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.app_event_tx.send(AppEvent::RemoteReloadRequested {
+            thread_id,
+            args: args.to_string(),
         });
     }
 
@@ -2312,6 +2187,9 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
             }
+            SlashCommand::Reload => {
+                self.dispatch_reload_command(trimmed);
+            }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
@@ -2622,51 +2500,6 @@ impl ChatWidget {
         ));
         self.bottom_pane.drain_pending_submission_state();
         false
-    }
-}
-
-#[cfg(test)]
-mod reload_tests {
-    use super::ReloadProcessOutcome;
-    use super::parse_reload_process_output;
-
-    #[test]
-    fn reload_output_requires_applied_status() {
-        assert_eq!(
-            parse_reload_process_output(
-                true,
-                br#"{"status":"applied","managedCodexPath":"/opt/codex"}"#,
-                b"",
-            ),
-            ReloadProcessOutcome::Completed {
-                summary: Some(
-                    r#"{"status":"applied","managedCodexPath":"/opt/codex"}"#.to_string(),
-                ),
-                launcher: std::path::PathBuf::from("/opt/codex"),
-            }
-        );
-        assert_eq!(
-            parse_reload_process_output(true, br#"{"status":"inProgress"}"#, b""),
-            ReloadProcessOutcome::InProgress(
-                "the daemon is still handing off the active session".to_string()
-            )
-        );
-        assert_eq!(
-            parse_reload_process_output(
-                true,
-                br#"{"status":"needsAttention","error":"recover"}"#,
-                b"",
-            ),
-            ReloadProcessOutcome::Failed("recover".to_string())
-        );
-        assert!(matches!(
-            parse_reload_process_output(true, br#"{"status":"unknown"}"#, b""),
-            ReloadProcessOutcome::Failed(_)
-        ));
-        assert!(matches!(
-            parse_reload_process_output(true, br#"{"status":"applied"}"#, b""),
-            ReloadProcessOutcome::Failed(_)
-        ));
     }
 }
 
