@@ -1,0 +1,5 @@
+---
+source: tui/src/app/history_ui_tests.rs
+expression: render_cell(&cell)
+---
+• Embedded app-server handoff prepared; restarting Codex frontend. The replacement process will recover the exact graph before startup writes.

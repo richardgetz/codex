@@ -30,6 +30,7 @@ async fn run_startup_for_test(
         AppServerTarget::Embedded,
         /*state_db*/ None,
         Arc::new(EnvironmentManager::default_for_tests()),
+        /*frontend_launcher*/ None,
         Duration::ZERO,
         Some(bootstrap),
         /*startup_hooks_browser*/ None,

@@ -112,8 +112,14 @@ release or merge rules.
   cleanly closes the old client and re-execs the configured launcher, resuming the
   exact displayed thread with its effective account alias, working directory,
   model, reasoning effort, and service tier; prompts and images are never
-  replayed. Embedded and standalone-daemon sessions
-  remain unavailable because no replacement launcher is configured.
+  replayed. Embedded sessions now prepare the durable handoff in-process,
+  restart through a validated launcher, and recover the receipt before startup
+  writes; the npm wrapper carries its stable shim path through reload markers,
+  marks package-managed children so unsupported vendor argv[0] fallbacks are
+  refused, and unproven versioned vendor binaries are refused. Unsafe blockers remain
+  in the handoff for explicit resolution.
+  Standalone-daemon and remote sessions remain unavailable when no replacement
+  launcher is configured.
 - `thread/read` keeps persisted snapshots marked `NotLoaded` when the live
   thread is absent, even if a concurrent resume or delayed unload leaves a
   transient active watcher status. It also clears the live-only

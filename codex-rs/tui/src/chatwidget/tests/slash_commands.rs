@@ -4659,6 +4659,15 @@ async fn slash_app_requests_desktop_handoff() {
 }
 
 #[tokio::test]
+async fn slash_reload_requests_embedded_handoff() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Reload);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ReloadRequested));
+}
+
+#[tokio::test]
 async fn slash_app_without_thread_id_shows_starting_error() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

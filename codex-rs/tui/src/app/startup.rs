@@ -147,6 +147,7 @@ impl App {
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        frontend_launcher: Option<PathBuf>,
         startup_elapsed_before_app: Duration,
         startup_bootstrap: Option<AppServerBootstrap>,
         startup_hooks_browser: Option<HooksListEntry>,
@@ -771,6 +772,7 @@ Fix the config and retry.\n\
             feedback_audience,
             environment_manager,
             app_server_target,
+            frontend_launcher,
             reconnect: Default::default(),
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
@@ -994,7 +996,7 @@ Fix the config and retry.\n\
         #[cfg(debug_assertions)]
         let pre_loop_exit_reason: Option<ExitReason> = None;
 
-        let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
+        let mut exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
             loop {
@@ -1244,7 +1246,80 @@ Fix the config and retry.\n\
                 }
             }
         };
-        if let Err(err) = app_server.shutdown().await {
+        let replacement = match &exit_reason_result {
+            Ok(ExitReason::FrontendReload {
+                thread_id,
+                launcher,
+                account_alias,
+                cwd,
+                model_provider,
+                model,
+                reasoning_effort,
+                service_tier,
+                handoff_id,
+            }) => Some((
+                *thread_id,
+                launcher.clone(),
+                account_alias.clone(),
+                cwd.clone(),
+                model_provider.clone(),
+                model.clone(),
+                reasoning_effort.clone(),
+                service_tier.clone(),
+                handoff_id.clone(),
+            )),
+            _ => None,
+        };
+        if let Some((
+            thread_id,
+            launcher,
+            account_alias,
+            cwd,
+            model_provider,
+            model,
+            reasoning_effort,
+            service_tier,
+            handoff_id,
+        )) = replacement
+        {
+            // The durable receipt has already sealed every loaded root. Close the old embedded
+            // owner before launching its replacement so a failed or Windows child launch cannot
+            // leave two runtimes sharing the same session state.
+            if let Err(err) = app_server.shutdown().await {
+                tracing::warn!(error = %err, "failed to shut down embedded app server before frontend replacement");
+            }
+            crate::restore_terminal_before_fatal_exit();
+            let error = crate::reexec_frontend(
+                &launcher,
+                thread_id,
+                account_alias.clone(),
+                cwd.clone(),
+                model_provider.clone(),
+                model.clone(),
+                reasoning_effort.clone(),
+                service_tier.clone(),
+                handoff_id.clone(),
+            );
+            let message = if let Some(handoff_id) = handoff_id {
+                let recovery_command = crate::frontend_reload_recovery_command(
+                    &launcher,
+                    &handoff_id,
+                    thread_id,
+                    account_alias.as_deref(),
+                    &cwd,
+                    model_provider.as_deref(),
+                    &model,
+                    reasoning_effort.as_deref(),
+                    service_tier.as_deref(),
+                );
+                format!(
+                    "Codex frontend reload could not start its replacement launcher: {error}. Handoff {handoff_id} remains durably fenced; resume it with `{recovery_command}` before starting another turn."
+                )
+            } else {
+                format!("Codex frontend reload could not start its replacement launcher: {error}")
+            };
+            exit_reason_result = Ok(ExitReason::Fatal(message));
+        } else if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_pet_result = tui.clear_ambient_pet_image();

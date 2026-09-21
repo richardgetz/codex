@@ -153,7 +153,9 @@ pub(super) async fn run_main_inner(
         .await;
     }
 
-    let reuse_implicit_local_daemon = !cli.shared.worktree
+    let frontend_reload_embedded = cli.frontend_reload_handoff_id.is_some();
+    let reuse_implicit_local_daemon = !frontend_reload_embedded
+        && !cli.shared.worktree
         && !cli.oss
         && !workload_identity_selected
         && (cli.agents_overview
@@ -169,7 +171,9 @@ pub(super) async fn run_main_inner(
         && loader_overrides_are_default(&launch_loader_overrides)
         && !strict_config
         && !cli.bypass_hook_trust;
-    let initial_screen = if cli.resume_picker || cli.fork_picker || cli.agents_overview {
+    let initial_screen = if frontend_reload_embedded {
+        startup_draft::StartupDraftInitialScreen::Composer
+    } else if cli.resume_picker || cli.fork_picker || cli.agents_overview {
         startup_draft::StartupDraftInitialScreen::SessionPicker
     } else if !cli.oss
         && explicit_remote_endpoint.is_none()
@@ -186,7 +190,9 @@ pub(super) async fn run_main_inner(
     } else {
         startup_draft::StartupDraftInitialScreen::Composer
     };
-    let session_action = if cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some() {
+    let session_action = if frontend_reload_embedded {
+        startup_draft::StartupDraftSessionAction::Resume
+    } else if cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some() {
         startup_draft::StartupDraftSessionAction::Fork
     } else if cli.resume_picker || cli.resume_last || cli.resume_session_id.is_some() {
         startup_draft::StartupDraftSessionAction::Resume
@@ -195,7 +201,8 @@ pub(super) async fn run_main_inner(
     };
     let mut startup_draft = startup_draft::StartupDraft::new(initial_screen, session_action)?;
 
-    let prepared_default_daemon = if explicit_remote_endpoint.is_none()
+    let prepared_default_daemon = if !frontend_reload_embedded
+        && explicit_remote_endpoint.is_none()
         && reuse_implicit_local_daemon
         && std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).is_none()
     {
@@ -208,13 +215,17 @@ pub(super) async fn run_main_inner(
     let default_daemon = prepared_default_daemon
         .as_ref()
         .map(|daemon| daemon.socket_path.clone());
-    let app_server_target = app_server_target_for_launch(
-        explicit_remote_endpoint,
-        default_daemon,
-        reuse_implicit_local_daemon,
-        workload_identity_selected,
-        std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
-    )?;
+    let app_server_target = if frontend_reload_embedded {
+        AppServerTarget::Embedded
+    } else {
+        app_server_target_for_launch(
+            explicit_remote_endpoint,
+            default_daemon,
+            reuse_implicit_local_daemon,
+            workload_identity_selected,
+            std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),
+        )?
+    };
     let remote_cwd_override = cli
         .cwd
         .clone()

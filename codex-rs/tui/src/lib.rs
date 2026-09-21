@@ -127,6 +127,7 @@ mod config_update;
 pub(crate) mod custom_terminal;
 mod daybreak;
 mod experimental_features;
+mod frontend_reload;
 mod permission_discovery;
 mod pets;
 mod worktree_browser;
@@ -266,6 +267,14 @@ use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
+pub(crate) use frontend_reload::apply_frontend_reload_cli_args;
+pub(crate) use frontend_reload::apply_frontend_reload_context;
+pub(crate) use frontend_reload::frontend_reload_recovery_command;
+pub(crate) use frontend_reload::launcher_is_executable;
+pub(crate) use frontend_reload::reexec_frontend;
+pub(crate) use frontend_reload::resolve_frontend_launcher;
+pub(crate) use frontend_reload::restore_terminal_before_fatal_exit;
+pub(crate) use frontend_reload::take_frontend_reload_context;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
@@ -1099,276 +1108,6 @@ fn can_reuse_implicit_local_daemon(
         && !has_non_replayable_launch_overrides
 }
 
-/// Restore terminal modes before a fatal startup exit bypasses destructor cleanup.
-fn restore_terminal_before_fatal_exit() {
-    if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
-        let _ = tui::restore_after_exit();
-    }
-}
-
-const FRONTEND_RELOAD_THREAD_ENV: &str = "CODEX_TUI_RELOAD_THREAD_ID";
-const FRONTEND_RELOAD_ACCOUNT_ENV: &str = "CODEX_TUI_RELOAD_ACCOUNT_ALIAS";
-const FRONTEND_RELOAD_CWD_ENV: &str = "CODEX_TUI_RELOAD_CWD";
-const FRONTEND_RELOAD_MODEL_ENV: &str = "CODEX_TUI_RELOAD_MODEL";
-const FRONTEND_RELOAD_REASONING_ENV: &str = "CODEX_TUI_RELOAD_REASONING_EFFORT";
-const FRONTEND_RELOAD_SERVICE_TIER_ENV: &str = "CODEX_TUI_RELOAD_SERVICE_TIER";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FrontendReloadContext {
-    thread_id: String,
-    account_alias: Option<String>,
-    cwd: PathBuf,
-    model: String,
-    reasoning_effort: Option<String>,
-    service_tier: Option<String>,
-}
-
-fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContext>> {
-    let thread = std::env::var_os(FRONTEND_RELOAD_THREAD_ENV);
-    let account = std::env::var_os(FRONTEND_RELOAD_ACCOUNT_ENV);
-    let cwd = std::env::var_os(FRONTEND_RELOAD_CWD_ENV);
-    let model = std::env::var_os(FRONTEND_RELOAD_MODEL_ENV);
-    let reasoning_effort = std::env::var_os(FRONTEND_RELOAD_REASONING_ENV);
-    let service_tier = std::env::var_os(FRONTEND_RELOAD_SERVICE_TIER_ENV);
-    if thread.is_none()
-        && account.is_none()
-        && cwd.is_none()
-        && model.is_none()
-        && reasoning_effort.is_none()
-        && service_tier.is_none()
-    {
-        return Ok(None);
-    }
-
-    // Consume the marker before any startup work so a malformed or interrupted handoff cannot
-    // silently reapply itself if the caller retries in the same process.
-    unsafe {
-        std::env::remove_var(FRONTEND_RELOAD_THREAD_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_ACCOUNT_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_CWD_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_MODEL_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_REASONING_ENV);
-        std::env::remove_var(FRONTEND_RELOAD_SERVICE_TIER_ENV);
-    }
-
-    let thread = thread.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker omitted its thread id",
-        )
-    })?;
-    let thread = thread.to_str().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker contained a non-UTF-8 thread id",
-        )
-    })?;
-    ThreadId::from_string(thread).map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Codex frontend reload marker contained an invalid thread id: {error}"),
-        )
-    })?;
-
-    let account = account.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker omitted its account alias",
-        )
-    })?;
-    let account = account.to_str().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker contained a non-UTF-8 account alias",
-        )
-    })?;
-    let cwd = cwd.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker omitted its working directory",
-        )
-    })?;
-    let cwd = PathBuf::from(cwd);
-    if !cwd.is_absolute() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "Codex frontend reload marker contained a non-absolute working directory `{}`",
-                cwd.display()
-            ),
-        ));
-    }
-
-    let model = model.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker omitted the current model",
-        )
-    })?;
-    let model = model.to_str().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker contained a non-UTF-8 model",
-        )
-    })?;
-    if model.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Codex frontend reload marker contained an empty model",
-        ));
-    }
-    let reasoning_effort = reasoning_effort
-        .map(|value| {
-            value.to_str().map(str::to_owned).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Codex frontend reload marker contained a non-UTF-8 reasoning effort",
-                )
-            })
-        })
-        .transpose()?
-        .filter(|value| !value.is_empty());
-    let service_tier = service_tier
-        .map(|value| {
-            value.to_str().map(str::to_owned).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Codex frontend reload marker contained a non-UTF-8 service tier",
-                )
-            })
-        })
-        .transpose()?
-        .filter(|value| !value.is_empty());
-
-    Ok(Some(FrontendReloadContext {
-        thread_id: thread.to_string(),
-        account_alias: (!account.is_empty()).then(|| account.to_string()),
-        cwd,
-        model: model.to_string(),
-        reasoning_effort,
-        service_tier,
-    }))
-}
-
-fn apply_frontend_reload_context(cli: &mut Cli, context: FrontendReloadContext) {
-    cli.resume_picker = false;
-    cli.resume_last = false;
-    cli.resume_session_id = Some(context.thread_id);
-    cli.resume_show_all = false;
-    cli.resume_include_non_interactive = false;
-    // A `codex fork` or `codex agents` invocation may have populated one of these internal
-    // startup modes before the handoff marker was consumed.  The exact displayed thread must
-    // win on re-entry; otherwise startup orchestration can fork a second thread or reopen the
-    // daemon overview instead of resuming the selected thread.
-    cli.agents_overview = false;
-    cli.fork_picker = false;
-    cli.fork_last = false;
-    cli.fork_session_id = None;
-    cli.fork_show_all = false;
-    // The original invocation may have carried a prompt or image arguments. They were already
-    // submitted before the daemon handoff and must never be replayed by the replacement process.
-    cli.prompt = None;
-    cli.images.clear();
-    cli.cwd = Some(context.cwd);
-    cli.model = Some(context.model);
-    if let Some(effort) = context.reasoning_effort {
-        cli.config_overrides.raw_overrides.push(format!(
-            "model_reasoning_effort={}",
-            toml_string_literal(&effort)
-        ));
-    }
-    if let Some(service_tier) = context.service_tier {
-        cli.config_overrides.raw_overrides.push(format!(
-            "service_tier={}",
-            toml_string_literal(&service_tier)
-        ));
-    }
-    // Account switching is session-local, so restore the effective alias rather than the alias
-    // that happened to be present in the original process arguments.
-    cli.startup_account_alias = context.account_alias;
-}
-
-fn toml_string_literal(value: &str) -> String {
-    // JSON string escaping is compatible with TOML basic strings and handles quotes, control
-    // characters, and arbitrary Unicode without interpolating malformed config overrides.
-    serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
-}
-
-fn frontend_reload_args<I>(args: I) -> Vec<std::ffi::OsString>
-where
-    I: IntoIterator<Item = std::ffi::OsString>,
-{
-    args.into_iter().skip(1).collect()
-}
-
-fn build_frontend_reload_command(
-    launcher: &Path,
-    context: &FrontendReloadContext,
-    args: Vec<std::ffi::OsString>,
-) -> std::process::Command {
-    let mut command = std::process::Command::new(launcher);
-    command
-        .args(args)
-        .env(FRONTEND_RELOAD_THREAD_ENV, &context.thread_id)
-        .env(
-            FRONTEND_RELOAD_ACCOUNT_ENV,
-            context.account_alias.as_deref().unwrap_or_default(),
-        )
-        .env(FRONTEND_RELOAD_CWD_ENV, &context.cwd)
-        .env(FRONTEND_RELOAD_MODEL_ENV, &context.model)
-        .env(
-            FRONTEND_RELOAD_REASONING_ENV,
-            context.reasoning_effort.as_deref().unwrap_or_default(),
-        )
-        .env(
-            FRONTEND_RELOAD_SERVICE_TIER_ENV,
-            context.service_tier.as_deref().unwrap_or_default(),
-        );
-    command
-}
-
-fn reexec_frontend(
-    launcher: &Path,
-    thread_id: ThreadId,
-    account_alias: Option<String>,
-    cwd: PathBuf,
-    model: String,
-    reasoning_effort: Option<String>,
-    service_tier: Option<String>,
-) -> std::io::Error {
-    let context = FrontendReloadContext {
-        thread_id: thread_id.to_string(),
-        account_alias,
-        cwd,
-        model,
-        reasoning_effort,
-        service_tier,
-    };
-    let args = frontend_reload_args(std::env::args_os());
-    let mut command = build_frontend_reload_command(launcher, &context, args);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.exec()
-    }
-    #[cfg(windows)]
-    {
-        match command.status() {
-            Ok(status) if status.success() => std::process::exit(0),
-            Ok(status) => std::io::Error::other(format!(
-                "replacement Codex frontend exited with status {status}"
-            )),
-            Err(error) => error,
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = command;
-        std::io::Error::other("automatic Codex frontend reload is unsupported on this platform")
-    }
-}
-
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -1378,8 +1117,12 @@ pub async fn run_main(
     if let Some(context) = take_frontend_reload_context()? {
         apply_frontend_reload_context(&mut cli, context);
     }
+    apply_frontend_reload_cli_args(&mut cli)?;
+    if cli.frontend_launcher.is_none() {
+        cli.frontend_launcher = resolve_frontend_launcher();
+    }
 
-    let result = match startup_orchestration::run_main_inner(
+    match startup_orchestration::run_main_inner(
         cli,
         arg0_paths,
         loader_overrides,
@@ -1396,34 +1139,7 @@ pub async fn run_main(
             exit_reason: ExitReason::UserRequested,
         }),
         result => result,
-    };
-    let Ok(exit_info) = &result else {
-        return result;
-    };
-    if let ExitReason::FrontendReload {
-        thread_id,
-        launcher,
-        account_alias,
-        cwd,
-        model,
-        reasoning_effort,
-        service_tier,
-    } = &exit_info.exit_reason
-    {
-        let error = reexec_frontend(
-            launcher,
-            *thread_id,
-            account_alias.clone(),
-            cwd.clone(),
-            model.clone(),
-            reasoning_effort.clone(),
-            service_tier.clone(),
-        );
-        return Ok(AppExitInfo::fatal(format!(
-            "Managed app-server reload completed, but Codex could not restart the frontend with the configured launcher: {error}"
-        )));
     }
-    result
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1471,7 +1187,8 @@ async fn run_ratatui_app(
     {
         use crate::update_prompt::UpdatePromptOutcome;
 
-        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
+        let skip_update_prompt = cli.frontend_reload_handoff_id.is_some()
+            || cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
         if !skip_update_prompt {
             startup_draft.flush_pending_events(&mut tui).await?;
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
@@ -1513,7 +1230,7 @@ async fn run_ratatui_app(
             ),
         )
         .await;
-    let app_server_session = match startup_app_server {
+    let mut app_server_session = match startup_app_server {
         Ok(Ok(app_server)) => {
             AppServerSession::new(app_server, app_server_target.thread_params_mode())
                 .with_local_codex_home(&initial_config.codex_home)
@@ -1530,7 +1247,56 @@ async fn run_ratatui_app(
         }
     }
     .with_remote_cwd_override(remote_cwd_override.clone());
-    if let Some(provider) = manually_selected_oss_provider.as_deref() {
+    if let Some(handoff_id) = cli.frontend_reload_handoff_id.as_deref() {
+        let receipt = match startup_draft
+            .run_until(
+                &mut tui,
+                app_server_session.thread_handoff_recover(handoff_id.to_owned()),
+            )
+            .await
+        {
+            Ok(Ok(receipt)) => receipt,
+            Ok(Err(err)) => {
+                shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
+                    .await;
+                return Err(err);
+            }
+            Err(err) => {
+                shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard)
+                    .await;
+                return Err(err.into());
+            }
+        };
+        if receipt.state != codex_app_server_protocol::ThreadHandoffState::Completed {
+            let error = color_eyre::eyre::eyre!(
+                "embedded frontend reload handoff {handoff_id} did not complete (state: {:?}); retry recovery before starting a new turn",
+                receipt.state
+            );
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        }
+        let Some(selected_thread_id) = cli.resume_session_id.as_deref() else {
+            let error = color_eyre::eyre::eyre!(
+                "embedded frontend reload handoff {handoff_id} did not identify a thread to resume"
+            );
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        };
+        if !receipt
+            .nodes
+            .iter()
+            .any(|node| node.thread_id == selected_thread_id)
+        {
+            let error = color_eyre::eyre::eyre!(
+                "embedded frontend reload handoff {handoff_id} did not contain selected thread {selected_thread_id}"
+            );
+            shutdown_startup_session(Some(app_server_session), &mut terminal_restore_guard).await;
+            return Err(error);
+        }
+    }
+    if cli.frontend_reload_handoff_id.is_none()
+        && let Some(provider) = manually_selected_oss_provider.as_deref()
+    {
         match startup_draft
             .run_until(
                 &mut tui,
@@ -1596,10 +1362,13 @@ async fn run_ratatui_app(
             unreachable!("app server should exist when auth is required");
         };
         let login_status = startup_draft
-            .run_until(
-                &mut tui,
-                get_login_status(active_app_server, &initial_config),
-            )
+            .run_until(&mut tui, async {
+                if cli.frontend_reload_handoff_id.is_some() {
+                    read_login_status(active_app_server).await
+                } else {
+                    get_login_status(active_app_server, &initial_config).await
+                }
+            })
             .await;
         match login_status {
             Ok(Ok((login_status, account))) => (login_status, Some(account)),
@@ -1617,11 +1386,12 @@ async fn run_ratatui_app(
     let requires_openai_auth = startup_account
         .as_ref()
         .is_some_and(|account| account.requires_openai_auth);
-    let should_show_onboarding = should_show_onboarding(
-        login_status,
-        requires_openai_auth,
-        should_show_trust_screen_flag,
-    );
+    let should_show_onboarding = cli.frontend_reload_handoff_id.is_none()
+        && should_show_onboarding(
+            login_status,
+            requires_openai_auth,
+            should_show_trust_screen_flag,
+        );
 
     let config = if should_show_onboarding {
         if let Err(err) = startup_draft.flush_pending_events(&mut tui).await {
@@ -1974,39 +1744,43 @@ async fn run_ratatui_app(
     }
 
     let current_cwd = config.cwd.clone();
-    let fallback_cwd = match resolve_startup_resume_or_fork_cwd(
-        &mut tui,
-        &config,
-        app_server.as_mut(),
-        &session_selection,
-        cli.cwd.as_deref(),
-        remote_mode,
-        uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
-    )
-    .await
-    {
-        Ok(ResolveCwdOutcome::Continue(cwd)) => cwd,
-        Ok(ResolveCwdOutcome::ContinueAfterPrompt(cwd)) => {
-            // Another daemon client can change authentication while this prompt is open.
-            startup_account = None;
-            Some(cwd)
-        }
-        Ok(ResolveCwdOutcome::Exit) => {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-            return Ok(AppExitInfo {
-                token_usage: crate::token_usage::TokenUsage::default(),
-                thread_id: None,
-                resume_hint: None,
-                disconnect_info: None,
-                update_action: None,
-                exit_reason: ExitReason::UserRequested,
-            });
-        }
-        Err(err) => {
-            terminal_restore_guard.restore_silently();
-            session_log::log_session_end();
-            return Err(err);
+    let fallback_cwd = if cli.frontend_reload_handoff_id.is_some() {
+        Some(config.cwd.to_path_buf())
+    } else {
+        match resolve_startup_resume_or_fork_cwd(
+            &mut tui,
+            &config,
+            app_server.as_mut(),
+            &session_selection,
+            cli.cwd.as_deref(),
+            remote_mode,
+            uses_remote_workspace_or_environment(&app_server_target, &environment_manager),
+        )
+        .await
+        {
+            Ok(ResolveCwdOutcome::Continue(cwd)) => cwd,
+            Ok(ResolveCwdOutcome::ContinueAfterPrompt(cwd)) => {
+                // Another daemon client can change authentication while this prompt is open.
+                startup_account = None;
+                Some(cwd)
+            }
+            Ok(ResolveCwdOutcome::Exit) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Ok(AppExitInfo {
+                    token_usage: crate::token_usage::TokenUsage::default(),
+                    thread_id: None,
+                    resume_hint: None,
+                    disconnect_info: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+            Err(err) => {
+                terminal_restore_guard.restore_silently();
+                session_log::log_session_end();
+                return Err(err);
+            }
         }
     };
 
@@ -2023,6 +1797,7 @@ async fn run_ratatui_app(
     ) && (cli.resume_picker || cli.fork_picker);
 
     let reloaded_config = match &session_selection {
+        _ if cli.frontend_reload_handoff_id.is_some() => Ok(config),
         resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             startup_draft
                 .run_until(
@@ -2105,8 +1880,12 @@ async fn run_ratatui_app(
     } = cli;
     let images = shared.into_inner().images;
 
-    config =
-        crate::app::config_for_startup_account_alias(&config, startup_account_alias.as_deref())?;
+    if cli.frontend_reload_handoff_id.is_none() {
+        config = crate::app::config_for_startup_account_alias(
+            &config,
+            startup_account_alias.as_deref(),
+        )?;
+    }
     tui.configure_realtime_voice(config.realtime.enabled);
 
     let local_settings = crate::local_settings::LocalSettings::from(&config);
@@ -2115,6 +1894,12 @@ async fn run_ratatui_app(
     tui.set_alt_screen_enabled(use_alt_screen);
     if config.model_provider_id != startup_model_provider {
         startup_account = None;
+        if cli.frontend_reload_handoff_id.is_some() {
+            return Err(std::io::Error::other(
+                "embedded frontend reload changed the model provider before handoff recovery completed",
+            )
+            .into());
+        }
         if matches!(&app_server_target, AppServerTarget::Embedded) {
             // App-server providers are fixed at startup, so onboarding cannot
             // reuse a server initialized before it persisted another provider.
@@ -2175,15 +1960,16 @@ async fn run_ratatui_app(
     let startup_prefetch_started_at = Instant::now();
     let startup_prefetch = startup_draft
         .run_until(&mut tui, async {
-            tokio::join!(
-                async {
-                    match startup_account {
-                        Some(account) => app_server.bootstrap_with_account(&config, account).await,
-                        None => app_server.bootstrap(&config).await,
-                    }
-                },
-                load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
-            )
+            let startup_bootstrap = match startup_account {
+                Some(account) => app_server.bootstrap_with_account(&config, account).await,
+                None => app_server.bootstrap(&config).await,
+            };
+            let startup_hooks_entry = if cli.frontend_reload_handoff_id.is_some() {
+                None
+            } else {
+                Some(load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd).await)
+            };
+            (startup_bootstrap, startup_hooks_entry)
         })
         .await;
     let (startup_bootstrap, startup_hooks_entry) = match startup_prefetch {
@@ -2205,14 +1991,19 @@ async fn run_ratatui_app(
         }
     };
     let startup_elapsed_before_app = startup_prefetch_started_at.elapsed();
-    let startup_hooks_review = maybe_run_startup_hooks_review(
-        &mut app_server,
-        &mut tui,
-        &config,
-        bypass_hook_trust_for_startup_review,
-        startup_hooks_entry,
-    )
-    .await;
+    let startup_hooks_review = match startup_hooks_entry {
+        None => Ok(StartupHooksReviewOutcome::Continue),
+        Some(startup_hooks_entry) => {
+            maybe_run_startup_hooks_review(
+                &mut app_server,
+                &mut tui,
+                &config,
+                bypass_hook_trust_for_startup_review,
+                startup_hooks_entry,
+            )
+            .await
+        }
+    };
     let startup_hooks_browser = match startup_hooks_review {
         Err(err) => {
             shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
@@ -2240,6 +2031,7 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        cli.frontend_launcher.clone(),
         startup_elapsed_before_app,
         startup_bootstrap,
         startup_hooks_browser,
@@ -2327,6 +2119,12 @@ async fn get_login_status(
     app_server
         .switch_account(config.active_account_alias().map(str::to_string))
         .await?;
+    read_login_status(app_server).await
+}
+
+async fn read_login_status(
+    app_server: &mut AppServerSession,
+) -> color_eyre::Result<(LoginStatus, GetAccountResponse)> {
     let account = app_server.read_account().await?;
     let login_status = match &account.account {
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AuthMode::ApiKey),
@@ -2520,7 +2318,6 @@ pub(crate) mod tests {
     use super::*;
     use crate::legacy_core::config::ConfigBuilder;
     use crate::legacy_core::config::ConfigOverrides;
-    use clap::Parser;
     use codex_app_server_protocol::AskForApproval;
     use codex_app_server_protocol::ClientRequest;
     use codex_app_server_protocol::RequestId;
@@ -2540,154 +2337,6 @@ pub(crate) mod tests {
             .codex_home(temp_dir.path().to_path_buf())
             .build()
             .await
-    }
-
-    #[test]
-    fn frontend_reload_command_preserves_context_and_client_arguments() {
-        let context = FrontendReloadContext {
-            thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
-            account_alias: Some("work".to_string()),
-            cwd: PathBuf::from("/workspace/current"),
-            model: "gpt-6".to_string(),
-            reasoning_effort: Some("high".to_string()),
-            service_tier: Some("fast".to_string()),
-        };
-        let mut command = build_frontend_reload_command(
-            Path::new("/opt/codex-rick"),
-            &context,
-            frontend_reload_args([
-                std::ffi::OsString::from("codex"),
-                std::ffi::OsString::from("--profile"),
-                std::ffi::OsString::from("work"),
-            ]),
-        );
-
-        assert_eq!(command.get_program(), Path::new("/opt/codex-rick"));
-        assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
-            [
-                std::ffi::OsStr::new("--profile"),
-                std::ffi::OsStr::new("work")
-            ]
-        );
-        let env = command
-            .get_envs()
-            .filter_map(|(key, value)| value.map(|value| (key, value)))
-            .collect::<Vec<_>>();
-        assert!(env.contains(&(
-            std::ffi::OsStr::new(FRONTEND_RELOAD_THREAD_ENV),
-            std::ffi::OsStr::new("019e72f4-e09a-70f2-b2c2-a153a57b8cc0")
-        )));
-        assert!(env.contains(&(
-            std::ffi::OsStr::new(FRONTEND_RELOAD_ACCOUNT_ENV),
-            std::ffi::OsStr::new("work")
-        )));
-        assert!(env.contains(&(
-            std::ffi::OsStr::new(FRONTEND_RELOAD_CWD_ENV),
-            std::ffi::OsStr::new("/workspace/current")
-        )));
-        assert!(env.contains(&(
-            std::ffi::OsStr::new(FRONTEND_RELOAD_MODEL_ENV),
-            std::ffi::OsStr::new("gpt-6")
-        )));
-        assert!(env.contains(&(
-            std::ffi::OsStr::new(FRONTEND_RELOAD_REASONING_ENV),
-            std::ffi::OsStr::new("high")
-        )));
-        assert!(env.contains(&(
-            std::ffi::OsStr::new(FRONTEND_RELOAD_SERVICE_TIER_ENV),
-            std::ffi::OsStr::new("fast")
-        )));
-
-        // Keep the command alive until all borrowed iterators have been consumed; this is a
-        // fake-launcher assertion only and never starts a process.
-        command.args(["--no-alt-screen"]);
-    }
-
-    #[test]
-    fn frontend_reload_context_drops_replayed_prompt_and_images() {
-        let mut cli = Cli::try_parse_from([
-            "codex",
-            "old prompt",
-            "--image",
-            "/tmp/old.png",
-            "--model",
-            "old-model",
-        ])
-        .expect("test CLI should parse");
-        cli.agents_overview = true;
-        cli.fork_picker = true;
-        cli.fork_last = true;
-        cli.fork_session_id = Some("old-thread".to_string());
-        cli.fork_show_all = true;
-        apply_frontend_reload_context(
-            &mut cli,
-            FrontendReloadContext {
-                thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
-                account_alias: None,
-                cwd: PathBuf::from("/workspace/current"),
-                model: "current-model".to_string(),
-                reasoning_effort: Some("high".to_string()),
-                service_tier: Some("fast".to_string()),
-            },
-        );
-
-        assert_eq!(cli.prompt, None);
-        assert!(cli.images.is_empty());
-        assert_eq!(
-            cli.resume_session_id.as_deref(),
-            Some("019e72f4-e09a-70f2-b2c2-a153a57b8cc0")
-        );
-        assert!(!cli.agents_overview);
-        assert!(!cli.fork_picker);
-        assert!(!cli.fork_last);
-        assert_eq!(cli.fork_session_id, None);
-        assert!(!cli.fork_show_all);
-        assert_eq!(cli.cwd.as_deref(), Some(Path::new("/workspace/current")));
-        assert_eq!(cli.startup_account_alias, None);
-        assert_eq!(cli.model.as_deref(), Some("current-model"));
-        assert!(
-            cli.config_overrides
-                .raw_overrides
-                .iter()
-                .any(|override_value| override_value == "model_reasoning_effort=\"high\"")
-        );
-        assert!(
-            cli.config_overrides
-                .raw_overrides
-                .iter()
-                .any(|override_value| override_value == "service_tier=\"fast\"")
-        );
-    }
-
-    #[test]
-    fn frontend_reload_context_escapes_toml_overrides() {
-        let mut cli = Cli::try_parse_from(["codex"]).expect("test CLI should parse");
-        apply_frontend_reload_context(
-            &mut cli,
-            FrontendReloadContext {
-                thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
-                account_alias: None,
-                cwd: PathBuf::from("/workspace/current"),
-                model: "current-model".to_string(),
-                reasoning_effort: Some("custom\"effort\nline".to_string()),
-                service_tier: Some("tier\\value\nline".to_string()),
-            },
-        );
-
-        assert!(
-            cli.config_overrides
-                .raw_overrides
-                .iter()
-                .any(|override_value| override_value
-                    == "model_reasoning_effort=\"custom\\\"effort\\nline\"")
-        );
-        assert!(
-            cli.config_overrides
-                .raw_overrides
-                .iter()
-                .any(|override_value| override_value == "service_tier=\"tier\\\\value\\nline\"")
-        );
     }
 
     #[tokio::test]
