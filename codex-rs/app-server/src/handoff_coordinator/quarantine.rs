@@ -328,7 +328,7 @@ impl HandoffCoordinator {
             {
                 let live_subtree = self
                     .thread_manager
-                    .list_agent_subtree_thread_ids(loaded.thread.id())
+                    .list_open_agent_subtree_thread_ids(loaded.thread.id())
                     .await
                     .map_err(|error| {
                         invalid_params(format!(
