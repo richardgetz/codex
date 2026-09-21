@@ -7,11 +7,11 @@ use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SlashCommandExecuteParams;
 use codex_app_server_protocol::SlashCommandExecuteResponse;
+use codex_app_server_protocol::SlashCommandOutput;
+use codex_app_server_protocol::SlashCommandReloadResult;
 use codex_app_server_protocol::SlashCommandResultKind;
 use codex_app_server_protocol::SlashCommandResultNotification;
 use codex_app_server_protocol::SlashCommandResultPayload;
-use codex_app_server_protocol::SlashCommandOutput;
-use codex_app_server_protocol::SlashCommandReloadResult;
 use codex_protocol::ThreadId;
 
 fn reload(state: &str) -> SlashCommandReloadResult {
@@ -177,7 +177,8 @@ fn remote_reload_terminal_events_are_deduplicated_after_pending_clear() {
 }
 
 #[tokio::test]
-async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_order() -> color_eyre::Result<()> {
+async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_order()
+-> color_eyre::Result<()> {
     let thread_id = ThreadId::new();
     let request_id = RequestId::Integer(7);
 
@@ -204,8 +205,7 @@ async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_or
         request_id.clone(),
     ));
     assert_eq!(
-        dispatch_reload_completion_events(&mut app, &mut events, &mut app_server, &mut tui)
-            .await?,
+        dispatch_reload_completion_events(&mut app, &mut events, &mut app_server, &mut tui).await?,
         (1, 1)
     );
     app_server.shutdown().await?;
@@ -233,8 +233,7 @@ async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_or
         /*is_status_request*/ false,
     );
     assert_eq!(
-        dispatch_reload_completion_events(&mut app, &mut events, &mut app_server, &mut tui)
-            .await?,
+        dispatch_reload_completion_events(&mut app, &mut events, &mut app_server, &mut tui).await?,
         (1, 1)
     );
     app_server.shutdown().await?;

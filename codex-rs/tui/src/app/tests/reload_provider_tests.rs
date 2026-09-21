@@ -1,9 +1,9 @@
-use crate::app::test_support::make_test_app_with_channels;
-use crate::app_event::AppEvent;
-use crate::app::AppRunControl;
-use crate::app::ExitReason;
 use crate::AppServerTarget;
 use crate::RemoteAppServerEndpoint;
+use crate::app::AppRunControl;
+use crate::app::ExitReason;
+use crate::app::test_support::make_test_app_with_channels;
+use crate::app_event::AppEvent;
 use codex_protocol::ThreadId;
 use color_eyre::Result;
 
@@ -14,8 +14,7 @@ async fn local_daemon_frontend_refresh_carries_chat_widget_provider() -> Result<
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
     app.config.model_provider_id = "startup-default-provider".to_string();
     assert_ne!(
-        app.config.model_provider_id,
-        effective_provider,
+        app.config.model_provider_id, effective_provider,
         "the test must distinguish startup and active-thread providers"
     );
     app.app_server_target = AppServerTarget::LocalDaemon {
@@ -36,10 +35,7 @@ async fn local_daemon_frontend_refresh_carries_chat_widget_provider() -> Result<
         )
         .await?;
 
-    let AppRunControl::Exit(ExitReason::FrontendRefresh {
-        model_provider, ..
-    }) = control
-    else {
+    let AppRunControl::Exit(ExitReason::FrontendRefresh { model_provider, .. }) = control else {
         panic!("local daemon refresh should request a frontend restart");
     };
     assert_eq!(model_provider.as_deref(), Some(effective_provider.as_str()));

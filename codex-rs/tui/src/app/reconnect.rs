@@ -24,7 +24,8 @@ pub(super) struct ReconnectState {
     ///
     /// The app-server sends both forms of a slash-command result. Keep the last terminal request
     /// long enough to suppress whichever form arrives second; a new request replaces this marker.
-    pub(super) last_remote_reload_terminal: Option<(ThreadId, codex_app_server_protocol::RequestId)>,
+    pub(super) last_remote_reload_terminal:
+        Option<(ThreadId, codex_app_server_protocol::RequestId)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

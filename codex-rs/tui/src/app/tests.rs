@@ -40,12 +40,12 @@ mod model_defaults;
 mod patch_approval_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
-#[path = "tests/reload_provider_tests.rs"]
-mod reload_provider;
 mod plugin_catalog;
 mod rate_limits;
 #[path = "tests/recap_generation_tests.rs"]
 mod recap_generation;
+#[path = "tests/reload_provider_tests.rs"]
+mod reload_provider;
 mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;
