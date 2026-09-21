@@ -170,7 +170,7 @@ async fn frontend_refresh_exit_summary_explains_that_server_work_continues() {
     assert_snapshot!(output, @"
     Refreshing Codex frontend; the app-server continues running.
     Reconnect: codex --remote wss://example.com:443/ resume THREAD_ID
-    Stop the current turn: run codex --remote wss://example.com:443/ agents, select this task, and use the configured stop shortcut.
+    Stop the current turn: run codex --remote wss://example.com:443/ agents, select this task, and press ctrl + x.
     ");
 }
 
