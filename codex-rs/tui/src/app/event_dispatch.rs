@@ -23,6 +23,11 @@ use codex_config::types::WindowsSandboxModeToml;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
+pub(crate) const EMBEDDED_RELOAD_PREPARED_MESSAGE: &str =
+    "Embedded app-server handoff prepared; restarting Codex frontend.";
+pub(crate) const EMBEDDED_RELOAD_PREPARED_HINT: &str =
+    "The replacement process will recover the exact graph before startup writes.";
+
 impl App {
     pub(super) async fn handle_event(
         &mut self,
@@ -966,8 +971,14 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::FrontendReload {
                     thread_id,
                     launcher,
-                    account_alias: self.config.active_account_alias().map(str::to_owned),
+                    account_alias: Some(
+                        self.config
+                            .active_account_alias()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| "default".to_string()),
+                    ),
                     cwd,
+                    model_provider: None,
                     model: self.chat_widget.current_model().to_string(),
                     reasoning_effort: self
                         .chat_widget
@@ -1021,17 +1032,22 @@ impl App {
                 self.insert_history_cell(
                     tui,
                     Box::new(history_cell::new_info_event(
-                        "Embedded app-server handoff prepared; restarting Codex frontend."
-                            .to_string(),
-                        Some("The replacement process will recover the exact graph before startup writes.".to_string()),
+                        EMBEDDED_RELOAD_PREPARED_MESSAGE.to_string(),
+                        Some(EMBEDDED_RELOAD_PREPARED_HINT.to_string()),
                     )),
                 );
                 let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
                 return Ok(AppRunControl::Exit(ExitReason::FrontendReload {
                     thread_id,
                     launcher,
-                    account_alias: self.config.active_account_alias().map(str::to_owned),
+                    account_alias: Some(
+                        self.config
+                            .active_account_alias()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| "default".to_string()),
+                    ),
                     cwd,
+                    model_provider: Some(self.config.model_provider_id.clone()),
                     model: self.chat_widget.current_model().to_string(),
                     reasoning_effort: self
                         .chat_widget

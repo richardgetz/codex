@@ -539,6 +539,7 @@ pub enum ExitReason {
         launcher: PathBuf,
         account_alias: Option<String>,
         cwd: PathBuf,
+        model_provider: Option<String>,
         model: String,
         reasoning_effort: Option<String>,
         service_tier: Option<String>,

@@ -114,7 +114,9 @@ release or merge rules.
   model, reasoning effort, and service tier; prompts and images are never
   replayed. Embedded sessions now prepare the durable handoff in-process,
   restart through a validated launcher, and recover the receipt before startup
-  writes; unsafe blockers remain in the handoff for explicit resolution.
+  writes; the npm wrapper carries its stable shim path through reload markers,
+  while unproven versioned vendor binaries are refused. Unsafe blockers remain
+  in the handoff for explicit resolution.
   Standalone-daemon and remote sessions remain unavailable when no replacement
   launcher is configured.
 - `thread/read` keeps persisted snapshots marked `NotLoaded` when the live

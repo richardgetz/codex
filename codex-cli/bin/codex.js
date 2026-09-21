@@ -238,11 +238,25 @@ const packageManagerEnvVar =
       ? "CODEX_MANAGED_BY_PNPM"
       : packageManager === "vite-plus"
         ? "CODEX_MANAGED_BY_VITE_PLUS"
-        : "CODEX_MANAGED_BY_NPM";
+      : "CODEX_MANAGED_BY_NPM";
+// The native child cannot recover the stable npm shim from its own argv[0] or current_exe after
+// an upgrade. Preserve the path that launched this wrapper so an embedded TUI reload can invoke
+// the package resolver again and pick up the replacement vendor binary. Windows uses a Node
+// script entrypoint that cannot be spawned directly by Rust, so it deliberately leaves this
+// marker unset and receives the normal unsupported-launcher diagnostic instead.
+const frontendLauncher =
+  process.platform === "win32"
+    ? null
+    : path.isAbsolute(process.argv[1] || "")
+      ? path.resolve(process.argv[1])
+      : path.join(codexPackageRoot, "bin", "codex.js");
 const env = {
   ...process.env,
   CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
 };
+if (frontendLauncher) {
+  env.CODEX_TUI_FRONTEND_LAUNCHER = frontendLauncher;
+}
 delete env.CODEX_MANAGED_BY_NPM;
 delete env.CODEX_MANAGED_BY_BUN;
 delete env.CODEX_MANAGED_BY_PNPM;

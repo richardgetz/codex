@@ -2655,7 +2655,7 @@ mod reload_tests {
             parse_reload_process_output(
                 true,
                 br#"{"status":"needsAttention","error":"recover"}"#,
-                b""
+                b"",
             ),
             ReloadProcessOutcome::Failed("recover".to_string())
         );

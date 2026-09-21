@@ -1246,56 +1246,68 @@ Fix the config and retry.\n\
                 }
             }
         };
-        let replacement_failure = if let Ok(ExitReason::FrontendReload {
+        let replacement = match &exit_reason_result {
+            Ok(ExitReason::FrontendReload {
+                thread_id,
+                launcher,
+                account_alias,
+                cwd,
+                model_provider,
+                model,
+                reasoning_effort,
+                service_tier,
+                handoff_id,
+            }) => Some((
+                *thread_id,
+                launcher.clone(),
+                account_alias.clone(),
+                cwd.clone(),
+                model_provider.clone(),
+                model.clone(),
+                reasoning_effort.clone(),
+                service_tier.clone(),
+                handoff_id.clone(),
+            )),
+            _ => None,
+        };
+        if let Some((
             thread_id,
             launcher,
             account_alias,
             cwd,
+            model_provider,
             model,
             reasoning_effort,
             service_tier,
             handoff_id,
-        }) = &exit_reason_result
+        )) = replacement
         {
-            Some((
-                crate::reexec_frontend(
-                    launcher,
-                    *thread_id,
-                    account_alias.clone(),
-                    cwd.clone(),
-                    model.clone(),
-                    reasoning_effort.clone(),
-                    service_tier.clone(),
-                    handoff_id.clone(),
-                ),
-                handoff_id.clone(),
-                *thread_id,
+            // The durable receipt has already sealed every loaded root. Close the old embedded
+            // owner before launching its replacement so a failed or Windows child launch cannot
+            // leave two runtimes sharing the same session state.
+            if let Err(err) = app_server.shutdown().await {
+                tracing::warn!(error = %err, "failed to shut down embedded app server before frontend replacement");
+            }
+            crate::restore_terminal_before_fatal_exit();
+            let error = crate::reexec_frontend(
+                &launcher,
+                thread_id,
                 account_alias.clone(),
                 cwd.clone(),
+                model_provider.clone(),
                 model.clone(),
                 reasoning_effort.clone(),
                 service_tier.clone(),
-            ))
-        } else {
-            None
-        };
-        if let Some((
-            error,
-            handoff_id,
-            thread_id,
-            account_alias,
-            cwd,
-            model,
-            reasoning_effort,
-            service_tier,
-        )) = replacement_failure
-        {
+                handoff_id.clone(),
+            );
             let message = if let Some(handoff_id) = handoff_id {
                 let recovery_command = crate::frontend_reload_recovery_command(
+                    &launcher,
                     &handoff_id,
                     thread_id,
                     account_alias.as_deref(),
                     &cwd,
+                    model_provider.as_deref(),
                     &model,
                     reasoning_effort.as_deref(),
                     service_tier.as_deref(),
@@ -1307,8 +1319,7 @@ Fix the config and retry.\n\
                 format!("Codex frontend reload could not start its replacement launcher: {error}")
             };
             exit_reason_result = Ok(ExitReason::Fatal(message));
-        }
-        if let Err(err) = app_server.shutdown().await {
+        } else if let Err(err) = app_server.shutdown().await {
             tracing::warn!(error = %err, "failed to shut down embedded app server");
         }
         let clear_pet_result = tui.clear_ambient_pet_image();
