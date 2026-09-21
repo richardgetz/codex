@@ -1045,6 +1045,14 @@ impl MessageProcessor {
         event_stream_ready: Option<McpEventStreamReady>,
     ) -> Result<(), JSONRPCErrorError> {
         let connection_id = connection_request_id.connection_id;
+        let method = codex_request.method_name();
+        let _handoff_operation = self
+            .handoff_coordinator
+            .acquire_request_operation(method)
+            .await;
+        self.handoff_coordinator
+            .guard_request_method(method)
+            .await?;
         let app_server_client_name = session.app_server_client_name().map(str::to_string);
         let client_version = session.client_version().map(str::to_string);
         let client_mcp_extensions = session.client_mcp_extensions();

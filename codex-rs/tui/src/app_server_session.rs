@@ -1734,7 +1734,7 @@ impl AppServerSession {
                 params: SwitchAccountParams { alias },
             })
             .await
-            .map_err(|error| color_eyre::eyre::eyre!("account/switch failed in TUI: {error}"))?;
+            .map_err(account_switch_failure)?;
         let (needs_auth_selection, account_status_error) = match self.read_account().await {
             Ok(account) => (account_switch_needs_auth_selection(&account), None),
             Err(err) => (
@@ -2112,6 +2112,10 @@ impl AppServerSession {
         self.next_request_id += 1;
         RequestId::Integer(request_id)
     }
+}
+
+fn account_switch_failure(error: impl std::fmt::Display) -> color_eyre::eyre::Report {
+    color_eyre::eyre::eyre!("account/switch failed in TUI: {error}")
 }
 
 fn thread_realtime_start_params(
@@ -3121,6 +3125,13 @@ mod tests {
         assert_eq!(app_server.next_request_id, next_request_id + 3);
         app_server.shutdown().await?;
         Ok(())
+    }
+
+    #[test]
+    fn account_switch_error_preserves_handoff_diagnostic() {
+        insta::assert_snapshot!(account_switch_failure(
+            "app-server recovery is pending; only reads and handoff recovery are available; inspect thread/handoff/status or call thread/handoff/recover"
+        ), @r###"account/switch failed in TUI: app-server recovery is pending; only reads and handoff recovery are available; inspect thread/handoff/status or call thread/handoff/recover"###);
     }
 
     fn rate_limit_snapshot(limit_id: &str) -> RateLimitSnapshot {

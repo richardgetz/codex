@@ -30,6 +30,7 @@ impl HandoffCoordinator {
         params: ThreadHandoffPrepareParams,
     ) -> Result<ThreadHandoffPrepareResponse, JSONRPCErrorError> {
         let _operation = self.operation.lock().await;
+        self.invalidate_startup_recovery_state().await;
         let requested_root = params
             .root_thread_id
             .as_deref()

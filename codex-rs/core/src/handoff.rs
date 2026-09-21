@@ -209,20 +209,33 @@ impl HandoffJournal {
     fn is_preparation_failure_shape(&self) -> bool {
         !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                matches!(
-                    node.state,
-                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
-                )
+                !node.thread_id.is_empty()
+                    && !node.root_thread_id.is_empty()
+                    && node
+                        .parent_thread_id
+                        .as_ref()
+                        .is_none_or(|parent_thread_id| !parent_thread_id.is_empty())
+                    && matches!(
+                        node.state,
+                        HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                    )
             })
     }
 
     fn is_failed_preparation_shape(&self) -> bool {
         !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                matches!(
-                    node.state,
-                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
-                ) && node.turn_id.is_none()
+                !node.thread_id.is_empty()
+                    && !node.root_thread_id.is_empty()
+                    && node
+                        .parent_thread_id
+                        .as_ref()
+                        .is_none_or(|parent_thread_id| !parent_thread_id.is_empty())
+                    && matches!(
+                        node.state,
+                        HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                    )
+                    && node.turn_id.is_none()
                     && !node.was_running
             })
     }
@@ -560,6 +573,32 @@ mod tests {
                 .len(),
             1,
             "an empty legacy receipt has no evidence that startup can be unfenced"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_preparation_marker_remains_pending_without_node_identity() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                thread_id: String::new(),
+                ..node("malformed")
+            }],
+        )
+        .await
+        .expect("begin malformed handoff");
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal.persist(home.path()).await.expect("persist handoff");
+
+        assert_eq!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending handoffs")
+                .len(),
+            1,
+            "a marker without a recorded node identity has no positive evidence of safe retirement"
         );
     }
 
