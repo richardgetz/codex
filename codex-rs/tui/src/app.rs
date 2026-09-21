@@ -256,6 +256,7 @@ mod rate_limit_refresh;
 mod realtime_voice_calibration;
 mod recap;
 mod reconnect;
+mod remote_reload;
 mod replay_filter;
 mod resize_reflow;
 mod resume_config;

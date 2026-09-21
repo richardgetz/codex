@@ -66,6 +66,8 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SlashCommandExecuteParams;
+use codex_app_server_protocol::SlashCommandExecuteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::SwitchAccountParams;
@@ -1992,6 +1994,26 @@ impl AppServerSession {
             .request_typed(ClientRequest::SkillsList { request_id, params })
             .await
             .wrap_err("skills/list failed in TUI")
+    }
+
+    pub(crate) async fn slash_command_execute(
+        &mut self,
+        request_id: RequestId,
+        thread_id: ThreadId,
+        command: String,
+        args: String,
+    ) -> Result<SlashCommandExecuteResponse> {
+        self.client
+            .request_typed(ClientRequest::SlashCommandExecute {
+                request_id,
+                params: SlashCommandExecuteParams {
+                    thread_id: thread_id.to_string(),
+                    command,
+                    args,
+                },
+            })
+            .await
+            .wrap_err("slashCommand/execute failed in TUI")
     }
 
     pub(crate) async fn reload_user_config(&mut self) -> Result<()> {

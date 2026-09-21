@@ -1305,7 +1305,7 @@ impl ChatWidget {
                 self.add_spend_output("");
             }
             SlashCommand::Reload => {
-                self.dispatch_reload_command();
+                self.dispatch_reload_command("");
             }
             SlashCommand::Mic => {
                 self.app_event_tx
@@ -1490,16 +1490,23 @@ impl ChatWidget {
         }
     }
 
-    fn dispatch_reload_command(&mut self) {
+    fn dispatch_reload_command(&mut self, args: &str) {
         let Some(connection) = self.remote_connection.as_ref() else {
             self.app_event_tx.send(AppEvent::ReloadRequested);
             return;
         };
         if connection.is_remote {
-            self.add_error_message(
-                "`/reload` is unavailable from a remote app-server connection; run it from the local managed Codex session."
-                    .to_string(),
-            );
+            let Some(thread_id) = self.thread_id else {
+                self.add_error_message(
+                    "`/reload` requires an active thread on a remote app-server connection."
+                        .to_string(),
+                );
+                return;
+            };
+            self.app_event_tx.send(AppEvent::RemoteReloadRequested {
+                thread_id,
+                args: args.trim().to_string(),
+            });
             return;
         }
         let executable = match std::env::current_exe() {
@@ -2311,6 +2318,9 @@ impl ChatWidget {
             SlashCommand::Resume if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::ResumeSessionByIdOrName(args));
+            }
+            SlashCommand::Reload => {
+                self.dispatch_reload_command(trimmed);
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 self.app_event_tx

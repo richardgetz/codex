@@ -19,6 +19,13 @@ pub(super) struct ReconnectState {
     pub(super) offline: bool,
     pub(super) failed: bool,
     pub(super) presentation: ReconnectPresentation,
+    pub(super) pending_remote_reload: Option<PendingRemoteReload>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingRemoteReload {
+    pub(super) thread_id: ThreadId,
+    pub(super) request_id: codex_app_server_protocol::RequestId,
 }
 
 pub(super) struct Reconnected {
@@ -433,6 +440,7 @@ impl App {
         self.chat_widget.add_info_message(
             "Reconnected. No input was resent. Review uncertain submissions before retrying; recovered queues remain paused.".into(), /*hint*/ None,
         );
+        self.queue_remote_reload_status_after_reconnect();
         Ok(())
     }
 }

@@ -185,6 +185,12 @@ impl App {
         {
             return;
         }
+        if let ServerNotification::SlashCommandResult(result) = &notification {
+            if result.command.eq_ignore_ascii_case("reload") {
+                self.handle_remote_reload_notification(result);
+            }
+            return;
+        }
         self.observe_usage_notification(&notification);
         // Hidden helper threads must not enter visible thread routing or overview refreshes.
         if let ServerNotificationThreadTarget::Thread(thread_id) =

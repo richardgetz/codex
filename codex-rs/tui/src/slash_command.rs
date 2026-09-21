@@ -249,6 +249,7 @@ impl SlashCommand {
                 | SlashCommand::Mcp
                 | SlashCommand::Mic
                 | SlashCommand::Voice
+                | SlashCommand::Reload
                 | SlashCommand::Spend
                 | SlashCommand::Continuous
                 | SlashCommand::Outcomes
@@ -433,9 +434,9 @@ mod tests {
     }
 
     #[test]
-    fn reload_command_is_visible_without_inline_arguments() {
+    fn reload_command_accepts_inline_arguments() {
         assert_eq!(SlashCommand::from_str("reload"), Ok(SlashCommand::Reload));
-        assert!(!SlashCommand::Reload.supports_inline_args());
+        assert!(SlashCommand::Reload.supports_inline_args());
         assert!(SlashCommand::Reload.available_during_task());
     }
 

@@ -55,6 +55,8 @@ impl App {
                     | AppEvent::ResumeEtaSessionConfirmed { .. }
                     | AppEvent::ReloadApplied { .. }
                     | AppEvent::ReloadRequested
+                    | AppEvent::RemoteReloadRequested { .. }
+                    | AppEvent::RemoteReloadStatusRequested { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -1059,6 +1061,14 @@ impl App {
                         .map(str::to_owned),
                     handoff_id: Some(receipt.handoff_id),
                 }));
+            }
+            AppEvent::RemoteReloadRequested { thread_id, args } => {
+                self.execute_remote_reload(app_server, thread_id, args)
+                    .await?;
+            }
+            AppEvent::RemoteReloadStatusRequested { thread_id } => {
+                self.execute_remote_reload_status(app_server, thread_id)
+                    .await?;
             }
             AppEvent::CodexOp(mut op) => {
                 if let AppCommand::OverrideTurnContext {
