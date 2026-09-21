@@ -545,6 +545,7 @@ pub enum ExitReason {
         reasoning_effort: Option<String>,
         service_tier: Option<String>,
         handoff_id: Option<String>,
+        local_daemon_socket: Option<PathBuf>,
     },
     /// The connected app-server remains the owner; restart only the local frontend and reconnect
     /// to the same endpoint without pausing or replaying any server work.

@@ -27,6 +27,7 @@ pub(super) struct PendingRemoteReload {
     pub(super) thread_id: ThreadId,
     pub(super) request_id: codex_app_server_protocol::RequestId,
     pub(super) status_request_id: Option<codex_app_server_protocol::RequestId>,
+    pub(super) allow_frontend_refresh: bool,
 }
 
 pub(super) struct Reconnected {

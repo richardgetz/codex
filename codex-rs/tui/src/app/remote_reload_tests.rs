@@ -58,9 +58,13 @@ fn remote_reload_status_keeps_operation_notification_correlation() {
         thread_id: ThreadId::new(),
         request_id: operation_request_id.clone(),
         status_request_id: Some(status_request_id.clone()),
+        allow_frontend_refresh: true,
     };
 
-    assert!(pending_reload_request_matches(&pending, &operation_request_id));
+    assert!(pending_reload_request_matches(
+        &pending,
+        &operation_request_id
+    ));
     assert!(pending_reload_request_matches(&pending, &status_request_id));
     assert!(!pending_reload_request_matches(
         &pending,
@@ -73,4 +77,48 @@ fn remote_reload_suppresses_only_duplicate_mutations() {
     assert!(suppress_duplicate_reload(false, true));
     assert!(!suppress_duplicate_reload(true, true));
     assert!(!suppress_duplicate_reload(false, false));
+}
+
+#[test]
+fn remote_reload_terminal_events_are_deduplicated_after_pending_clear() {
+    assert_eq!(
+        remote_reload_terminal_action(
+            RemoteReloadState::Completed,
+            /*operation_request_match*/ true,
+            /*status_request_match*/ false,
+            /*allow_frontend_refresh*/ true,
+        ),
+        RemoteReloadTerminalAction::Completed
+    );
+    assert_eq!(
+        remote_reload_terminal_action(
+            RemoteReloadState::Completed,
+            /*operation_request_match*/ false,
+            /*status_request_match*/ false,
+            /*allow_frontend_refresh*/ true,
+        ),
+        RemoteReloadTerminalAction::Ignore
+    );
+}
+
+#[test]
+fn remote_reload_unknown_status_keeps_the_original_operation_pending() {
+    assert_eq!(
+        remote_reload_terminal_action(
+            RemoteReloadState::Unknown,
+            /*operation_request_match*/ false,
+            /*status_request_match*/ true,
+            /*allow_frontend_refresh*/ true,
+        ),
+        RemoteReloadTerminalAction::KeepPending
+    );
+    assert_eq!(
+        remote_reload_terminal_action(
+            RemoteReloadState::Unavailable,
+            /*operation_request_match*/ false,
+            /*status_request_match*/ true,
+            /*allow_frontend_refresh*/ false,
+        ),
+        RemoteReloadTerminalAction::ClearPending
+    );
 }

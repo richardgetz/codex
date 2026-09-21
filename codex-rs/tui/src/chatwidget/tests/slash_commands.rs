@@ -4668,25 +4668,31 @@ async fn slash_reload_requests_embedded_handoff() {
 }
 
 #[tokio::test]
-async fn slash_reload_forwards_remote_operation_arguments() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.remote_connection = Some(crate::status::remote_connection::RemoteConnectionStatus {
-        address: "ws://127.0.0.1:4500/".to_string(),
-        version: "vtest".to_string(),
-        is_remote: true,
-    });
+async fn slash_reload_forwards_operation_arguments_for_persistent_targets() {
+    for is_remote in [true, false] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let thread_id = ThreadId::new();
+        chat.thread_id = Some(thread_id);
+        chat.remote_connection = Some(crate::status::remote_connection::RemoteConnectionStatus {
+            address: if is_remote {
+                "ws://127.0.0.1:4500/".to_string()
+            } else {
+                "unix:///tmp/codex.sock".to_string()
+            },
+            version: "vtest".to_string(),
+            is_remote,
+        });
 
-    chat.dispatch_command_with_args(SlashCommand::Reload, "recover".to_string(), Vec::new());
+        chat.dispatch_command_with_args(SlashCommand::Reload, "recover".to_string(), Vec::new());
 
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::RemoteReloadRequested {
-            thread_id: actual_thread_id,
-            args,
-        }) if actual_thread_id == thread_id && args == "recover"
-    );
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::RemoteReloadRequested {
+                thread_id: actual_thread_id,
+                args,
+            }) if actual_thread_id == thread_id && args == "recover"
+        );
+    }
 }
 
 #[tokio::test]

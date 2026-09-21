@@ -552,9 +552,7 @@ async fn connect_default_daemon(
 ///
 /// Frontend refresh markers use this path so a missing or broken shared daemon is reported to the
 /// caller instead of starting a second server with different ownership semantics.
-pub(crate) async fn connect_daemon_at(
-    socket_path: AbsolutePathBuf,
-) -> std::io::Result<PreparedDefaultDaemon> {
+async fn connect_daemon_at(socket_path: AbsolutePathBuf) -> std::io::Result<PreparedDefaultDaemon> {
     match std::fs::metadata(socket_path.as_path()) {
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {

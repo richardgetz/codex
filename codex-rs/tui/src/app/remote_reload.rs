@@ -29,10 +29,37 @@ impl RemoteReloadState {
     }
 }
 
-fn remote_reload_state(
-    reload: Option<&SlashCommandReloadResult>,
-    ok: bool,
-) -> RemoteReloadState {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteReloadTerminalAction {
+    Ignore,
+    KeepPending,
+    ClearPending,
+    Completed,
+    FrontendRefresh,
+}
+
+fn remote_reload_terminal_action(
+    state: RemoteReloadState,
+    operation_request_match: bool,
+    status_request_match: bool,
+    allow_frontend_refresh: bool,
+) -> RemoteReloadTerminalAction {
+    if !state.is_terminal() || !(operation_request_match || status_request_match) {
+        return RemoteReloadTerminalAction::Ignore;
+    }
+    if status_request_match && matches!(state, RemoteReloadState::Unknown) {
+        return RemoteReloadTerminalAction::KeepPending;
+    }
+    if matches!(state, RemoteReloadState::Completed) {
+        return RemoteReloadTerminalAction::Completed;
+    }
+    if matches!(state, RemoteReloadState::Unavailable) && allow_frontend_refresh {
+        return RemoteReloadTerminalAction::FrontendRefresh;
+    }
+    RemoteReloadTerminalAction::ClearPending
+}
+
+fn remote_reload_state(reload: Option<&SlashCommandReloadResult>, ok: bool) -> RemoteReloadState {
     match reload.map(|result| result.state.as_str()) {
         Some("accepted") => RemoteReloadState::Accepted,
         Some("in_progress") => RemoteReloadState::InProgress,
@@ -48,12 +75,8 @@ fn suppress_duplicate_reload(is_status: bool, pending: bool) -> bool {
     pending && !is_status
 }
 
-fn pending_reload_request_matches(
-    pending: &PendingRemoteReload,
-    request_id: &RequestId,
-) -> bool {
-    &pending.request_id == request_id
-        || pending.status_request_id.as_ref() == Some(request_id)
+fn pending_reload_request_matches(pending: &PendingRemoteReload, request_id: &RequestId) -> bool {
+    &pending.request_id == request_id || pending.status_request_id.as_ref() == Some(request_id)
 }
 
 impl App {
@@ -63,14 +86,15 @@ impl App {
         thread_id: ThreadId,
         args: String,
     ) -> color_eyre::Result<()> {
-        if !matches!(self.app_server_target, crate::AppServerTarget::Remote { .. }) {
+        if matches!(self.app_server_target, crate::AppServerTarget::Embedded) {
             self.chat_widget.add_error_message(
-                "`/reload` forwarding requires a remote app-server connection.".to_string(),
+                "`/reload` forwarding requires a persistent app-server connection.".to_string(),
             );
             return Ok(());
         }
 
         let is_status = args.trim().eq_ignore_ascii_case("status");
+        let allows_frontend_refresh = args.trim().is_empty();
         if suppress_duplicate_reload(is_status, self.reconnect.pending_remote_reload.is_some()) {
             self.chat_widget.add_info_message(
                 "A managed remote reload is already in progress; no second handoff was started."
@@ -97,6 +121,7 @@ impl App {
                     thread_id,
                     request_id: request_id.clone(),
                     status_request_id: None,
+                    allow_frontend_refresh: allows_frontend_refresh,
                 });
             }
             (true, false) => {}
@@ -123,7 +148,28 @@ impl App {
             }
             Err(error) if self.recover_transport_error(&error) => Ok(()),
             Err(error) => {
+                let persistent_target = matches!(
+                    self.app_server_target,
+                    crate::AppServerTarget::LocalDaemon { .. }
+                        | crate::AppServerTarget::Remote { .. }
+                );
+                let method_unsupported = matches!(
+                    error.downcast_ref::<codex_app_server_client::TypedRequestError>(),
+                    Some(codex_app_server_client::TypedRequestError::Server { source, .. })
+                        if source.code == -32601
+                );
                 self.clear_remote_reload(request_id, tracked_thread_id);
+                if persistent_target && method_unsupported && allows_frontend_refresh {
+                    self.chat_widget.add_info_message(
+                        "The connected app-server does not expose managed reload; refreshing this frontend while leaving the server running."
+                            .to_string(),
+                        Some("No prompt or tool call will be replayed.".to_string()),
+                    );
+                    self.app_event_tx.send(AppEvent::FrontendRefreshRequested {
+                        thread_id: tracked_thread_id,
+                    });
+                    return Ok(());
+                }
                 self.chat_widget
                     .add_error_message(format!("Remote `/reload` failed: {error:#}"));
                 Ok(())
@@ -170,9 +216,10 @@ impl App {
         let Some(pending) = self.reconnect.pending_remote_reload.as_ref() else {
             return;
         };
-        self.app_event_tx.send(AppEvent::RemoteReloadStatusRequested {
-            thread_id: pending.thread_id,
-        });
+        self.app_event_tx
+            .send(AppEvent::RemoteReloadStatusRequested {
+                thread_id: pending.thread_id,
+            });
     }
 
     fn apply_remote_reload_response(
@@ -205,29 +252,67 @@ impl App {
         display_progress: bool,
     ) {
         let state = remote_reload_state(reload, ok);
-        let terminal = state.is_terminal();
-        let matches_pending = self
-            .reconnect
-            .pending_remote_reload
-            .as_ref()
-            .is_some_and(|pending| {
-                pending.thread_id == thread_id
-                    && pending_reload_request_matches(pending, &request_id)
-            });
+        let operation_request_match =
+            self.reconnect
+                .pending_remote_reload
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.thread_id == thread_id && pending.request_id == request_id
+                });
+        let status_request_match =
+            self.reconnect
+                .pending_remote_reload
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.thread_id == thread_id
+                        && pending.status_request_id.as_ref() == Some(&request_id)
+                });
+        let matches_pending = operation_request_match || status_request_match;
 
-        if matches!(state, RemoteReloadState::Accepted | RemoteReloadState::InProgress)
-            && allow_new_pending
+        if matches!(
+            state,
+            RemoteReloadState::Accepted | RemoteReloadState::InProgress
+        ) && allow_new_pending
             && self.reconnect.pending_remote_reload.is_none()
         {
             self.reconnect.pending_remote_reload = Some(PendingRemoteReload {
                 thread_id,
                 request_id: request_id.clone(),
                 status_request_id: None,
+                allow_frontend_refresh: false,
             });
         }
 
-        if terminal && matches_pending {
-            self.reconnect.pending_remote_reload = None;
+        let allow_frontend_refresh = self
+            .reconnect
+            .pending_remote_reload
+            .as_ref()
+            .is_some_and(|pending| pending.allow_frontend_refresh);
+        match remote_reload_terminal_action(
+            state,
+            operation_request_match,
+            status_request_match,
+            allow_frontend_refresh,
+        ) {
+            RemoteReloadTerminalAction::Ignore => {}
+            RemoteReloadTerminalAction::KeepPending => {
+                if let Some(pending) = self.reconnect.pending_remote_reload.as_mut() {
+                    pending.status_request_id = None;
+                }
+            }
+            RemoteReloadTerminalAction::ClearPending => {
+                self.reconnect.pending_remote_reload = None;
+            }
+            RemoteReloadTerminalAction::Completed => {
+                self.reconnect.pending_remote_reload = None;
+                self.app_event_tx
+                    .send(AppEvent::RemoteReloadCompleted { thread_id });
+            }
+            RemoteReloadTerminalAction::FrontendRefresh => {
+                self.reconnect.pending_remote_reload = None;
+                self.app_event_tx
+                    .send(AppEvent::FrontendRefreshRequested { thread_id });
+            }
         }
 
         let detail = reload
@@ -252,21 +337,29 @@ impl App {
             RemoteReloadState::Completed => {
                 self.chat_widget.add_info_message(message.to_string(), None);
             }
-            RemoteReloadState::Failed | RemoteReloadState::Unavailable | RemoteReloadState::Unknown => {
+            RemoteReloadState::Unavailable if allow_frontend_refresh && matches_pending => {
+                self.chat_widget.add_info_message(
+                    message.to_string(),
+                    Some("Refreshing this frontend while the connected app-server continues running.".to_string()),
+                );
+            }
+            RemoteReloadState::Failed
+            | RemoteReloadState::Unavailable
+            | RemoteReloadState::Unknown => {
                 self.chat_widget.add_error_message(message.to_string());
             }
         }
     }
 
     fn clear_remote_reload(&mut self, request_id: RequestId, thread_id: ThreadId) {
-        let status_request_matches = self
-            .reconnect
-            .pending_remote_reload
-            .as_ref()
-            .is_some_and(|pending| {
-                pending.thread_id == thread_id
-                    && pending.status_request_id.as_ref() == Some(&request_id)
-            });
+        let status_request_matches =
+            self.reconnect
+                .pending_remote_reload
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.thread_id == thread_id
+                        && pending.status_request_id.as_ref() == Some(&request_id)
+                });
         if status_request_matches {
             if let Some(pending) = self.reconnect.pending_remote_reload.as_mut() {
                 pending.status_request_id = None;

@@ -993,6 +993,12 @@ impl App {
                         .current_service_tier()
                         .map(str::to_owned),
                     handoff_id: None,
+                    local_daemon_socket: match &self.app_server_target {
+                        crate::AppServerTarget::LocalDaemon {
+                            endpoint: crate::RemoteAppServerEndpoint::UnixSocket { socket_path },
+                        } => Some(socket_path.to_path_buf()),
+                        _ => None,
+                    },
                 }));
             }
             AppEvent::ReloadRequested => {
@@ -1062,6 +1068,7 @@ impl App {
                         .current_service_tier()
                         .map(str::to_owned),
                     handoff_id: Some(receipt.handoff_id),
+                    local_daemon_socket: None,
                 }));
             }
             AppEvent::RemoteReloadRequested { thread_id, args } => {
@@ -1107,6 +1114,12 @@ impl App {
                         .current_service_tier()
                         .map(str::to_owned),
                     handoff_id: None,
+                    local_daemon_socket: match &self.app_server_target {
+                        crate::AppServerTarget::LocalDaemon {
+                            endpoint: crate::RemoteAppServerEndpoint::UnixSocket { socket_path },
+                        } => Some(socket_path.to_path_buf()),
+                        _ => None,
+                    },
                 }));
             }
             AppEvent::FrontendRefreshRequested { thread_id } => {

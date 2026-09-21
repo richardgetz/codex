@@ -138,6 +138,43 @@ async fn remote_disconnect_exit_summary_does_not_require_a_local_rollout_or_prin
 }
 
 #[tokio::test]
+async fn frontend_refresh_exit_summary_explains_that_server_work_continues() {
+    let (mut app, _, _) = make_test_app_with_channels().await;
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "wss://example.com:443/".to_string(),
+            auth_token: None,
+        },
+    };
+    let thread_id = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+    app.active_thread_id = Some(thread_id);
+    app.chat_widget.handle_thread_session(test_thread_session(
+        thread_id,
+        test_path_buf("/tmp/project"),
+    ));
+    let exit_info = app.exit_info(ExitReason::FrontendRefresh {
+        thread_id,
+        launcher: test_path_buf("/tmp/codex"),
+        account_alias: None,
+        cwd: test_path_buf("/tmp/project"),
+        model_provider: None,
+        model: "gpt-test".to_string(),
+        reasoning_effort: None,
+        service_tier: None,
+        local_daemon_socket: None,
+    });
+    let output = exit_info
+        .format_exit_messages(/*color_enabled*/ false)
+        .join("\n")
+        .replace(&thread_id.to_string(), "THREAD_ID");
+    assert_snapshot!(output, @"
+    Refreshing Codex frontend; the app-server continues running.
+    Reconnect: codex --remote wss://example.com:443/ resume THREAD_ID
+    Stop the current turn: run codex --remote wss://example.com:443/ agents, select this task, and use the configured stop shortcut.
+    ");
+}
+
+#[tokio::test]
 async fn embedded_exit_keeps_the_session_summary() {
     let (mut app, _, _) = make_test_app_with_channels().await;
     let thread_id = prepare_local_daemon_thread(&mut app).unwrap();

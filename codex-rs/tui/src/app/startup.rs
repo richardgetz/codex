@@ -1257,6 +1257,7 @@ Fix the config and retry.\n\
                 reasoning_effort,
                 service_tier,
                 handoff_id,
+                local_daemon_socket,
             }) => Some((
                 *thread_id,
                 launcher.clone(),
@@ -1267,7 +1268,7 @@ Fix the config and retry.\n\
                 reasoning_effort.clone(),
                 service_tier.clone(),
                 handoff_id.clone(),
-                None,
+                local_daemon_socket.clone(),
                 false,
             )),
             Ok(ExitReason::FrontendRefresh {
