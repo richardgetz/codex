@@ -117,6 +117,30 @@ async fn write_failed_preparation_fixture(
     Ok(journal.handoff_id)
 }
 
+async fn write_active_recovery_fixture(codex_home: &Path) -> Result<String> {
+    let mut journal = HandoffJournal::begin(
+        codex_home,
+        "test-runtime",
+        vec![HandoffNode {
+            thread_id: "thread-active".to_string(),
+            root_thread_id: "root-active".to_string(),
+            parent_thread_id: None,
+            agent_path: None,
+            turn_id: Some("turn-active".to_string()),
+            rollout_path: Some("/tmp/thread-active.jsonl".to_string()),
+            was_running: true,
+            was_paused: false,
+            state: HandoffNodeState::Suspended,
+            blockers: Vec::new(),
+        }],
+    )
+    .await?;
+    journal.transfer_started = Some(true);
+    journal.set_state(HandoffJournalState::NeedsAttention);
+    journal.persist(codex_home).await?;
+    Ok(journal.handoff_id)
+}
+
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
 struct CreateConfigTomlParams {
@@ -649,6 +673,27 @@ async fn recover_of_terminal_needs_attention_does_not_rearm_account_fence() -> R
         mcp.read_stream_until_notification_message("account/updated"),
     )
     .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_handoff_still_fences_account_switch() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    write_active_recovery_fixture(codex_home.path()).await?;
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let switch_id = mcp
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(switch_id)),
+    )
+    .await??;
+    assert!(error.error.message.contains("recovery is pending"));
     Ok(())
 }
 

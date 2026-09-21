@@ -197,20 +197,23 @@ impl HandoffJournal {
     fn is_preparation_failure_shape(&self) -> bool {
         !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                matches!(
-                    node.state,
-                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
-                )
+                has_structural_identity(node)
+                    && matches!(
+                        node.state,
+                        HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                    )
             })
     }
 
     fn is_failed_preparation_shape(&self) -> bool {
         !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                matches!(
-                    node.state,
-                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
-                ) && node.turn_id.is_none()
+                has_structural_identity(node)
+                    && matches!(
+                        node.state,
+                        HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                    )
+                    && node.turn_id.is_none()
                     && !node.was_running
             })
     }
@@ -302,6 +305,15 @@ impl HandoffJournal {
             .filter(HandoffJournal::requires_recovery)
             .collect())
     }
+}
+
+fn has_structural_identity(node: &HandoffNode) -> bool {
+    !node.thread_id.trim().is_empty()
+        && !node.root_thread_id.trim().is_empty()
+        && node
+            .parent_thread_id
+            .as_deref()
+            .is_none_or(|parent_thread_id| !parent_thread_id.trim().is_empty())
 }
 
 fn journal_path(codex_home: &Path, handoff_id: &str) -> PathBuf {
@@ -522,6 +534,38 @@ mod tests {
                 .len(),
             1,
             "an empty legacy receipt has no evidence that startup can be unfenced"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_needs_attention_identity_remains_pending() {
+        let home = tempdir().expect("temporary CODEX_HOME");
+        let mut journal = HandoffJournal::begin(
+            home.path(),
+            "test",
+            vec![HandoffNode {
+                thread_id: " ".to_string(),
+                root_thread_id: String::new(),
+                parent_thread_id: Some(String::new()),
+                ..node("ignored")
+            }],
+        )
+        .await
+        .expect("begin malformed handoff");
+        journal.transfer_started = Some(false);
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist malformed identity");
+
+        assert_eq!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending handoffs")
+                .len(),
+            1,
+            "malformed identities do not prove that startup can be unfenced"
         );
     }
 
