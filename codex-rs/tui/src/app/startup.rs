@@ -1267,6 +1267,31 @@ Fix the config and retry.\n\
                 reasoning_effort.clone(),
                 service_tier.clone(),
                 handoff_id.clone(),
+                None,
+                false,
+            )),
+            Ok(ExitReason::FrontendRefresh {
+                thread_id,
+                launcher,
+                account_alias,
+                cwd,
+                model_provider,
+                model,
+                reasoning_effort,
+                service_tier,
+                local_daemon_socket,
+            }) => Some((
+                *thread_id,
+                launcher.clone(),
+                account_alias.clone(),
+                cwd.clone(),
+                model_provider.clone(),
+                model.clone(),
+                reasoning_effort.clone(),
+                service_tier.clone(),
+                None,
+                local_daemon_socket.clone(),
+                true,
             )),
             _ => None,
         };
@@ -1280,16 +1305,18 @@ Fix the config and retry.\n\
             reasoning_effort,
             service_tier,
             handoff_id,
+            local_daemon_socket,
+            frontend_refresh,
         )) = replacement
         {
-            // The durable receipt has already sealed every loaded root. Close the old embedded
-            // owner before launching its replacement so a failed or Windows child launch cannot
-            // leave two runtimes sharing the same session state.
+            // Close the client before launching the replacement. Embedded handoffs have already
+            // sealed every loaded root; shared targets only close this frontend's transport while
+            // their persistent server continues owning active work.
             if let Err(err) = app_server.shutdown().await {
-                tracing::warn!(error = %err, "failed to shut down embedded app server before frontend replacement");
+                tracing::warn!(error = %err, "failed to shut down app-server client before frontend replacement");
             }
             crate::restore_terminal_before_fatal_exit();
-            let error = crate::reexec_frontend(
+            let error = crate::reexec_frontend_with_local_daemon_socket(
                 &launcher,
                 thread_id,
                 account_alias.clone(),
@@ -1299,8 +1326,13 @@ Fix the config and retry.\n\
                 reasoning_effort.clone(),
                 service_tier.clone(),
                 handoff_id.clone(),
+                local_daemon_socket,
             );
-            let message = if let Some(handoff_id) = handoff_id {
+            let message = if frontend_refresh {
+                format!(
+                    "Codex frontend refresh could not start its replacement launcher: {error}. The connected app-server remains running; reconnect with the original Codex command."
+                )
+            } else if let Some(handoff_id) = handoff_id {
                 let recovery_command = crate::frontend_reload_recovery_command(
                     &launcher,
                     &handoff_id,

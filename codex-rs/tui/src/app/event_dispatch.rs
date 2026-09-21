@@ -57,6 +57,8 @@ impl App {
                     | AppEvent::ReloadRequested
                     | AppEvent::RemoteReloadRequested { .. }
                     | AppEvent::RemoteReloadStatusRequested { .. }
+                    | AppEvent::RemoteReloadCompleted { .. }
+                    | AppEvent::FrontendRefreshRequested { .. }
                     | AppEvent::FatalExitRequest(_)
             )
         {
@@ -1069,6 +1071,94 @@ impl App {
             AppEvent::RemoteReloadStatusRequested { thread_id } => {
                 self.execute_remote_reload_status(app_server, thread_id)
                     .await?;
+            }
+            AppEvent::RemoteReloadCompleted { thread_id } => {
+                let Some(launcher) = self.frontend_launcher.clone() else {
+                    self.chat_widget.add_error_message(
+                        "The managed app-server reload completed, but this frontend could not resolve a local launcher to reconnect with it. Set CODEX_TUI_FRONTEND_LAUNCHER to an absolute executable path and retry `/reload`."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                let account_alias = (!self.app_server_target.uses_remote_workspace()).then(|| {
+                    self.config
+                        .active_account_alias()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| "default".to_string())
+                });
+                self.chat_widget.add_info_message(
+                    "Managed app-server reload completed; restarting Codex frontend.".to_string(),
+                    Some("The replacement server recovered the exact displayed thread.".to_string()),
+                );
+                return Ok(AppRunControl::Exit(ExitReason::FrontendReload {
+                    thread_id,
+                    launcher,
+                    account_alias,
+                    cwd,
+                    model_provider: None,
+                    model: self.chat_widget.current_model().to_string(),
+                    reasoning_effort: self
+                        .chat_widget
+                        .current_reasoning_effort()
+                        .map(|effort| effort.to_string()),
+                    service_tier: self
+                        .chat_widget
+                        .current_service_tier()
+                        .map(str::to_owned),
+                    handoff_id: None,
+                }));
+            }
+            AppEvent::FrontendRefreshRequested { thread_id } => {
+                let Some(launcher) = self.frontend_launcher.clone() else {
+                    self.chat_widget.add_error_message(
+                        "Frontend refresh could not resolve a local launcher. Set CODEX_TUI_FRONTEND_LAUNCHER to an absolute executable path and retry `/reload`. The connected app-server remains running.".to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                let local_daemon_socket = match &self.app_server_target {
+                    crate::AppServerTarget::LocalDaemon { endpoint } => match endpoint {
+                        crate::RemoteAppServerEndpoint::UnixSocket { socket_path } => {
+                            Some(socket_path.to_path_buf())
+                        }
+                        crate::RemoteAppServerEndpoint::WebSocket { .. } => None,
+                    },
+                    crate::AppServerTarget::Remote { .. } => None,
+                    crate::AppServerTarget::Embedded => {
+                        self.chat_widget.add_error_message(
+                            "Frontend refresh is unavailable for an embedded app-server; use `/reload` to prepare its durable handoff.".to_string(),
+                        );
+                        return Ok(AppRunControl::Continue);
+                    }
+                };
+                let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
+                let account_alias = (!self.app_server_target.uses_remote_workspace()).then(|| {
+                    self.config
+                        .active_account_alias()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| "default".to_string())
+                });
+                self.chat_widget.add_info_message(
+                    "Refreshing the Codex frontend; the connected app-server will continue running.".to_string(),
+                    Some("No prompt or tool call will be replayed.".to_string()),
+                );
+                return Ok(AppRunControl::Exit(ExitReason::FrontendRefresh {
+                    thread_id,
+                    launcher,
+                    account_alias,
+                    cwd,
+                    model_provider: None,
+                    model: self.chat_widget.current_model().to_string(),
+                    reasoning_effort: self
+                        .chat_widget
+                        .current_reasoning_effort()
+                        .map(|effort| effort.to_string()),
+                    service_tier: self
+                        .chat_widget
+                        .current_service_tier()
+                        .map(str::to_owned),
+                    local_daemon_socket,
+                }));
             }
             AppEvent::CodexOp(mut op) => {
                 if let AppCommand::OverrideTurnContext {

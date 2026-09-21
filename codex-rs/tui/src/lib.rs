@@ -272,6 +272,7 @@ pub(crate) use frontend_reload::apply_frontend_reload_context;
 pub(crate) use frontend_reload::frontend_reload_recovery_command;
 pub(crate) use frontend_reload::launcher_is_executable;
 pub(crate) use frontend_reload::reexec_frontend;
+pub(crate) use frontend_reload::reexec_frontend_with_local_daemon_socket;
 pub(crate) use frontend_reload::resolve_frontend_launcher;
 pub(crate) use frontend_reload::restore_terminal_before_fatal_exit;
 pub(crate) use frontend_reload::take_frontend_reload_context;
@@ -544,6 +545,34 @@ async fn connect_default_daemon(
             )));
         }
     }
+    connect_daemon_at(socket_path).await.map(Some)
+}
+
+/// Connect to an already selected daemon socket without falling back to an embedded owner.
+///
+/// Frontend refresh markers use this path so a missing or broken shared daemon is reported to the
+/// caller instead of starting a second server with different ownership semantics.
+pub(crate) async fn connect_daemon_at(
+    socket_path: AbsolutePathBuf,
+) -> std::io::Result<PreparedDefaultDaemon> {
+    match std::fs::metadata(socket_path.as_path()) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "the selected local app-server daemon socket `{}` is no longer available; refusing to start a competing embedded server",
+                    socket_path.display()
+                ),
+            ));
+        }
+        Err(err) => {
+            return Err(std::io::Error::other(format!(
+                "failed to inspect the existing local app-server daemon socket at `{}`; refusing to start a competing embedded server: {err}",
+                socket_path.display()
+            )));
+        }
+    }
 
     let target = AppServerTarget::LocalDaemon {
         endpoint: RemoteAppServerEndpoint::UnixSocket {
@@ -558,10 +587,10 @@ async fn connect_default_daemon(
                 socket_path.display()
             ))
         })?;
-    Ok(Some(PreparedDefaultDaemon {
+    Ok(PreparedDefaultDaemon {
         socket_path,
         app_server,
-    }))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

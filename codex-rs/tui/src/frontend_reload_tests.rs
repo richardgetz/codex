@@ -18,6 +18,7 @@ fn frontend_reload_command_preserves_context_and_client_arguments() {
         service_tier: Some("fast".to_string()),
         handoff_id: Some("handoff-1".to_string()),
         launcher: Some(PathBuf::from("/opt/codex-rick")),
+        local_daemon_socket: None,
     };
     let mut command = build_frontend_reload_command(
         Path::new("/opt/codex-rick"),
@@ -81,6 +82,47 @@ fn frontend_reload_command_preserves_context_and_client_arguments() {
     // Keep the command alive until all borrowed iterators have been consumed; this is a
     // fake-launcher assertion only and never starts a process.
     command.args(["--no-alt-screen"]);
+}
+
+#[test]
+fn frontend_refresh_preserves_local_daemon_target_and_remote_auth_arguments() {
+    let context = FrontendReloadContext {
+        thread_id: "019e72f4-e09a-70f2-b2c2-a153a57b8cc0".to_string(),
+        account_alias: Some("work".to_string()),
+        cwd: PathBuf::from("/workspace/current"),
+        model_provider: Some("openai".to_string()),
+        model: "gpt-6".to_string(),
+        reasoning_effort: Some("high".to_string()),
+        service_tier: Some("fast".to_string()),
+        handoff_id: None,
+        launcher: None,
+        local_daemon_socket: Some(PathBuf::from("/tmp/codex-daemon.sock")),
+    };
+    let command = build_frontend_reload_command(
+        Path::new("/opt/codex-rick"),
+        &context,
+        frontend_reload_args([
+            std::ffi::OsString::from("codex"),
+            std::ffi::OsString::from("--remote"),
+            std::ffi::OsString::from("wss://shared.example"),
+            std::ffi::OsString::from("--remote-auth-token-env"),
+            std::ffi::OsString::from("CODEX_SHARED_TOKEN"),
+        ]),
+    );
+
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        [
+            std::ffi::OsStr::new("--remote"),
+            std::ffi::OsStr::new("wss://shared.example"),
+            std::ffi::OsStr::new("--remote-auth-token-env"),
+            std::ffi::OsStr::new("CODEX_SHARED_TOKEN"),
+        ]
+    );
+    assert!(command.get_envs().any(|(key, value)| {
+        key == std::ffi::OsStr::new(FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV)
+            && value == Some(std::ffi::OsStr::new("/tmp/codex-daemon.sock"))
+    }));
 }
 
 #[test]
@@ -160,6 +202,7 @@ fn frontend_reload_context_drops_replayed_prompt_and_images() {
             service_tier: Some("fast".to_string()),
             handoff_id: None,
             launcher: None,
+            local_daemon_socket: Some(PathBuf::from("/tmp/codex-daemon.sock")),
         },
     );
 
@@ -178,6 +221,10 @@ fn frontend_reload_context_drops_replayed_prompt_and_images() {
     assert_eq!(cli.startup_account_alias, None);
     assert_eq!(cli.frontend_reload_handoff_id, None);
     assert_eq!(cli.frontend_launcher, None);
+    assert_eq!(
+        cli.frontend_reload_local_daemon_socket,
+        Some(PathBuf::from("/tmp/codex-daemon.sock"))
+    );
     assert_eq!(cli.model.as_deref(), Some("current-model"));
     assert!(
         cli.config_overrides
@@ -210,6 +257,7 @@ fn frontend_reload_context_clears_new_worktree_and_oss_selection() {
             service_tier: None,
             handoff_id: Some("handoff-1".to_string()),
             launcher: Some(PathBuf::from("/opt/codex-rick")),
+            local_daemon_socket: None,
         },
     );
     assert!(!cli.shared.worktree);
@@ -233,6 +281,7 @@ fn frontend_reload_context_preserves_explicit_default_account() {
             service_tier: None,
             handoff_id: Some("handoff-1".to_string()),
             launcher: Some(PathBuf::from("/opt/codex-rick")),
+            local_daemon_socket: None,
         },
     );
     assert_eq!(cli.startup_account_alias.as_deref(), Some("default"));
@@ -259,6 +308,7 @@ fn frontend_reload_context_escapes_toml_overrides() {
             service_tier: Some("tier\\value\nline".to_string()),
             handoff_id: None,
             launcher: None,
+            local_daemon_socket: None,
         },
     );
 
@@ -344,6 +394,7 @@ fn frontend_reload_marker_rejects_partial_handoff_without_clearing_retry_context
         FRONTEND_RELOAD_SERVICE_TIER_ENV,
         FRONTEND_RELOAD_HANDOFF_ENV,
         FRONTEND_RELOAD_LAUNCHER_ENV,
+        FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV,
     ];
     unsafe {
         for name in marker_names {
@@ -387,6 +438,7 @@ fn frontend_reload_marker_rejects_invalid_handoff_id_without_clearing_context() 
         FRONTEND_RELOAD_SERVICE_TIER_ENV,
         FRONTEND_RELOAD_HANDOFF_ENV,
         FRONTEND_RELOAD_LAUNCHER_ENV,
+        FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV,
     ];
     unsafe {
         for name in marker_names {
@@ -431,6 +483,7 @@ fn frontend_reload_marker_rejects_non_executable_launcher_without_clearing_conte
         FRONTEND_RELOAD_SERVICE_TIER_ENV,
         FRONTEND_RELOAD_HANDOFF_ENV,
         FRONTEND_RELOAD_LAUNCHER_ENV,
+        FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV,
     ];
     let temp_dir = TempDir::new().expect("temporary launcher directory");
     let launcher = temp_dir.path().join("codex");
@@ -456,6 +509,50 @@ fn frontend_reload_marker_rejects_non_executable_launcher_without_clearing_conte
     assert_eq!(
         std::env::var_os(FRONTEND_RELOAD_LAUNCHER_ENV),
         Some(launcher.into_os_string())
+    );
+
+    unsafe {
+        for name in marker_names {
+            std::env::remove_var(name);
+        }
+    }
+}
+
+#[test]
+#[serial]
+fn frontend_reload_marker_rejects_relative_local_daemon_socket_without_clearing_context() {
+    let marker_names = [
+        FRONTEND_RELOAD_THREAD_ENV,
+        FRONTEND_RELOAD_ACCOUNT_ENV,
+        FRONTEND_RELOAD_CWD_ENV,
+        FRONTEND_RELOAD_PROVIDER_ENV,
+        FRONTEND_RELOAD_MODEL_ENV,
+        FRONTEND_RELOAD_REASONING_ENV,
+        FRONTEND_RELOAD_SERVICE_TIER_ENV,
+        FRONTEND_RELOAD_HANDOFF_ENV,
+        FRONTEND_RELOAD_LAUNCHER_ENV,
+        FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV,
+    ];
+    unsafe {
+        for name in marker_names {
+            std::env::remove_var(name);
+        }
+        std::env::set_var(
+            FRONTEND_RELOAD_THREAD_ENV,
+            "019e72f4-e09a-70f2-b2c2-a153a57b8cc0",
+        );
+        std::env::set_var(FRONTEND_RELOAD_ACCOUNT_ENV, "work");
+        std::env::set_var(FRONTEND_RELOAD_CWD_ENV, "/workspace/current");
+        std::env::set_var(FRONTEND_RELOAD_PROVIDER_ENV, "openai");
+        std::env::set_var(FRONTEND_RELOAD_MODEL_ENV, "gpt-6");
+        std::env::set_var(FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV, "relative.sock");
+    }
+
+    let result = take_frontend_reload_context();
+    assert!(result.is_err());
+    assert_eq!(
+        std::env::var_os(FRONTEND_RELOAD_LOCAL_DAEMON_SOCKET_ENV),
+        Some(std::ffi::OsString::from("relative.sock"))
     );
 
     unsafe {

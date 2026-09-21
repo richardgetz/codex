@@ -43,6 +43,7 @@ fn main() -> anyhow::Result<()> {
             | ExitReason::Archived(_)
             | ExitReason::TurnInterrupted
             | ExitReason::FrontendReload { .. }
+            | ExitReason::FrontendRefresh { .. }
             | ExitReason::ThreadRemoved => false,
         };
 

@@ -29,7 +29,8 @@ impl App {
             ExitReason::UserRequested | ExitReason::TurnInterrupted | ExitReason::Fatal(_) => {
                 self.chat_widget.thread_id().or(self.primary_thread_id)
             }
-            ExitReason::FrontendReload { thread_id, .. } => Some(*thread_id),
+            ExitReason::FrontendReload { thread_id, .. }
+            | ExitReason::FrontendRefresh { thread_id, .. } => Some(*thread_id),
         };
         let disconnect_info = thread_id.and_then(|_| {
             let command = match &self.app_server_target {
@@ -100,6 +101,9 @@ impl AppExitInfo {
                 }
                 ExitReason::FrontendReload { .. } => {
                     "Reloading Codex with the updated managed launcher."
+                }
+                ExitReason::FrontendRefresh { .. } => {
+                    "Refreshing Codex frontend; the app-server continues running."
                 }
                 ExitReason::Fatal(_) => "Disconnected from this task. Work may still be running.",
                 ExitReason::TurnInterrupted => {

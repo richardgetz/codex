@@ -660,6 +660,18 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
+    /// The remote owner completed a managed replacement; restart this frontend with its local
+    /// launcher and reattach the same displayed thread.
+    RemoteReloadCompleted {
+        thread_id: ThreadId,
+    },
+
+    /// The connected server has no replacement launcher. Refresh only this frontend and keep the
+    /// shared server and any active work running.
+    FrontendRefreshRequested {
+        thread_id: ThreadId,
+    },
+
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),

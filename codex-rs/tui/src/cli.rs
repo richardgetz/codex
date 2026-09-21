@@ -84,6 +84,10 @@ pub struct Cli {
     #[clap(skip)]
     pub frontend_launcher: Option<std::path::PathBuf>,
 
+    /// Internal: preserve the selected implicit local-daemon socket across a frontend refresh.
+    #[clap(skip)]
+    pub frontend_reload_local_daemon_socket: Option<std::path::PathBuf>,
+
     #[clap(flatten)]
     pub shared: TuiSharedCliOptions,
 

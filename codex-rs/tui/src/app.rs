@@ -546,6 +546,19 @@ pub enum ExitReason {
         service_tier: Option<String>,
         handoff_id: Option<String>,
     },
+    /// The connected app-server remains the owner; restart only the local frontend and reconnect
+    /// to the same endpoint without pausing or replaying any server work.
+    FrontendRefresh {
+        thread_id: ThreadId,
+        launcher: PathBuf,
+        account_alias: Option<String>,
+        cwd: PathBuf,
+        model_provider: Option<String>,
+        model: String,
+        reasoning_effort: Option<String>,
+        service_tier: Option<String>,
+        local_daemon_socket: Option<PathBuf>,
+    },
     Fatal(String),
 }
 
