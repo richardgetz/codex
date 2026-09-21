@@ -578,31 +578,6 @@ fn build_frontend_reload_command(
     command
 }
 
-pub(crate) fn reexec_frontend(
-    launcher: &Path,
-    thread_id: ThreadId,
-    account_alias: Option<String>,
-    cwd: PathBuf,
-    model_provider: Option<String>,
-    model: String,
-    reasoning_effort: Option<String>,
-    service_tier: Option<String>,
-    handoff_id: Option<String>,
-) -> std::io::Error {
-    reexec_frontend_with_local_daemon_socket(
-        launcher,
-        thread_id,
-        account_alias,
-        cwd,
-        model_provider,
-        model,
-        reasoning_effort,
-        service_tier,
-        handoff_id,
-        None,
-    )
-}
-
 pub(crate) fn reexec_frontend_with_local_daemon_socket(
     launcher: &Path,
     thread_id: ThreadId,

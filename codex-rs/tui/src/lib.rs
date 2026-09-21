@@ -271,7 +271,6 @@ pub(crate) use frontend_reload::apply_frontend_reload_cli_args;
 pub(crate) use frontend_reload::apply_frontend_reload_context;
 pub(crate) use frontend_reload::frontend_reload_recovery_command;
 pub(crate) use frontend_reload::launcher_is_executable;
-pub(crate) use frontend_reload::reexec_frontend;
 pub(crate) use frontend_reload::reexec_frontend_with_local_daemon_socket;
 pub(crate) use frontend_reload::resolve_frontend_launcher;
 pub(crate) use frontend_reload::restore_terminal_before_fatal_exit;
