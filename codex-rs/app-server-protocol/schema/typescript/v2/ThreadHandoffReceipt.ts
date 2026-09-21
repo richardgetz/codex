@@ -11,4 +11,9 @@ export type ThreadHandoffReceipt = { handoffId: string, state: ThreadHandoffStat
 /**
  * Creation time as integer Unix seconds.
  */
-createdAt: number, nodes: Array<ThreadHandoffNode>, };
+createdAt: number,
+/**
+ * Whether the coordinator crossed the durable drain boundary. `None` identifies receipts
+ * written before this marker existed and must remain conservative.
+ */
+transferStarted: boolean | null, nodes: Array<ThreadHandoffNode>, };

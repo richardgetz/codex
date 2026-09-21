@@ -172,6 +172,7 @@ fn receipt_from_journal(journal: &HandoffJournal) -> ThreadHandoffReceipt {
         state: api_state_from_core(journal.state),
         runtime_version: journal.runtime_version.clone(),
         created_at: journal.created_at_ms.max(0).div_euclid(1000),
+        transfer_started: journal.transfer_started,
         nodes: journal.nodes.iter().map(api_node_from_core).collect(),
     }
 }

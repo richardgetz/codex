@@ -88,6 +88,10 @@ pub struct ThreadHandoffReceipt {
     /// Creation time as integer Unix seconds.
     #[ts(type = "number")]
     pub created_at: i64,
+    /// Whether the coordinator crossed the durable drain boundary. `None` identifies receipts
+    /// written before this marker existed and must remain conservative.
+    #[serde(default)]
+    pub transfer_started: Option<bool>,
     pub nodes: Vec<ThreadHandoffNode>,
 }
 

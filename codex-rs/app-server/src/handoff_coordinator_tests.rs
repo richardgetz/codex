@@ -99,6 +99,7 @@ fn receipt_converts_milliseconds_to_unix_seconds() {
         created_at_ms: 12_345,
         runtime_version: "test".to_string(),
         state: HandoffJournalState::Suspended,
+        transfer_started: Some(true),
         nodes: vec![node(
             "root",
             None,

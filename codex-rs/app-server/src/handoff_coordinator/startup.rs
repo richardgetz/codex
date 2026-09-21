@@ -1,9 +1,9 @@
 use super::HandoffCoordinator;
 use super::HandoffJournal;
-use super::HandoffJournalState;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::JSONRPCErrorError;
 use std::time::Duration;
+use tokio::sync::MutexGuard;
 use tokio::time::timeout;
 
 const STARTUP_RECOVERY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -17,6 +17,13 @@ pub(super) enum StartupRecoveryState {
 }
 
 impl HandoffCoordinator {
+    /// Invalidate a cached startup probe as soon as a new durable handoff begins. Any request
+    /// arriving after a failed handoff must re-read the journal instead of trusting a prior Ready
+    /// result from before the handoff existed.
+    pub(super) async fn invalidate_startup_recovery_state(&self) {
+        *self.startup_recovery_state.lock().await = StartupRecoveryState::Unknown;
+    }
+
     /// Fence mutating requests while an unfinished handoff needs recovery.
     ///
     /// The probe is cached after the first request so normal traffic does not turn journal
@@ -27,7 +34,7 @@ impl HandoffCoordinator {
             return Ok(());
         }
 
-        if self.operation.try_lock().is_err() || !self.active.lock().await.is_empty() {
+        if !self.active.lock().await.is_empty() {
             return Err(recovery_pending_error());
         }
 
@@ -39,6 +46,23 @@ impl HandoffCoordinator {
         }
     }
 
+    /// Serialize mutating request execution with handoff preparation/recovery. The initial
+    /// dispatch probe runs before a request enters its per-connection queue, so this second
+    /// operation lock and guard check close the race where a request passed while preparation was
+    /// still acquiring its barrier.
+    pub(crate) async fn acquire_request_operation(
+        &self,
+        method: &str,
+    ) -> Option<MutexGuard<'_, ()>> {
+        if recovery_read_method(method)
+            || matches!(method, "thread/handoff/prepare" | "thread/handoff/recover")
+        {
+            None
+        } else {
+            Some(self.operation.lock().await)
+        }
+    }
+
     /// Re-read the durable handoff set after an explicit recovery attempt.
     pub(crate) async fn refresh_startup_recovery_state(&self) {
         let next = match timeout(
@@ -47,7 +71,7 @@ impl HandoffCoordinator {
         )
         .await
         {
-            Ok(Ok(journals)) if journals.iter().any(requires_recovery) => {
+            Ok(Ok(journals)) if journals.iter().any(HandoffJournal::requires_recovery) => {
                 StartupRecoveryState::Pending
             }
             Ok(Ok(_)) => StartupRecoveryState::Ready,
@@ -70,7 +94,7 @@ impl HandoffCoordinator {
         )
         .await
         {
-            Ok(Ok(journals)) if journals.iter().any(requires_recovery) => {
+            Ok(Ok(journals)) if journals.iter().any(HandoffJournal::requires_recovery) => {
                 StartupRecoveryState::Pending
             }
             Ok(Ok(_)) => StartupRecoveryState::Ready,
@@ -82,10 +106,6 @@ impl HandoffCoordinator {
         }
         *state
     }
-}
-
-fn requires_recovery(journal: &HandoffJournal) -> bool {
-    !matches!(journal.state, HandoffJournalState::Completed)
 }
 
 fn recovery_read_method(method: &str) -> bool {
@@ -100,5 +120,7 @@ fn recovery_read_method(method: &str) -> bool {
 }
 
 fn recovery_pending_error() -> JSONRPCErrorError {
-    invalid_request("app-server recovery is pending; only reads and handoff recovery are available")
+    invalid_request(
+        "app-server recovery is pending; only reads and handoff recovery are available; inspect thread/handoff/status or call thread/handoff/recover",
+    )
 }

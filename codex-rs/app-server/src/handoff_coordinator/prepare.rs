@@ -30,6 +30,7 @@ impl HandoffCoordinator {
         params: ThreadHandoffPrepareParams,
     ) -> Result<ThreadHandoffPrepareResponse, JSONRPCErrorError> {
         let _operation = self.operation.lock().await;
+        self.invalidate_startup_recovery_state().await;
         let requested_root = params
             .root_thread_id
             .as_deref()
@@ -139,6 +140,14 @@ impl HandoffCoordinator {
             manager_guard.abort();
             return Err(internal_error(format!(
                 "could not persist handoff drain state: {error}"
+            )));
+        }
+        journal.mark_transfer_started();
+        if let Err(error) = journal.persist(&self.codex_home).await {
+            drop(tree_guards);
+            manager_guard.abort();
+            return Err(internal_error(format!(
+                "could not persist handoff transfer boundary: {error}"
             )));
         }
 
