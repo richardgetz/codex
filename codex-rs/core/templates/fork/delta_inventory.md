@@ -93,6 +93,9 @@ release or merge rules.
   recovery without enabling remote control. Handoff journals now persist the
   durable transfer boundary, so proven preflight failures are retained without
   fencing unrelated startup while ambiguous or active transfers stay fenced.
+  Explicit `thread/handoff/recover` quarantine validates the recorded graph,
+  durably pauses affected roots, and retains `NeedsAttention` diagnostics while
+  making only successfully quarantined receipts nonblocking.
 - App-server v2 exposes a host-gated slash-command catalog and bounded
   `slashCommand/execute` responses for Inbound clients. Status and spend return
   configured-account usage/rate-limit data as Markdown, while non-model results
@@ -906,7 +909,10 @@ release or merge rules.
   failures durably, restores exact turn ids, and requires explicit recover
   before retrying an unresolved attempt without enabling remote control.
   Verify transfer-boundary markers classify only proven preflight failures as
-  nonblocking, while ambiguous or active receipts remain fenced.
+  nonblocking, while ambiguous or active receipts remain fenced. Verify
+  explicit quarantine validates graph closure, durably pauses every affected
+  root, retains the original receipt diagnostics, and only then permits
+  ordinary startup writes.
 - Verify a discovered local daemon connection failure remains visible and does
   not silently switch the TUI to an embedded server; preserve initial embedded
   selection and explicit remote or embedded overrides.
