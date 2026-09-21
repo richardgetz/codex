@@ -488,6 +488,17 @@ impl CodexThread {
         preflight
     }
 
+    /// Inspect a node after its loaded descendants have already been suspended.
+    pub async fn handoff_preflight_after_descendants(&self) -> crate::HandoffPreflight {
+        let mut preflight = self.session.handoff_preflight_after_descendants().await;
+        if self.out_of_band_elicitations.lock().await.count > 0 {
+            preflight
+                .blockers
+                .push(codex_protocol::turn_input::HandoffBlocker::PendingUserInput);
+        }
+        preflight
+    }
+
     /// Returns whether new turn and spawn admission is currently sealed for
     /// this root tree.
     pub fn handoff_admission_sealed(&self) -> bool {
