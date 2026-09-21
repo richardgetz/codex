@@ -1,7 +1,9 @@
 use super::HandoffCoordinator;
+use super::RECOVERY_ADMISSION_TIMEOUT;
 use super::core_error;
 use super::ordered_indices;
 use super::parse_thread_id;
+use super::quarantine::validate_graph;
 use super::receipt_from_journal;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::ConnectionId;
@@ -23,31 +25,14 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadPauseState;
 use codex_rollout::InitialHistory;
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
-const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
-
-struct LoadedRecoveryNode {
-    index: usize,
-    thread: Arc<CodexThread>,
-    root_thread_id: ThreadId,
-}
-
-fn format_handoff_blocker(blocker: &HandoffBlocker) -> String {
-    format!("{blocker:?}")
-}
-
-fn format_handoff_blockers(blockers: &[HandoffBlocker]) -> String {
-    blockers
-        .iter()
-        .map(format_handoff_blocker)
-        .collect::<Vec<_>>()
-        .join(", ")
+pub(super) struct LoadedRecoveryNode {
+    pub(super) index: usize,
+    pub(super) thread: Arc<CodexThread>,
 }
 
 impl HandoffCoordinator {
@@ -216,313 +201,32 @@ impl HandoffCoordinator {
         })
     }
 
-    async fn quarantine(
-        &self,
-        journal: &mut HandoffJournal,
-    ) -> Result<ThreadHandoffRecoverResponse, JSONRPCErrorError> {
-        if journal.state != HandoffJournalState::NeedsAttention {
-            return Err(invalid_params(
-                "only a NeedsAttention handoff can be explicitly quarantined",
-            ));
-        }
-
-        if journal.nodes.is_empty() {
-            return Err(invalid_params(
-                "cannot quarantine a handoff without any recorded nodes",
-            ));
-        }
-
-        let state_db = self.state_db.clone().ok_or_else(|| {
-            invalid_params("cannot quarantine handoff: durable state database is unavailable")
-        })?;
-
-        // Validate the durable graph before changing any live or durable state. Quarantine is
-        // allowed to retire a stale receipt whose rollout/parent has disappeared, but it must
-        // still have a concrete root to pause and retain the original node diagnostics.
-        let mut parsed_nodes = Vec::with_capacity(journal.nodes.len());
-        let mut root_ids = Vec::new();
-        let mut node_ids = HashSet::new();
-        for (index, node) in journal.nodes.iter().enumerate() {
-            let thread_id = parse_thread_id(&node.thread_id)?;
-            let root_thread_id = parse_thread_id(&node.root_thread_id)?;
-            let parent_thread_id = node
-                .parent_thread_id
-                .as_deref()
-                .map(parse_thread_id)
-                .transpose()?;
-            if !node_ids.insert(thread_id) {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: duplicate node {}",
-                    journal.handoff_id, node.thread_id
-                )));
-            }
-            if parent_thread_id == Some(thread_id) {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: node {} is its own parent",
-                    journal.handoff_id, node.thread_id
-                )));
-            }
-            if !root_ids.contains(&root_thread_id) {
-                root_ids.push(root_thread_id);
-            }
-            parsed_nodes.push((index, thread_id, root_thread_id, parent_thread_id));
-        }
-        let journal_nodes_by_id = journal
-            .nodes
-            .iter()
-            .map(|node| {
-                (
-                    ThreadId::from_string(&node.thread_id).expect("node ids were parsed above"),
-                    (
-                        ThreadId::from_string(&node.root_thread_id)
-                            .expect("root ids were parsed above"),
-                        node.parent_thread_id.as_deref().map(|parent| {
-                            ThreadId::from_string(parent).expect("parent ids were parsed above")
-                        }),
-                    ),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        for (_, thread_id, root_thread_id, parent_thread_id) in &parsed_nodes {
-            if parent_thread_id.is_none() && thread_id != root_thread_id {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: root-less node {} does not identify itself as the root",
-                    journal.handoff_id, thread_id
-                )));
-            }
-            if thread_id == root_thread_id && parent_thread_id.is_some() {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: root {} has a parent",
-                    journal.handoff_id, root_thread_id
-                )));
-            }
-            if let Some(parent_thread_id) = parent_thread_id {
-                if let Some((parent_root_thread_id, _)) = journal_nodes_by_id.get(parent_thread_id)
-                    && parent_root_thread_id != root_thread_id
-                {
-                    return Err(invalid_params(format!(
-                        "cannot quarantine handoff {}: node {} has inconsistent root lineage",
-                        journal.handoff_id, thread_id
-                    )));
-                }
-                // A loaded parent outside the receipt means the durable graph is incomplete. A
-                // cold/missing parent is the stale case quarantine is designed to retire.
-                if !journal_nodes_by_id.contains_key(parent_thread_id)
-                    && self
-                        .thread_manager
-                        .get_thread(*parent_thread_id)
-                        .await
-                        .is_ok()
-                {
-                    return Err(invalid_params(format!(
-                        "cannot quarantine handoff {}: node {} has an unrecorded live parent",
-                        journal.handoff_id, thread_id
-                    )));
-                }
-            }
-        }
-        for root_thread_id in &root_ids {
-            let has_recorded_root = parsed_nodes.iter().any(|(_, thread_id, root, parent)| {
-                thread_id == root_thread_id && root == root_thread_id && parent.is_none()
-            });
-            if !has_recorded_root
-                && self
-                    .thread_manager
-                    .get_thread(*root_thread_id)
-                    .await
-                    .is_ok()
-            {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: root {} is live but missing from the receipt",
-                    journal.handoff_id, root_thread_id
-                )));
-            }
-        }
-
-        // Keep both the manager-wide handoff fence and the recovery-pending fence through every
-        // live preflight, durable pause, and journal write. The manager fence closes new roots;
-        // each loaded root below gets its own tree fence before it is inspected.
-        let manager_guard = self.thread_manager.begin_handoff().map_err(core_error)?;
-        if timeout(
-            RECOVERY_ADMISSION_TIMEOUT,
-            manager_guard.wait_for_admissions(),
-        )
-        .await
-        .is_err()
-        {
-            manager_guard.abort();
-            return Err(invalid_params(
-                "thread-manager handoff admissions did not drain; quarantine was not applied",
-            ));
-        }
-        let recovery_pending = self
-            .thread_manager
-            .begin_recovery_pending()
-            .map_err(core_error)?;
-        if timeout(
-            RECOVERY_ADMISSION_TIMEOUT,
-            recovery_pending.wait_for_admissions(),
-        )
-        .await
-        .is_err()
-        {
-            return Err(invalid_params(
-                "handoff admissions did not drain; quarantine was not applied",
-            ));
-        }
-
-        // Only inspect sessions that are already live in this process. Loading a missing rollout
-        // here would turn an explicit stale-state resolution into the same recovery loop it is
-        // intended to escape. Cold roots are protected by the durable activity pause below.
-        let mut loaded_nodes = Vec::new();
-        for (index, thread_id, root_thread_id, parent_thread_id) in &parsed_nodes {
-            let Ok(thread) = self.thread_manager.get_thread(*thread_id).await else {
-                continue;
-            };
-            let config_snapshot = thread.config_snapshot().await;
-            let parent_is_loaded = if let Some(parent_thread_id) = parent_thread_id {
-                self.thread_manager
-                    .get_thread(*parent_thread_id)
-                    .await
-                    .is_ok()
-            } else {
-                true
-            };
-            if config_snapshot.parent_thread_id != *parent_thread_id
-                || (parent_thread_id.is_none() && thread_id != root_thread_id)
-                || !parent_is_loaded
-            {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: loaded node {} has inconsistent parent lineage",
-                    journal.handoff_id, thread_id
-                )));
-            }
-            loaded_nodes.push(LoadedRecoveryNode {
-                index: *index,
-                thread,
-                root_thread_id: *root_thread_id,
-            });
-        }
-
-        let mut tree_guards = Vec::new();
-        let mut transition_guards = Vec::new();
-        let mut guarded_thread_ids = HashSet::new();
-        for loaded in &loaded_nodes {
-            if !guarded_thread_ids.insert(loaded.thread.id()) {
-                continue;
-            }
-            tree_guards.push(loaded.thread.begin_handoff().map_err(|error| {
-                invalid_params(format!(
-                    "cannot quarantine handoff {}: node {} handoff is already active: {error}",
-                    journal.handoff_id,
-                    loaded.thread.id()
-                ))
-            })?);
-            transition_guards.push(loaded.thread.lock_activity_transition().await);
-        }
-        for tree_guard in &tree_guards {
-            if timeout(RECOVERY_ADMISSION_TIMEOUT, tree_guard.wait_for_admissions())
-                .await
-                .is_err()
-            {
-                return Err(invalid_params(
-                    "thread-tree handoff admissions did not drain; quarantine was not applied",
-                ));
-            }
-        }
-
-        let recorded_thread_ids = node_ids;
-        for loaded in &loaded_nodes {
-            let node = &journal.nodes[loaded.index];
-            let mut preflight = loaded.thread.handoff_preflight().await;
-            if preflight
-                .blockers
-                .iter()
-                .any(|blocker| matches!(blocker, HandoffBlocker::LiveDescendants))
-            {
-                let live_subtree = self
-                    .thread_manager
-                    .list_agent_subtree_thread_ids(loaded.thread.id())
-                    .await
-                    .map_err(|error| {
-                        invalid_params(format!(
-                            "cannot quarantine handoff {}: could not inspect node {} descendants: {error}",
-                            journal.handoff_id, node.thread_id
-                        ))
-                    })?;
-                if live_subtree
-                    .iter()
-                    .all(|thread_id| recorded_thread_ids.contains(thread_id))
-                {
-                    preflight = loaded.thread.handoff_preflight_after_descendants().await;
-                }
-            }
-            let blockers = preflight.blockers;
-            if preflight.was_running || !blockers.is_empty() {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: node {} still has active work ({})",
-                    journal.handoff_id,
-                    node.thread_id,
-                    format_handoff_blockers(&blockers)
-                )));
-            }
-        }
-
-        for root_thread_id in root_ids {
-            let marker = state_db
-                .pause_thread_activity(root_thread_id)
-                .await
-                .map_err(|error| {
-                invalid_params(format!(
-                    "cannot quarantine handoff {}: failed to persist pause for root {}: {error}",
-                    journal.handoff_id, root_thread_id
-                ))
-                })?;
-            if let Some(loaded) = loaded_nodes
-                .iter()
-                .find(|loaded| loaded.thread.id() == root_thread_id)
-                && let Err(error) = loaded.thread.pause_activity_with_ack(None).await
-            {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: failed to pause root {}: {error}",
-                    journal.handoff_id, root_thread_id
-                )));
-            }
-            let applied = state_db
-                .complete_thread_activity_pause(root_thread_id, marker.generation)
-                .await
-                .map_err(|error| {
-                    invalid_params(format!(
-                        "cannot quarantine handoff {}: failed to persist paused root {}: {error}",
-                        journal.handoff_id, root_thread_id
-                    ))
-                })?;
-            if !applied {
-                return Err(invalid_params(format!(
-                    "cannot quarantine handoff {}: root {} pause changed concurrently",
-                    journal.handoff_id, root_thread_id
-                )));
-            }
-        }
-
-        journal.mark_quarantined();
-        self.persist_journal(journal).await?;
-        drop(transition_guards);
-        drop(tree_guards);
-        manager_guard.abort();
-        recovery_pending.complete();
-        self.refresh_startup_recovery_state().await;
-        Ok(ThreadHandoffRecoverResponse {
-            receipt: receipt_from_journal(journal),
-        })
-    }
-
     async fn load_all_recovery_nodes(
         &self,
         journal: &mut HandoffJournal,
     ) -> Result<(Vec<LoadedRecoveryNode>, bool), JSONRPCErrorError> {
         let mut loaded_nodes = Vec::new();
         let mut all_loaded = true;
+        if let Err(error) = validate_graph(journal, true) {
+            tracing::warn!(
+                handoff_id = %journal.handoff_id,
+                error = %error.message,
+                "handoff recovery graph is incomplete or cyclic"
+            );
+            for node in journal.nodes.clone() {
+                let mut blockers = node.blockers;
+                if blockers.is_empty() {
+                    blockers.push(HandoffBlocker::ParentUnavailable);
+                }
+                journal.update_node(
+                    &node.thread_id,
+                    HandoffNodeState::NeedsAttention,
+                    blockers,
+                    None,
+                );
+            }
+            return Ok((loaded_nodes, false));
+        }
         for index in ordered_indices(&journal.nodes, false) {
             let node = journal.nodes[index].clone();
             let retry_failed_transfer = journal.transfer_started == Some(true)
@@ -550,11 +254,7 @@ impl HandoffCoordinator {
                 continue;
             }
             match self.load_recovery_node(&node).await {
-                Ok(thread) => loaded_nodes.push(LoadedRecoveryNode {
-                    index,
-                    thread,
-                    root_thread_id: parse_thread_id(&node.root_thread_id)?,
-                }),
+                Ok(thread) => loaded_nodes.push(LoadedRecoveryNode { index, thread }),
                 Err(blocker) => {
                     all_loaded = false;
                     journal.update_node(
