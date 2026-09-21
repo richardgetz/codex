@@ -1,13 +1,16 @@
 use super::HandoffCoordinator;
+use super::RECOVERY_ADMISSION_TIMEOUT;
 use super::core_error;
 use super::ordered_indices;
 use super::parse_thread_id;
+use super::quarantine::validate_graph;
 use super::receipt_from_journal;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::ConnectionId;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ThreadHandoffRecoverParams;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
+use codex_app_server_protocol::ThreadHandoffRecoveryResolution;
 use codex_core::CodexThread;
 use codex_core::HandoffBlocker;
 use codex_core::HandoffJournal;
@@ -27,11 +30,9 @@ use std::sync::Arc;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
-const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
-
-struct LoadedRecoveryNode {
-    index: usize,
-    thread: Arc<CodexThread>,
+pub(super) struct LoadedRecoveryNode {
+    pub(super) index: usize,
+    pub(super) thread: Arc<CodexThread>,
 }
 
 impl HandoffCoordinator {
@@ -53,6 +54,18 @@ impl HandoffCoordinator {
                 receipt: receipt_from_journal(&journal),
             });
         }
+        let mut journal = journal;
+        if journal.quarantined && journal.state != HandoffJournalState::NeedsAttention {
+            return Err(invalid_params(
+                "quarantine marker is only valid on a NeedsAttention handoff",
+            ));
+        }
+        if journal.quarantined {
+            self.refresh_startup_recovery_state().await;
+            return Ok(ThreadHandoffRecoverResponse {
+                receipt: receipt_from_journal(&journal),
+            });
+        }
         if !journal.requires_recovery() {
             self.refresh_startup_recovery_state().await;
             return Ok(ThreadHandoffRecoverResponse {
@@ -60,7 +73,16 @@ impl HandoffCoordinator {
             });
         }
 
-        let mut journal = journal;
+        if params.resolution == Some(ThreadHandoffRecoveryResolution::Quarantine) {
+            let result = self.quarantine(&mut journal).await;
+            if result.is_err() {
+                // The failed explicit resolution leaves the manager's recovery guard fail-closed;
+                // refresh the cached startup probe as well so a write arriving after the error
+                // cannot observe a stale Ready value from before this journal was created.
+                self.refresh_startup_recovery_state().await;
+            }
+            return result;
+        }
         if matches!(
             journal.state,
             HandoffJournalState::Prepared | HandoffJournalState::Draining
@@ -182,6 +204,26 @@ impl HandoffCoordinator {
     ) -> Result<(Vec<LoadedRecoveryNode>, bool), JSONRPCErrorError> {
         let mut loaded_nodes = Vec::new();
         let mut all_loaded = true;
+        if let Err(error) = validate_graph(journal, true) {
+            tracing::warn!(
+                handoff_id = %journal.handoff_id,
+                error = %error.message,
+                "handoff recovery graph is incomplete or cyclic"
+            );
+            for node in journal.nodes.clone() {
+                let mut blockers = node.blockers;
+                if blockers.is_empty() {
+                    blockers.push(HandoffBlocker::ParentUnavailable);
+                }
+                journal.update_node(
+                    &node.thread_id,
+                    HandoffNodeState::NeedsAttention,
+                    blockers,
+                    None,
+                );
+            }
+            return Ok((loaded_nodes, false));
+        }
         for index in ordered_indices(&journal.nodes, false) {
             let node = journal.nodes[index].clone();
             if node.state == HandoffNodeState::NeedsAttention || !node.blockers.is_empty() {

@@ -89,6 +89,10 @@ pub struct HandoffJournal {
     /// journals written before this marker existed and must be classified conservatively.
     #[serde(default)]
     pub transfer_started: Option<bool>,
+    /// Whether an operator explicitly quarantined this unresolved receipt after durable pause.
+    /// Quarantined journals retain their diagnostics but never admit automatic recovery.
+    #[serde(default)]
+    pub quarantined: bool,
     pub nodes: Vec<HandoffNode>,
 }
 
@@ -106,6 +110,7 @@ impl HandoffJournal {
             runtime_version: runtime_version.into(),
             state: HandoffJournalState::Prepared,
             transfer_started: Some(false),
+            quarantined: false,
             nodes,
         };
         journal.persist(codex_home).await?;
@@ -173,6 +178,12 @@ impl HandoffJournal {
         self.transfer_started = Some(true);
     }
 
+    /// Mark an unresolved receipt as explicitly quarantined after its affected roots were
+    /// durably paused. This never changes the original state or node diagnostics.
+    pub fn mark_quarantined(&mut self) {
+        self.quarantined = true;
+    }
+
     /// Return whether this journal still fences ordinary startup writes.
     ///
     /// A `NeedsAttention` journal written by current runtimes is terminal when preparation
@@ -187,6 +198,7 @@ impl HandoffJournal {
             | HandoffJournalState::Draining
             | HandoffJournalState::Suspended
             | HandoffJournalState::Restoring => true,
+            HandoffJournalState::NeedsAttention if self.quarantined => false,
             HandoffJournalState::NeedsAttention => match self.transfer_started {
                 Some(false) => !self.is_preparation_failure_shape(),
                 Some(true) | None => !self.is_failed_preparation_shape(),
@@ -511,6 +523,32 @@ mod tests {
                 .expect("load pending handoffs")
                 .is_empty(),
             "a terminal needs-attention receipt must not fence unrelated startup writes"
+        );
+    }
+
+    #[tokio::test]
+    async fn quarantined_needs_attention_is_retained_without_fencing_startup() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin(home.path(), "test", vec![node("thread")])
+            .await
+            .expect("begin handoff");
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal.mark_quarantined();
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist quarantine");
+
+        let retained = HandoffJournal::load_all(home.path())
+            .await
+            .expect("load all");
+        assert_eq!(retained.len(), 1);
+        assert!(retained[0].quarantined);
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending")
+                .is_empty()
         );
     }
 

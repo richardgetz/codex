@@ -5,6 +5,7 @@
 //! loads the recorded rollout and asks Core to resume the exact interrupted turn.
 
 mod prepare;
+mod quarantine;
 mod recovery;
 mod startup;
 
@@ -28,11 +29,15 @@ use codex_core::ThreadManager;
 use codex_core::ThreadManagerHandoffGuard;
 use codex_core::config::Config;
 use codex_protocol::ThreadId;
+use codex_rollout::StateDbHandle;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::Duration;
+
+pub(super) const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct ActiveHandoff {
     manager_guard: ThreadManagerHandoffGuard,
@@ -42,6 +47,7 @@ struct ActiveHandoff {
 /// Coordinates one durable, all-loaded-roots handoff at a time.
 pub(crate) struct HandoffCoordinator {
     thread_manager: Arc<ThreadManager>,
+    state_db: Option<StateDbHandle>,
     config: Arc<Config>,
     codex_home: PathBuf,
     runtime_version: String,
@@ -54,6 +60,7 @@ pub(crate) struct HandoffCoordinator {
 impl HandoffCoordinator {
     pub(crate) fn new(
         thread_manager: Arc<ThreadManager>,
+        state_db: Option<StateDbHandle>,
         config: Arc<Config>,
         codex_home: PathBuf,
         runtime_version: String,
@@ -61,6 +68,7 @@ impl HandoffCoordinator {
     ) -> Self {
         Self {
             thread_manager,
+            state_db,
             config,
             codex_home,
             runtime_version,
@@ -172,6 +180,7 @@ fn receipt_from_journal(journal: &HandoffJournal) -> ThreadHandoffReceipt {
         state: api_state_from_core(journal.state),
         runtime_version: journal.runtime_version.clone(),
         created_at: journal.created_at_ms.max(0).div_euclid(1000),
+        quarantined: journal.quarantined,
         transfer_started: journal.transfer_started,
         nodes: journal.nodes.iter().map(api_node_from_core).collect(),
     }
