@@ -1,6 +1,9 @@
 use super::*;
+use crate::app::AppRunControl;
+use crate::app::ExitReason;
 use crate::app::test_support::make_test_app_with_channels;
 use crate::app_event::AppEvent;
+use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SlashCommandExecuteParams;
 use codex_app_server_protocol::SlashCommandExecuteResponse;
@@ -53,19 +56,35 @@ fn completed_reload_notification(
     }
 }
 
-fn count_reload_history_and_completion_events(
+async fn dispatch_reload_completion_events(
+    app: &mut crate::app::App,
     events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-) -> (usize, usize) {
+    app_server: &mut AppServerSession,
+    tui: &mut crate::tui::Tui,
+) -> color_eyre::Result<(usize, usize)> {
     let mut history_cells = 0;
     let mut completions = 0;
     while let Ok(event) = events.try_recv() {
         match event {
             AppEvent::InsertHistoryCell(_) => history_cells += 1,
-            AppEvent::RemoteReloadCompleted { .. } => completions += 1,
+            AppEvent::RemoteReloadCompleted { thread_id } => {
+                completions += 1;
+                let control = app
+                    .handle_event(
+                        tui,
+                        app_server,
+                        AppEvent::RemoteReloadCompleted { thread_id },
+                    )
+                    .await?;
+                assert!(matches!(
+                    control,
+                    AppRunControl::Exit(ExitReason::FrontendReload { .. })
+                ));
+            }
             _ => {}
         }
     }
-    (history_cells, completions)
+    Ok((history_cells, completions))
 }
 
 #[test]
@@ -158,11 +177,14 @@ fn remote_reload_terminal_events_are_deduplicated_after_pending_clear() {
 }
 
 #[tokio::test]
-async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_order() {
+async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_order() -> color_eyre::Result<()> {
     let thread_id = ThreadId::new();
     let request_id = RequestId::Integer(7);
 
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.frontend_launcher = Some(std::env::current_exe()?);
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
     app.reconnect.pending_remote_reload = Some(PendingRemoteReload {
         thread_id,
         request_id: request_id.clone(),
@@ -182,11 +204,16 @@ async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_or
         request_id.clone(),
     ));
     assert_eq!(
-        count_reload_history_and_completion_events(&mut events),
+        dispatch_reload_completion_events(&mut app, &mut events, &mut app_server, &mut tui)
+            .await?,
         (1, 1)
     );
+    app_server.shutdown().await?;
 
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.frontend_launcher = Some(std::env::current_exe()?);
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
     app.reconnect.pending_remote_reload = Some(PendingRemoteReload {
         thread_id,
         request_id: request_id.clone(),
@@ -206,9 +233,12 @@ async fn remote_reload_terminal_handlers_present_one_result_in_either_arrival_or
         /*is_status_request*/ false,
     );
     assert_eq!(
-        count_reload_history_and_completion_events(&mut events),
+        dispatch_reload_completion_events(&mut app, &mut events, &mut app_server, &mut tui)
+            .await?,
         (1, 1)
     );
+    app_server.shutdown().await?;
+    Ok(())
 }
 
 #[test]
