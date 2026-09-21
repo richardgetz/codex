@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::AppRunControl;
 use crate::app::ExitReason;
-use crate::app::test_support::make_test_app_with_channels;
+use crate::app::tests::make_test_app_with_channels;
 use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::RequestId;

@@ -2,7 +2,7 @@ use crate::AppServerTarget;
 use crate::RemoteAppServerEndpoint;
 use crate::app::AppRunControl;
 use crate::app::ExitReason;
-use crate::app::test_support::make_test_app_with_channels;
+use crate::app::tests::make_test_app_with_channels;
 use crate::app_event::AppEvent;
 use codex_protocol::ThreadId;
 use color_eyre::Result;

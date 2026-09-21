@@ -4065,7 +4065,10 @@ mod tests {
         config.model_provider_id = "oss-provider".to_string();
         let local_daemon = crate::AppServerTarget::LocalDaemon {
             endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
-                socket_path: PathBuf::from("/tmp/codex-local-daemon.sock"),
+                socket_path: AbsolutePathBuf::from_absolute_path_checked(
+                    temp_dir.path().join("codex-local-daemon.sock"),
+                )
+                .expect("absolute test socket path"),
             },
         };
 
