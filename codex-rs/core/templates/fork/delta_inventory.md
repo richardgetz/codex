@@ -93,6 +93,9 @@ release or merge rules.
   recovery without enabling remote control. Handoff journals now persist the
   durable transfer boundary, so proven preflight failures are retained without
   fencing unrelated startup while ambiguous or active transfers stay fenced.
+  A post-transfer receipt with an empty captured graph is retained and completed
+  as a no-op during recovery; an orphaned daemon receipt may be reconciled only
+  after its completed stop proves that no work was captured.
   Explicit `thread/handoff/recover` quarantine validates the recorded graph,
   durably pauses affected roots, and retains `NeedsAttention` diagnostics while
   making only successfully quarantined receipts nonblocking.

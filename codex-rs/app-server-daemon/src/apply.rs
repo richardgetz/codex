@@ -92,7 +92,10 @@ impl Daemon {
                 self.running_managed_codex_version_best_effort().await,
             ));
         }
-        if resolution.is_none() && !attempt.blocks_new_apply() {
+        if resolution.is_none()
+            && !attempt.blocks_new_apply()
+            && !attempt.can_reconcile_empty_orphan()
+        {
             return Ok(attempt.output_with_running_version(
                 &self.socket_path,
                 client::probe(&self.socket_path)
@@ -464,7 +467,10 @@ impl Daemon {
                         self.running_managed_codex_version_best_effort().await,
                     ));
                 }
-                if attempt.handoff.state == "needsAttention" && resolution.is_none() {
+                if attempt.handoff.state == "needsAttention"
+                    && resolution.is_none()
+                    && !attempt.can_reconcile_empty_orphan()
+                {
                     return self
                         .mark_needs_attention(
                             &mut attempt,
@@ -475,7 +481,8 @@ impl Daemon {
                 if !matches!(
                     attempt.handoff.state.as_str(),
                     "prepared" | "draining" | "suspended" | "restoring"
-                ) && !(resolution.is_some() && attempt.handoff.state == "needsAttention")
+                ) && !(attempt.can_reconcile_empty_orphan()
+                    || (resolution.is_some() && attempt.handoff.state == "needsAttention"))
                 {
                     return self
                         .mark_needs_attention(
@@ -486,6 +493,11 @@ impl Daemon {
                 }
             }
             Err(error) => {
+                if error.is_unknown_handoff() && attempt.can_reconcile_empty_orphan() {
+                    return self
+                        .mark_empty_orphan_applied(&mut attempt, managed_codex_bin, &info)
+                        .await;
+                }
                 let failure = error.to_string();
                 if let Some(receipt) = error.receipt {
                     attempt.handoff = receipt;
@@ -533,6 +545,11 @@ impl Daemon {
                 .await
             }
             Err(error) => {
+                if error.is_unknown_handoff() && attempt.can_reconcile_empty_orphan() {
+                    return self
+                        .mark_empty_orphan_applied(&mut attempt, managed_codex_bin, &info)
+                        .await;
+                }
                 let failure = error.to_string();
                 if let Some(receipt) = error.receipt {
                     attempt.handoff = receipt;
@@ -563,6 +580,27 @@ impl Daemon {
                 receipt: None,
             })?;
         parse_handoff_response(message, method)
+    }
+
+    async fn mark_empty_orphan_applied(
+        &self,
+        attempt: &mut ApplyAttemptReceipt,
+        managed_codex_bin: &Path,
+        info: &client::ProbeInfo,
+    ) -> Result<ApplyOutput> {
+        attempt.handoff.state = "completed".to_string();
+        attempt.phase = ApplyPhase::Applied;
+        attempt.failure = None;
+        attempt.managed_codex_version = self
+            .managed_codex_version_best_effort(managed_codex_bin)
+            .await;
+        attempt.save(&self.apply_receipt_file).await?;
+        Ok(attempt.output_with_running_version(
+            &self.socket_path,
+            Some(info.app_server_version.clone()),
+            /*error*/ None,
+            self.running_managed_codex_version_best_effort().await,
+        ))
     }
 
     async fn mark_needs_attention(

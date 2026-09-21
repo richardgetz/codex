@@ -205,10 +205,19 @@ impl ApplyAttemptReceipt {
         if self.phase != ApplyPhase::NeedsAttention {
             return true;
         }
+        if self.handoff.is_empty_post_transfer_noop() {
+            return self.stop_completed != Some(true);
+        }
         match self.handoff.transfer_started {
             Some(false) => !self.handoff.is_preparation_failure_shape(),
             Some(true) | None => !self.handoff.is_failed_preparation_shape(),
         }
+    }
+
+    pub(crate) fn can_reconcile_empty_orphan(&self) -> bool {
+        self.phase != ApplyPhase::Applied
+            && self.stop_completed == Some(true)
+            && self.handoff.is_empty_post_transfer_noop()
     }
 
     pub(crate) fn output(
@@ -263,6 +272,12 @@ impl ApplyAttemptReceipt {
 }
 
 impl HandoffReceipt {
+    pub(crate) fn is_empty_post_transfer_noop(&self) -> bool {
+        self.state == "needsAttention"
+            && self.transfer_started == Some(true)
+            && self.nodes.is_empty()
+    }
+
     fn is_preparation_failure_shape(&self) -> bool {
         self.state == "needsAttention"
             && !self.nodes.is_empty()
@@ -275,6 +290,9 @@ impl HandoffReceipt {
     }
 
     fn is_failed_preparation_shape(&self) -> bool {
+        if self.is_empty_post_transfer_noop() {
+            return true;
+        }
         self.state == "needsAttention"
             && !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
@@ -338,6 +356,15 @@ pub(crate) struct HandoffRpcError {
 impl std::fmt::Display for HandoffRpcError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{} failed: {}", self.method, self.message)
+    }
+}
+
+impl HandoffRpcError {
+    pub(crate) fn is_unknown_handoff(&self) -> bool {
+        matches!(
+            self.method.as_str(),
+            "thread/handoff/status" | "thread/handoff/recover"
+        ) && self.message.starts_with("unknown handoff id ")
     }
 }
 

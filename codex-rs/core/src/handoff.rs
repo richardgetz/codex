@@ -187,10 +187,10 @@ impl HandoffJournal {
     /// Return whether this journal still fences ordinary startup writes.
     ///
     /// A `NeedsAttention` journal written by current runtimes is terminal when preparation
-    /// failed before the durable drain boundary. Legacy journals have no marker, so only the
-    /// exact no-turn, never-running preparation shape is admitted as terminal. A marker that
-    /// says transfer started is still terminal when no node proves a transfer occurred; any
-    /// exact turn or transfer-state node remains fenced so its state cannot be lost.
+    /// failed before the durable drain boundary. An empty journal with a positive transfer marker
+    /// is also terminal: the complete snapshot proves that no turn was captured. Legacy journals
+    /// have no marker, so an empty receipt remains pending. Any exact turn or transfer-state node
+    /// remains fenced so its state cannot be lost.
     pub fn requires_recovery(&self) -> bool {
         match self.state {
             HandoffJournalState::Completed => false,
@@ -218,16 +218,18 @@ impl HandoffJournal {
     }
 
     fn is_failed_preparation_shape(&self) -> bool {
-        !self.nodes.is_empty()
-            && self.nodes.iter().all(|node| {
-                has_structural_identity(node)
-                    && matches!(
-                        node.state,
-                        HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
-                    )
-                    && node.turn_id.is_none()
-                    && !node.was_running
-            })
+        if self.nodes.is_empty() {
+            return self.transfer_started == Some(true);
+        }
+        self.nodes.iter().all(|node| {
+            has_structural_identity(node)
+                && matches!(
+                    node.state,
+                    HandoffNodeState::Planned | HandoffNodeState::NeedsAttention
+                )
+                && node.turn_id.is_none()
+                && !node.was_running
+        })
     }
 
     /// Update one node's receipt without changing unrelated nodes.
@@ -572,6 +574,28 @@ mod tests {
                 .len(),
             1,
             "an empty legacy receipt has no evidence that startup can be unfenced"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_post_transfer_needs_attention_does_not_fence_startup() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin(home.path(), "test", Vec::new())
+            .await
+            .expect("begin empty handoff");
+        journal.mark_transfer_started();
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist empty post-transfer handoff");
+
+        assert!(
+            HandoffJournal::load_pending(home.path())
+                .await
+                .expect("load pending handoffs")
+                .is_empty(),
+            "a proven empty post-transfer receipt has no work to fence"
         );
     }
 
