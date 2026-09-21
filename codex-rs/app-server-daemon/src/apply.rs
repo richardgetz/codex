@@ -158,9 +158,20 @@ impl Daemon {
                                          loading daemon settings also failed: {settings_error}"
                                     ),
                                 )
-                                .await;
+                            .await;
                         }
                     };
+                    if let Err(launcher_error) = ensure_apply_launcher(&settings) {
+                        return self
+                            .mark_needs_attention(
+                                &mut attempt,
+                                format!(
+                                    "cannot quarantine without a reachable app server: {error}; \
+                                     configured local launcher is unavailable: {launcher_error}"
+                                ),
+                            )
+                            .await;
+                    }
                     let backend = match self.running_backend_instance(&settings).await {
                         Ok(backend) => backend,
                         Err(backend_error) => {
