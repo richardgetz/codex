@@ -44,6 +44,18 @@ fn remote_reload_state(
     }
 }
 
+fn suppress_duplicate_reload(is_status: bool, pending: bool) -> bool {
+    pending && !is_status
+}
+
+fn pending_reload_request_matches(
+    pending: &PendingRemoteReload,
+    request_id: &RequestId,
+) -> bool {
+    &pending.request_id == request_id
+        || pending.status_request_id.as_ref() == Some(request_id)
+}
+
 impl App {
     pub(super) async fn execute_remote_reload(
         &mut self,
@@ -59,7 +71,7 @@ impl App {
         }
 
         let is_status = args.trim().eq_ignore_ascii_case("status");
-        if !is_status && self.reconnect.pending_remote_reload.is_some() {
+        if suppress_duplicate_reload(is_status, self.reconnect.pending_remote_reload.is_some()) {
             self.chat_widget.add_info_message(
                 "A managed remote reload is already in progress; no second handoff was started."
                     .to_string(),
@@ -76,15 +88,15 @@ impl App {
             .map_or(thread_id, |pending| pending.thread_id);
         match (is_status, self.reconnect.pending_remote_reload.is_some()) {
             (true, true) => {
-                self.reconnect.pending_remote_reload = Some(PendingRemoteReload {
-                    thread_id: tracked_thread_id,
-                    request_id: request_id.clone(),
-                });
+                if let Some(pending) = self.reconnect.pending_remote_reload.as_mut() {
+                    pending.status_request_id = Some(request_id.clone());
+                }
             }
             (false, _) => {
                 self.reconnect.pending_remote_reload = Some(PendingRemoteReload {
                     thread_id,
                     request_id: request_id.clone(),
+                    status_request_id: None,
                 });
             }
             (true, false) => {}
@@ -138,7 +150,9 @@ impl App {
         let Some(pending) = self.reconnect.pending_remote_reload.as_ref() else {
             return;
         };
-        if pending.thread_id != thread_id || pending.request_id != notification.request_id {
+        if pending.thread_id != thread_id
+            || !pending_reload_request_matches(pending, &notification.request_id)
+        {
             return;
         }
         self.apply_remote_reload_payload(
@@ -197,7 +211,8 @@ impl App {
             .pending_remote_reload
             .as_ref()
             .is_some_and(|pending| {
-                pending.thread_id == thread_id && pending.request_id == request_id
+                pending.thread_id == thread_id
+                    && pending_reload_request_matches(pending, &request_id)
             });
 
         if matches!(state, RemoteReloadState::Accepted | RemoteReloadState::InProgress)
@@ -207,6 +222,7 @@ impl App {
             self.reconnect.pending_remote_reload = Some(PendingRemoteReload {
                 thread_id,
                 request_id: request_id.clone(),
+                status_request_id: None,
             });
         }
 
@@ -232,6 +248,7 @@ impl App {
                     ),
                 );
             }
+            RemoteReloadState::Accepted | RemoteReloadState::InProgress => {}
             RemoteReloadState::Completed => {
                 self.chat_widget.add_info_message(message.to_string(), None);
             }
@@ -242,12 +259,24 @@ impl App {
     }
 
     fn clear_remote_reload(&mut self, request_id: RequestId, thread_id: ThreadId) {
-        if self
+        let status_request_matches = self
             .reconnect
             .pending_remote_reload
             .as_ref()
             .is_some_and(|pending| {
-                pending.request_id == request_id && pending.thread_id == thread_id
+                pending.thread_id == thread_id
+                    && pending.status_request_id.as_ref() == Some(&request_id)
+            });
+        if status_request_matches {
+            if let Some(pending) = self.reconnect.pending_remote_reload.as_mut() {
+                pending.status_request_id = None;
+            }
+        } else if self
+            .reconnect
+            .pending_remote_reload
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.thread_id == thread_id && pending.request_id == request_id
             })
         {
             self.reconnect.pending_remote_reload = None;

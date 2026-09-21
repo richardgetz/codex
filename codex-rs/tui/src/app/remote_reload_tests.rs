@@ -1,6 +1,8 @@
 use super::*;
+use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SlashCommandExecuteParams;
 use codex_app_server_protocol::SlashCommandReloadResult;
+use codex_protocol::ThreadId;
 
 fn reload(state: &str) -> SlashCommandReloadResult {
     SlashCommandReloadResult {
@@ -46,4 +48,29 @@ fn remote_reload_bridge_preserves_status_and_recover_arguments() {
         assert_eq!(value["command"], "reload");
         assert_eq!(value["args"], args);
     }
+}
+
+#[test]
+fn remote_reload_status_keeps_operation_notification_correlation() {
+    let operation_request_id = RequestId::Integer(7);
+    let status_request_id = RequestId::Integer(9);
+    let pending = PendingRemoteReload {
+        thread_id: ThreadId::new(),
+        request_id: operation_request_id.clone(),
+        status_request_id: Some(status_request_id.clone()),
+    };
+
+    assert!(pending_reload_request_matches(&pending, &operation_request_id));
+    assert!(pending_reload_request_matches(&pending, &status_request_id));
+    assert!(!pending_reload_request_matches(
+        &pending,
+        &RequestId::Integer(11)
+    ));
+}
+
+#[test]
+fn remote_reload_suppresses_only_duplicate_mutations() {
+    assert!(suppress_duplicate_reload(false, true));
+    assert!(!suppress_duplicate_reload(true, true));
+    assert!(!suppress_duplicate_reload(false, false));
 }

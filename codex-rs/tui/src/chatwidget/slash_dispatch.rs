@@ -1415,7 +1415,15 @@ impl ChatWidget {
     }
 
     fn dispatch_reload_command(&mut self, args: &str) {
+        let args = args.trim();
         let Some(_connection) = self.remote_connection.as_ref() else {
+            if !args.is_empty() {
+                self.add_error_message(
+                    "`/reload status` and `/reload recover` require a persistent app-server connection; embedded reload accepts `/reload` without arguments."
+                        .to_string(),
+                );
+                return;
+            }
             self.app_event_tx.send(AppEvent::ReloadRequested);
             return;
         };
@@ -1428,7 +1436,7 @@ impl ChatWidget {
         };
         self.app_event_tx.send(AppEvent::RemoteReloadRequested {
             thread_id,
-            args: args.trim().to_string(),
+            args: args.to_string(),
         });
     }
 
