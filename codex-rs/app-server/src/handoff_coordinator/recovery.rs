@@ -10,6 +10,7 @@ use crate::outgoing_message::ConnectionId;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ThreadHandoffRecoverParams;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
+use codex_app_server_protocol::ThreadHandoffRecoveryResolution;
 use codex_core::CodexThread;
 use codex_core::HandoffBlocker;
 use codex_core::HandoffJournal;
@@ -53,6 +54,18 @@ impl HandoffCoordinator {
                 receipt: receipt_from_journal(&journal),
             });
         }
+        let mut journal = journal;
+        if journal.quarantined && journal.state != HandoffJournalState::NeedsAttention {
+            return Err(invalid_params(
+                "quarantine marker is only valid on a NeedsAttention handoff",
+            ));
+        }
+        if journal.quarantined {
+            self.refresh_startup_recovery_state().await;
+            return Ok(ThreadHandoffRecoverResponse {
+                receipt: receipt_from_journal(&journal),
+            });
+        }
         if !journal.requires_recovery() {
             self.refresh_startup_recovery_state().await;
             return Ok(ThreadHandoffRecoverResponse {
@@ -60,7 +73,16 @@ impl HandoffCoordinator {
             });
         }
 
-        let mut journal = journal;
+        if params.resolution == Some(ThreadHandoffRecoveryResolution::Quarantine) {
+            let result = self.quarantine(&mut journal).await;
+            if result.is_err() {
+                // The failed explicit resolution leaves the manager's recovery guard fail-closed;
+                // refresh the cached startup probe as well so a write arriving after the error
+                // cannot observe a stale Ready value from before this journal was created.
+                self.refresh_startup_recovery_state().await;
+            }
+            return result;
+        }
         if matches!(
             journal.state,
             HandoffJournalState::Prepared | HandoffJournalState::Draining

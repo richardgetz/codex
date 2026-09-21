@@ -174,6 +174,7 @@ fn receipt_converts_milliseconds_to_unix_seconds() {
         runtime_version: "test".to_string(),
         state: HandoffJournalState::Suspended,
         transfer_started: Some(true),
+        quarantined: false,
         nodes: vec![node(
             "root",
             None,

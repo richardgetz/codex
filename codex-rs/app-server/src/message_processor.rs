@@ -546,6 +546,7 @@ impl MessageProcessor {
         );
         let handoff_coordinator = HandoffCoordinator::new(
             Arc::clone(&thread_manager),
+            state_db.clone(),
             Arc::clone(&config),
             config_manager.codex_home().to_path_buf(),
             env!("CARGO_PKG_VERSION").to_string(),
