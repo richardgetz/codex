@@ -5,6 +5,7 @@
 //! loads the recorded rollout and asks Core to resume the exact interrupted turn.
 
 mod prepare;
+mod quarantine;
 mod recovery;
 mod startup;
 
@@ -33,6 +34,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::Duration;
+
+pub(super) const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct ActiveHandoff {
     manager_guard: ThreadManagerHandoffGuard,

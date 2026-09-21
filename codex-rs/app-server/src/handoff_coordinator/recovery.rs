@@ -1,7 +1,9 @@
 use super::HandoffCoordinator;
+use super::RECOVERY_ADMISSION_TIMEOUT;
 use super::core_error;
 use super::ordered_indices;
 use super::parse_thread_id;
+use super::quarantine::validate_graph;
 use super::receipt_from_journal;
 use crate::error_code::invalid_params;
 use crate::outgoing_message::ConnectionId;
@@ -27,11 +29,9 @@ use std::sync::Arc;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
-const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
-
-struct LoadedRecoveryNode {
-    index: usize,
-    thread: Arc<CodexThread>,
+pub(super) struct LoadedRecoveryNode {
+    pub(super) index: usize,
+    pub(super) thread: Arc<CodexThread>,
 }
 
 impl HandoffCoordinator {
@@ -182,6 +182,26 @@ impl HandoffCoordinator {
     ) -> Result<(Vec<LoadedRecoveryNode>, bool), JSONRPCErrorError> {
         let mut loaded_nodes = Vec::new();
         let mut all_loaded = true;
+        if let Err(error) = validate_graph(journal, true) {
+            tracing::warn!(
+                handoff_id = %journal.handoff_id,
+                error = %error.message,
+                "handoff recovery graph is incomplete or cyclic"
+            );
+            for node in journal.nodes.clone() {
+                let mut blockers = node.blockers;
+                if blockers.is_empty() {
+                    blockers.push(HandoffBlocker::ParentUnavailable);
+                }
+                journal.update_node(
+                    &node.thread_id,
+                    HandoffNodeState::NeedsAttention,
+                    blockers,
+                    None,
+                );
+            }
+            return Ok((loaded_nodes, false));
+        }
         for index in ordered_indices(&journal.nodes, false) {
             let node = journal.nodes[index].clone();
             if node.state == HandoffNodeState::NeedsAttention || !node.blockers.is_empty() {
