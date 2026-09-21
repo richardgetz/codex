@@ -299,7 +299,7 @@ impl App {
         {
             self.reconnect.pending_remote_reload = Some(PendingRemoteReload {
                 thread_id,
-                request_id: request_id.clone(),
+                request_id,
                 status_request_id: None,
                 allow_frontend_refresh: false,
             });
