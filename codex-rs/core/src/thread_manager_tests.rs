@@ -609,6 +609,7 @@ async fn child_session_inherits_client_mcp_extensions() {
 struct FakeAgentGraphStore {
     root_thread_id: ThreadId,
     descendant_thread_ids: Vec<ThreadId>,
+    open_descendant_thread_ids: Vec<ThreadId>,
 }
 
 impl codex_agent_graph_store::AgentGraphStore for FakeAgentGraphStore {
@@ -643,8 +644,13 @@ impl codex_agent_graph_store::AgentGraphStore for FakeAgentGraphStore {
         status_filter: Option<codex_agent_graph_store::ThreadSpawnEdgeStatus>,
     ) -> codex_agent_graph_store::AgentGraphStoreFuture<'_, Vec<ThreadId>> {
         assert_eq!(root_thread_id, self.root_thread_id);
-        assert_eq!(status_filter, None);
-        let descendant_thread_ids = self.descendant_thread_ids.clone();
+        let descendant_thread_ids = match status_filter {
+            None => self.descendant_thread_ids.clone(),
+            Some(codex_agent_graph_store::ThreadSpawnEdgeStatus::Open) => {
+                self.open_descendant_thread_ids.clone()
+            }
+            Some(status) => panic!("unexpected thread-spawn status filter: {status:?}"),
+        };
         Box::pin(async move { Ok(descendant_thread_ids) })
     }
 }
@@ -2465,6 +2471,7 @@ async fn subtree_listing_uses_injected_graph_store_without_state_db() {
     let agent_graph_store = Arc::new(FakeAgentGraphStore {
         root_thread_id,
         descendant_thread_ids: descendant_thread_ids.clone(),
+        open_descendant_thread_ids: descendant_thread_ids[..1].to_vec(),
     });
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
@@ -2487,13 +2494,21 @@ async fn subtree_listing_uses_injected_graph_store_without_state_db() {
     );
 
     let mut expected_thread_ids = vec![root_thread_id];
-    expected_thread_ids.extend(descendant_thread_ids);
+    expected_thread_ids.extend(descendant_thread_ids.clone());
     assert_eq!(
         manager
             .list_agent_subtree_thread_ids(root_thread_id)
             .await
             .expect("subtree should load from injected graph store"),
         expected_thread_ids
+    );
+
+    assert_eq!(
+        manager
+            .list_open_agent_subtree_thread_ids(root_thread_id)
+            .await
+            .expect("open subtree should load from injected graph store"),
+        vec![root_thread_id, descendant_thread_ids[0]]
     );
 }
 
