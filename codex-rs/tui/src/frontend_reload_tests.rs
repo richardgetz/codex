@@ -290,6 +290,32 @@ fn frontend_reload_launcher_requires_an_executable_file() {
 }
 
 #[test]
+fn frontend_reload_launcher_rejects_managed_vendor_fallback() {
+    let temp_dir = tempfile::tempdir().expect("temporary launcher directory");
+    let launcher = temp_dir.path().join("codex-vendor");
+    std::fs::write(&launcher, b"#!/bin/sh\n").expect("write launcher");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+            .expect("make launcher executable");
+    }
+
+    assert_eq!(
+        resolve_frontend_launcher_from_inputs(None, Some(&launcher), true),
+        None
+    );
+    assert_eq!(
+        resolve_frontend_launcher_from_inputs(Some(&launcher), Some(&launcher), true),
+        Some(launcher.clone())
+    );
+    assert_eq!(
+        resolve_frontend_launcher_from_inputs(None, Some(&launcher), false),
+        Some(launcher)
+    );
+}
+
+#[test]
 #[serial]
 fn frontend_reload_launcher_rejects_relative_configured_path() {
     let previous = std::env::var_os(FRONTEND_LAUNCHER_ENV);

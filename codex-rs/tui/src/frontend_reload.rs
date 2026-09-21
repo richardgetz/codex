@@ -24,6 +24,7 @@ const FRONTEND_RELOAD_SERVICE_TIER_ENV: &str = "CODEX_TUI_RELOAD_SERVICE_TIER";
 const FRONTEND_RELOAD_HANDOFF_ENV: &str = "CODEX_TUI_RELOAD_HANDOFF_ID";
 const FRONTEND_RELOAD_LAUNCHER_ENV: &str = "CODEX_TUI_RELOAD_LAUNCHER";
 const FRONTEND_LAUNCHER_ENV: &str = "CODEX_TUI_FRONTEND_LAUNCHER";
+const MANAGED_PACKAGE_ROOT_ENV: &str = "CODEX_MANAGED_PACKAGE_ROOT";
 
 fn validate_frontend_reload_handoff_id(handoff_id: &str) -> std::io::Result<()> {
     if handoff_id.is_empty()
@@ -69,15 +70,25 @@ pub(crate) fn launcher_is_executable(path: &Path) -> bool {
     }
 }
 
-pub(crate) fn resolve_frontend_launcher() -> Option<PathBuf> {
-    let configured = std::env::var_os(FRONTEND_LAUNCHER_ENV).map(PathBuf::from);
-    if let Some(configured) = configured.as_deref() {
+fn resolve_frontend_launcher_from_inputs(
+    configured: Option<&Path>,
+    argv0: Option<&Path>,
+    managed_package_root: bool,
+) -> Option<PathBuf> {
+    if let Some(configured) = configured {
         return (configured.is_absolute() && launcher_is_executable(configured))
             .then(|| configured.to_path_buf());
     }
 
-    let argv0 = std::env::args_os().next().map(PathBuf::from);
-    if let Some(argv0) = argv0.as_deref()
+    // A package-managed child may expose only its versioned vendor binary as argv[0]. The
+    // wrapper's package-root marker records that provenance so a platform without a
+    // spawnable stable shim refuses to prepare a durable handoff instead of re-executing a stale
+    // binary after an upgrade.
+    if managed_package_root {
+        return None;
+    }
+
+    if let Some(argv0) = argv0
         && argv0.is_absolute()
         && launcher_is_executable(argv0)
     {
@@ -86,8 +97,19 @@ pub(crate) fn resolve_frontend_launcher() -> Option<PathBuf> {
 
     // A native child launched through npm may report the versioned vendor binary as both
     // `argv[0]` and `current_exe()`. Re-executing that path after an upgrade can select a removed
-    // or stale binary, so an explicit wrapper marker or absolute argv[0] is required.
+    // or stale binary, so an explicit launcher or native absolute argv[0] is required.
     None
+}
+
+pub(crate) fn resolve_frontend_launcher() -> Option<PathBuf> {
+    let configured = std::env::var_os(FRONTEND_LAUNCHER_ENV).map(PathBuf::from);
+    let argv0 = std::env::args_os().next().map(PathBuf::from);
+    let managed_package_root = std::env::var_os(MANAGED_PACKAGE_ROOT_ENV).is_some();
+    resolve_frontend_launcher_from_inputs(
+        configured.as_deref(),
+        argv0.as_deref(),
+        managed_package_root,
+    )
 }
 
 pub(crate) fn take_frontend_reload_context() -> std::io::Result<Option<FrontendReloadContext>> {

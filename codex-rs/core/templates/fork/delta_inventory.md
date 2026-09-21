@@ -115,7 +115,8 @@ release or merge rules.
   replayed. Embedded sessions now prepare the durable handoff in-process,
   restart through a validated launcher, and recover the receipt before startup
   writes; the npm wrapper carries its stable shim path through reload markers,
-  while unproven versioned vendor binaries are refused. Unsafe blockers remain
+  marks package-managed children so unsupported vendor argv[0] fallbacks are
+  refused, and unproven versioned vendor binaries are refused. Unsafe blockers remain
   in the handoff for explicit resolution.
   Standalone-daemon and remote sessions remain unavailable when no replacement
   launcher is configured.

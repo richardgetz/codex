@@ -242,8 +242,8 @@ const packageManagerEnvVar =
 // The native child cannot recover the stable npm shim from its own argv[0] or current_exe after
 // an upgrade. Preserve the path that launched this wrapper so an embedded TUI reload can invoke
 // the package resolver again and pick up the replacement vendor binary. Windows uses a Node
-// script entrypoint that cannot be spawned directly by Rust, so it deliberately leaves this
-// marker unset and receives the normal unsupported-launcher diagnostic instead.
+// script entrypoint that cannot be spawned directly by Rust, so its managed-package marker makes
+// Rust reject its versioned vendor argv[0] and report the unsupported-launcher diagnostic.
 const frontendLauncher =
   process.platform === "win32"
     ? null
