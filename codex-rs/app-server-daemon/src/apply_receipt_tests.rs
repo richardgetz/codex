@@ -222,6 +222,27 @@ fn legacy_failed_receipts_remain_conservative() {
 }
 
 #[test]
+fn completed_legacy_stop_allows_recovery_to_restart_missing_replacement() {
+    let mut receipt = ApplyAttemptReceipt {
+        handoff: receipt(
+            "needsAttention",
+            vec![node("needsAttention", Some("turn-1"))],
+        ),
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(true),
+        stop_completed: None,
+        failure: Some("recovery failed after stopping the old runtime".to_string()),
+    };
+    assert!(receipt.should_hold_legacy_owner());
+
+    receipt.stop_completed = Some(true);
+    assert!(!receipt.should_hold_legacy_owner());
+    assert!(receipt.blocks_new_apply());
+}
+
+#[test]
 fn legacy_failed_preparation_receipts_with_no_running_nodes_can_retry() {
     let receipt = ApplyAttemptReceipt {
         handoff: HandoffReceipt {
@@ -262,7 +283,15 @@ fn malformed_legacy_failed_preparation_receipts_remain_fenced() {
                 "turnId": null,
                 "wasRunning": false,
             })],
-            ..receipt("needsAttention", Vec::new())
+            ..HandoffReceipt {
+                handoff_id: "handoff-1".to_string(),
+                state: "needsAttention".to_string(),
+                runtime_version: "codex-0.2.0".to_string(),
+                created_at: 1_757_712_000,
+                quarantined: false,
+                transfer_started: None,
+                nodes: Vec::new(),
+            }
         },
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
@@ -409,6 +438,65 @@ fn malformed_quarantined_receipts_remain_fenced() {
         failure: None,
     };
     assert!(receipt.blocks_new_apply());
+
+    let malformed_needs_attention = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            quarantined: true,
+            nodes: vec![serde_json::json!({
+                "threadId": " ",
+                "rootThreadId": "root-1",
+                "state": "needsAttention",
+            })],
+            ..HandoffReceipt {
+                handoff_id: "handoff-1".to_string(),
+                state: "needsAttention".to_string(),
+                runtime_version: "codex-0.2.0".to_string(),
+                created_at: 1_757_712_000,
+                quarantined: false,
+                transfer_started: None,
+                nodes: Vec::new(),
+            }
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(true),
+        stop_completed: Some(true),
+        failure: Some("malformed quarantined receipt".to_string()),
+    };
+    assert!(malformed_needs_attention.blocks_new_apply());
+    assert!(
+        !malformed_needs_attention
+            .output(Path::new("socket"), None, None)
+            .can_retry
+    );
+
+    let unknown_node_state = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            quarantined: true,
+            nodes: vec![serde_json::json!({
+                "threadId": "thread-1",
+                "rootThreadId": "thread-1",
+                "state": "garbage",
+            })],
+            ..HandoffReceipt {
+                handoff_id: "handoff-1".to_string(),
+                state: "needsAttention".to_string(),
+                runtime_version: "codex-0.2.0".to_string(),
+                created_at: 1_757_712_000,
+                quarantined: false,
+                transfer_started: None,
+                nodes: Vec::new(),
+            }
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(true),
+        stop_completed: Some(true),
+        failure: Some("unknown quarantined node state".to_string()),
+    };
+    assert!(unknown_node_state.blocks_new_apply());
 }
 
 #[test]

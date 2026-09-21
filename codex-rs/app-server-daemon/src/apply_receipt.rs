@@ -183,6 +183,14 @@ impl ApplyAttemptReceipt {
         self.phase == ApplyPhase::Applied
     }
 
+    pub(crate) fn should_hold_legacy_owner(&self) -> bool {
+        self.phase == ApplyPhase::NeedsAttention
+            && self.handoff.state == "needsAttention"
+            && self.handoff.transfer_started.is_none()
+            && self.stop_completed != Some(true)
+            && self.blocks_new_apply()
+    }
+
     pub(crate) fn blocks_new_apply(&self) -> bool {
         if self.is_resolved() {
             return false;
@@ -190,6 +198,7 @@ impl ApplyAttemptReceipt {
         if self.phase == ApplyPhase::NeedsAttention
             && self.handoff.state == "needsAttention"
             && self.handoff.quarantined
+            && self.handoff.is_quarantine_shape()
         {
             return false;
         }
@@ -258,19 +267,10 @@ impl HandoffReceipt {
         self.state == "needsAttention"
             && !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                let thread_id = node
-                    .get("threadId")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|thread_id| !thread_id.is_empty());
-                let root_thread_id = node
-                    .get("rootThreadId")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|root_thread_id| !root_thread_id.is_empty());
                 matches!(
                     node.get("state").and_then(serde_json::Value::as_str),
                     Some("planned" | "needsAttention")
-                ) && thread_id
-                    && root_thread_id
+                ) && has_structural_identity(node)
             })
     }
 
@@ -278,14 +278,6 @@ impl HandoffReceipt {
         self.state == "needsAttention"
             && !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                let thread_id = node
-                    .get("threadId")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|thread_id| !thread_id.is_empty());
-                let root_thread_id = node
-                    .get("rootThreadId")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|root_thread_id| !root_thread_id.is_empty());
                 let state = node.get("state").and_then(serde_json::Value::as_str);
                 let turn_id = node.get("turnId").and_then(serde_json::Value::as_str);
                 let was_running = node
@@ -293,24 +285,47 @@ impl HandoffReceipt {
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(true);
                 matches!(state, Some("planned" | "needsAttention"))
-                    && thread_id
-                    && root_thread_id
+                    && has_structural_identity(node)
                     && turn_id.is_none()
                     && !was_running
             })
     }
 
-    fn can_quarantine(&self) -> bool {
+    fn is_quarantine_shape(&self) -> bool {
         self.state == "needsAttention"
             && !self.nodes.is_empty()
             && self.nodes.iter().all(|node| {
-                ["threadId", "rootThreadId"].iter().all(|field| {
-                    node.get(*field)
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|value| !value.is_empty())
-                })
+                has_structural_identity(node)
+                    && matches!(
+                        node.get("state").and_then(serde_json::Value::as_str),
+                        Some(
+                            "planned"
+                                | "suspending"
+                                | "suspended"
+                                | "recovering"
+                                | "restored"
+                                | "paused"
+                                | "needsAttention"
+                                | "notActive"
+                        )
+                    )
             })
     }
+
+    fn can_quarantine(&self) -> bool {
+        self.is_quarantine_shape()
+    }
+}
+
+fn has_structural_identity(node: &serde_json::Value) -> bool {
+    ["threadId", "rootThreadId"].iter().all(|field| {
+        node.get(*field)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+    }) && node
+        .get("parentThreadId")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug)]

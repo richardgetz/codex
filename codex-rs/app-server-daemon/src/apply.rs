@@ -121,12 +121,7 @@ impl Daemon {
                 self.running_managed_codex_version_best_effort().await,
             ));
         }
-        if resolution.is_none()
-            && attempt.phase == ApplyPhase::NeedsAttention
-            && attempt.handoff.state == "needsAttention"
-            && attempt.handoff.transfer_started.is_none()
-            && attempt.blocks_new_apply()
-        {
+        if resolution.is_none() && attempt.should_hold_legacy_owner() {
             // A legacy receipt cannot prove whether the old runtime crossed the drain boundary.
             // Keep it alive until an operator explicitly retries with a newer receipt or
             // quarantines the affected roots; stopping an ambiguous owner would discard the only
@@ -143,21 +138,97 @@ impl Daemon {
         }
 
         if resolution == Some("quarantine") {
-            // Quarantine only needs the currently running coordinator and durable state DB. It
-            // must remain available after an upgrade has removed or replaced the old launcher;
-            // unlike automatic recovery, it never stops or starts a managed backend.
+            // Quarantine normally uses the currently running coordinator and durable state DB.
+            // If the managed backend and socket are both gone, start a replacement without
+            // stopping anything: an absent managed PID is positive evidence that there is no
+            // daemon-owned process left to discard, while a stale unmanaged process still makes
+            // the bind/start operation fail closed.
+            let mut managed_codex_path = attempt.managed_codex_path.clone();
             let info = match client::probe(&self.socket_path).await {
                 Ok(info) => info,
                 Err(error) => {
-                    return self
-                        .mark_needs_attention(
-                            &mut attempt,
-                            format!("cannot quarantine without a reachable app server: {error}"),
-                        )
-                        .await;
+                    let settings = match self.load_settings().await {
+                        Ok(settings) => settings,
+                        Err(settings_error) => {
+                            return self
+                                .mark_needs_attention(
+                                    &mut attempt,
+                                    format!(
+                                        "cannot quarantine without a reachable app server ({error}); \
+                                         loading daemon settings also failed: {settings_error}"
+                                    ),
+                                )
+                                .await;
+                        }
+                    };
+                    let backend = match self.running_backend_instance(&settings).await {
+                        Ok(backend) => backend,
+                        Err(backend_error) => {
+                            return self
+                                .mark_needs_attention(
+                                    &mut attempt,
+                                    format!(
+                                        "cannot quarantine without a reachable app server ({error}); \
+                                         checking managed backend failed: {backend_error}"
+                                    ),
+                                )
+                                .await;
+                        }
+                    };
+                    if backend.is_some() {
+                        return self
+                            .mark_needs_attention(
+                                &mut attempt,
+                                format!(
+                                    "cannot quarantine without a reachable app server: {error}; \
+                                     managed backend is still running, so it was left untouched"
+                                ),
+                            )
+                            .await;
+                    }
+
+                    managed_codex_path = self.configured_managed_codex_bin(&settings).to_path_buf();
+                    if let Err(start_error) = self.ensure_managed_codex_bin(&managed_codex_path) {
+                        return self
+                            .mark_needs_attention(
+                                &mut attempt,
+                                format!(
+                                    "cannot quarantine without a reachable app server: {error}; \
+                                     replacement launcher is unavailable: {start_error}"
+                                ),
+                            )
+                            .await;
+                    }
+                    if let Err(start_error) = self
+                        .start_managed_backend_with_bin(&settings, &managed_codex_path)
+                        .await
+                    {
+                        return self
+                            .mark_needs_attention(
+                                &mut attempt,
+                                format!(
+                                    "cannot quarantine without a reachable app server: {error}; \
+                                     replacement start failed: {start_error}"
+                                ),
+                            )
+                            .await;
+                    }
+                    match self.wait_until_ready(&managed_codex_path).await {
+                        Ok(info) => info,
+                        Err(start_error) => {
+                            return self
+                                .mark_needs_attention(
+                                    &mut attempt,
+                                    format!(
+                                        "cannot quarantine without a reachable app server: {error}; \
+                                         replacement did not become ready: {start_error}"
+                                    ),
+                                )
+                                .await;
+                        }
+                    }
                 }
             };
-            let managed_codex_path = attempt.managed_codex_path.clone();
             return self
                 .recover_attempt(attempt, &managed_codex_path, info, resolution)
                 .await;

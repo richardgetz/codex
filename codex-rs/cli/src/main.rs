@@ -802,7 +802,11 @@ enum AppServerDaemonSubcommand {
     Apply,
 
     /// Recover a previously checkpointed app-server tree after an interrupted apply.
-    Recover,
+    Recover {
+        /// Explicitly quarantine an unrecoverable receipt after durably pausing its roots.
+        #[arg(long)]
+        quarantine: bool,
+    },
 
     /// Print the latest app-server apply attempt without changing daemon state.
     ApplyStatus,
@@ -1440,9 +1444,13 @@ async fn cli_main(
                         print_app_server_apply_output(codex_app_server_daemon::apply().await?)
                             .await?;
                     }
-                    AppServerDaemonSubcommand::Recover => {
-                        print_app_server_apply_output(codex_app_server_daemon::recover().await?)
-                            .await?;
+                    AppServerDaemonSubcommand::Recover { quarantine } => {
+                        let output = if quarantine {
+                            codex_app_server_daemon::quarantine().await?
+                        } else {
+                            codex_app_server_daemon::recover().await?
+                        };
+                        print_app_server_apply_output(output).await?;
                     }
                     AppServerDaemonSubcommand::ApplyStatus => {
                         print_app_server_apply_output(
@@ -2781,7 +2789,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
             AppServerDaemonSubcommand::Apply => "app-server daemon apply",
-            AppServerDaemonSubcommand::Recover => "app-server daemon recover",
+            AppServerDaemonSubcommand::Recover { .. } => "app-server daemon recover",
             AppServerDaemonSubcommand::ApplyStatus => "app-server daemon apply-status",
             AppServerDaemonSubcommand::EnableRemoteControl => {
                 "app-server daemon enable-remote-control"
@@ -5132,7 +5140,16 @@ mod tests {
         assert!(matches!(
             app_server_from_args(["codex", "app-server", "daemon", "recover"].as_ref()).subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
-                subcommand: AppServerDaemonSubcommand::Recover
+                subcommand: AppServerDaemonSubcommand::Recover { quarantine: false }
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                ["codex", "app-server", "daemon", "recover", "--quarantine"].as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Recover { quarantine: true }
             }))
         ));
         assert!(matches!(
