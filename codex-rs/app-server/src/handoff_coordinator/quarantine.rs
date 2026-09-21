@@ -161,7 +161,7 @@ impl HandoffCoordinator {
             .iter()
             .map(|node| node.root_thread_id)
             .collect::<Vec<_>>();
-        root_ids.sort_by_key(|thread_id| thread_id.to_string());
+        root_ids.sort_by_key(std::string::ToString::to_string);
         root_ids.dedup();
         let node_ids = parsed_nodes
             .iter()
