@@ -254,7 +254,7 @@ const env = {
   ...process.env,
   CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,
 };
-if (frontendLauncher) {
+if (frontendLauncher && !env.CODEX_TUI_FRONTEND_LAUNCHER) {
   env.CODEX_TUI_FRONTEND_LAUNCHER = frontendLauncher;
 }
 delete env.CODEX_MANAGED_BY_NPM;
