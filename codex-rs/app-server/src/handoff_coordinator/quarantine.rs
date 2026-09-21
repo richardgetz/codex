@@ -157,10 +157,12 @@ impl HandoffCoordinator {
             invalid_params("cannot quarantine handoff: durable state database is unavailable")
         })?;
         let parsed_nodes = validate_graph(journal, false)?;
-        let root_ids = parsed_nodes
+        let mut root_ids = parsed_nodes
             .iter()
             .map(|node| node.root_thread_id)
-            .collect::<HashSet<_>>();
+            .collect::<Vec<_>>();
+        root_ids.sort_by_key(|thread_id| thread_id.to_string());
+        root_ids.dedup();
         let node_ids = parsed_nodes
             .iter()
             .map(|node| node.thread_id)

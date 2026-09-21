@@ -13,6 +13,11 @@ export type ThreadHandoffReceipt = { handoffId: string, state: ThreadHandoffStat
  */
 createdAt: number,
 /**
+ * True only after an explicit quarantine operation durably paused affected roots. The
+ * original NeedsAttention state and node diagnostics remain available for inspection.
+ */
+quarantined: boolean,
+/**
  * Whether the coordinator crossed the durable drain boundary. `None` identifies receipts
  * written before this marker existed and must remain conservative.
  */

@@ -4568,6 +4568,25 @@
       ],
       "type": "string"
     },
+    "ThreadHandoffRecoveryResolution": {
+      "description": "Explicit operator resolution for an unresolved handoff receipt.",
+      "oneOf": [
+        {
+          "description": "Retry safe exact-turn recovery while preserving the global recovery fence.",
+          "enum": [
+            "retry"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Permanently quarantine after Codex durably pauses every affected root tree.",
+          "enum": [
+            "quarantine"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "ThreadHistoryMode": {
       "enum": [
         "legacy",

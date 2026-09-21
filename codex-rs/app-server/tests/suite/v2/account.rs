@@ -1,6 +1,7 @@
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::McpProcess;
+use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 
@@ -39,9 +40,18 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SwitchAccountResponse;
+use codex_app_server_protocol::ThreadActivityReadResponse;
+use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHandoffState;
+use codex_app_server_protocol::ThreadPauseState;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnStartParams;
+use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::HandoffBlocker;
 use codex_core::HandoffJournal;
@@ -58,9 +68,12 @@ use codex_login::auth::BedrockApiKeyAuth;
 use codex_login::load_auth_dot_json;
 use codex_login::login_with_api_key;
 use codex_login::login_with_bedrock_api_key;
+use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::AuthMode as DomainAuthMode;
 use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use serial_test::serial;
@@ -68,6 +81,7 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use url::Url;
 use wiremock::Mock;
@@ -132,6 +146,39 @@ async fn write_active_recovery_fixture(codex_home: &Path) -> Result<String> {
             was_paused: false,
             state: HandoffNodeState::Suspended,
             blockers: Vec::new(),
+        }],
+    )
+    .await?;
+    journal.transfer_started = Some(true);
+    journal.set_state(HandoffJournalState::NeedsAttention);
+    journal.persist(codex_home).await?;
+    Ok(journal.handoff_id)
+}
+
+async fn write_quarantine_fixture(codex_home: &Path, thread_id: &str) -> Result<String> {
+    write_quarantine_fixture_with_turn(codex_home, thread_id, "stale-turn", true).await
+}
+
+async fn write_quarantine_fixture_with_turn(
+    codex_home: &Path,
+    thread_id: &str,
+    turn_id: &str,
+    was_running: bool,
+) -> Result<String> {
+    let mut journal = HandoffJournal::begin(
+        codex_home,
+        "test-runtime",
+        vec![HandoffNode {
+            thread_id: thread_id.to_string(),
+            root_thread_id: thread_id.to_string(),
+            parent_thread_id: None,
+            agent_path: None,
+            turn_id: Some(turn_id.to_string()),
+            rollout_path: None,
+            was_running,
+            was_paused: false,
+            state: HandoffNodeState::NeedsAttention,
+            blockers: vec![HandoffBlocker::Persistence],
         }],
     )
     .await?;
@@ -694,6 +741,287 @@ async fn active_handoff_still_fences_account_switch() -> Result<()> {
     )
     .await??;
     assert!(error.error.message.contains("recovery is pending"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_quarantine_pauses_the_root_and_survives_restart() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let _response = responses::mount_sse_once(
+        &responses_server,
+        responses::sse(vec![
+            responses::ev_response_created("quarantine-seed"),
+            responses::ev_assistant_message("quarantine-seed-message", "seed history"),
+            responses::ev_completed("quarantine-seed"),
+        ]),
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    MockResponsesConfig::new(&responses_server.uri()).write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let turn_request = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "seed history".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(turn_request)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let handoff_id = write_quarantine_fixture(codex_home.path(), &thread.id).await?;
+
+    let recover_request = app
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({
+                "handoffId": handoff_id,
+                "resolution": "quarantine"
+            })),
+        )
+        .await?;
+    let recovered: ThreadHandoffRecoverResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(recover_request)).await??;
+    assert!(recovered.receipt.quarantined);
+    assert_eq!(recovered.receipt.state, ThreadHandoffState::NeedsAttention);
+
+    let activity_request = app
+        .send_raw_request("thread/activity/read", Some(json!({"threadId": thread.id})))
+        .await?;
+    let activity: ThreadActivityReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(activity_request)).await??;
+    assert!(activity.activities.iter().any(|entry| {
+        entry.thread_id == thread.id && entry.pause_state == ThreadPauseState::Paused
+    }));
+
+    let account_request = app
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let _: SwitchAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(account_request)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    app.shutdown_gracefully().await?;
+
+    let mut replacement = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let resume_request = replacement
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadResumeResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        replacement.read_response(resume_request),
+    )
+    .await??;
+    let activity_request = replacement
+        .send_raw_request("thread/activity/read", Some(json!({"threadId": thread.id})))
+        .await?;
+    let activity: ThreadActivityReadResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        replacement.read_response(activity_request),
+    )
+    .await??;
+    assert!(activity.activities.iter().any(|entry| {
+        entry.thread_id == thread.id && entry.pause_state == ThreadPauseState::Paused
+    }));
+    let account_request = replacement
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let _: SwitchAccountResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        replacement.read_response(account_request),
+    )
+    .await??;
+    replacement.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn quarantine_handles_missing_parent_and_cold_root() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let root_thread_id = ThreadId::new().to_string();
+    let child_thread_id = ThreadId::new().to_string();
+    let missing_parent_id = ThreadId::new().to_string();
+    let mut journal = HandoffJournal::begin(
+        codex_home.path(),
+        "test-runtime",
+        vec![HandoffNode {
+            thread_id: child_thread_id.clone(),
+            root_thread_id: root_thread_id.clone(),
+            parent_thread_id: Some(missing_parent_id),
+            agent_path: Some("orphan".to_string()),
+            turn_id: Some("historical-turn".to_string()),
+            rollout_path: None,
+            was_running: true,
+            was_paused: false,
+            state: HandoffNodeState::NeedsAttention,
+            blockers: vec![HandoffBlocker::ParentUnavailable],
+        }],
+    )
+    .await?;
+    journal.transfer_started = Some(true);
+    journal.set_state(HandoffJournalState::NeedsAttention);
+    journal.persist(codex_home.path()).await?;
+    let handoff_id = journal.handoff_id.clone();
+
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let recover_request = app
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({
+                "handoffId": handoff_id,
+                "resolution": "quarantine"
+            })),
+        )
+        .await?;
+    let recovered: ThreadHandoffRecoverResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(recover_request)).await??;
+    assert!(recovered.receipt.quarantined);
+    assert_eq!(recovered.receipt.nodes.len(), 1);
+    assert_eq!(recovered.receipt.nodes[0].thread_id, child_thread_id);
+    let account_request = app
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let _: SwitchAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(account_request)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+    app.shutdown_gracefully().await?;
+
+    let mut replacement = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let status_request = replacement
+        .send_raw_request(
+            "thread/handoff/status",
+            Some(json!({ "handoffId": handoff_id })),
+        )
+        .await?;
+    let status: codex_app_server_protocol::ThreadHandoffStatusResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        replacement.read_response(status_request),
+    )
+    .await??;
+    assert!(status.receipt.quarantined);
+    let account_request = replacement
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let _: SwitchAccountResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        replacement.read_response(account_request),
+    )
+    .await??;
+    replacement.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn active_needs_attention_handoff_still_fences_account_switch() -> Result<()> {
+    let (release_running_turn, running_turn_gate) = oneshot::channel();
+    let (responses_server, _completions) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![responses::ev_response_created("active-response")]),
+        },
+        StreamingSseChunk {
+            gate: Some(running_turn_gate),
+            body: responses::sse(vec![
+                responses::ev_assistant_message("active-message", "active"),
+                responses::ev_completed("active-response"),
+            ]),
+        },
+    ]])
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    MockResponsesConfig::new(responses_server.uri()).write(codex_home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread = app.start_thread(ThreadStartParams::default()).await?.thread;
+    let turn_request = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "keep this turn active".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let TurnStartResponse { turn } =
+        timeout(DEFAULT_READ_TIMEOUT, app.read_response(turn_request)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/started"),
+    )
+    .await??;
+    responses_server.wait_for_request_count(1).await;
+    let handoff_id =
+        write_quarantine_fixture_with_turn(codex_home.path(), &thread.id, &turn.id, true).await?;
+    let recover_request = app
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({
+                "handoffId": handoff_id,
+                "resolution": "quarantine"
+            })),
+        )
+        .await?;
+    let quarantine_error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(recover_request)),
+    )
+    .await??;
+    assert!(quarantine_error.error.message.contains("active work"));
+
+    let id = app
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let error: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
+    assert!(error.error.message.contains("recovery is pending"));
+    assert!(error.error.message.contains("thread/handoff/status"));
+    release_running_turn.send(()).expect("release active turn");
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    app.shutdown_gracefully().await?;
     Ok(())
 }
 
