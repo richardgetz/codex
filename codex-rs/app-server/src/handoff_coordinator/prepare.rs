@@ -141,6 +141,14 @@ impl HandoffCoordinator {
                 "could not persist handoff drain state: {error}"
             )));
         }
+        journal.mark_transfer_started();
+        if let Err(error) = journal.persist(&self.codex_home).await {
+            drop(tree_guards);
+            manager_guard.abort();
+            return Err(internal_error(format!(
+                "could not persist handoff transfer boundary: {error}"
+            )));
+        }
 
         for index in ordered_indices(&journal.nodes, true) {
             let thread_id = journal.nodes[index].thread_id.clone();

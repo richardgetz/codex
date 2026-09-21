@@ -1734,7 +1734,7 @@ impl AppServerSession {
                 params: SwitchAccountParams { alias },
             })
             .await
-            .wrap_err("account/switch failed in TUI")?;
+            .map_err(|error| color_eyre::eyre::eyre!("account/switch failed in TUI: {error}"))?;
         let (needs_auth_selection, account_status_error) = match self.read_account().await {
             Ok(account) => (account_switch_needs_auth_selection(&account), None),
             Err(err) => (

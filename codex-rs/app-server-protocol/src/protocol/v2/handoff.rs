@@ -43,6 +43,19 @@ pub enum ThreadHandoffState {
     NeedsAttention,
 }
 
+/// Explicit operator resolution for an unresolved handoff receipt.
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, ExperimentalApi,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadHandoffRecoveryResolution {
+    /// Retry safe exact-turn recovery while preserving the global recovery fence.
+    Retry,
+    /// Permanently quarantine after Codex durably pauses every affected root tree.
+    Quarantine,
+}
+
 /// Lifecycle state of one thread in a handoff receipt.
 #[derive(
     Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, ExperimentalApi,
@@ -88,6 +101,14 @@ pub struct ThreadHandoffReceipt {
     /// Creation time as integer Unix seconds.
     #[ts(type = "number")]
     pub created_at: i64,
+    /// True only after an explicit quarantine operation durably paused affected roots. The
+    /// original NeedsAttention state and node diagnostics remain available for inspection.
+    #[serde(default)]
+    pub quarantined: bool,
+    /// Whether the coordinator crossed the durable drain boundary. `None` identifies receipts
+    /// written before this marker existed and must remain conservative.
+    #[serde(default)]
+    pub transfer_started: Option<bool>,
     pub nodes: Vec<ThreadHandoffNode>,
 }
 
@@ -128,6 +149,9 @@ pub struct ThreadHandoffStatusResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadHandoffRecoverParams {
     pub handoff_id: String,
+    /// Omit for ordinary safe recovery; quarantine requires an explicit operator action.
+    #[ts(optional = nullable)]
+    pub resolution: Option<ThreadHandoffRecoveryResolution>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]

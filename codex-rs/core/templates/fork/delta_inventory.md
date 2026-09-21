@@ -90,7 +90,12 @@ release or merge rules.
   launcher (the standalone updater remains on its existing lifecycle), then
   checkpoint every loaded root before replacement, require a fully suspended
   receipt, restore exact turn ids, and persist unresolved failures for explicit
-  recovery without enabling remote control.
+  recovery without enabling remote control. Handoff journals and daemon
+  receipts persist the transfer boundary, keep proven preflight failures
+  retryable without fencing ordinary startup, expose `canRetry`, and keep
+  ambiguous or active transfers fenced. Explicit `thread/handoff/recover`
+  quarantine durably pauses affected roots and preserves `NeedsAttention`
+  diagnostics without replaying or claiming completion.
 - App-server v2 exposes a host-gated slash-command catalog and bounded
   `slashCommand/execute` responses for Inbound clients. Status and spend return
   configured-account usage/rate-limit data as Markdown, while non-model results
@@ -903,6 +908,10 @@ release or merge rules.
   process only after a suspended all-node receipt, records start/recovery
   failures durably, restores exact turn ids, and requires explicit recover
   before retrying an unresolved attempt without enabling remote control.
+  Verify transfer-boundary markers classify only proven preflight failures as
+  retryable, daemon `canRetry` remains false for active or ambiguous receipts,
+  and explicit quarantine pauses every affected root before making its receipt
+  nonblocking while preserving the original diagnostics.
 - Verify a discovered local daemon connection failure remains visible and does
   not silently switch the TUI to an embedded server; preserve initial embedded
   selection and explicit remote or embedded overrides.

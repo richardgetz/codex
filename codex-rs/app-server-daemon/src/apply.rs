@@ -1,5 +1,6 @@
 //! Safe app-server daemon upgrades coordinated through the handoff journal.
 
+use std::future::Future;
 use std::path::Path;
 
 use anyhow::Result;
@@ -21,6 +22,25 @@ const PREPARE_METHOD: &str = "thread/handoff/prepare";
 const STATUS_METHOD: &str = "thread/handoff/status";
 const RECOVER_METHOD: &str = "thread/handoff/recover";
 
+async fn stop_backend_with_receipt<F>(
+    attempt: &mut ApplyAttemptReceipt,
+    receipt_path: &Path,
+    stop: F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    // Persist ownership before awaiting the external stop. A crash or cancellation here leaves
+    // a receipt that retries the same managed backend instead of assuming it was replaced.
+    attempt.stop_started = Some(true);
+    attempt.save(receipt_path).await?;
+    stop.await?;
+    attempt.stop_completed = Some(true);
+    attempt.phase = ApplyPhase::Starting;
+    attempt.save(receipt_path).await?;
+    Ok(())
+}
+
 fn ensure_apply_launcher(settings: &DaemonSettings) -> Result<()> {
     anyhow::ensure!(
         settings.managed_codex_path.is_some(),
@@ -33,7 +53,7 @@ impl Daemon {
     pub(crate) async fn apply(&self) -> Result<ApplyOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
         if let Some(receipt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?
-            && !receipt.is_resolved()
+            && receipt.blocks_new_apply()
         {
             return Ok(receipt.output_with_running_version(
                 &self.socket_path,
@@ -49,11 +69,69 @@ impl Daemon {
     }
 
     pub(crate) async fn recover(&self) -> Result<ApplyOutput> {
+        self.recover_with_resolution(None).await
+    }
+
+    pub(crate) async fn quarantine(&self) -> Result<ApplyOutput> {
+        self.recover_with_resolution(Some("quarantine")).await
+    }
+
+    async fn recover_with_resolution(&self, resolution: Option<&str>) -> Result<ApplyOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
         let Some(mut attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await? else {
             return Err(anyhow!("no pending app-server handoff receipt to recover"));
         };
         if attempt.is_resolved() {
+            return Ok(attempt.output_with_running_version(
+                &self.socket_path,
+                client::probe(&self.socket_path)
+                    .await
+                    .ok()
+                    .map(|info| info.app_server_version),
+                /*error*/ None,
+                self.running_managed_codex_version_best_effort().await,
+            ));
+        }
+        if resolution.is_none() && !attempt.blocks_new_apply() {
+            return Ok(attempt.output_with_running_version(
+                &self.socket_path,
+                client::probe(&self.socket_path)
+                    .await
+                    .ok()
+                    .map(|info| info.app_server_version),
+                /*error*/ None,
+                self.running_managed_codex_version_best_effort().await,
+            ));
+        }
+        if resolution.is_none()
+            && attempt.phase == ApplyPhase::NeedsAttention
+            && attempt.handoff.state == "needsAttention"
+            && attempt.handoff.transfer_started == Some(false)
+        {
+            // Preparation failed before the old runtime crossed the drain boundary. Keep that
+            // runtime alive for an explicit quarantine or a fresh apply; restarting it here would
+            // lose the only owner that can still report the unresolved blocker.
+            return Ok(attempt.output_with_running_version(
+                &self.socket_path,
+                client::probe(&self.socket_path)
+                    .await
+                    .ok()
+                    .map(|info| info.app_server_version),
+                /*error*/ None,
+                self.running_managed_codex_version_best_effort().await,
+            ));
+        }
+        if resolution.is_none()
+            && attempt.phase == ApplyPhase::NeedsAttention
+            && attempt.handoff.state == "needsAttention"
+            && attempt.handoff.transfer_started.is_none()
+            && attempt.stop_started.is_none()
+            && attempt.blocks_new_apply()
+        {
+            // A legacy receipt cannot prove whether the old runtime crossed the drain boundary.
+            // Keep it alive until an operator explicitly retries with a newer receipt or
+            // quarantines the affected roots; stopping an ambiguous owner would discard the only
+            // process that can still report its exact blocker.
             return Ok(attempt.output_with_running_version(
                 &self.socket_path,
                 client::probe(&self.socket_path)
@@ -78,26 +156,45 @@ impl Daemon {
         }
         self.ensure_managed_codex_bin(managed_codex_bin)?;
 
-        let backend = self.running_backend_instance(&settings).await?;
-        if backend.is_none() && client::probe(&self.socket_path).await.is_ok() {
-            return self
-                .mark_needs_attention(
+        let mut backend = self.running_backend_instance(&settings).await?;
+        if resolution.is_none() && attempt.stop_completed != Some(true) {
+            if let Some(backend_instance) = backend.as_ref() {
+                if let Err(error) = stop_backend_with_receipt(
                     &mut attempt,
-                    "app server is running but is not managed by codex app-server daemon",
+                    &self.apply_receipt_file,
+                    backend_instance.stop(),
                 )
-                .await;
-        }
-        if backend.is_none() {
-            attempt.phase = ApplyPhase::Starting;
-            attempt.save(&self.apply_receipt_file).await?;
-            if let Err(error) = self
-                .start_managed_backend_with_bin(&settings, managed_codex_bin)
                 .await
-            {
+                {
+                    return self
+                        .mark_needs_attention(&mut attempt, error.to_string())
+                        .await;
+                }
+                // `running_backend_instance` is a snapshot; do not use it to skip launching the
+                // replacement after the old process has just been stopped.
+                backend = None;
+            } else if client::probe(&self.socket_path).await.is_ok() {
                 return self
-                    .mark_needs_attention(&mut attempt, error.to_string())
+                    .mark_needs_attention(
+                        &mut attempt,
+                        "app server is running but is not managed by codex app-server daemon",
+                    )
                     .await;
             }
+            if attempt.stop_completed != Some(true) {
+                attempt.stop_completed = Some(true);
+                attempt.phase = ApplyPhase::Starting;
+                attempt.save(&self.apply_receipt_file).await?;
+            }
+        }
+        if backend.is_none()
+            && let Err(error) = self
+                .start_managed_backend_with_bin(&settings, managed_codex_bin)
+                .await
+        {
+            return self
+                .mark_needs_attention(&mut attempt, error.to_string())
+                .await;
         }
 
         let info = match self.wait_until_ready(managed_codex_bin).await {
@@ -108,7 +205,8 @@ impl Daemon {
                     .await;
             }
         };
-        self.recover_attempt(attempt, managed_codex_bin, info).await
+        self.recover_attempt(attempt, managed_codex_bin, info, resolution)
+            .await
     }
 
     pub(crate) async fn apply_status(&self) -> Result<ApplyOutput> {
@@ -130,7 +228,7 @@ impl Daemon {
         }
         let fallback = attempt.clone();
         match self
-            .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id)
+            .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id, None)
             .await
         {
             Ok(status) => {
@@ -211,14 +309,13 @@ impl Daemon {
                 .await,
         );
         attempt.save(&self.apply_receipt_file).await?;
-        if let Err(error) = backend.stop().await {
+        if let Err(error) =
+            stop_backend_with_receipt(&mut attempt, &self.apply_receipt_file, backend.stop()).await
+        {
             return self
                 .mark_needs_attention(&mut attempt, error.to_string())
                 .await;
         }
-
-        attempt.phase = ApplyPhase::Starting;
-        attempt.save(&self.apply_receipt_file).await?;
         if let Err(error) = self
             .start_managed_backend_with_bin(&settings, managed_codex_bin)
             .await
@@ -235,7 +332,8 @@ impl Daemon {
                     .await;
             }
         };
-        self.recover_attempt(attempt, managed_codex_bin, info).await
+        self.recover_attempt(attempt, managed_codex_bin, info, None)
+            .await
     }
 
     async fn recover_attempt(
@@ -243,11 +341,12 @@ impl Daemon {
         mut attempt: ApplyAttemptReceipt,
         managed_codex_bin: &Path,
         info: client::ProbeInfo,
+        resolution: Option<&str>,
     ) -> Result<ApplyOutput> {
         attempt.phase = ApplyPhase::Recovering;
         attempt.save(&self.apply_receipt_file).await?;
         match self
-            .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id)
+            .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id, None)
             .await
         {
             Ok(status) => {
@@ -263,7 +362,7 @@ impl Daemon {
                         self.running_managed_codex_version_best_effort().await,
                     ));
                 }
-                if attempt.handoff.state == "needsAttention" {
+                if attempt.handoff.state == "needsAttention" && resolution.is_none() {
                     return self
                         .mark_needs_attention(
                             &mut attempt,
@@ -274,7 +373,8 @@ impl Daemon {
                 if !matches!(
                     attempt.handoff.state.as_str(),
                     "prepared" | "draining" | "suspended" | "restoring"
-                ) {
+                ) && !(resolution.is_some() && attempt.handoff.state == "needsAttention")
+                {
                     return self
                         .mark_needs_attention(
                             &mut attempt,
@@ -293,7 +393,7 @@ impl Daemon {
         }
 
         match self
-            .request_handoff(RECOVER_METHOD, &attempt.handoff.handoff_id)
+            .request_handoff(RECOVER_METHOD, &attempt.handoff.handoff_id, resolution)
             .await
         {
             Ok(receipt) if receipt.state == "completed" => {
@@ -303,6 +403,17 @@ impl Daemon {
                 attempt.managed_codex_version = self
                     .managed_codex_version_best_effort(managed_codex_bin)
                     .await;
+                attempt.save(&self.apply_receipt_file).await?;
+                Ok(attempt.output_with_running_version(
+                    &self.socket_path,
+                    Some(info.app_server_version),
+                    /*error*/ None,
+                    self.running_managed_codex_version_best_effort().await,
+                ))
+            }
+            Ok(receipt) if receipt.quarantined => {
+                attempt.handoff = receipt;
+                attempt.phase = ApplyPhase::NeedsAttention;
                 attempt.save(&self.apply_receipt_file).await?;
                 Ok(attempt.output_with_running_version(
                     &self.socket_path,
@@ -333,18 +444,22 @@ impl Daemon {
         &self,
         method: &str,
         handoff_id: &str,
+        resolution: Option<&str>,
     ) -> std::result::Result<HandoffReceipt, HandoffRpcError> {
-        let message = client::request(
-            &self.socket_path,
-            method,
-            Some(serde_json::json!({ "handoffId": handoff_id })),
-        )
-        .await
-        .map_err(|error| HandoffRpcError {
-            method: method.to_string(),
-            message: error.to_string(),
-            receipt: None,
-        })?;
+        let params = match resolution {
+            Some(resolution) => serde_json::json!({
+                "handoffId": handoff_id,
+                "resolution": resolution,
+            }),
+            None => serde_json::json!({ "handoffId": handoff_id }),
+        };
+        let message = client::request(&self.socket_path, method, Some(params))
+            .await
+            .map_err(|error| HandoffRpcError {
+                method: method.to_string(),
+                message: error.to_string(),
+                receipt: None,
+            })?;
         parse_handoff_response(message, method)
     }
 

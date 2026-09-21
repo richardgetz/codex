@@ -530,6 +530,7 @@ export type { ThreadHandoffBlocker } from "./ThreadHandoffBlocker";
 export type { ThreadHandoffNode } from "./ThreadHandoffNode";
 export type { ThreadHandoffNodeState } from "./ThreadHandoffNodeState";
 export type { ThreadHandoffReceipt } from "./ThreadHandoffReceipt";
+export type { ThreadHandoffRecoveryResolution } from "./ThreadHandoffRecoveryResolution";
 export type { ThreadHandoffState } from "./ThreadHandoffState";
 export type { ThreadHistoryMode } from "./ThreadHistoryMode";
 export type { ThreadInjectItemsParams } from "./ThreadInjectItemsParams";

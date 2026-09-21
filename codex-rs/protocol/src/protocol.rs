@@ -1178,7 +1178,8 @@ impl Op {
     /// Returns whether this operation can create or mutate work that must be
     /// admitted before a cross-process handoff seals the root tree.
     ///
-    /// Explicit cancellation and handoff suspension controls remain usable while draining.
+    /// Explicit cancellation, activity pause, and handoff suspension controls remain usable
+    /// while draining.
     /// Callback responses are admitted only before the seal; once sealed they are rejected with
     /// an observable error so pending process-local state remains a blocker. Unknown future
     /// operations fail closed by requiring admission.
@@ -1192,6 +1193,8 @@ impl Op {
             | Self::UserInputAnswer { .. }
             | Self::RequestPermissionsResponse { .. }
             | Self::DynamicToolResponse { .. }
+            | Self::PauseActivityWithAck { .. }
+            | Self::PauseActivityWithSnapshotAck { .. }
             | Self::SuspendTurnAndShutdownForHandoff { .. }
             | Self::SuspendTurnAndShutdownForHandoffAfterDescendants { .. }
             | Self::Shutdown => false,

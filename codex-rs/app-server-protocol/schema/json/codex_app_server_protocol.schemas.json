@@ -22784,11 +22784,24 @@
             },
             "type": "array"
           },
+          "quarantined": {
+            "default": false,
+            "description": "True only after an explicit quarantine operation durably paused affected roots. The original NeedsAttention state and node diagnostics remain available for inspection.",
+            "type": "boolean"
+          },
           "runtimeVersion": {
             "type": "string"
           },
           "state": {
             "$ref": "#/definitions/v2/ThreadHandoffState"
+          },
+          "transferStarted": {
+            "default": null,
+            "description": "Whether the coordinator crossed the durable drain boundary. `None` identifies receipts written before this marker existed and must remain conservative.",
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -22799,6 +22812,25 @@
           "state"
         ],
         "type": "object"
+      },
+      "ThreadHandoffRecoveryResolution": {
+        "description": "Explicit operator resolution for an unresolved handoff receipt.",
+        "oneOf": [
+          {
+            "description": "Retry safe exact-turn recovery while preserving the global recovery fence.",
+            "enum": [
+              "retry"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Permanently quarantine after Codex durably pauses every affected root tree.",
+            "enum": [
+              "quarantine"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ThreadHandoffState": {
         "description": "Lifecycle state of a process handoff attempt.",

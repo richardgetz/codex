@@ -1,6 +1,5 @@
 use super::HandoffCoordinator;
 use super::HandoffJournal;
-use super::HandoffJournalState;
 use crate::error_code::invalid_request;
 use codex_app_server_protocol::JSONRPCErrorError;
 use std::time::Duration;
@@ -47,7 +46,7 @@ impl HandoffCoordinator {
         )
         .await
         {
-            Ok(Ok(journals)) if journals.iter().any(requires_recovery) => {
+            Ok(Ok(journals)) if journals.iter().any(HandoffJournal::requires_recovery) => {
                 StartupRecoveryState::Pending
             }
             Ok(Ok(_)) => StartupRecoveryState::Ready,
@@ -70,7 +69,7 @@ impl HandoffCoordinator {
         )
         .await
         {
-            Ok(Ok(journals)) if journals.iter().any(requires_recovery) => {
+            Ok(Ok(journals)) if journals.iter().any(HandoffJournal::requires_recovery) => {
                 StartupRecoveryState::Pending
             }
             Ok(Ok(_)) => StartupRecoveryState::Ready,
@@ -82,10 +81,6 @@ impl HandoffCoordinator {
         }
         *state
     }
-}
-
-fn requires_recovery(journal: &HandoffJournal) -> bool {
-    !matches!(journal.state, HandoffJournalState::Completed)
 }
 
 fn recovery_read_method(method: &str) -> bool {
@@ -100,5 +95,7 @@ fn recovery_read_method(method: &str) -> bool {
 }
 
 fn recovery_pending_error() -> JSONRPCErrorError {
-    invalid_request("app-server recovery is pending; only reads and handoff recovery are available")
+    invalid_request(
+        "app-server recovery is pending; only reads and handoff recovery are available; inspect thread/handoff/status or call thread/handoff/recover",
+    )
 }
