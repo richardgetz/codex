@@ -814,6 +814,21 @@ impl MessageProcessor {
         self.thread_processor.thread_created_receiver()
     }
 
+    pub(crate) async fn daemon_recovery_candidates(&self) -> Vec<String> {
+        self.thread_processor.daemon_recovery_candidates().await
+    }
+
+    pub(crate) async fn restore_daemon_threads(
+        &self,
+        candidates: std::collections::BTreeSet<String>,
+    ) {
+        for thread_id in candidates {
+            if let Err(error) = self.thread_processor.thread_resume_daemon(thread_id).await {
+                tracing::warn!(code = error.code, "failed to restore saved daemon thread");
+            }
+        }
+    }
+
     pub(crate) async fn send_initialize_notifications_to_connection(
         &self,
         connection_id: ConnectionId,
