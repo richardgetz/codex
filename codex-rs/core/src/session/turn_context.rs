@@ -1254,7 +1254,7 @@ impl Session {
             disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
             active_host_plugin_identities: None,
             next_step_input: ArcSwap::from_pointee(StepInputs {
-                settings: step_settings,
+                settings: Arc::clone(&step_settings),
                 environments: environments.clone(),
             }),
             session_telemetry: session_telemetry_for_context,
