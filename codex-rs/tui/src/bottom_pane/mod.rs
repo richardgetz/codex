@@ -1100,6 +1100,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_voice_strip(&mut self, state: Option<VoiceStripState>) {
+        self.composer
+            .set_voice_strip(state, self.frame_requester.clone());
+        self.request_redraw();
+    }
+
     /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
     pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
         if self.composer.set_plan_mode_nudge_visible(visible) {

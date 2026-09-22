@@ -94,7 +94,10 @@ impl ChatWidget {
             }
             ServerNotification::TurnStarted(notification) => {
                 if replay_kind.is_none() {
-                    self.clear_misalignment_for_new_turn(&notification.turn.id);
+                    self.clear_misalignment_for_new_turn(
+                        &notification.turn.id,
+                        super::misalignment_policy::MisalignmentTurnSource::ServerNotification,
+                    );
                 }
                 self.turn_lifecycle.last_turn_id = Some(notification.turn.id);
                 self.last_non_retry_error = None;

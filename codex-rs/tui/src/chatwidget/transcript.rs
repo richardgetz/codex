@@ -37,6 +37,8 @@ pub(super) struct StatusCopySource {
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    /// Inserts a separator before the next completed agent message after history flushes.
+    pub(super) needs_final_message_separator: bool,
     /// A realtime user transcript can stream alongside a normal assistant response.
     pub(super) realtime_user_transcript_cell: Option<RealtimeTranscriptCell>,
     /// A realtime assistant transcript can stream alongside a normal user transcript.

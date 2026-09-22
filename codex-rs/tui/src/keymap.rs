@@ -113,6 +113,7 @@ pub(crate) struct AppKeymap {
 pub(crate) struct ChatKeymap {
     /// Toggle microphone capture in an active GPT-Live voice session.
     pub(crate) toggle_voice_mute: Vec<KeyBinding>,
+    chord_hints: Arc<RuntimeChordKeymap>,
     /// Interrupt the active turn.
     pub(crate) interrupt_turn: Vec<KeyBinding>,
     /// Decrease the active reasoning effort.
@@ -129,6 +130,14 @@ pub(crate) struct ChatKeymap {
     pub(crate) prompt_stack_back: Vec<KeyBinding>,
     /// Skip the focused question.
     pub(crate) skip_question: Vec<KeyBinding>,
+}
+
+impl ChatKeymap {
+    pub(crate) fn voice_mute_hint(&self) -> Option<ShortcutHint> {
+        let action = keymap_action_id("chat", "toggle_voice_mute")?;
+        self.chord_hints
+            .primary_hint(action, &self.toggle_voice_mute)
+    }
 }
 
 /// Composer-level keybindings validated in the second app-scope conflict pass.
@@ -671,6 +680,7 @@ impl RuntimeKeymap {
                 &defaults.chat.toggle_voice_mute,
                 "tui.keymap.chat.toggle_voice_mute",
             )?,
+            chord_hints: Arc::clone(&chords),
             interrupt_turn: resolve_bindings(
                 keymap.chat.interrupt_turn.as_ref(),
                 &defaults.chat.interrupt_turn,
@@ -1539,6 +1549,7 @@ impl RuntimeKeymap {
             chords: Arc::default(),
             chat: ChatKeymap {
                 toggle_voice_mute: default_bindings![],
+                chord_hints: Arc::default(),
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![
                     alt(KeyCode::Char(',')),

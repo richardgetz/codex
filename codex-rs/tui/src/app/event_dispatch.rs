@@ -154,6 +154,7 @@ impl App {
                     crate::worktree_browser::fetch(
                         request,
                         self.config.codex_home.to_path_buf(),
+                        app_server.request_handle(),
                         self.app_event_tx.clone(),
                     );
                 }
