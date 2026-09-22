@@ -487,6 +487,9 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 state_db: args.state_db,
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
+                user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
+                    &auth_manager,
+                ))),
                 auth_manager,
                 installation_id,
                 code_mode_session_provider: None,
@@ -497,7 +500,9 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
-            let session = Arc::new(ConnectionSessionState::new());
+            let session = Arc::new(ConnectionSessionState::new(
+                crate::transport::ConnectionOrigin::InProcess,
+            ));
             let mut listen_for_threads = true;
             let mut listen_for_running_turns = true;
 

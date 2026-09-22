@@ -75,6 +75,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::UserVerificationCancelResponse;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
 use codex_code_mode::CodeModeSessionProvider;
@@ -142,6 +143,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     handoff_coordinator: HandoffCoordinator,
+    user_verification: Arc<crate::user_verification::Service>,
     models_refresh_worker: ModelsRefreshWorker,
     turn_cost_worker: Option<TurnCostWorker>,
     skills_watcher: Arc<SkillsWatcher>,
@@ -177,6 +179,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Debug)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) rpc_gate: Arc<ConnectionRpcGate>,
+    pub(crate) origin: crate::transport::ConnectionOrigin,
     pub(crate) mcp_event_streams: McpEventStreams,
     initialized: OnceLock<InitializedConnectionSessionState>,
 }
@@ -193,13 +196,14 @@ pub(crate) struct InitializedConnectionSessionState {
 
 impl Default for ConnectionSessionState {
     fn default() -> Self {
-        Self::new()
+        Self::new(crate::transport::ConnectionOrigin::InProcess)
     }
 }
 
 impl ConnectionSessionState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(origin: crate::transport::ConnectionOrigin) -> Self {
         Self {
+            origin,
             rpc_gate: Arc::new(ConnectionRpcGate::new()),
             mcp_event_streams: McpEventStreams::default(),
             initialized: OnceLock::new(),
@@ -265,6 +269,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) user_verification: Arc<crate::user_verification::Service>,
     pub(crate) installation_id: String,
     pub(crate) code_mode_session_provider: Option<Arc<dyn CodeModeSessionProvider>>,
     pub(crate) server_lifecycle: Arc<ServerLifecycle>,
@@ -291,6 +296,7 @@ impl MessageProcessor {
             config_warnings,
             session_source,
             auth_manager,
+            user_verification,
             installation_id,
             code_mode_session_provider,
             server_lifecycle,
@@ -459,6 +465,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             config_warnings.clone(),
             rpc_transport,
+            Arc::clone(&user_verification),
         );
         let marketplace_processor = MarketplaceRequestProcessor::new(
             Arc::clone(&config),
@@ -602,6 +609,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            user_verification,
             handoff_coordinator,
             models_refresh_worker,
             turn_cost_worker,
@@ -672,7 +680,12 @@ impl MessageProcessor {
             traceparent: trace.traceparent.clone(),
             tracestate: trace.tracestate.clone(),
         });
-        let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
+        let request_context = RequestContext::new(
+            request_id.clone(),
+            request.method.as_str(),
+            request_span,
+            request_trace,
+        );
         Self::run_request_with_context(
             Arc::clone(&self.outgoing),
             request_context.clone(),
@@ -729,8 +742,12 @@ impl MessageProcessor {
         }
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
-        let request_context =
-            RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
+        let request_context = RequestContext::new(
+            request_id.clone(),
+            request.method_name(),
+            request_span,
+            /*parent_trace*/ None,
+        );
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,
@@ -1068,11 +1085,48 @@ impl MessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled before initialized request dispatch");
             }
-            ClientRequest::UserVerificationStatus { .. }
+            ClientRequest::UserVerificationCancel { params, .. } => {
+                self.outgoing
+                    .cancel_user_verification_request(&ConnectionRequestId {
+                        connection_id,
+                        request_id: params.request_id,
+                    })
+                    .await;
+                Ok(Some(UserVerificationCancelResponse {}.into()))
+            }
+            request @ (ClientRequest::UserVerificationStatus { .. }
             | ClientRequest::UserVerificationEnroll { .. }
             | ClientRequest::UserVerificationDelete { .. }
-            | ClientRequest::UserVerificationVerify { .. } => {
-                Err(crate::user_verification::unavailable())
+            | ClientRequest::UserVerificationVerify { .. }) => {
+                let operation = match request {
+                    ClientRequest::UserVerificationStatus { .. } => {
+                        crate::user_verification::Operation::Status
+                    }
+                    ClientRequest::UserVerificationEnroll { .. } => {
+                        crate::user_verification::Operation::Enroll
+                    }
+                    ClientRequest::UserVerificationDelete { .. } => {
+                        crate::user_verification::Operation::Delete
+                    }
+                    ClientRequest::UserVerificationVerify { params, .. } => {
+                        crate::user_verification::Operation::Verify(params)
+                    }
+                    _ => unreachable!("matched a user-verification request"),
+                };
+                let response = self
+                    .user_verification
+                    .handle(
+                        operation,
+                        Arc::clone(&session.rpc_gate),
+                        request_context.cancellation.clone(),
+                        session.origin,
+                    )
+                    .await?;
+                let (payload, check) = response.into_parts();
+                self.outgoing
+                    .send_response_as_checked(request_id.clone(), payload, check)
+                    .await;
+                Ok(None)
             }
             ClientRequest::ServerDiagnostics { .. } => Ok(Some(read_server_diagnostics().into())),
             ClientRequest::ServerLifecycleRead { .. } => {
@@ -1371,6 +1425,19 @@ impl MessageProcessor {
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
             }
+            ClientRequest::ThreadAttachmentAdd { params, .. } => {
+                self.thread_processor
+                    .thread_attachment_add(request_id.clone(), params)
+                    .await
+            }
+            ClientRequest::ThreadAttachmentList { params, .. } => {
+                self.thread_processor.thread_attachment_list(params).await
+            }
+            ClientRequest::ThreadAttachmentRemove { params, .. } => {
+                self.thread_processor
+                    .thread_attachment_remove(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::ThreadSectionMove { params, .. } => {
                 self.thread_processor.thread_section_move(params).await
             }
@@ -1411,6 +1478,9 @@ impl MessageProcessor {
             }
             ClientRequest::ThreadMemoryModeSet { params, .. } => {
                 self.thread_processor.thread_memory_mode_set(params).await
+            }
+            ClientRequest::MemoryStatus { params, .. } => {
+                self.thread_processor.memory_status(params).await
             }
             ClientRequest::ThreadScratchpadContinuousPolicySet { params, .. } => {
                 self.thread_processor

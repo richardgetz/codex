@@ -10,6 +10,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::server_lifecycle::ServerLifecycle;
 use crate::transport::AppServerTransport;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
@@ -160,6 +161,7 @@ impl Harness {
             user_verification: Arc::clone(&service),
             installation_id: "11111111-1111-4111-8111-111111111111".into(),
             code_mode_session_provider: None,
+            server_lifecycle: Arc::new(ServerLifecycle::new()),
             rpc_transport: match origin {
                 ConnectionOrigin::InProcess => AppServerRpcTransport::InProcess,
                 ConnectionOrigin::Stdio | ConnectionOrigin::RemoteControl => {
