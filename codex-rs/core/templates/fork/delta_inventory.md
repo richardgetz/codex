@@ -20,6 +20,13 @@ release or merge rules.
 
 ## Unreleased
 
+- Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
+  recovery contract, account and launcher ownership, pause/continue and ETA
+  APIs, and migration numbering. Upstream attachment state is adapted to the
+  fork by retaining shipped migration `0055` and appending attachment schema
+  changes at `0064`; refreshes must keep both the upstream managed updater and
+  these fork-owned lifecycle gates.
+
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
 
