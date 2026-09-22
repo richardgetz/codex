@@ -57,11 +57,11 @@ mod task_estimates;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_activity;
+mod thread_attachments;
 mod thread_control;
 mod thread_inbound_messages;
 mod thread_section_order;
 mod thread_sections;
-mod thread_attachments;
 mod threads;
 
 pub use external_agent_config_imports::ExternalAgentConfigImportDetailsRecord;

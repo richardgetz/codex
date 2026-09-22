@@ -197,13 +197,16 @@ impl DaemonSettings {
             }
         }
         let temporary_path = path.with_extension("tmp");
-        let contents = serde_json::to_vec_pretty(&settings).context("failed to serialize settings")?;
-        fs::write(&temporary_path, contents).await.with_context(|| {
-            format!(
-                "failed to write daemon settings {}",
-                temporary_path.display()
-            )
-        })?;
+        let contents =
+            serde_json::to_vec_pretty(&settings).context("failed to serialize settings")?;
+        fs::write(&temporary_path, contents)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to write daemon settings {}",
+                    temporary_path.display()
+                )
+            })?;
         fs::rename(&temporary_path, path)
             .await
             .with_context(|| format!("failed to replace daemon settings {}", path.display()))
@@ -239,8 +242,7 @@ async fn read_settings<T: DeserializeOwned + Default>(path: &Path) -> Result<T> 
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
         Err(err) => {
-            return Err(err)
-                .with_context(|| format!("failed to read settings {}", path.display()));
+            return Err(err).with_context(|| format!("failed to read settings {}", path.display()));
         }
     };
     serde_json::from_str(&contents)

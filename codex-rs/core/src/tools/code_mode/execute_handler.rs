@@ -157,8 +157,8 @@ impl CodeModeExecuteHandler {
             args.max_output_tokens,
             wall_time,
         )
-            .await
-            .map_err(FunctionCallError::RespondToModel)
+        .await
+        .map_err(FunctionCallError::RespondToModel)
     }
 }
 

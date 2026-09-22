@@ -117,8 +117,7 @@ impl Session {
                 .into_iter()
                 .map(ResponseItemEnvelope::into_item)
                 .collect::<Vec<_>>();
-            self.record_conversation_items(turn_context, &items)
-                .await;
+            self.record_conversation_items(turn_context, &items).await;
             return;
         }
 
@@ -140,7 +139,7 @@ impl Session {
             }));
         }
         self.record_prepared_conversation_items(turn_context, annotated_items, image_preparations)
-        .await;
+            .await;
     }
 
     /// Injects items into active work, or records them without starting a turn.
@@ -160,8 +159,7 @@ impl Session {
                 default_turn_context.as_ref()
             }
         };
-        self.record_conversation_items(turn_context, &items)
-            .await;
+        self.record_conversation_items(turn_context, &items).await;
     }
 }
 

@@ -26,8 +26,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
-use codex_state::Stage1Output;
 use codex_state::MemoryStore;
+use codex_state::Stage1Output;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -75,13 +75,7 @@ pub async fn run(
     // 2. Ensure the memories root has a git baseline repository.
     if let Err(err) = prepare_memory_workspace(&root).await {
         tracing::error!("failed preparing memory workspace: {err}");
-        job::failed(
-            context.as_ref(),
-            &db,
-            &claim,
-            "failed_prepare_workspace",
-        )
-        .await;
+        job::failed(context.as_ref(), &db, &claim, "failed_prepare_workspace").await;
         return;
     }
 
@@ -93,13 +87,7 @@ pub async fn run(
     ) else {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
-        job::failed(
-            context.as_ref(),
-            &db,
-            &claim,
-            "failed_sandbox_policy",
-        )
-        .await;
+        job::failed(context.as_ref(), &db, &claim, "failed_sandbox_policy").await;
         return;
     };
 
@@ -111,13 +99,7 @@ pub async fn run(
         Ok(raw_memories) => raw_memories,
         Err(err) => {
             tracing::error!("failed to list stage1 outputs from global: {err}");
-            job::failed(
-                context.as_ref(),
-                &db,
-                &claim,
-                "failed_load_stage1_outputs",
-            )
-            .await;
+            job::failed(context.as_ref(), &db, &claim, "failed_load_stage1_outputs").await;
             return;
         }
     };
@@ -142,13 +124,7 @@ pub async fn run(
         Ok(diff) => diff,
         Err(err) => {
             tracing::error!("failed checking memory workspace changes: {err}");
-            job::failed(
-                context.as_ref(),
-                &db,
-                &claim,
-                "failed_workspace_status",
-            )
-            .await;
+            job::failed(context.as_ref(), &db, &claim, "failed_workspace_status").await;
             return;
         }
     };
@@ -174,13 +150,7 @@ pub async fn run(
     // 7. Persist the diff for the consolidation agent to inspect.
     if let Err(err) = write_workspace_diff(&root, &workspace_diff).await {
         tracing::error!("failed writing memory workspace diff file: {err}");
-        job::failed(
-            context.as_ref(),
-            &db,
-            &claim,
-            "failed_workspace_diff_file",
-        )
-        .await;
+        job::failed(context.as_ref(), &db, &claim, "failed_workspace_diff_file").await;
         return;
     }
 

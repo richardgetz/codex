@@ -16,9 +16,9 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -877,8 +877,8 @@ impl ThreadEnvironments {
         drop(tokio::spawn(
             task.clone().in_current_span().with_current_subscriber(),
         ));
-        let shell_snapshot_v2_supported = snapshot_v2
-            && (environment.is_remote() || !shell_snapshot.should_rebuild_inherited());
+        let shell_snapshot_v2_supported =
+            snapshot_v2 && (environment.is_remote() || !shell_snapshot.should_rebuild_inherited());
         Ok(ResolvedEnvironment {
             environment,
             shell,

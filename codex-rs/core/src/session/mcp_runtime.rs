@@ -152,7 +152,9 @@ impl Session {
                 .services
                 .thread_extension_data
                 .get::<codex_extension_api::SessionIsolation>()
-                .is_some_and(|isolation| *isolation == codex_extension_api::SessionIsolation::Isolated)
+                .is_some_and(|isolation| {
+                    *isolation == codex_extension_api::SessionIsolation::Isolated
+                })
             {
                 return projection;
             }

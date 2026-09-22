@@ -60,12 +60,7 @@ pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
         http_client_factory,
         ClientRouteClass::Other,
     );
-    run_with_http(
-        &http,
-        &daemon,
-        &current_updater_identity().await?,
-    )
-    .await
+    run_with_http(&http, &daemon, &current_updater_identity().await?).await
 }
 
 async fn run_with_http(

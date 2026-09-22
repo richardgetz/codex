@@ -136,7 +136,10 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
                         .iter()
                         .find_map(|state| match state {
                             TurnEnvironmentState::Failed { selection, error }
-                                if selection.environment_id == environment_id => Some(error),
+                                if selection.environment_id == environment_id =>
+                            {
+                                Some(error)
+                            }
                             _ => None,
                         })
                 {

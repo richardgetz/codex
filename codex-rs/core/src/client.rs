@@ -999,14 +999,16 @@ impl ModelClient {
     fn filter_tool_result_metadata(input: &mut [ResponseItem], api_provider: &ApiProvider) {
         // Check the resolved destination only when sending, not for local budget estimates.
         // HTTP and WS (including v2 compaction) share this raw-metadata-only filter.
-        let result_metadata_allowed = url::Url::parse(&api_provider.base_url)
-            .ok()
-            .is_some_and(|url| {
-                url.scheme() == "https"
-                    && url.host_str().is_some_and(|host| {
-                        host == "api.openai.com" || codex_http_client::is_allowed_chatgpt_host(host)
-                    })
-            });
+        let result_metadata_allowed =
+            url::Url::parse(&api_provider.base_url)
+                .ok()
+                .is_some_and(|url| {
+                    url.scheme() == "https"
+                        && url.host_str().is_some_and(|host| {
+                            host == "api.openai.com"
+                                || codex_http_client::is_allowed_chatgpt_host(host)
+                        })
+                });
         if !result_metadata_allowed {
             for item in input {
                 item.clear_tool_result_metadata();

@@ -110,11 +110,7 @@ impl ToolCallRuntime {
             .enabled(codex_features::Feature::ExecutedToolCallMetadata)
             && let Some(executed_tool_calls) = self.session.services.executed_tool_calls.as_ref()
         {
-            executed_tool_calls.record_tool_call(
-                &call,
-                &source,
-                &self.step_context,
-            );
+            executed_tool_calls.record_tool_call(&call, &source, &self.step_context);
         }
         let router = &self.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);

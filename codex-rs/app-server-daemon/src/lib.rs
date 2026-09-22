@@ -26,9 +26,9 @@ use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
-use managed_install::managed_codex_bin;
 #[cfg(any(unix, windows))]
 use managed_install::executable_identity;
+use managed_install::managed_codex_bin;
 #[cfg(any(unix, windows))]
 use managed_install::managed_codex_version;
 use serde::Serialize;
@@ -484,7 +484,8 @@ impl Daemon {
             };
             let mode = if mode == RestartMode::IfBinaryOrVersionChanged {
                 let managed_identity = executable_identity(managed_codex_bin).await?;
-                if backend.running_executable_identity().await?.as_ref() == Some(&managed_identity) {
+                if backend.running_executable_identity().await?.as_ref() == Some(&managed_identity)
+                {
                     RestartMode::IfVersionChanged
                 } else {
                     RestartMode::Always
@@ -780,7 +781,8 @@ impl Daemon {
         if updater.is_starting_or_running().await? {
             updater.stop().await?;
         }
-        let auto_update_enabled = settings.auto_update_enabled && settings.managed_codex_path.is_none();
+        let auto_update_enabled =
+            settings.auto_update_enabled && settings.managed_codex_path.is_none();
         if auto_update_enabled {
             updater.start().await?;
         }
@@ -943,7 +945,10 @@ impl Daemon {
         self.settings_file
             .parent()
             .and_then(Path::parent)
-            .is_some_and(|home| home.join("packages/standalone/auto-update-version").is_file())
+            .is_some_and(|home| {
+                home.join("packages/standalone/auto-update-version")
+                    .is_file()
+            })
     }
 
     fn manual_update_socket_path(&self) -> PathBuf {
