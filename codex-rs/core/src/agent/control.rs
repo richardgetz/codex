@@ -186,6 +186,10 @@ pub(crate) struct LocalAgentControl {
     eta_reminders: Arc<EtaReminderController>,
 }
 
+// Keep the fork's concrete controller name available to the split control modules. The
+// backend-facing `AgentControl` trait lives in `agent::api` and is exported separately.
+pub(crate) use LocalAgentControl as AgentControl;
+
 impl Default for LocalAgentControl {
     fn default() -> Self {
         Self::new(
