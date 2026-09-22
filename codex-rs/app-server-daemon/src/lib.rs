@@ -119,6 +119,23 @@ pub struct BootstrapOutput {
     pub app_server_version: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateStatus {
+    Updated,
+    NoUpdate,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct UpdateOutput {
+    pub status: UpdateStatus,
+    pub managed_codex_path: PathBuf,
+    pub installed_version: Option<String>,
+    pub running_version: Option<String>,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum RemoteControlStartOutput {
@@ -293,6 +310,13 @@ pub async fn run_pid_update_loop(
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
     update_loop::run(http_client_factory).await
+}
+
+pub async fn update() -> Result<UpdateOutput> {
+    ensure_supported_platform()?;
+    #[cfg(windows)]
+    backend::windows::ensure_not_elevated()?;
+    update_loop::request_manual_update(&Daemon::from_environment()?).await
 }
 
 #[cfg(any(unix, windows))]
@@ -892,6 +916,39 @@ impl Daemon {
             remote_control_enabled: settings.remote_control_enabled,
             reload_enabled: settings.managed_codex_path.is_some(),
         }
+    }
+
+    fn current_managed_codex_bin(&self) -> Result<PathBuf> {
+        let home = self
+            .settings_file
+            .parent()
+            .and_then(Path::parent)
+            .context("daemon settings path has no Codex home")?;
+        Ok(managed_install::managed_codex_bin(home))
+    }
+
+    fn is_stable_standalone_release(&self) -> Result<bool> {
+        let home = self
+            .settings_file
+            .parent()
+            .and_then(Path::parent)
+            .context("daemon settings path has no Codex home")?;
+        Ok(managed_install::is_stable_standalone_release(
+            home,
+            &self.current_managed_codex_bin()?,
+        ))
+    }
+
+    fn has_latest_selection_marker(&self) -> bool {
+        self.settings_file
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|home| home.join("packages/standalone/auto-update-version").is_file())
+    }
+
+    fn manual_update_socket_path(&self) -> PathBuf {
+        self.update_pid_file
+            .with_file_name("app-server-updater.sock")
     }
 
     async fn load_settings(&self) -> Result<DaemonSettings> {
