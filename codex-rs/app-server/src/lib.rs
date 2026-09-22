@@ -142,6 +142,7 @@ mod thread_control_runtime;
 mod thread_state;
 mod thread_status;
 mod transport;
+mod turn_admission;
 mod turn_cost_worker;
 mod user_verification;
 mod user_verification_response;
@@ -749,12 +750,13 @@ pub async fn run_main_with_transport_options(
         AppServerTransport::Stdio => {
             let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
             app_server_client_name_rx = Some(stdio_client_name_rx);
-            start_stdio_connection(
+            let accept_handle = start_stdio_connection(
                 transport_event_tx.clone(),
-                &mut transport_accept_handles,
                 stdio_client_name_tx,
+                runtime_options.install_shutdown_signal_handler,
             )
             .await?;
+            transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::UnixSocket { socket_path } => {
             let accept_handle = start_control_socket_acceptor(
@@ -1090,6 +1092,7 @@ pub async fn run_main_with_transport_options(
                             TransportEvent::ConnectionOpened {
                                 connection_id,
                                 origin,
+                                auth,
                                 writer,
                                 disconnect_sender,
                             } => {
@@ -1120,6 +1123,7 @@ pub async fn run_main_with_transport_options(
                                     connection_id,
                                     ConnectionState::new(
                                         origin,
+                                        auth,
                                         outbound_initialized,
                                         outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,
