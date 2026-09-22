@@ -4239,15 +4239,23 @@ impl Config {
                 builtin_workspace_write_settings.as_ref(),
                 &mut startup_warnings,
             )?;
+            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+                permission_profile.to_runtime_permissions();
             if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
                 && let Some(sandbox_workspace_write) = cfg.sandbox_workspace_write.as_ref()
             {
-                configured_workspace_roots.extend(sandbox_workspace_write.writable_roots.clone());
+                for root in &sandbox_workspace_write.writable_roots {
+                    let root = PathUri::from_abs_path(root);
+                    if !configured_workspace_roots.contains(&root) {
+                        configured_workspace_roots.push(root);
+                    }
+                }
             }
-            dedupe_absolute_paths(&mut configured_workspace_roots);
+            configured_workspace_roots.sort();
+            configured_workspace_roots.dedup();
             file_system_sandbox_policy = file_system_sandbox_policy
-                .with_materialized_project_roots_for_workspace_roots(&configured_workspace_roots);
+                .with_materialized_project_roots_for_path_uris(&configured_workspace_roots);
             let mut permission_profile = if let Some(permission_profile) =
                 builtin_permission_profile(default_permissions, builtin_workspace_write_settings)
             {
@@ -4845,10 +4853,9 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let (network_requirements, network_requirements_source) = match network_requirements {
-            Some(Sourced { value, source }) => (Some(value), Some(source)),
-            None => (None, None),
-        };
+        let network_requirements_source = network_requirements
+            .as_ref()
+            .map(|Sourced { source, .. }| source.clone());
         let has_network_requirements = network_requirements.is_some();
         let network_permission_profile = constrained_permission_profile.get().clone();
         let network = build_network_proxy_spec(
@@ -4867,9 +4874,9 @@ impl Config {
             }
         })?;
         let network = if has_network_requirements {
-            Some(network)
+            network
         } else {
-            network.enabled().then_some(network)
+            network.filter(NetworkProxySpec::enabled)
         };
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,

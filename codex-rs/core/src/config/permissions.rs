@@ -70,7 +70,7 @@ pub(crate) fn is_builtin_permission_profile_name(profile_name: &str) -> bool {
     )
 }
 
-fn builtin_permission_profile(
+pub(crate) fn builtin_permission_profile(
     profile_name: &str,
     workspace_write: Option<&WorkspaceWriteSettings>,
 ) -> Option<PermissionProfile> {

@@ -18,7 +18,6 @@ use crate::context::world_state::MultiAgentModeState;
 use crate::context::world_state::MultiAgentUsageHintState;
 use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PersistentModeState;
-use crate::context::world_state::PersonalityState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolsState;
@@ -63,7 +62,7 @@ impl Session {
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(
                     turn_context,
-                    &turn_context.environments,
+                    &turn_context.initial_environments.environments,
                     None,
                 )
                 .await
@@ -92,7 +91,6 @@ impl Session {
             "building step world state"
         );
         let step_model_info = &step_context.settings.model_info;
-        let step_personality = step_context.settings.personality();
         let model_instructions = render_model_instructions(model_info);
         let model_instructions = if !turn_context.config.update_plan_enabled
             && turn_context.config.model_catalog.is_none()
@@ -106,28 +104,23 @@ impl Session {
             model_instructions
         };
         let base_instructions = self.get_prompt_base_instructions().await.text;
-        let (previous_model, previous_context) = {
+        let previous_model = {
             let state = self.state.lock().await;
-            (
-                state
-                    .previous_turn_settings()
-                    .map(|previous| previous.model)
-                    .or_else(|| {
-                        state
-                            .base_instructions_provenance
-                            .as_ref()
-                            .and_then(|provenance| match provenance {
-                                BaseInstructionsProvenance::Model { model } => Some(model),
-                                BaseInstructionsProvenance::Custom => None,
-                            })
-                            .filter(|_| base_instructions != model_instructions)
-                            .cloned()
-                    }),
-                state.reference_context_item(),
-            )
+            state
+                .previous_turn_settings()
+                .map(|previous| previous.model)
+                .or_else(|| {
+                    state
+                        .base_instructions_provenance
+                        .as_ref()
+                        .and_then(|provenance| match provenance {
+                            BaseInstructionsProvenance::Model { model } => Some(model),
+                            BaseInstructionsProvenance::Custom => None,
+                        })
+                        .filter(|_| base_instructions != model_instructions)
+                        .cloned()
+                })
         };
-        let personality_is_baked =
-            step_model_info.supports_personality() && base_instructions == model_instructions;
         let environment_subagents = if turn_context.config.include_environment_context {
             self.services
                 .agent_control
@@ -147,28 +140,6 @@ impl Session {
             previous_model.as_deref(),
             model_instructions,
         ));
-        if self.features.enabled(Feature::Personality) {
-            let personality_instructions = step_personality.and_then(|personality| {
-                step_model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|messages| messages.get_personality_message(Some(personality)))
-                    .filter(|message| !message.is_empty())
-            });
-            world_state.add_section(PersonalityState::new(
-                &step_model_info.slug,
-                step_personality,
-                previous_context
-                    .as_ref()
-                    .map(|previous| previous.model.as_str())
-                    .or(previous_model.as_deref()),
-                previous_context
-                    .as_ref()
-                    .and_then(|previous| previous.personality),
-                personality_instructions,
-                personality_is_baked,
-            ));
-        }
         let token_budget_enabled = turn_context.config.features.enabled(Feature::TokenBudget)
             && step_context
                 .settings
