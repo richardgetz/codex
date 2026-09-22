@@ -114,7 +114,6 @@ impl SectionCost {
             ContentItem::EncryptedContent { encrypted_content } => {
                 self.text_bytes = self.text_bytes.saturating_add(encrypted_content.len());
             }
-            }
             ContentItem::InputAudio { audio_url } => {
                 // Guardian currently has no audio contributor. Count a future opaque
                 // payload conservatively until its consumer supplies modality costs.

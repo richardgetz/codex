@@ -3252,6 +3252,7 @@ impl Session {
                 msg: EventMsg::Warning(WarningEvent { message }),
             })
             .await;
+        }
     }
 
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
