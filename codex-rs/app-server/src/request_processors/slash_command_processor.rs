@@ -19,15 +19,20 @@ use codex_app_server_protocol::SlashCommandResultKind;
 use codex_app_server_protocol::SlashCommandResultNotification;
 use codex_app_server_protocol::SlashCommandResultPayload;
 use codex_app_server_protocol::SlashCommandSpec;
+use codex_app_server_protocol::ThreadActivityContinueParams;
+use codex_app_server_protocol::ThreadActivityPauseParams;
 use codex_app_server_transport::APP_SERVER_DAEMON_MANAGED_ENV;
 use codex_app_server_transport::APP_SERVER_DAEMON_RELOAD_ENV;
 
 use super::AccountRequestProcessor;
 use super::ConnectionRequestId;
 use super::OutgoingMessageSender;
+use super::TurnRequestProcessor;
 use super::invalid_request;
+use crate::server_lifecycle::NEW_WORK_REJECTED_MESSAGE;
+use crate::server_lifecycle::ServerLifecycle;
 
-const MAX_OUTPUT_CHARS: usize = 20_000;
+const MAX_OUTPUT_CHARS: usize = 200_000;
 const RELOAD_HANDOFF_DELAY: Duration = Duration::from_millis(250);
 
 type ReloadLauncher = dyn Fn(std::path::PathBuf, ReloadOperation) -> std::io::Result<tokio::process::Child>
@@ -53,17 +58,23 @@ pub(crate) struct SlashCommandRequestProcessor {
     account_processor: AccountRequestProcessor,
     outgoing: Arc<OutgoingMessageSender>,
     reload_scheduled: Arc<AtomicBool>,
+    server_lifecycle: Arc<ServerLifecycle>,
+    turn_processor: TurnRequestProcessor,
 }
 
 impl SlashCommandRequestProcessor {
     pub(crate) fn new(
         account_processor: AccountRequestProcessor,
+        turn_processor: TurnRequestProcessor,
         outgoing: Arc<OutgoingMessageSender>,
+        server_lifecycle: Arc<ServerLifecycle>,
     ) -> Self {
         Self {
             account_processor,
             outgoing,
             reload_scheduled: Arc::new(AtomicBool::new(false)),
+            server_lifecycle,
+            turn_processor,
         }
     }
 
@@ -86,12 +97,25 @@ impl SlashCommandRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let command = normalize_command(&params.command)?;
         let thread_id = params.thread_id.clone();
-        if matches!(command.as_str(), "status" | "spend" | "usage")
-            && !params.args.trim().is_empty()
+        if matches!(
+            command.as_str(),
+            "status" | "spend" | "usage" | "pause" | "continue"
+        ) && !params.args.trim().is_empty()
         {
             let error = invalid_request(format!(
                 "`/{command}` does not accept inline arguments in the app-server bridge"
             ));
+            let notification = error_result(&command, &error);
+            self.send_result_notification(request_id, &thread_id, &notification)
+                .await;
+            return Err(error);
+        }
+        if command == "continue"
+            && self
+                .server_lifecycle
+                .rejects_new_work("thread/activity/continue")
+        {
+            let error = invalid_request(NEW_WORK_REJECTED_MESSAGE);
             let notification = error_result(&command, &error);
             self.send_result_notification(request_id, &thread_id, &notification)
                 .await;
@@ -116,6 +140,17 @@ impl SlashCommandRequestProcessor {
                     return Err(error);
                 }
             },
+            "pause" | "continue" => {
+                match self.activity_result(&command, request_id, &thread_id).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let notification = error_result(&command, &error);
+                        self.send_result_notification(request_id, &thread_id, &notification)
+                            .await;
+                        return Err(error);
+                    }
+                }
+            }
             "reload" => {
                 self.reload_result(&params.args, request_id, &thread_id)
                     .await
@@ -135,6 +170,47 @@ impl SlashCommandRequestProcessor {
         self.send_result_notification(request_id, &thread_id, &result)
             .await;
         Ok(Some(result.into()))
+    }
+
+    async fn activity_result(
+        &self,
+        command: &str,
+        request_id: &ConnectionRequestId,
+        thread_id: &str,
+    ) -> Result<SlashCommandExecuteResponse, JSONRPCErrorError> {
+        match command {
+            "pause" => {
+                self.turn_processor
+                    .thread_activity_pause(
+                        request_id,
+                        ThreadActivityPauseParams {
+                            thread_id: thread_id.to_string(),
+                        },
+                    )
+                    .await
+            }
+            "continue" => {
+                self.turn_processor
+                    .thread_activity_continue(
+                        request_id,
+                        ThreadActivityContinueParams {
+                            thread_id: thread_id.to_string(),
+                        },
+                    )
+                    .await
+            }
+            _ => unreachable!("activity_result called for unsupported command {command}"),
+        }?;
+        Ok(SlashCommandExecuteResponse {
+            command: command.to_string(),
+            ok: true,
+            result_kind: SlashCommandResultKind::Text,
+            output: SlashCommandOutput {
+                format: "markdown".to_string(),
+                text: format!("`/{command}` completed successfully."),
+            },
+            reload: None,
+        })
     }
 
     async fn send_result_notification(
@@ -710,10 +786,10 @@ fn command_specs(reload_available: bool) -> Vec<SlashCommandSpec> {
             aliases: Vec::new(),
             description: description.to_string(),
             supports_inline_args,
-            available: matches!(name, "status" | "spend")
+            available: matches!(name, "status" | "spend" | "pause" | "continue")
                 || (name == "reload" && reload_available),
             unavailable_reason: (match name {
-                "status" | "spend" => None,
+                "status" | "spend" | "pause" | "continue" => None,
                 "reload" if reload_available => None,
                 "reload" => Some(
                     "Reload requires an app-server process launched by the managed local daemon with an explicitly configured local Codex launcher.".to_string(),
