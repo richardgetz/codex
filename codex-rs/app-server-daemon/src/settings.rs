@@ -39,7 +39,7 @@ impl Default for DaemonSettings {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredSettings {
     #[serde(default)]
@@ -50,6 +50,17 @@ struct StoredSettings {
     updater: UpdaterSettings,
     #[serde(default)]
     managed_codex_path: Option<std::path::PathBuf>,
+}
+
+impl Default for StoredSettings {
+    fn default() -> Self {
+        Self {
+            remote_control_enabled: false,
+            shutdown_grace_seconds: DEFAULT_SHUTDOWN_GRACE_SECONDS,
+            updater: UpdaterSettings::default(),
+            managed_codex_path: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
