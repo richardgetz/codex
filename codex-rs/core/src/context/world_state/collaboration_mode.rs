@@ -30,6 +30,7 @@ impl CollaborationModeState {
         let catalog_instructions = match collaboration_mode.mode {
             ModeKind::Default => messages.default,
             ModeKind::Plan => messages.plan,
+            ModeKind::PairProgramming | ModeKind::Execute => messages.default,
         }
         .catalog_override();
 

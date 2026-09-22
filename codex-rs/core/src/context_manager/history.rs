@@ -954,6 +954,10 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
                 ContentItem::InputImage { image, detail } => {
                     estimate_image_reference_bytes(image, *detail)
                 }
+                ContentItem::EncryptedContent { encrypted_content } => i64::try_from(
+                    estimate_encrypted_function_output_length(encrypted_content.len()),
+                )
+                .unwrap_or(i64::MAX),
                 ContentItem::InputAudio { audio_url } => estimate_audio_bytes(audio_url),
             })
             .fold(0i64, i64::saturating_add),

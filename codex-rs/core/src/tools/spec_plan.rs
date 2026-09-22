@@ -1324,7 +1324,8 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
                     .model_messages
                     .and_then(|messages| messages.tools.as_ref())
                     .and_then(|tools| tools.send_user_message_async.as_ref())
-                    .and_then(|tool| tool.description.clone()),
+                    .and_then(|tool| tool.description.clone())
+                    .unwrap_or_default(),
             },
             ToolExposure::DirectModelOnly,
         );
