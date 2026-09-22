@@ -432,7 +432,7 @@ mod tests {
                 .skills()
                 .expect("mention catalog")
                 .as_slice(),
-            &[enabled.clone(), repo_skill.clone()],
+            &[enabled, repo_skill.clone()],
             "disabled skills stay out of $ autocomplete"
         );
 
