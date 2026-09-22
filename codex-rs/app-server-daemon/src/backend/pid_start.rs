@@ -80,6 +80,39 @@ impl PidBackend {
         let codex_bin = &self.codex_bin;
         let codex_bin_path: &Path = codex_bin.as_ref();
         let mut command = Command::new(codex_bin_path);
+        let managed_app_server = matches!(self.command_kind, PidCommandKind::AppServer { .. });
+        if managed_app_server
+            && matches!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    Command::new(codex_bin_path)
+                        .args(["app-server", "--managed-daemon", "--help"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .kill_on_drop(true)
+                        .status(),
+                )
+                .await,
+                Ok(Ok(status)) if status.success()
+            )
+        {
+            command.arg("--managed-daemon");
+        } else if managed_app_server {
+            let codex_home = self
+                .pid_file
+                .parent()
+                .and_then(Path::parent)
+                .context("daemon pid path has no Codex home")?;
+            let recovery_file = codex_app_server_transport::daemon_recovery_file_path(codex_home);
+            match fs::remove_file(&recovery_file).await {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    tracing::warn!(path = %recovery_file.display(), %err, "failed to clear daemon recovery state before legacy launch");
+                }
+            }
+        }
         let stderr_log = match self.open_stderr_log().await {
             Ok(stderr_log) => stderr_log,
             Err(err) => {
@@ -247,7 +280,7 @@ impl PidBackend {
             .context("spawned app-server process has no pid")?;
         // Do not publish the PID record until the post-spawn observation agrees with the
         // pre-spawn generation; the PID and process start time then bind that result to this child.
-        let launch_identity =
+        let (launch_identity, executable_identity) =
             if let Some((path, version_before_spawn, identity_before_spawn)) = launch_identity {
                 let version_after_spawn = crate::managed_install::managed_codex_version(&path)
                     .await
@@ -255,15 +288,20 @@ impl PidBackend {
                 let identity_after_spawn = crate::managed_install::executable_identity(&path)
                     .await
                     .ok();
-                Some(retain_launch_identity(
+                let executable_identity = match (&identity_before_spawn, &identity_after_spawn) {
+                    (Some(before), Some(after)) if before == after => identity_after_spawn.clone(),
+                    _ => None,
+                };
+                let launch_identity = retain_launch_identity(
                     path,
                     version_before_spawn,
                     identity_before_spawn,
                     version_after_spawn,
                     identity_after_spawn,
-                ))
+                );
+                (Some(launch_identity), executable_identity)
             } else {
-                None
+                (None, None)
             };
         let record = match async {
             #[cfg(windows)]
@@ -277,6 +315,7 @@ impl PidBackend {
             Ok(process_start_time) => PidRecord {
                 pid,
                 process_start_time,
+                executable_identity,
                 launch_identity,
             },
             Err(err) => {

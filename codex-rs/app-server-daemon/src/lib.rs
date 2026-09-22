@@ -28,6 +28,8 @@ use codex_app_server_transport::app_server_control_socket_path;
 use codex_utils_home_dir::find_codex_home;
 use managed_install::managed_codex_bin;
 #[cfg(any(unix, windows))]
+use managed_install::executable_identity;
+#[cfg(any(unix, windows))]
 use managed_install::managed_codex_version;
 use serde::Serialize;
 use settings::DaemonSettings;
@@ -186,6 +188,7 @@ pub(crate) enum RestartIfRunningOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RestartMode {
     IfVersionChanged,
+    IfBinaryOrVersionChanged,
     Always,
 }
 
@@ -407,7 +410,9 @@ impl Daemon {
 
         self.ensure_managed_codex_bin(managed_codex_bin)?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
-            backend.stop().await?;
+            backend
+                .stop_with_grace(settings.shutdown_grace_seconds)
+                .await?;
         }
 
         let pid = self
@@ -453,13 +458,25 @@ impl Daemon {
             } else {
                 None
             };
+            let mode = if mode == RestartMode::IfBinaryOrVersionChanged {
+                let managed_identity = executable_identity(managed_codex_bin).await?;
+                if backend.running_executable_identity().await?.as_ref() == Some(&managed_identity) {
+                    RestartMode::IfVersionChanged
+                } else {
+                    RestartMode::Always
+                }
+            } else {
+                mode
+            };
             match restart_decision(mode, info.as_ref(), managed_version.as_deref()) {
                 RestartDecision::NotReady => return Ok(RestartIfRunningOutcome::NotReady),
                 RestartDecision::AlreadyCurrent => RestartIfRunningOutcome::AlreadyCurrent,
                 RestartDecision::Restart => {
                     #[cfg(windows)]
                     backend::windows::ensure_detached_launch(managed_codex_bin)?;
-                    backend.stop().await?;
+                    backend
+                        .stop_with_grace(settings.shutdown_grace_seconds)
+                        .await?;
                     let _ = self
                         .start_managed_backend_with_bin(&settings, managed_codex_bin)
                         .await?;
@@ -492,10 +509,12 @@ impl Daemon {
     }
 
     async fn stop(&self) -> Result<LifecycleOutput> {
-        let settings = self.load_settings().await?;
+        let settings = DaemonSettings::load_for_stop(&self.settings_file).await;
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
         if let Some(backend) = self.running_backend_instance(&settings).await? {
-            backend.stop().await?;
+            backend
+                .stop_with_grace(settings.shutdown_grace_seconds)
+                .await?;
             return Ok(self
                 .output(
                     LifecycleStatus::Stopped,
@@ -669,7 +688,9 @@ impl Daemon {
         settings.save(&self.settings_file).await?;
 
         let app_server_version = if let Some(backend) = backend {
-            backend.stop().await?;
+            backend
+                .stop_with_grace(settings.shutdown_grace_seconds)
+                .await?;
             let managed_codex_bin = self.configured_managed_codex_bin(&settings);
             let _ = self
                 .start_managed_backend_with_bin(&settings, managed_codex_bin)
@@ -698,6 +719,7 @@ impl Daemon {
             managed_codex_path: options
                 .managed_codex_path
                 .or(previous_settings.managed_codex_path.clone()),
+            ..previous_settings.clone()
         };
         settings.validate()?;
         let managed_codex_bin = self.configured_managed_codex_bin(&settings);
@@ -722,7 +744,9 @@ impl Daemon {
         settings.save(&self.settings_file).await?;
 
         if let Some(backend) = self.running_backend_instance(&settings).await? {
-            backend.stop().await?;
+            backend
+                .stop_with_grace(settings.shutdown_grace_seconds)
+                .await?;
         }
 
         let backend =
@@ -732,7 +756,7 @@ impl Daemon {
         if updater.is_starting_or_running().await? {
             updater.stop().await?;
         }
-        let auto_update_enabled = settings.managed_codex_path.is_none();
+        let auto_update_enabled = settings.auto_update_enabled && settings.managed_codex_path.is_none();
         if auto_update_enabled {
             updater.start().await?;
         }
@@ -1231,6 +1255,7 @@ mod tests {
         let settings = DaemonSettings {
             remote_control_enabled: true,
             managed_codex_path: Some(launcher.clone()),
+            ..DaemonSettings::default()
         };
         assert_eq!(
             daemon.configured_managed_codex_bin(&settings),
@@ -1252,6 +1277,7 @@ mod tests {
         let settings = DaemonSettings {
             remote_control_enabled: false,
             managed_codex_path: Some(configured_launcher_path()),
+            ..DaemonSettings::default()
         };
 
         assert!(
@@ -1277,6 +1303,7 @@ mod tests {
         DaemonSettings {
             remote_control_enabled: false,
             managed_codex_path: Some(configured_launcher_path()),
+            ..DaemonSettings::default()
         }
         .save(&daemon.settings_file)
         .await

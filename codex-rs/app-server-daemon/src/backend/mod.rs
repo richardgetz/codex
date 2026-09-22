@@ -10,6 +10,7 @@ use serde::Serialize;
 
 pub(crate) use pid::LaunchIdentity;
 pub(crate) use pid::PidBackend;
+pub(crate) use crate::managed_install::ExecutableIdentity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +47,18 @@ pub(crate) async fn running_launch_identity(pid_file: &Path) -> Result<Option<La
         /*remote_control_enabled*/ false,
     )
     .running_launch_identity()
+    .await
+}
+
+pub(crate) async fn running_executable_identity(
+    pid_file: &Path,
+) -> Result<Option<ExecutableIdentity>> {
+    PidBackend::new(
+        PathBuf::new(),
+        pid_file.to_path_buf(),
+        /*remote_control_enabled*/ false,
+    )
+    .running_executable_identity()
     .await
 }
 

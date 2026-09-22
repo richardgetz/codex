@@ -166,7 +166,10 @@ fn update_modes_for_identities(
     managed_identity: &ExecutableIdentity,
 ) -> (RestartMode, UpdaterRefreshMode) {
     if running_updater_identity == managed_identity {
-        (RestartMode::IfVersionChanged, UpdaterRefreshMode::None)
+        (
+            RestartMode::IfBinaryOrVersionChanged,
+            UpdaterRefreshMode::None,
+        )
     } else {
         (
             RestartMode::Always,
