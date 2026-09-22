@@ -10,6 +10,9 @@ pub(crate) mod status;
 pub(crate) mod types;
 
 pub(crate) use codex_protocol::protocol::AgentStatus;
+// Preserve the fork's concrete local controller name for internal callers. The public
+// `crate::AgentControl` export remains the backend trait from `agent::api`.
+pub(crate) use control::LocalAgentControl as AgentControl;
 pub(crate) use control::LocalAgentControl;
 pub(crate) use registry::exceeds_thread_spawn_depth_limit;
 pub(crate) use registry::next_thread_spawn_depth;

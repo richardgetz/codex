@@ -4,6 +4,7 @@
 use crate::context::MultiAgentRoleInstructions;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::turn_input::CyberAccessProgram;
@@ -28,6 +29,7 @@ pub enum SpawnAgentForkMode {
 pub struct SpawnAgentOptions {
     pub fork_parent_spawn_call_id: Option<String>,
     pub fork_mode: Option<SpawnAgentForkMode>,
+    pub initial_collaboration_mode: Option<CollaborationMode>,
     pub parent_thread_id: Option<ThreadId>,
     pub parent_turn_id: Option<String>,
     /// Attribute delegated usage to the turn that initiated it.

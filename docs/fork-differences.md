@@ -183,7 +183,7 @@ show_idle_notifications = false
 dynamic_handoff = true
 
 [team.worker]
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 reasoning_effort = "max"
 # Optional: maximum concurrently active direct Workers per Lead.
 max_concurrent = 10
@@ -195,7 +195,7 @@ max_concurrent = 10
 - `/team on`, `/team off`, and `/team status` enable, disable, and report the
   current thread's assignment without changing global config defaults.
   `/team lead` and `/team worker` open the same model and effort picker used by
-  `/model`; typed forms such as `/team lead gpt-5.6-sol high` select an exact
+  `/model`; typed forms such as `/team lead gpt-6-sol high` select an exact
   catalog entry. These profile edits remain in the current thread snapshot,
   preserve Team Off until `/team on`, survive resume/fork, and affect Workers
   spawned afterward. In-flight Workers retain the profile captured at spawn.

@@ -27,6 +27,12 @@ release or merge rules.
   changes at `0064`; refreshes must keep both the upstream managed updater and
   these fork-owned lifecycle gates.
 
+- The stable model catalog includes GPT-6 Sol and Luna (client minimum
+  `0.155.0`, medium defaults), routes built-in 5.4/5.5/5.6 upgrades and the
+  default Luna fallback to those targets, and reports their standard, long
+  context, Fast, and Flex status pricing. Explicit historical model IDs remain
+  selectable.
+
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
 
@@ -884,6 +890,10 @@ release or merge rules.
   completion. Process/output watchers must not be treated as automatic model
   wakes, arbitrary commands must not subscribe idle workers, and missing
   callbacks require an explicit check.
+
+- Verify upstream model refreshes preserve the GPT-6 Sol/Luna catalog entries,
+  migration mappings, Luna fallback, and standard/long/Fast/Flex status pricing
+  while keeping explicit historical model IDs selectable.
 
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
