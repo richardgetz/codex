@@ -131,6 +131,14 @@ async fn write_failed_preparation_fixture(
     Ok(journal.handoff_id)
 }
 
+async fn write_empty_post_transfer_fixture(codex_home: &Path) -> Result<String> {
+    let mut journal = HandoffJournal::begin(codex_home, "test-runtime", Vec::new()).await?;
+    journal.mark_transfer_started();
+    journal.set_state(HandoffJournalState::NeedsAttention);
+    journal.persist(codex_home).await?;
+    Ok(journal.handoff_id)
+}
+
 async fn write_active_recovery_fixture(codex_home: &Path) -> Result<String> {
     let mut journal = HandoffJournal::begin(
         codex_home,
@@ -683,6 +691,55 @@ async fn stale_needs_attention_handoffs_do_not_fence_account_switch() -> Result<
 }
 
 #[tokio::test]
+async fn empty_post_transfer_handoff_does_not_fence_startup_and_recovers() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    let handoff_id = write_empty_post_transfer_fixture(codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let thread_request = mcp
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let _: codex_app_server_protocol::ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_request)).await??;
+
+    let switch_id = mcp
+        .send_raw_request("account/switch", Some(json!({ "alias": "work" })))
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(switch_id)),
+    )
+    .await??;
+    let _: SwitchAccountResponse = to_response(response)?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("account/updated"),
+    )
+    .await??;
+
+    let recover_id = mcp
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({ "handoffId": handoff_id })),
+        )
+        .await?;
+    let recovered: ThreadHandoffRecoverResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(recover_id)).await??;
+    assert_eq!(recovered.receipt.state, ThreadHandoffState::Completed);
+    assert!(recovered.receipt.nodes.is_empty());
+
+    let retained = HandoffJournal::load_all(codex_home.path()).await?;
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].state, HandoffJournalState::Completed);
+    Ok(())
+}
+
+#[tokio::test]
 async fn recover_of_terminal_needs_attention_does_not_rearm_account_fence() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
@@ -727,7 +784,7 @@ async fn recover_of_terminal_needs_attention_does_not_rearm_account_fence() -> R
 async fn active_handoff_still_fences_account_switch() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
-    write_active_recovery_fixture(codex_home.path()).await?;
+    let handoff_id = write_active_recovery_fixture(codex_home.path()).await?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -741,6 +798,7 @@ async fn active_handoff_still_fences_account_switch() -> Result<()> {
     )
     .await??;
     assert!(error.error.message.contains("recovery is pending"));
+    assert!(error.error.message.contains(&handoff_id));
     Ok(())
 }
 

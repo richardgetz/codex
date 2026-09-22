@@ -12,6 +12,7 @@ use super::ApplyAttemptReceipt;
 use super::ApplyPhase;
 use super::ApplyStatus;
 use super::HandoffReceipt;
+use super::HandoffRpcError;
 use super::ensure_transferable_handoff;
 use super::parse_handoff_response;
 use super::sanitize_failure;
@@ -326,6 +327,91 @@ fn legacy_failed_receipts_without_nodes_cannot_retry() {
             )
             .can_retry
     );
+}
+
+#[test]
+fn empty_post_transfer_receipt_can_retry_after_stop_completed() {
+    let receipt = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            transfer_started: Some(true),
+            ..receipt("needsAttention", Vec::new())
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(true),
+        stop_completed: Some(true),
+        failure: Some("coordinator did not complete exact handoff recovery".to_string()),
+    };
+
+    assert!(!receipt.blocks_new_apply());
+    let output = receipt.output(Path::new("socket"), None, None);
+    assert!(output.can_retry);
+    assert!(!output.can_quarantine);
+}
+
+#[test]
+fn empty_post_transfer_orphan_is_reconcilable_after_completed_stop() {
+    let receipt = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            transfer_started: Some(true),
+            ..receipt("needsAttention", Vec::new())
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(true),
+        stop_completed: Some(true),
+        failure: Some("coordinator did not complete exact handoff recovery".to_string()),
+    };
+
+    assert!(receipt.can_reconcile_empty_orphan());
+    assert!(
+        HandoffRpcError {
+            method: "thread/handoff/status".to_string(),
+            message: "unknown handoff id handoff-1".to_string(),
+            receipt: None,
+        }
+        .is_unknown_handoff()
+    );
+}
+
+#[test]
+fn empty_post_transfer_orphan_without_stop_start_is_not_reconcilable() {
+    let receipt = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            transfer_started: Some(true),
+            ..receipt("needsAttention", Vec::new())
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(false),
+        stop_completed: Some(true),
+        failure: Some("invalid receipt markers".to_string()),
+    };
+
+    assert!(!receipt.can_reconcile_empty_orphan());
+}
+
+#[test]
+fn empty_post_transfer_receipt_stays_fenced_until_stop_completed() {
+    let receipt = ApplyAttemptReceipt {
+        handoff: HandoffReceipt {
+            transfer_started: Some(true),
+            ..receipt("needsAttention", Vec::new())
+        },
+        phase: ApplyPhase::NeedsAttention,
+        managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
+        managed_codex_version: None,
+        stop_started: Some(true),
+        stop_completed: Some(false),
+        failure: Some("backend stop failed".to_string()),
+    };
+
+    assert!(receipt.blocks_new_apply());
+    let output = receipt.output(Path::new("socket"), None, None);
+    assert!(!output.can_retry);
 }
 
 #[test]

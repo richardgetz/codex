@@ -55,6 +55,7 @@ pub(crate) struct HandoffCoordinator {
     operation: Mutex<()>,
     active: Mutex<HashMap<String, ActiveHandoff>>,
     startup_recovery_state: Mutex<startup::StartupRecoveryState>,
+    pending_handoff_ids: Mutex<Vec<String>>,
 }
 
 impl HandoffCoordinator {
@@ -76,6 +77,7 @@ impl HandoffCoordinator {
             operation: Mutex::new(()),
             active: Mutex::new(HashMap::new()),
             startup_recovery_state: Mutex::new(startup::StartupRecoveryState::Unknown),
+            pending_handoff_ids: Mutex::new(Vec::new()),
         }
     }
 

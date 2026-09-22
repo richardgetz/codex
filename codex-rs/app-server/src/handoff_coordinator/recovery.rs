@@ -66,6 +66,17 @@ impl HandoffCoordinator {
                 receipt: receipt_from_journal(&journal),
             });
         }
+        if journal.state == HandoffJournalState::NeedsAttention
+            && journal.transfer_started == Some(true)
+            && journal.nodes.is_empty()
+        {
+            journal.set_state(HandoffJournalState::Completed);
+            self.persist_journal(&journal).await?;
+            self.refresh_startup_recovery_state().await;
+            return Ok(ThreadHandoffRecoverResponse {
+                receipt: receipt_from_journal(&journal),
+            });
+        }
         if !journal.requires_recovery() {
             self.refresh_startup_recovery_state().await;
             return Ok(ThreadHandoffRecoverResponse {

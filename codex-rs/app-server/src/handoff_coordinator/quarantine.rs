@@ -34,6 +34,9 @@ pub(super) fn validate_graph(
     require_complete: bool,
 ) -> Result<Vec<ParsedHandoffNode>, JSONRPCErrorError> {
     if journal.nodes.is_empty() {
+        if journal.transfer_started == Some(true) {
+            return Ok(Vec::new());
+        }
         return Err(invalid_params(format!(
             "handoff {} does not contain any recorded nodes",
             journal.handoff_id

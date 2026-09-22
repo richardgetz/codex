@@ -140,6 +140,38 @@ fn graph_validation_requires_complete_parent_closure_for_recovery() {
 }
 
 #[test]
+fn graph_validation_accepts_empty_post_transfer_receipt_for_recovery() {
+    let journal = HandoffJournal {
+        schema_version: 1,
+        handoff_id: "empty-transfer".to_string(),
+        created_at_ms: 0,
+        runtime_version: "test".to_string(),
+        state: HandoffJournalState::NeedsAttention,
+        transfer_started: Some(true),
+        quarantined: false,
+        nodes: Vec::new(),
+    };
+
+    assert!(validate_graph(&journal, true).is_ok());
+}
+
+#[test]
+fn graph_validation_rejects_empty_receipt_without_transfer_marker() {
+    let journal = HandoffJournal {
+        schema_version: 1,
+        handoff_id: "empty-legacy".to_string(),
+        created_at_ms: 0,
+        runtime_version: "test".to_string(),
+        state: HandoffJournalState::NeedsAttention,
+        transfer_started: None,
+        quarantined: false,
+        nodes: Vec::new(),
+    };
+
+    assert!(validate_graph(&journal, true).is_err());
+}
+
+#[test]
 fn graph_validation_rejects_known_cross_root_parent() {
     let first_root = ThreadId::new().to_string();
     let second_root = ThreadId::new().to_string();
