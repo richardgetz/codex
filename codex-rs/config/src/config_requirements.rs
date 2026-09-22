@@ -1632,7 +1632,7 @@ impl ConfigRequirementsToml {
         }) {
             return Some("model_providers");
         }
-        let managed_fields: [(bool, &[&str], &'static str); 11] = [
+        let managed_fields: [(bool, &[&str], &'static str); 10] = [
             (
                 self.model_provider.is_some(),
                 &["model_provider"],
