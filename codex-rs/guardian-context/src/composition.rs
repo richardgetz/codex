@@ -284,6 +284,11 @@ impl ComposedContext {
                     ContentItem::InputImage { image_url, detail } => {
                         UserInput::Image { image_url, detail }
                     }
+                    ContentItem::EncryptedContent { .. } => {
+                        return Err(SectionError::UnsupportedDelivery {
+                            section: section.id,
+                        });
+                    }
                     ContentItem::InputAudio { .. } | ContentItem::OutputText { .. } => {
                         return Err(SectionError::UnsupportedDelivery {
                             section: section.id,

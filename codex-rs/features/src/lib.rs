@@ -1836,6 +1836,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::Experimental {
+            owner: FeatureOwner::Rick,
             name: "Voice conversations",
             menu_description: "Talk with Codex using /voice.",
             announcement: "NEW: Voice conversations can now be enabled from /experimental. Restart Codex after enabling, then use /voice.",

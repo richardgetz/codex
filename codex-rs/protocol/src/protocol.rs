@@ -3547,6 +3547,11 @@ pub struct SessionMeta {
     pub parent_thread_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
+    /// Top-level runtime workspace roots at creation for default environments.
+    /// An absent value means unknown; an empty list means no roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     pub originator: String,
     pub cli_version: String,
     #[serde(default)]
@@ -3608,6 +3613,7 @@ impl Default for SessionMeta {
             parent_thread_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
+            runtime_workspace_roots: None,
             originator: String::new(),
             cli_version: String::new(),
             source: SessionSource::default(),

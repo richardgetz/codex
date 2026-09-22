@@ -23,7 +23,6 @@ mod thread_sections;
 mod unarchive_thread;
 mod update_thread_metadata;
 mod usage;
-mod writer_lock;
 
 #[cfg(test)]
 #[path = "daybreak_metadata_tests.rs"]
@@ -103,8 +102,9 @@ use crate::TurnPage;
 use crate::UpdateProjectParams;
 use crate::UpdateThreadMetadataParams;
 use crate::UpdatedProject;
-use crate::local::writer_lock::WriterLockCoordinator;
-use crate::local::writer_lock::WriterLockGuard;
+use codex_rollout::WriterLockCoordinator;
+
+type WriterLockGuard = Arc<codex_rollout::WriterLockGuard>;
 
 pub use rollout_migration::RolloutMigrationFailureReason;
 pub use rollout_migration::RolloutMigrationMode;
@@ -338,6 +338,23 @@ impl LocalThreadStore {
         Ok(())
     }
 
+    fn acquire_writer_lock(&self, thread_id: ThreadId) -> ThreadStoreResult<WriterLockGuard> {
+        self.writer_lock_coordinator
+            .acquire(thread_id)
+            .map(Arc::new)
+            .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                    ThreadStoreError::Conflict {
+                        message: err.to_string(),
+                    }
+                } else {
+                    ThreadStoreError::Internal {
+                        message: err.to_string(),
+                    }
+                }
+            })
+    }
+
     async fn acquire_writer_locks(
         &self,
         thread_ids: &[ThreadId],
@@ -347,7 +364,7 @@ impl LocalThreadStore {
             if self.live_recorders.lock().await.contains_key(&thread_id) {
                 continue;
             }
-            writer_locks.push(self.writer_lock_coordinator.acquire(thread_id)?);
+            writer_locks.push(self.acquire_writer_lock(thread_id)?);
         }
         Ok(writer_locks)
     }

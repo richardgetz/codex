@@ -22,6 +22,7 @@ use startup::mcp_init_error_display;
 use startup::mcp_startup_failure_reason;
 use startup::should_share_codex_apps_tools_cache;
 pub use tool_catalog::tool_is_model_visible;
+pub(crate) use tool_catalog::BindingCatalogRevision;
 
 use std::collections::HashMap;
 use std::sync::Arc;

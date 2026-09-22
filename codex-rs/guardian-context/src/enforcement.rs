@@ -274,6 +274,7 @@ fn retain_content(
             let original_bytes = match &item.content {
                 ContentItem::InputText { text } | ContentItem::OutputText { text } => text.len(),
                 ContentItem::InputImage { image_url, .. } => image_url.len(),
+                ContentItem::EncryptedContent { encrypted_content } => encrypted_content.len(),
                 ContentItem::InputAudio { audio_url } => audio_url.len(),
             };
             truncations.push(TruncationObservation {
