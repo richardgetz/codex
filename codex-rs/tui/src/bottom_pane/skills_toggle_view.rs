@@ -10,6 +10,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
+use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -48,6 +49,7 @@ pub(crate) struct SkillsToggleView {
     items: Vec<SkillsToggleItem>,
     state: ScrollState,
     complete: bool,
+    cwd: Option<PathBuf>,
     app_event_tx: AppEventSender,
     header: Box<dyn Renderable>,
     footer_hint: Line<'static>,
@@ -72,6 +74,7 @@ impl SkillsToggleView {
             items,
             state: ScrollState::new(),
             complete: false,
+            cwd: None,
             app_event_tx,
             header: Box::new(header),
             footer_hint: skills_toggle_hint_line(&keymap),
@@ -81,6 +84,11 @@ impl SkillsToggleView {
         };
         view.apply_filter();
         view
+    }
+
+    pub(crate) fn with_cwd(mut self, cwd: PathBuf) -> Self {
+        self.cwd = Some(cwd);
+        self
     }
 
     fn visible_len(&self) -> usize {
@@ -219,8 +227,8 @@ impl SkillsToggleView {
         }
         self.complete = true;
         self.app_event_tx.send(AppEvent::ManageSkillsClosed);
-        self.app_event_tx
-            .list_skills(Vec::new(), /*force_reload*/ true);
+        let cwds = self.cwd.clone().into_iter().collect();
+        self.app_event_tx.list_skills(cwds, /*force_reload*/ true);
     }
 
     fn rows_width(total_width: u16) -> u16 {

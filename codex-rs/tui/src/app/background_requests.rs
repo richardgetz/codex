@@ -254,7 +254,7 @@ impl App {
     pub(super) fn refresh_startup_skills(&mut self, app_server: &AppServerSession) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        let cwd = self.config.cwd.to_path_buf();
+        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
         tokio::spawn(async move {
             let result = fetch_skills_list(request_handle, cwd.clone())
                 .await

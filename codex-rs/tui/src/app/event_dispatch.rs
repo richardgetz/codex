@@ -95,7 +95,7 @@ impl App {
             }
             AppEvent::CloseMisalignmentReview => self.chat_widget.show_misalignment_policy_precaution(),
             AppEvent::SkillsListLoaded { ref cwd, .. }
-                if cwds_differ(cwd, self.config.cwd.as_path()) =>
+                if cwds_differ(cwd, self.chat_widget.config_ref().cwd.as_path()) =>
             {
                 self.skill_load_warnings.startup_complete = true;
             }

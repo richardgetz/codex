@@ -144,6 +144,11 @@ release or merge rules.
   an existing socket that fails the handshake reports the failure instead of
   starting a competing embedded server; explicit remote and embedded targets
   remain unchanged.
+- Persistent resume through an implicit LocalDaemon preserves the owner
+  thread's model, provider, permissions, working directory, and account state
+  when no explicit resume overrides are supplied; explicit overrides retain
+  their existing restore behavior, and picker or `--last` StartFresh fallbacks
+  still apply configured account selection after the final choice.
 - App-server daemon lifecycle and apply responses expose nullable
   `runningManagedCodexVersion` captured with the active child PID/start record;
   legacy or generation-ambiguous records remain unknown instead of re-reading
@@ -194,6 +199,10 @@ release or merge rules.
 - Initial developer context keeps extension Skills world-state sections ahead of
   Apps and Plugins usage guidance, while preserving the existing App enablement,
   model-capability, and connector filtering rules.
+- Remote TUI skill discovery scopes startup and manage-skills refreshes to the
+  selected session CWD, ignores stale catalog responses for other CWDs, and
+  clears only a matching empty catalog while preserving global and repo-local
+  entries plus disabled-skill filtering.
 - Cancellation at a tool activity or parallel-dispatch boundary returns the
   normal aborted response; when cancellation and a pre-admission dispatch are
   both ready, cancellation claims the terminal outcome first while already
@@ -877,6 +886,14 @@ release or merge rules.
   socket exists, and fails closed when an existing endpoint is stale or rejects
   initialize. Verify explicit remote/embedded targets, executor selection, and
   security/config overrides retain their existing target selection.
+- Verify persistent implicit LocalDaemon resume preserves the owner thread's
+  settings and account when no explicit resume overrides are supplied, while
+  explicit overrides still restore their requested settings and picker or
+  `--last` StartFresh fallbacks still apply configured account selection after
+  the final choice.
+- Verify remote skill refresh requests and response guards use the selected
+  session CWD, ignore stale catalogs for other CWDs, clear only matching empty
+  catalogs, and retain global/repository entries plus disabled-skill filtering.
 - Verify `thread/read` cannot combine a persisted/unloaded snapshot with an
   active watcher status or nullable `canAcceptDirectInput`; concurrent resume
   and delayed-unload paths must return `NotLoaded` until a live snapshot is

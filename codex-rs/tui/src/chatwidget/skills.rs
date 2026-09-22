@@ -89,7 +89,8 @@ impl ChatWidget {
             items,
             self.app_event_tx.clone(),
             self.bottom_pane.list_keymap(),
-        );
+        )
+        .with_cwd(self.config.cwd.to_path_buf());
         self.bottom_pane.show_view(Box::new(view));
     }
 
@@ -136,7 +137,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_skills_from_response(&mut self, response: &SkillsListResponse) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.data);
+        let Some(skills) = skills_for_cwd(&self.config.cwd, &response.data) else {
+            return;
+        };
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
@@ -171,12 +174,14 @@ impl ChatWidget {
     }
 }
 
-fn skills_for_cwd(cwd: &AbsolutePathBuf, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
+fn skills_for_cwd(
+    cwd: &AbsolutePathBuf,
+    skills_entries: &[SkillsListEntry],
+) -> Option<Vec<SkillMetadata>> {
     skills_entries
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd.as_path())
         .map(|entry| entry.skills.clone())
-        .unwrap_or_default()
 }
 
 fn enabled_skills_for_mentions(skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
@@ -365,7 +370,124 @@ fn app_id_from_path(path: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn test_skill(name: &str, enabled: bool) -> SkillMetadata {
+        SkillMetadata {
+            name: name.to_string(),
+            description: format!("{name} test skill"),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            path: AbsolutePathBuf::from_absolute_path(PathBuf::from(format!(
+                "/tmp/{name}/SKILL.md"
+            )))
+            .expect("absolute skill path"),
+            scope: codex_app_server_protocol::SkillScope::User,
+            enabled,
+            plugin_id: None,
+        }
+    }
+
+    fn skills_entry(cwd: &AbsolutePathBuf, skills: Vec<SkillMetadata>) -> SkillsListEntry {
+        SkillsListEntry {
+            cwd: cwd.to_path_buf(),
+            skills,
+            errors: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_remote_skills_response_does_not_clear_selected_catalog() {
+        let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
+        let selected_cwd =
+            AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/remote-project"))
+                .expect("selected cwd");
+        let stale_cwd = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/client-project"))
+            .expect("stale cwd");
+        chat.config.cwd = selected_cwd.clone();
+        let enabled = test_skill("test-proof", /*enabled*/ true);
+        let mut repo_skill = test_skill("repo-local-proof", /*enabled*/ true);
+        repo_skill.scope = codex_app_server_protocol::SkillScope::Repo;
+        repo_skill.path = AbsolutePathBuf::from_absolute_path(PathBuf::from(
+            "/tmp/remote-project/.codex/skills/repo-local-proof/SKILL.md",
+        ))
+        .expect("repo skill path");
+        let disabled = test_skill("disabled-proof", /*enabled*/ false);
+
+        chat.set_skills_from_response(&SkillsListResponse {
+            data: vec![skills_entry(
+                &selected_cwd,
+                vec![enabled.clone(), repo_skill.clone(), disabled.clone()],
+            )],
+        });
+        assert_eq!(
+            chat.skills_all,
+            vec![enabled.clone(), repo_skill.clone(), disabled.clone()],
+            "the selected session catalog includes disabled skills for the manage-skills view"
+        );
+        assert_eq!(
+            chat.bottom_pane
+                .skills()
+                .expect("mention catalog")
+                .as_slice(),
+            &[enabled, repo_skill.clone()],
+            "disabled skills stay out of $ autocomplete"
+        );
+
+        // A late startup response for the launch cwd must not erase the selected remote session.
+        let stale_skill = test_skill("other-project", /*enabled*/ true);
+        chat.set_skills_from_response(&SkillsListResponse {
+            data: vec![skills_entry(&stale_cwd, vec![stale_skill])],
+        });
+        assert_eq!(
+            chat.skills_all,
+            vec![
+                test_skill("test-proof", /*enabled*/ true),
+                repo_skill,
+                disabled,
+            ],
+            "an unmatched cwd response is stale and must preserve the selected catalog"
+        );
+
+        // A matching empty catalog is an intentional clear after the server reports no skills.
+        chat.set_skills_from_response(&SkillsListResponse {
+            data: vec![skills_entry(&selected_cwd, Vec::new())],
+        });
+        assert!(chat.skills_all.is_empty());
+        assert_eq!(chat.bottom_pane.skills().map(Vec::len), Some(0));
+    }
+
+    #[tokio::test]
+    async fn closing_manage_skills_refreshes_selected_session_cwd() {
+        let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
+        let selected_cwd =
+            AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/remote-project"))
+                .expect("selected cwd");
+        chat.config.cwd = selected_cwd.clone();
+        chat.skills_all = vec![test_skill("test-proof", /*enabled*/ true)];
+        chat.open_manage_skills_popup();
+
+        assert_eq!(
+            chat.bottom_pane.on_ctrl_c(),
+            crate::bottom_pane::CancellationEvent::Handled
+        );
+        loop {
+            let event = events.recv().await.expect("skills close event");
+            let AppEvent::CodexOp(crate::app_command::AppCommand::ListSkills {
+                cwds,
+                force_reload,
+            }) = event
+            else {
+                continue;
+            };
+            assert_eq!(cwds, vec![selected_cwd.to_path_buf()]);
+            assert!(force_reload);
+            break;
+        }
+    }
 
     fn app(id: &str, name: &str) -> AppInfo {
         AppInfo {
