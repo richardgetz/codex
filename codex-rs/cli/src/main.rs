@@ -798,6 +798,9 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
+    /// Update the standalone Codex installation and restart the managed daemon when needed.
+    Update,
+
     /// Apply an installed Codex update after checkpointing every loaded app-server tree.
     Apply,
 
@@ -1440,6 +1443,10 @@ async fn cli_main(
                     }
                     AppServerDaemonSubcommand::Restart => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
+                    }
+                    AppServerDaemonSubcommand::Update => {
+                        let output = codex_app_server_daemon::update().await?;
+                        println!("{}", serde_json::to_string(&output)?);
                     }
                     AppServerDaemonSubcommand::Apply => {
                         print_app_server_apply_output(codex_app_server_daemon::apply().await?)
@@ -2789,6 +2796,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
+            AppServerDaemonSubcommand::Update => "app-server daemon update",
             AppServerDaemonSubcommand::Apply => "app-server daemon apply",
             AppServerDaemonSubcommand::Recover { .. } => "app-server daemon recover",
             AppServerDaemonSubcommand::ApplyStatus => "app-server daemon apply-status",
