@@ -4231,7 +4231,7 @@ impl Config {
             )?;
             let CompiledPermissionProfile {
                 permission_profile,
-                workspace_roots: configured_workspace_roots,
+                workspace_roots: mut configured_workspace_roots,
             } = compile_permission_profile(
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
