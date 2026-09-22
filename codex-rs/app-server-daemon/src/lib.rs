@@ -128,6 +128,7 @@ pub enum UpdateStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateOutput {
     pub status: UpdateStatus,
     pub managed_codex_path: PathBuf,
@@ -1126,6 +1127,8 @@ mod tests {
     use super::RestartDecision;
     use super::RestartIfRunningOutcome;
     use super::RestartMode;
+    use super::UpdateOutput;
+    use super::UpdateStatus;
     use super::UpdaterRefreshMode;
     use super::restart_decision;
     use super::should_reexec_updater;
@@ -1137,6 +1140,27 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RemoteControlStatus::AlreadyEnabled).expect("serialize"),
             "\"alreadyEnabled\""
+        );
+    }
+
+    #[test]
+    fn update_output_uses_camel_case_json() {
+        let output = UpdateOutput {
+            status: UpdateStatus::NoUpdate,
+            managed_codex_path: PathBuf::from("/tmp/codex"),
+            installed_version: None,
+            running_version: None,
+            message: "already current".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(output).expect("serialize"),
+            serde_json::json!({
+                "status": "noUpdate",
+                "managedCodexPath": "/tmp/codex",
+                "installedVersion": null,
+                "runningVersion": null,
+                "message": "already current",
+            })
         );
     }
 

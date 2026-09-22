@@ -264,6 +264,18 @@ impl ThreadEnvironments {
                 let selection = environment.selection;
                 let config_origin = environment.config_origin;
                 let selected_environment = Arc::clone(&environment.environment);
+                let installed_config = match config_origin {
+                    EnvironmentConfigOrigin::Thread => Some(thread_config_for_selection(
+                        &selection.workspace_roots,
+                        &thread_environment_config,
+                    )),
+                    EnvironmentConfigOrigin::Owner => match &selection.config {
+                        EnvironmentConfigState::Ready(config) => Some(config.clone()),
+                        EnvironmentConfigState::FromThread
+                        | EnvironmentConfigState::Pending
+                        | EnvironmentConfigState::Failed(_) => None,
+                    },
+                };
                 let inherited_snapshot = if !selected_environment.is_remote()
                     && shell_snapshot.should_rebuild_inherited()
                 {
@@ -284,7 +296,7 @@ impl ThreadEnvironments {
                         shell_snapshot_v2_supported: environment.shell_snapshot_v2_supported
                             && (selected_environment.is_remote()
                                 || !shell_snapshot.should_rebuild_inherited()),
-                        installed_config: None,
+                        installed_config,
                     }))
                     .boxed()
                     .shared();
@@ -316,6 +328,8 @@ impl ThreadEnvironments {
         environment: Arc<Environment>,
         cwd: PathUri,
         shell: Option<Shell>,
+        allow_login_shell: bool,
+        shell_environment_policy: ShellEnvironmentPolicy,
     ) -> ShellSnapshotTask {
         if shell_snapshot.should_rebuild_inherited() {
             return futures::future::ready(None).boxed().shared();
@@ -325,8 +339,8 @@ impl ThreadEnvironments {
                 environment,
                 cwd,
                 shell,
-                /*allow_login_shell*/ true,
-                ShellEnvironmentPolicy::default(),
+                allow_login_shell,
+                shell_environment_policy,
                 /*sandbox*/ None,
             )
             .boxed()
@@ -384,7 +398,6 @@ impl ThreadEnvironments {
                     environment.config_origin = config_origin;
                     if shell_settings_changed
                         && !environment.environment.is_remote()
-                        && self.shell_snapshot.should_rebuild_inherited()
                         && let Some(Ok(resolved)) = environment.resolution.clone().now_or_never()
                     {
                         self.restart_shell_snapshot(&mut environment, resolved);
@@ -547,7 +560,6 @@ impl ThreadEnvironments {
                 environment.refresh_thread_config(config);
                 if shell_settings_changed
                     && !environment.environment.is_remote()
-                    && self.shell_snapshot.should_rebuild_inherited()
                     && let Some(Ok(resolved)) = environment.resolution.clone().now_or_never()
                 {
                     self.restart_shell_snapshot(&mut environment, resolved);
@@ -583,11 +595,27 @@ impl ThreadEnvironments {
         selected: &mut SelectedTurnEnvironment,
         resolved: ResolvedEnvironment,
     ) {
+        let config = resolved.installed_config.as_ref().or_else(|| {
+            let EnvironmentConfigState::Ready(config) = &selected.selection.config else {
+                return None;
+            };
+            Some(config)
+        });
+        let (allow_login_shell, shell_environment_policy) = config
+            .map(|config| {
+                (
+                    config.allow_login_shell,
+                    config.shell_environment_policy.clone(),
+                )
+            })
+            .unwrap_or_default();
         let shell_snapshot = Self::start_shell_snapshot_task(
             self.shell_snapshot.clone(),
             Arc::clone(&resolved.environment),
             selected.selection.cwd.clone(),
             resolved.shell.clone(),
+            allow_login_shell,
+            shell_environment_policy,
         );
         selected.resolution = futures::future::ready(Ok(ResolvedEnvironment {
             shell_snapshot,
@@ -805,6 +833,12 @@ impl ThreadEnvironments {
         };
         // Resolve the attachment only after both prerequisites are ready.
         let ((), installed_config) = tokio::try_join!(connection_ready, configuration_ready)?;
+        let installed_config = installed_config.or_else(|| {
+            let EnvironmentConfigState::Ready(config) = &selection.config else {
+                return None;
+            };
+            Some(config.clone())
+        });
         let executor_platform_os;
         let (shell, user_home_dir, temporary_dirs, snapshot_v2) = if environment.is_remote() {
             match environment.info().await {
@@ -860,6 +894,8 @@ impl ThreadEnvironments {
                 Arc::clone(&environment),
                 selection.cwd,
                 shell.clone(),
+                allow_login_shell,
+                shell_environment_policy,
             )
         } else {
             shell_snapshot_builder

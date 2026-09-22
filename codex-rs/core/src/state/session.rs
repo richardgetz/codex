@@ -57,8 +57,8 @@ impl ReasoningEffortPin {
     }
 
     pub(crate) fn pin(&mut self, model: &str, effort: ReasoningEffort) -> ReasoningEffort {
-        if self.get(model).is_some() {
-            return effort;
+        if let Some(pinned) = self.get(model) {
+            return pinned;
         }
         *self = Self::Active {
             model: model.to_owned(),

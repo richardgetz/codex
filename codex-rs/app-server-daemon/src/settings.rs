@@ -178,13 +178,24 @@ impl DaemonSettings {
             "shutdownGraceSeconds".to_string(),
             Value::from(self.shutdown_grace_seconds),
         );
-        settings.insert(
-            "updater".to_string(),
-            serde_json::json!({
+        let updater = settings
+            .entry("updater".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(updater) = updater {
+            updater.insert(
+                "autoUpdateEnabled".to_string(),
+                Value::Bool(self.auto_update_enabled),
+            );
+            updater.insert(
+                "updateIntervalMinutes".to_string(),
+                Value::from(self.update_interval_minutes),
+            );
+        } else {
+            *updater = serde_json::json!({
                 "autoUpdateEnabled": self.auto_update_enabled,
                 "updateIntervalMinutes": self.update_interval_minutes,
-            }),
-        );
+            });
+        }
         match &self.managed_codex_path {
             Some(path) => {
                 settings.insert(

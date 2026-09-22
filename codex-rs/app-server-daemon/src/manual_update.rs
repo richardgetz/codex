@@ -24,6 +24,9 @@ use crate::managed_install::executable_identity;
 use crate::managed_install::managed_codex_version;
 
 pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return unsupported(daemon).await;
+    }
     let socket_path = daemon.manual_update_socket_path();
     let mut replacement_deadline = None;
     'request: loop {
@@ -194,6 +197,9 @@ pub(super) async fn run(
     terminate: &mut Signal,
 ) -> Result<UpdateOutput> {
     let settings = daemon.load_settings().await?;
+    if settings.managed_codex_path.is_some() {
+        return unsupported(daemon).await;
+    }
     let managed_running = daemon.running_backend_instance(&settings).await?.is_some();
     if !daemon.is_stable_standalone_release()?
         || (!managed_running && client::probe(&daemon.socket_path).await.is_ok())

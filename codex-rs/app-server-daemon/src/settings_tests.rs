@@ -23,7 +23,7 @@ async fn remote_control_save_preserves_updater_settings() {
 
     tokio::fs::write(
         &path,
-        r#"{"remoteControlEnabled":true,"shutdownGraceSeconds":25,"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":17},"futureSetting":42}"#,
+        r#"{"remoteControlEnabled":true,"shutdownGraceSeconds":25,"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":17,"futureUpdaterSetting":true},"futureSetting":42}"#,
     )
     .await
     .expect("write settings");
@@ -42,7 +42,7 @@ async fn remote_control_save_preserves_updater_settings() {
         serde_json::json!({
             "remoteControlEnabled": false,
             "shutdownGraceSeconds": 25,
-            "updater": {"autoUpdateEnabled": false, "updateIntervalMinutes": 17},
+            "updater": {"autoUpdateEnabled": false, "updateIntervalMinutes": 17, "futureUpdaterSetting": true},
             "futureSetting": 42,
         })
     );

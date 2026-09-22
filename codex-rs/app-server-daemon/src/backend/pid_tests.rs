@@ -481,6 +481,7 @@ async fn stale_creation_time_never_stops_reused_pid() {
     let record = PidRecord {
         pid: std::process::id(),
         process_start_time: "stale".into(),
+        executable_identity: None,
         launch_identity: None,
     };
     tokio::fs::write(&backend.pid_file, serde_json::to_vec(&record).unwrap())
@@ -509,6 +510,7 @@ async fn failed_updater_handoff_preserves_predecessor_record() {
         process_start_time: super::read_process_start_time(std::process::id())
             .await
             .unwrap(),
+        executable_identity: None,
         launch_identity: None,
     };
     for record in [
@@ -570,6 +572,7 @@ async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
         process_start_time: super::read_process_start_time(pid)
             .await
             .expect("creation time"),
+        executable_identity: None,
         launch_identity: None,
     };
     let predecessor = PidRecord {
@@ -577,6 +580,7 @@ async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
         process_start_time: super::read_process_start_time(std::process::id())
             .await
             .expect("creation time"),
+        executable_identity: None,
         launch_identity: None,
     };
     tokio::fs::write(&backend.pid_file, serde_json::to_vec(&successor).unwrap())
@@ -676,6 +680,7 @@ fn inaccessible_reused_pid_is_stale_without_hiding_process_open_errors() {
         let record = PidRecord {
             pid: std::process::id(),
             process_start_time: "stale".into(),
+            executable_identity: None,
             launch_identity: None,
         };
         assert!(

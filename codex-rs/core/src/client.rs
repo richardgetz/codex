@@ -648,6 +648,7 @@ impl ModelClient {
             text,
             ..
         } = request;
+        ModelClient::filter_tool_result_metadata(&mut input, &client_setup.api_provider);
         self.prepare_response_items_for_request(&mut input);
         let payload = ApiCompactionInput {
             model: &model,

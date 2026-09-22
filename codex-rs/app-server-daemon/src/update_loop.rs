@@ -68,6 +68,9 @@ async fn run_with_http(
     daemon: &Daemon,
     running_updater_identity: &ExecutableIdentity,
 ) -> Result<()> {
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok(());
+    }
     #[cfg(unix)]
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
@@ -350,8 +353,16 @@ async fn update_once(
                 }
             }
             RestartIfRunningOutcome::Restarted => {
+                let updater_control = if matches!(
+                    updater_refresh_mode,
+                    crate::UpdaterRefreshMode::ReexecIfManagedBinaryChanged
+                ) {
+                    UpdateLoopControl::Stop
+                } else {
+                    UpdateLoopControl::Continue
+                };
                 return Ok((
-                    UpdateLoopControl::Continue,
+                    updater_control,
                     Some(RestartIfRunningOutcome::Restarted),
                 ));
             }
