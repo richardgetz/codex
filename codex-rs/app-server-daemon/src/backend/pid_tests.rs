@@ -427,6 +427,26 @@ fn app_server_remote_control_uses_runtime_flag() {
 }
 
 #[test]
+fn app_server_managed_daemon_flag_follows_subcommand() {
+    let backend = PidBackend::new(
+        "codex".into(),
+        "app-server.pid".into(),
+        /*remote_control_enabled*/ true,
+    );
+
+    assert_eq!(
+        backend.command_args_with_managed_flag(true),
+        vec![
+            "app-server",
+            "--managed-daemon",
+            "--remote-control",
+            "--listen",
+            "unix://",
+        ]
+    );
+}
+
+#[test]
 fn app_server_disabled_remote_control_uses_compatible_args_and_runtime_env() {
     let backend = PidBackend::new(
         "codex".into(),

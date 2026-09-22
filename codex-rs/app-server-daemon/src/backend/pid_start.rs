@@ -81,7 +81,7 @@ impl PidBackend {
         let codex_bin_path: &Path = codex_bin.as_ref();
         let mut command = Command::new(codex_bin_path);
         let managed_app_server = matches!(self.command_kind, PidCommandKind::AppServer { .. });
-        if managed_app_server
+        let use_managed_daemon_flag = managed_app_server
             && matches!(
                 tokio::time::timeout(
                     std::time::Duration::from_secs(5),
@@ -95,10 +95,8 @@ impl PidBackend {
                 )
                 .await,
                 Ok(Ok(status)) if status.success()
-            )
-        {
-            command.arg("--managed-daemon");
-        } else if managed_app_server {
+            );
+        if managed_app_server && !use_managed_daemon_flag {
             let codex_home = self
                 .pid_file
                 .parent()
@@ -123,7 +121,7 @@ impl PidBackend {
             }
         };
         command
-            .args(self.command_args())
+            .args(self.command_args_with_managed_flag(use_managed_daemon_flag))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_log.into_std().await));

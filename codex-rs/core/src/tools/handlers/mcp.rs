@@ -416,7 +416,15 @@ impl CoreToolRuntime for McpHandler {
     }
 
     fn on_tool_result_accepted(&self, invocation: &ToolInvocation, result: &dyn ToolOutput) {
-        // Direct calls also record sources, before the Code Mode-only evidence path below.
+        if let Some(executed_tool_calls) =
+            invocation.session.services.executed_tool_calls.as_ref()
+        {
+            executed_tool_calls.record_accepted_result(
+                &invocation.source,
+                &invocation.call_id,
+                result,
+            );
+        }
         let ToolCallSource::CodeMode { cell_id, .. } = &invocation.source else {
             return;
         };

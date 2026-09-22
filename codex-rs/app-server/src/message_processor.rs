@@ -83,6 +83,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ThreadStoreConfig;
 use codex_exec_server::EnvironmentManager;
+use codex_extension_api::TurnStartAdmission;
 use codex_feedback::CodexFeedback;
 use codex_goal_extension::GoalService;
 use codex_home::CodexHomeUserInstructionsProvider;
@@ -106,6 +107,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use crate::models_refresh_worker::ModelsRefreshWorker;
+use crate::turn_admission::TurnAdmission;
 
 const CONNECTION_RPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 30);
 
@@ -142,6 +144,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
 
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
+    pub(crate) turn_admission: TurnAdmission,
     handoff_coordinator: HandoffCoordinator,
     user_verification: Arc<crate::user_verification::Service>,
     models_refresh_worker: ModelsRefreshWorker,
@@ -328,6 +331,8 @@ impl MessageProcessor {
             ),
         );
         let goal_service = Arc::new(GoalService::new());
+        let turn_admission = TurnAdmission::default();
+        let turn_start_admission: Arc<dyn TurnStartAdmission> = Arc::new(turn_admission.clone());
         let extension_event_sink =
             app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone());
         let mut queue_service = None;
@@ -360,7 +365,7 @@ impl MessageProcessor {
                         git_attribution_base_url: config.chatgpt_base_url.clone(),
                         http_client_factory: config.http_client_factory(),
                         queue_service: queue_service.clone(),
-                        turn_start_admission: None,
+                        turn_start_admission: Some(Arc::clone(&turn_start_admission)),
                     },
                 ),
                 Arc::new(CodexHomeUserInstructionsProvider::new(
@@ -610,6 +615,7 @@ impl MessageProcessor {
 
         Self {
             outgoing,
+            turn_admission,
             user_verification,
             handoff_coordinator,
             models_refresh_worker,
@@ -997,6 +1003,24 @@ impl MessageProcessor {
             &codex_request,
         );
 
+        let (turn_admission, recheck_turn_admission) = match &codex_request {
+            ClientRequest::ThreadStart { .. }
+            | ClientRequest::ThreadFork { .. }
+            | ClientRequest::ThreadResume { .. }
+            | ClientRequest::ThreadRollback { .. }
+            | ClientRequest::ThreadRevert { .. } => (Some(self.turn_admission.admit()?), false),
+            ClientRequest::TurnStart { .. }
+            | ClientRequest::TurnSteer { .. }
+            | ClientRequest::ReviewStart { .. }
+            | ClientRequest::ThreadCompactStart { .. }
+            | ClientRequest::ThreadShellCommand { .. }
+            | ClientRequest::ThreadQueueStart { .. }
+            | ClientRequest::ThreadRealtimeStart { .. } => {
+                (Some(self.turn_admission.admit()?), true)
+            }
+            _ => (None, false),
+        };
+
         let event_stream_ready = match &codex_request {
             ClientRequest::McpServerEventStreamStart { params, .. } => {
                 // Stream startup intentionally precedes the serialization queue so the caller
@@ -1028,6 +1052,13 @@ impl MessageProcessor {
         let request = QueuedInitializedRequest::new(
             rpc_gate,
             async move {
+                let _turn_admission = turn_admission;
+                // Runtime changes already admitted before drain finish normally. Turn work
+                // still waiting in serialization must observe the newly closed gate.
+                if recheck_turn_admission && let Err(error) = processor.turn_admission.admit() {
+                    processor.outgoing.send_error(error_request_id, error).await;
+                    return;
+                }
                 let processor_for_request = Arc::clone(&processor);
                 let result = processor_for_request
                     .handle_initialized_client_request(

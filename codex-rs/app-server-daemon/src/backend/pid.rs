@@ -417,6 +417,15 @@ impl PidBackend {
     }
 
     #[cfg(any(unix, windows))]
+    fn command_args_with_managed_flag(&self, managed: bool) -> Vec<&'static str> {
+        let mut args = self.command_args();
+        if managed && matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
+            args.insert(1, "--managed-daemon");
+        }
+        args
+    }
+
+    #[cfg(any(unix, windows))]
     fn command_env(&self) -> Option<(&'static str, &'static str)> {
         match self.command_kind {
             PidCommandKind::AppServer {
