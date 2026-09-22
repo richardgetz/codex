@@ -271,7 +271,7 @@ async fn spawned_guardian_session_preserves_windows_sandbox_proxy_settings() {
     let params = test_review_params().await;
     let manager = &params.parent_session.guardian_review_session;
     prewarm_guardian_review_session(
-        params.parent_session,
+        Arc::clone(&params.parent_session),
         Arc::clone(params.parent_context.turn()),
     )
     .await
@@ -940,8 +940,9 @@ async fn run_review_removes_trunk_when_event_stream_is_broken() {
     let manager = Arc::new(GuardianReviewSessionManager::default());
     prewarm_test_session(&manager, review_session).await;
     let manager_for_review = Arc::clone(&manager);
-    let review =
-        tokio::spawn(async move { run_guardian_review_session(manager_for_review, params).await });
+    let review = tokio::spawn(async move {
+        run_guardian_review_session(manager_for_review.as_ref(), params).await
+    });
     let submission = rx_sub.recv().await.expect("guardian submission");
     let id = submission.id;
     let Op::TurnInput { reply, .. } = submission.op else {

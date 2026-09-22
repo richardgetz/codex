@@ -227,7 +227,7 @@ impl GuardianReviewSessionManagerTestExt for GuardianReviewSessionManager {
         io: SessionIo,
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            codex_guardian_reviewer::ReviewerPool::cache_for_test(
+            codex_guardian_reviewer::ReviewerPool::<GuardianReviewSession>::cache_for_test(
                 self,
                 GuardianReviewSession::from_test_parts(session, io).await,
             )
@@ -241,7 +241,7 @@ impl GuardianReviewSessionManagerTestExt for GuardianReviewSessionManager {
         io: SessionIo,
     ) -> BoxFuture<'_, ()> {
         Box::pin(async move {
-            codex_guardian_reviewer::ReviewerPool::register_ephemeral_for_test(
+            codex_guardian_reviewer::ReviewerPool::<GuardianReviewSession>::register_ephemeral_for_test(
                 self,
                 GuardianReviewSession::from_test_parts(session, io).await,
             )

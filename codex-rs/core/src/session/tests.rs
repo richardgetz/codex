@@ -9799,10 +9799,12 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
         agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
-    parent_session
-        .guardian_review_session
-        .cache_for_test(child_session, child_io)
-        .await;
+    <crate::guardian::GuardianReviewSessionManager as GuardianReviewSessionManagerTestExt>::cache_for_test(
+        &parent_session.guardian_review_session,
+        child_session,
+        child_io,
+    )
+    .await;
 
     parent_io
         .shutdown_and_wait()
@@ -9831,10 +9833,12 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
         agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
-    parent_session
-        .guardian_review_session
-        .cache_for_test(child_session, child_io)
-        .await;
+    <crate::guardian::GuardianReviewSessionManager as GuardianReviewSessionManagerTestExt>::cache_for_test(
+        &parent_session.guardian_review_session,
+        child_session,
+        child_io,
+    )
+    .await;
 
     assert_eq!(
         parent_session
@@ -9884,10 +9888,12 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         agent_status: watch::channel(AgentStatus::PendingInit).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
-    parent_session
-        .guardian_review_session
-        .register_ephemeral_for_test(child_session, child_io)
-        .await;
+    <crate::guardian::GuardianReviewSessionManager as GuardianReviewSessionManagerTestExt>::register_ephemeral_for_test(
+        &parent_session.guardian_review_session,
+        child_session,
+        child_io,
+    )
+    .await;
 
     parent_io
         .shutdown_and_wait()
