@@ -70,6 +70,11 @@ pub(crate) fn serialize_tiered_input(
                             text: "[audio omitted]".into(),
                         };
                     }
+                    ContentItem::EncryptedContent { .. } => {
+                        *part = ContentItem::InputText {
+                            text: "[encrypted content omitted]".into(),
+                        };
+                    }
                     ContentItem::InputText { .. } | ContentItem::OutputText { .. } => {}
                 }
             }

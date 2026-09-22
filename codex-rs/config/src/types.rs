@@ -19,6 +19,7 @@ pub use crate::shell_environment_policy::ShellEnvironmentPolicyToml;
 pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ApprovalsReviewer;
 pub use codex_protocol::config_types::MemoryAccessPolicy;
+pub use codex_protocol::MemoryVersion;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
@@ -447,6 +448,10 @@ impl From<GitIntentNotesToml> for GitIntentNotesConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MemoriesToml {
+    /// Selects the memory pipeline; v1 remains the default.
+    pub version: Option<MemoryVersion>,
+    /// Generate both versions while the selected version supplies context.
+    pub dual_write: Option<bool>,
     /// When `true`, external context sources mark the thread `memory_mode` as `"polluted"`.
     #[serde(alias = "no_memories_if_mcp_or_web_search")]
     pub disable_on_external_context: Option<bool>,
@@ -523,6 +528,8 @@ pub enum MemoriesScope {
 /// Effective memories settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MemoriesConfig {
+    pub version: MemoryVersion,
+    pub dual_write: bool,
     pub disable_on_external_context: bool,
     pub generate_memories: bool,
     pub use_memories: bool,
@@ -543,6 +550,8 @@ pub struct MemoriesConfig {
 impl Default for MemoriesConfig {
     fn default() -> Self {
         Self {
+            version: MemoryVersion::V1,
+            dual_write: false,
             disable_on_external_context: false,
             generate_memories: true,
             use_memories: true,
@@ -566,6 +575,8 @@ impl From<MemoriesToml> for MemoriesConfig {
     fn from(toml: MemoriesToml) -> Self {
         let defaults = Self::default();
         Self {
+            version: toml.version.unwrap_or(defaults.version),
+            dual_write: toml.dual_write.unwrap_or(defaults.dual_write),
             disable_on_external_context: toml
                 .disable_on_external_context
                 .unwrap_or(defaults.disable_on_external_context),
