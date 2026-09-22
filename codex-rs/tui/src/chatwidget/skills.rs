@@ -381,9 +381,9 @@ mod tests {
             short_description: None,
             interface: None,
             dependencies: None,
-            path: AbsolutePathBuf::from_absolute_path(
-                PathBuf::from(format!("/tmp/{name}/SKILL.md")),
-            )
+            path: AbsolutePathBuf::from_absolute_path(PathBuf::from(format!(
+                "/tmp/{name}/SKILL.md"
+            )))
             .expect("absolute skill path"),
             scope: codex_app_server_protocol::SkillScope::User,
             enabled,
@@ -402,8 +402,9 @@ mod tests {
     #[tokio::test]
     async fn stale_remote_skills_response_does_not_clear_selected_catalog() {
         let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
-        let selected_cwd = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/remote-project"))
-            .expect("selected cwd");
+        let selected_cwd =
+            AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/remote-project"))
+                .expect("selected cwd");
         let stale_cwd = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/client-project"))
             .expect("stale cwd");
         chat.config.cwd = selected_cwd.clone();
@@ -462,8 +463,9 @@ mod tests {
     #[tokio::test]
     async fn closing_manage_skills_refreshes_selected_session_cwd() {
         let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
-        let selected_cwd = AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/remote-project"))
-            .expect("selected cwd");
+        let selected_cwd =
+            AbsolutePathBuf::from_absolute_path(PathBuf::from("/tmp/remote-project"))
+                .expect("selected cwd");
         chat.config.cwd = selected_cwd.clone();
         chat.skills_all = vec![test_skill("test-proof", /*enabled*/ true)];
         chat.open_manage_skills_popup();

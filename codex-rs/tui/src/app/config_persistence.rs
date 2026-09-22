@@ -53,16 +53,13 @@ pub(super) fn resume_model_settings_for_overrides(
 }
 
 fn has_explicit_session_config_override(config: &Config) -> bool {
-    config
-        .config_layer_stack
-        .layers_high_to_low()
-        .any(|layer| {
-            matches!(&layer.name, ConfigLayerSource::SessionFlags)
-                && layer
-                    .config
-                    .as_table()
-                    .is_some_and(|table| !table.is_empty())
-        })
+    config.config_layer_stack.layers_high_to_low().any(|layer| {
+        matches!(&layer.name, ConfigLayerSource::SessionFlags)
+            && layer
+                .config
+                .as_table()
+                .is_some_and(|table| !table.is_empty())
+    })
 }
 
 pub(super) fn resume_model_settings_for_target(
@@ -72,7 +69,10 @@ pub(super) fn resume_model_settings_for_target(
 ) -> crate::app_server_session::ResumeModelSettings {
     let settings = resume_model_settings_for_overrides(config, harness_overrides);
     if settings != crate::app_server_session::ResumeModelSettings::RestoreFromThread
-        || !matches!(app_server_target, crate::AppServerTarget::LocalDaemon { .. })
+        || !matches!(
+            app_server_target,
+            crate::AppServerTarget::LocalDaemon { .. }
+        )
     {
         return settings;
     }

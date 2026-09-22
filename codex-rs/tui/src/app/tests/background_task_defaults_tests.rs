@@ -16,10 +16,11 @@ async fn startup_skills_refresh_targets_selected_remote_session_cwd() -> Result<
     let launch_cwd = tempdir()?;
     let selected_cwd = tempdir()?;
     app.config.cwd = launch_cwd.path().to_path_buf().abs();
-    app.chat_widget.handle_thread_session_quiet(test_thread_session(
-        ThreadId::new(),
-        selected_cwd.path().to_path_buf(),
-    ));
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(
+            ThreadId::new(),
+            selected_cwd.path().to_path_buf(),
+        ));
 
     let (mut server, requests, proxy) = start_recording_app_server_with_history(
         &app.config,
