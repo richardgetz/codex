@@ -52,6 +52,49 @@ pub(super) fn resume_model_settings_for_overrides(
     }
 }
 
+fn has_explicit_session_config_override(config: &Config) -> bool {
+    config
+        .config_layer_stack
+        .layers_high_to_low()
+        .any(|layer| {
+            matches!(&layer.name, ConfigLayerSource::SessionFlags)
+                && layer
+                    .config
+                    .as_table()
+                    .is_some_and(|table| !table.is_empty())
+        })
+}
+
+pub(super) fn resume_model_settings_for_target(
+    config: &Config,
+    harness_overrides: &ConfigOverrides,
+    app_server_target: &crate::AppServerTarget,
+) -> crate::app_server_session::ResumeModelSettings {
+    let settings = resume_model_settings_for_overrides(config, harness_overrides);
+    if settings != crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        || !matches!(app_server_target, crate::AppServerTarget::LocalDaemon { .. })
+    {
+        return settings;
+    }
+
+    // A local daemon owns the live thread settings. Rejoining with an empty set of
+    // client overrides avoids making the server tear down an idle thread and reopen
+    // its session storage under this process. Keep explicit launch settings on the
+    // existing restore path so they retain their documented override semantics.
+    if has_explicit_resume_permission_override(config, harness_overrides)
+        || has_explicit_session_config_override(config)
+        || harness_overrides.bypass_hook_trust.is_some()
+        || harness_overrides.cwd.is_some()
+        || harness_overrides.personality.is_some()
+        || harness_overrides.service_tier.is_some()
+        || harness_overrides.tools_web_search_request.is_some()
+    {
+        return settings;
+    }
+
+    crate::app_server_session::ResumeModelSettings::PreserveExistingThread
+}
+
 pub(super) fn has_explicit_resume_permission_override(
     config: &Config,
     overrides: &ConfigOverrides,
@@ -1071,7 +1114,11 @@ impl App {
     }
 
     pub(super) fn resume_model_settings(&self) -> crate::app_server_session::ResumeModelSettings {
-        resume_model_settings_for_overrides(&self.config, &self.harness_overrides)
+        resume_model_settings_for_target(
+            &self.config,
+            &self.harness_overrides,
+            &self.app_server_target,
+        )
     }
 
     pub(super) fn reject_remote_resume_permission_override(&mut self, config: &Config) -> bool {
@@ -1696,6 +1743,48 @@ mod tests {
         assert_eq!(
             app.resume_model_settings(),
             crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_preserves_owner_settings_without_explicit_overrides() {
+        let mut app = make_test_app().await;
+        app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::PreserveExistingThread
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_keeps_explicit_session_overrides() {
+        let mut app = make_test_app().await;
+        app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                TomlValue::Table(toml::map::Map::from_iter([(
+                    "web_search".to_string(),
+                    TomlValue::String("live".to_string()),
+                )])),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("session flags layer stack");
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread
         );
     }
 

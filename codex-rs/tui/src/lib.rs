@@ -1381,6 +1381,11 @@ async fn run_ratatui_app(
     #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
     let startup_model_provider = initial_config.model_provider_id.clone();
+    let preserve_local_daemon_resume_owner = should_preserve_local_daemon_resume_owner(
+        &app_server_target,
+        cli.startup_account_alias.as_deref(),
+        cli.resume_picker || cli.resume_last || cli.resume_session_id.is_some(),
+    );
     let (login_status, mut startup_account) = if workload_identity_selected {
         (LoginStatus::AuthMode(AuthMode::Chatgpt), None)
     } else {
@@ -1389,7 +1394,7 @@ async fn run_ratatui_app(
         };
         let login_status = startup_draft
             .run_until(&mut tui, async {
-                if cli.frontend_reload_handoff_id.is_some() {
+                if cli.frontend_reload_handoff_id.is_some() || preserve_local_daemon_resume_owner {
                     read_login_status(active_app_server).await
                 } else {
                     get_login_status(active_app_server, &initial_config).await
@@ -2146,6 +2151,16 @@ async fn get_login_status(
         .switch_account(config.active_account_alias().map(str::to_string))
         .await?;
     read_login_status(app_server).await
+}
+
+fn should_preserve_local_daemon_resume_owner(
+    app_server_target: &AppServerTarget,
+    explicit_account_alias: Option<&str>,
+    resume_requested: bool,
+) -> bool {
+    resume_requested
+        && explicit_account_alias.is_none()
+        && matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
 }
 
 async fn read_login_status(
@@ -3079,6 +3094,32 @@ requires_openai_auth = {requires_openai_auth}
         assert!(!target.uses_remote_workspace());
         assert_eq!(target.thread_params_mode(), ThreadParamsMode::Embedded);
         Ok(())
+    }
+
+    #[test]
+    fn local_daemon_resume_preserves_owner_account_without_explicit_alias() {
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")
+                    .expect("relative socket path"),
+            },
+        };
+        assert!(should_preserve_local_daemon_resume_owner(
+            &target, None, true
+        ));
+        assert!(!should_preserve_local_daemon_resume_owner(
+            &target,
+            Some("personal"),
+            true,
+        ));
+        assert!(!should_preserve_local_daemon_resume_owner(
+            &target, None, false
+        ));
+        assert!(!should_preserve_local_daemon_resume_owner(
+            &AppServerTarget::Embedded,
+            None,
+            true,
+        ));
     }
 
     #[test]
