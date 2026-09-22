@@ -256,12 +256,7 @@ impl ChatWidget {
             ThreadItem::UserMessage {
                 content, client_id, ..
             } => {
-                self.on_committed_user_message(
-                    &content,
-                    client_id.as_deref(),
-                    from_replay,
-                    &turn_id,
-                );
+                self.on_committed_user_message(&content, client_id.as_deref(), from_replay);
             }
             ThreadItem::AgentMessage {
                 id,
