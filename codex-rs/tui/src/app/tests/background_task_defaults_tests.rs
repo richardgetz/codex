@@ -8,6 +8,58 @@ use crate::app::tests::session_lifecycle_requests::start_recording_app_server_wi
 use crate::test_support::PathBufExt;
 use codex_state::SqliteConfig;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
+
+#[tokio::test]
+async fn startup_skills_refresh_targets_selected_remote_session_cwd() -> Result<()> {
+    let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
+    let launch_cwd = tempdir()?;
+    let selected_cwd = tempdir()?;
+    app.config.cwd = launch_cwd.path().to_path_buf().abs();
+    app.chat_widget.handle_thread_session_quiet(test_thread_session(
+        ThreadId::new(),
+        selected_cwd.path().to_path_buf(),
+    ));
+
+    let (mut server, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        HistoryCapabilities::Current,
+        /*blocked_thread_list*/ None,
+        /*failed_thread_name*/ None,
+        crate::app_server_session::ThreadParamsMode::Remote,
+        LoaderOverrides::default(),
+    )
+    .await?;
+    server.bootstrap(&app.config).await?;
+    requests.lock().expect("request recorder lock").clear();
+
+    app.refresh_startup_skills(&server);
+    let loaded_cwd = loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await?
+            .ok_or_else(|| color_eyre::eyre::eyre!("skills refresh event channel closed"))?;
+        if let AppEvent::SkillsListLoaded { cwd, .. } = event {
+            break cwd;
+        }
+    };
+    assert_eq!(
+        loaded_cwd,
+        selected_cwd.path().to_path_buf(),
+        "startup result scope must stay aligned with the selected remote session"
+    );
+
+    assert_eq!(
+        recorded_params(&requests, "skills/list"),
+        vec![serde_json::json!({
+            "cwds": [selected_cwd.path().display().to_string()],
+            "forceReload": true,
+        })],
+        "startup refresh must use the selected remote session cwd, not launch cwd"
+    );
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
 
 #[tokio::test]
 async fn background_task_reads_server_defaults_for_actual_destination() -> Result<()> {
