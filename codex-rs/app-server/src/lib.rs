@@ -448,6 +448,15 @@ pub async fn run_main(
         AppServerRuntimeOptions::default(),
     )
     .await
+    .map(|_| ())
+}
+
+/// Reports whether shutdown finished or the managed daemon must exit without waiting for I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppServerExit {
+    Graceful,
+    /// Executables should exit before dropping their runtime; libraries must not exit their host.
+    Forced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -462,6 +471,7 @@ pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_startup_mode: RemoteControlStartupMode,
     pub install_shutdown_signal_handler: bool,
+    pub managed_daemon: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -471,6 +481,7 @@ impl Default for AppServerRuntimeOptions {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_startup_mode: RemoteControlStartupMode::ResolvePersisted,
             install_shutdown_signal_handler: true,
+            managed_daemon: false,
         }
     }
 }
@@ -486,7 +497,7 @@ pub async fn run_main_with_transport_options(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
-) -> IoResult<()> {
+) -> IoResult<AppServerExit> {
     let loader_overrides = loader_overrides_with_test_user_config_file(
         loader_overrides,
         test_user_config_file_from_env(),
@@ -1329,7 +1340,7 @@ pub async fn run_main_with_transport_options(
         let _ = handle.await;
     }
 
-    Ok(())
+    Ok(AppServerExit::Graceful)
 }
 
 struct SqliteRecoveryNotice {
