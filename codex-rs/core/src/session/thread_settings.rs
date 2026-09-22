@@ -5,6 +5,7 @@ use super::session::Session;
 use super::session::SessionSettingsUpdate;
 use super::step_settings::StepSettingsUpdate;
 use crate::config::ConstraintResult;
+use codex_history::RolloutItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -14,8 +15,26 @@ use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::ThreadUsagePolicyUpdate;
+use codex_thread_store::ThreadStoreResult;
 use std::sync::Arc;
 use tokio::sync::SemaphorePermit;
+
+impl Session {
+    /// Persists the current settings snapshot without emitting a live settings event.
+    ///
+    /// Resume/revert paths use this checkpoint so effective runtime roots survive
+    /// a cold restart even when no subsequent turn is submitted.
+    pub(crate) async fn checkpoint_thread_settings(&self) -> ThreadStoreResult<()> {
+        let _settings_guard = acquire_persistence_lock(self).await;
+        if let Some(live_thread) = self.live_thread() {
+            live_thread
+                .append_items(&[RolloutItem::EventMsg(applied_event(self).await)])
+                .await?;
+            live_thread.flush().await?;
+        }
+        Ok(())
+    }
+}
 
 /// Applies standalone thread settings and reports invalid overrides through the
 /// normal event stream.

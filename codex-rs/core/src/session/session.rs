@@ -446,6 +446,7 @@ impl SessionConfiguration {
                 self.legacy_fallback_cwd.clone(),
                 environment_selections,
             )),
+            runtime_workspace_roots: Some(self.runtime_workspace_roots.clone()),
             profile_workspace_roots: Some(
                 self.permission_profile_state
                     .profile_workspace_roots()

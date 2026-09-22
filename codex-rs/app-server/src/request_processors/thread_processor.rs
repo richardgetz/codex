@@ -145,10 +145,10 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
         let requested_runtime_workspace_roots = requested_runtime_workspace_roots.to_vec();
-        if requested_runtime_workspace_roots != config_snapshot.runtime_workspace_roots {
+        if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
             mismatch_details.push(format!(
                 "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
-                config_snapshot.runtime_workspace_roots
+                config_snapshot.workspace_roots
             ));
         }
     }
@@ -2627,6 +2627,10 @@ impl ThreadRequestProcessor {
                     "failed to restore thread settings after revert: {err}"
                 ))
             })?;
+        codex_thread
+            .checkpoint_thread_settings()
+            .await
+            .map_err(|err| internal_error(format!("failed to checkpoint thread settings after revert: {err}")))?;
         Self::set_app_server_client_info(
             codex_thread.as_ref(),
             app_server_client_name,

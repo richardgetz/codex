@@ -119,9 +119,16 @@ fn map_additional_context(
         .collect()
 }
 
+#[derive(Default)]
+struct ThreadEnvironmentOverride {
+    environments: Option<TurnEnvironmentSelections>,
+    // Default-environment updates replace the separately persisted root selection.
+    runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+}
+
 struct ThreadSettingsBuildParams {
     method: &'static str,
-    environments: Option<TurnEnvironmentSelections>,
+    environment_override: ThreadEnvironmentOverride,
     approval_policy: Option<codex_app_server_protocol::AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
@@ -686,7 +693,7 @@ impl TurnRequestProcessor {
             }
         };
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments = self
+        let environment_override = self
             .build_environment_override(
                 thread.as_ref(),
                 cwd,
@@ -699,7 +706,7 @@ impl TurnRequestProcessor {
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "turn/start",
-                    environments,
+                    environment_override,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,
@@ -822,9 +829,9 @@ impl TurnRequestProcessor {
         cwd: Option<AbsolutePathBuf>,
         workspace_roots: Option<Vec<AbsolutePathBuf>>,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
-    ) -> Option<TurnEnvironmentSelections> {
+    ) -> ThreadEnvironmentOverride {
         if cwd.is_none() && workspace_roots.is_none() && environment_selections.is_none() {
-            return None;
+            return ThreadEnvironmentOverride::default();
         }
 
         // Explicit environment selections own their roots and pass through unchanged. Top-level
@@ -841,14 +848,17 @@ impl TurnRequestProcessor {
                     None => thread.config_snapshot().await.cwd().clone(),
                 },
             };
-            return Some(TurnEnvironmentSelections::new(
-                legacy_fallback_cwd,
-                environment_selections,
-            ));
+            return ThreadEnvironmentOverride {
+                environments: Some(TurnEnvironmentSelections::new(
+                    legacy_fallback_cwd,
+                    environment_selections,
+                )),
+                ..Default::default()
+            };
         }
 
-        let snapshot = thread.config_snapshot().await;
-        let current_cwd = snapshot.cwd().clone();
+        let snapshot = thread.thread_settings_snapshot().await;
+        let current_cwd = snapshot.cwd.clone();
         let legacy_fallback_cwd = cwd.unwrap_or_else(|| current_cwd.clone());
         let workspace_roots = match workspace_roots {
             Some(workspace_roots) => workspace_roots,
@@ -857,7 +867,7 @@ impl TurnRequestProcessor {
                 // the old cwd root while preserving any additional roots. Deduplicate because the
                 // new cwd may already be present as an additional root.
                 let mut retargeted_workspace_roots = Vec::new();
-                for root in snapshot.workspace_roots {
+                for root in snapshot.runtime_workspace_roots.unwrap_or_default() {
                     let root = if root == current_cwd {
                         legacy_fallback_cwd.clone()
                     } else {
@@ -873,10 +883,13 @@ impl TurnRequestProcessor {
         let environment_selections = self
             .thread_manager
             .default_environment_selections(&legacy_fallback_cwd, &workspace_roots);
-        Some(TurnEnvironmentSelections::new(
-            legacy_fallback_cwd,
-            environment_selections,
-        ))
+        ThreadEnvironmentOverride {
+            environments: Some(TurnEnvironmentSelections::new(
+                legacy_fallback_cwd,
+                environment_selections,
+            )),
+            runtime_workspace_roots: Some(workspace_roots),
+        }
     }
 
     async fn build_thread_settings_overrides(
@@ -886,7 +899,11 @@ impl TurnRequestProcessor {
     ) -> Result<codex_protocol::protocol::ThreadSettingsOverrides, JSONRPCErrorError> {
         let ThreadSettingsBuildParams {
             method,
-            environments,
+            environment_override:
+                ThreadEnvironmentOverride {
+                    environments,
+                    runtime_workspace_roots,
+                },
             approval_policy,
             approvals_reviewer,
             sandbox_policy,
@@ -1051,7 +1068,7 @@ impl TurnRequestProcessor {
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     disabled_plugin_ids: None,
                     environments: environments.clone(),
-                    runtime_workspace_roots: None,
+                    runtime_workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
@@ -1077,7 +1094,7 @@ impl TurnRequestProcessor {
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
             disabled_plugin_ids: None,
             environments,
-            runtime_workspace_roots: None,
+            runtime_workspace_roots,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -1112,7 +1129,7 @@ impl TurnRequestProcessor {
                 minimum_remaining_percent: usage_policy.minimum_remaining_percent,
             });
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments = self
+        let environment_override = self
             .build_environment_override(
                 thread.as_ref(),
                 cwd,
@@ -1125,7 +1142,7 @@ impl TurnRequestProcessor {
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "thread/settings/update",
-                    environments,
+                    environment_override,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
                     sandbox_policy: params.sandbox_policy,

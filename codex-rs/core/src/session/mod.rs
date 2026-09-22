@@ -2165,6 +2165,13 @@ impl Session {
                     .await
                     .set_token_usage_records(token_usage_records, latest_token_usage_record);
 
+                // Checkpoint effective settings even when no turn follows the resume. This
+                // retains runtime workspace roots and other restored thread-owned settings.
+                self.persist_rollout_items(&[RolloutItem::EventMsg(
+                    thread_settings::applied_event(self).await,
+                )])
+                .await;
+
                 // Defer seeding the session's initial context until the first turn starts so
                 // turn/start overrides can be merged before we write to the rollout.
                 if !is_subagent {
