@@ -1,4 +1,3 @@
-use crate::agent::types::ResolvedMultiAgentV2UsageHints;
 use crate::config::MultiAgentV2Config;
 use crate::context::MultiAgentRoleInstructions;
 use crate::session::step_context::StepContext;

@@ -256,7 +256,6 @@ pub(super) async fn spawn_review_thread(
         parent_thread_id: parent_turn_context.parent_thread_id,
         originator: parent_turn_context.originator.clone(),
         initial_environments: parent_turn_context.initial_environments.clone(),
-        environments: parent_turn_context.environments.clone(),
         tools_config,
         available_models,
         unified_exec_shell_mode,

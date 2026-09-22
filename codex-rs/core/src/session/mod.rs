@@ -14,6 +14,8 @@ use std::time::UNIX_EPOCH;
 use crate::agent::AgentStatus;
 use crate::agent::LocalAgentControl;
 use crate::agent::agent_status_from_event;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
@@ -57,6 +59,7 @@ use crate::realtime_classifier::RealtimeHandoffRoutingDecision;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_handoff::non_substantive_realtime_reasoning_effort;
 use crate::realtime_history::RealtimeEventOrder;
+use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::step_settings::StepSettings;
@@ -134,6 +137,7 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::EnteredReviewModeItem;
 use codex_protocol::items::ModelInvocationContext;
+use codex_protocol::items::SubAgentActivityItem;
 use codex_utils_output_truncation::with_serialization_allowance;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -163,6 +167,7 @@ use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
@@ -187,6 +192,7 @@ use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_rollout_trace::ThreadTraceContext;
+use codex_rollout_trace::AgentResultTracePayload;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles_with_context;
 use codex_shell_command::parse_command::parse_command;
@@ -2095,10 +2101,14 @@ impl Session {
                 },
             )
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        let turn_environments = self
+            .activate_turn_environments(&session_configuration)
+            .await;
         Ok(self
             .new_turn_from_configuration(
                 sub_id,
                 session_configuration,
+                turn_environments,
                 NewTurnContextOptions {
                     final_output_json_schema,
                     ..Default::default()
@@ -3646,7 +3656,8 @@ impl Session {
         self.maybe_notify_overwatch_controllers(msg).await;
 
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            agent_path: Some(_),
+            parent_thread_id,
+            agent_path: Some(child_agent_path),
             ..
         }) = &turn_context.session_source
         else {
@@ -4980,7 +4991,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
-        items: Vec<ResponseItemEnvelope>,
+        mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
         let policy: codex_utils_output_truncation::TruncationPolicy = model_info.truncation_policy.into();
@@ -6318,7 +6329,7 @@ impl Session {
                 turn_context,
                 token_usage,
                 effective_service_tier,
-        )
+            )
             .await;
         self.send_token_count_event(turn_context).await;
         result
@@ -6330,13 +6341,34 @@ impl Session {
         settings: &ResolvedStepSettings,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
-        self.record_token_usage_info_with_service_tier(turn_context, token_usage, None)
-            .await
+        self.record_token_usage_info_with_service_tier_for_settings(
+            turn_context,
+            settings,
+            token_usage,
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn record_token_usage_info_with_service_tier(
         &self,
         turn_context: &TurnContext,
+        token_usage: Option<&TokenUsage>,
+        effective_service_tier: Option<&str>,
+    ) -> CodexResult<()> {
+        self.record_token_usage_info_with_service_tier_for_settings(
+            turn_context,
+            &turn_context.initial_settings,
+            token_usage,
+            effective_service_tier,
+        )
+        .await
+    }
+
+    pub(crate) async fn record_token_usage_info_with_service_tier_for_settings(
+        &self,
+        turn_context: &TurnContext,
+        settings: &ResolvedStepSettings,
         token_usage: Option<&TokenUsage>,
         effective_service_tier: Option<&str>,
     ) -> CodexResult<()> {

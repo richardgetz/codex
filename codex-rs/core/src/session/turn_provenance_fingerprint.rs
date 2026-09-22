@@ -1,5 +1,6 @@
 use super::stable_provenance_id;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::user_input::UserInput;
 use sha1::Digest;
 use sha1::Sha1;
@@ -90,9 +91,16 @@ fn hash_structured_input(hasher: &mut Sha1, input: &UserInput) {
                 }
             }
         }
-        UserInput::Image { image_url, detail } => {
+        UserInput::Image { image, detail } => {
             hash_tag(hasher, b"image");
-            hash_frame(hasher, b"image-url", image_url.as_bytes());
+            match image {
+                ImageReference::Inline { image_url } => {
+                    hash_frame(hasher, b"image-url", image_url.as_bytes());
+                }
+                ImageReference::File { file_id } => {
+                    hash_frame(hasher, b"image-file-id", file_id.as_bytes());
+                }
+            }
             hash_image_detail(hasher, *detail);
         }
         UserInput::LocalImage { path, detail } => {

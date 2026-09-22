@@ -19,6 +19,7 @@ use crate::session::session::SessionSettingsUpdate;
 use crate::session::thread_settings;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_input;
+use crate::state::ReasoningEffortPin;
 use crate::tools::handlers::builtin_scratchpad::ScratchpadCheckpointRestore;
 use crate::tools::handlers::builtin_scratchpad::restore_thread_scratchpad_checkpoint;
 use crate::tools::handlers::builtin_scratchpad::scratchpad_absent_update_event;
@@ -29,6 +30,7 @@ use crate::user_message_admission::UserMessageAdmission;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianApprovedAction;
+use crate::context::NodeReplReviewEvidence;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
@@ -493,6 +495,12 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
                     current_context.as_ref(),
                     EventMsg::TurnStarted(TurnStartedEvent {
                         turn_id: current_context.sub_id.clone(),
+                        root_turn_id: Some(
+                            current_context
+                                .turn_metadata_state
+                                .root_turn_id()
+                                .unwrap_or_else(|| current_context.sub_id.clone()),
+                        ),
                         trace_id: current_context.trace_id.clone(),
                         started_at: current_context
                             .turn_timing_state
@@ -1162,7 +1170,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+    sess.apply_rollout_reconstruction(turn_context, replay_items.as_slice())
         .await;
     {
         let mut state = sess.state.lock().await;
@@ -1575,7 +1583,7 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     emit_thread_stop_lifecycle(sess).await;
 }
 
-async fn emit_thread_stop_lifecycle(sess: &Session) {
+pub(super) async fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_stop(codex_extension_api::ThreadStopInput {

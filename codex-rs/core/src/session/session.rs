@@ -976,19 +976,6 @@ impl Session {
             .map(codex_session_tmp::SessionTmpManager::agent_root)
     }
 
-    pub(crate) async fn preview_settings(
-        &self,
-        updates: &SessionSettingsUpdate,
-    ) -> ConstraintResult<ThreadConfigSnapshot> {
-        let state = self.state.lock().await;
-        let configuration = self.apply_session_settings(&state.session_configuration, updates)?;
-        let environments = updates.environments.as_ref().map_or_else(
-            || self.services.turn_environments.selections(),
-            |environments| environments.environments.clone(),
-        );
-        Ok(configuration.thread_config_snapshot(environments))
-    }
-
     pub(crate) async fn validate_settings(
         &self,
         updates: &SessionSettingsUpdate,

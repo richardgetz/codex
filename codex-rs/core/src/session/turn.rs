@@ -3111,8 +3111,12 @@ async fn drain_in_flight(
                     &envelope.item,
                 )
                 .await;
-                sess.record_annotated_conversation_items(&turn_context, vec![envelope])
-                    .await;
+                sess.record_annotated_conversation_items(
+                    &turn_context,
+                    turn_context.model_info(),
+                    vec![envelope],
+                )
+                .await;
             }
             Err(err) => {
                 error_or_panic(format!("in-flight tool future failed during drain: {err}"));
@@ -3559,8 +3563,9 @@ async fn try_run_sampling_request(
                 )
                 .await;
                 let budget_result = sess
-                    .record_token_usage_info_with_service_tier(
+                    .record_token_usage_info_with_service_tier_for_settings(
                         &turn_context,
+                        &step_context.settings,
                         token_usage.as_ref(),
                         service_tier.as_deref(),
                     )

@@ -1252,7 +1252,6 @@ impl Session {
             use_model_token_budget_defaults,
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
-            current_settings: ArcSwap::from(Arc::clone(&step_settings)),
             active_host_plugin_identities: None,
             next_step_input: ArcSwap::from_pointee(StepInputs {
                 settings: step_settings,
