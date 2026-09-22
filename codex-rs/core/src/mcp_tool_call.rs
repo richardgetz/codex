@@ -590,6 +590,7 @@ async fn handle_approved_mcp_tool_call(
                 })
                 .await
                 .map_err(|error| format!("tool call error: {error:?}"))?;
+        };
             // Capture trusted server metadata before result callbacks or model-facing rewrites.
             elicitation_type = mcp_tool_call_auth_elicitation_type(&server, connector_id, &result);
             let mcp_tool = McpToolContext::from_prepared_call(
