@@ -1062,6 +1062,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::AnalyticsPlanHistory,
         key: "analytics_plan_history",
         stage: Stage::Experimental {
+            owner: FeatureOwner::Upstream,
             name: "Analytics plan history",
             menu_description: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
             announcement: "",
@@ -1072,6 +1073,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::DaemonAutoStart,
         key: "daemon_auto_start",
         stage: Stage::Experimental {
+            owner: FeatureOwner::Upstream,
             name: "Automatically start the background server",
             menu_description: "Use the shared local server for new, resumed, and forked sessions. Takes effect next launch.",
             announcement: "Automatic background server startup can now be enabled from /experimental.",
