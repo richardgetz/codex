@@ -692,6 +692,10 @@ pub struct ThreadSettingsOverrides {
     /// Updated personality preference.
     pub personality: Option<Personality>,
 
+    /// Replace the thread's disabled plugin IDs. Omission preserves the current
+    /// selection, and an empty list clears it.
+    pub disabled_plugin_ids: Option<Vec<String>>,
+
     /// Updated per-thread usage and automatic-resume policy.
     pub usage_policy: Option<ThreadUsagePolicy>,
 
@@ -2558,6 +2562,9 @@ pub struct ThreadSettingsSnapshot {
     /// Effective Lead/Worker model policy, when configured for this thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<ThreadTeamSettings>,
+    /// Thread-owned plugin selection, retained even when a plugin is unavailable.
+    #[serde(default)]
+    pub disabled_plugin_ids: Vec<String>,
 }
 
 /// High-level execution activity for a loaded thread.
@@ -3697,6 +3704,10 @@ pub struct TurnContextItem {
     /// Only set for subagent turns; persisted so resume keeps the scope frozen at turn start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root_turn_id: Option<String>,
+    /// Plugin selection captured for this turn. Absent in older histories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub disabled_plugin_ids: Option<Vec<String>>,
     pub cwd: AbsolutePathBuf,
     /// Effective workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions in `permission_profile`.

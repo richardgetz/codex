@@ -3618,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "codex-guardian-reviewer"
-version = "0.0.0"
+version = "0.154.0"
 dependencies = [
  "anyhow",
  "codex-analytics",
@@ -4950,7 +4950,7 @@ dependencies = [
 
 [[package]]
 name = "codex-user-verification"
-version = "0.0.0"
+version = "0.154.0"
 dependencies = [
  "base64 0.22.1",
  "core-foundation 0.10.1",
