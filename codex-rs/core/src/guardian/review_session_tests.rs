@@ -269,7 +269,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
 #[tokio::test]
 async fn spawned_guardian_session_preserves_windows_sandbox_proxy_settings() {
     let params = test_review_params().await;
-    let manager = params.parent_session.guardian_review_session();
+    let manager = &params.parent_session.guardian_review_session;
     prewarm_guardian_review_session(
         params.parent_session,
         Arc::clone(params.parent_context.turn()),

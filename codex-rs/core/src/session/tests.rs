@@ -20,6 +20,7 @@ use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::function_tool::FunctionCallError;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
+use crate::guardian::GuardianReviewSessionManagerTestExt;
 use crate::orchestrator_memory::user_preferences_root;
 use crate::plugins::plugins_manager_for_config;
 use crate::session::step_context::StepContext;

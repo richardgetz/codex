@@ -108,6 +108,28 @@ impl<S: ReviewerSession> Default for ReviewerPool<S> {
 }
 
 impl<S: ReviewerSession> ReviewerPool<S> {
+    /// Installs a reviewer as the pool trunk for host-side lifecycle tests.
+    ///
+    /// This is intentionally a low-level hook: production hosts should use
+    /// [`ReviewerPool::prewarm`] so construction remains cancellation-aware.
+    #[doc(hidden)]
+    pub async fn cache_for_test(&self, session: S) {
+        self.state.lock().await.trunk = Some(Arc::new(Trunk {
+            session: Arc::new(session),
+            review_lock: Semaphore::new(/*permits*/ 1),
+        }));
+    }
+
+    /// Tracks an in-flight reviewer for host-side shutdown tests.
+    #[doc(hidden)]
+    pub async fn register_ephemeral_for_test(&self, session: S) {
+        self.state
+            .lock()
+            .await
+            .ephemeral_reviews
+            .push(Arc::new(session));
+    }
+
     /// Returns the current reviewer handle for host inspection and feedback collection.
     pub async fn trunk(&self) -> Option<Arc<S>> {
         self.state

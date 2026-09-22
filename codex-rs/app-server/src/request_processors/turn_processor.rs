@@ -1051,6 +1051,7 @@ impl TurnRequestProcessor {
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
                     disabled_plugin_ids: None,
                     environments: environments.clone(),
+                    runtime_workspace_roots: None,
                     approval_policy,
                     approvals_reviewer,
                     sandbox_policy: sandbox_policy.clone(),
@@ -1076,6 +1077,7 @@ impl TurnRequestProcessor {
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
             disabled_plugin_ids: None,
             environments,
+            runtime_workspace_roots: None,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,

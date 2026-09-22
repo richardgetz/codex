@@ -7,7 +7,6 @@ use crate::config::NetworkProxySpec;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::test_config;
 use crate::environment_selection::TurnEnvironmentState;
-use crate::guardian::approval_request::format_guardian_action_compact;
 use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
@@ -459,6 +458,16 @@ fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> Stri
         .collect::<String>()
 }
 
+fn guardian_prompt_items_text(prompt: &prompt::GuardianPromptItems) -> String {
+    guardian_prompt_text(
+        &prompt
+            .context
+            .clone()
+            .into_user_inputs()
+            .expect("Guardian prompt context should convert to user inputs"),
+    )
+}
+
 fn last_user_message_text_from_body(body: &serde_json::Value) -> String {
     body["input"]
         .as_array()
@@ -529,7 +538,7 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("whose request action you are assessing"));
     assert!(text.contains(">>> TRANSCRIPT START\n"));
     assert!(text.contains(">>> TRANSCRIPT END\n"));
@@ -570,7 +579,7 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("Retry reason:\nThe sandbox blocked the initial command.\n\n"));
     assert!(!text.contains("A policy rule requires approval."));
 
@@ -612,8 +621,8 @@ async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::
     )
     .await?;
 
-    let reason_item = prompt
-        .items
+    let prompt_inputs = prompt.context.clone().into_user_inputs()?;
+    let reason_item = prompt_inputs
         .iter()
         .find_map(|item| match item {
             codex_protocol::user_input::UserInput::Text { text, .. }
@@ -706,7 +715,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("PARENT TURN PERMISSION CONTEXT START"));
     assert!(text.contains("do not approve escalation whose purpose is to read them"));
     assert!(text.contains(denied_root.to_string_lossy().as_ref()));
@@ -769,7 +778,7 @@ async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyh
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("added since your last approval assessment"));
     assert!(text.contains(">>> TRANSCRIPT DELTA START\n"));
     assert!(text.contains("[5] user: Please also push the second docs fix."));
@@ -810,7 +819,7 @@ async fn build_guardian_prompt_delta_mode_handles_empty_delta() -> anyhow::Resul
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains(">>> TRANSCRIPT DELTA START\n"));
     assert!(text.contains("<no retained transcript delta entries>"));
     assert!(text.contains(">>> TRANSCRIPT DELTA END\n"));
@@ -848,7 +857,7 @@ async fn build_guardian_prompt_stale_delta_cursor_falls_back_to_full_prompt() ->
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("whose request action you are assessing"));
     assert!(text.contains(">>> TRANSCRIPT START\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
@@ -936,7 +945,7 @@ async fn build_guardian_prompt_stale_delta_version_falls_back_to_full_prompt() -
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("whose request action you are assessing"));
     assert!(text.contains(">>> TRANSCRIPT START\n"));
     assert!(!text.contains("TRANSCRIPT DELTA"));
@@ -952,9 +961,18 @@ fn collect_guardian_transcript_entries(
     history: &dyn codex_guardian_context::SectionHistory,
     node_repl_result_token_limit: usize,
 ) -> Vec<ConversationTranscriptEntry> {
-    prompt::collect_guardian_context(history, node_repl_result_token_limit, &[], &[])
+    prompt::collect_guardian_context(
+        history,
+        node_repl_result_token_limit,
+        &[],
+        &[],
+        /*planned_action*/ None,
+        /*permissions*/ None,
+        /*node_repl*/ None,
+    )
         .expect("collect Guardian context")
-        .transcript
+        .transcript_entries()
+        .to_vec()
 }
 
 #[test]
@@ -1226,7 +1244,7 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
 }
 
 #[test]
-fn guardian_action_formatters_reject_large_aggregate_payloads() {
+fn guardian_action_formatter_preserves_large_aggregate_payloads() -> serde_json::Result<()> {
     let file: PathUri = test_path_buf("/tmp/file").abs().into();
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
@@ -1235,17 +1253,10 @@ fn guardian_action_formatters_reject_large_aggregate_payloads() {
         patch: String::new(),
     };
 
-    for error in [
-        format_guardian_action_pretty(&action).map(|_| ()),
-        format_guardian_action_compact(&action).map(|_| ()),
-    ] {
-        assert_eq!(
-            error
-                .expect_err("aggregate action should exceed the review limit")
-                .to_string(),
-            "Guardian action exceeds the 200000-byte review limit"
-        );
-    }
+    let rendered = format_guardian_action_pretty(&action)?;
+    assert!(rendered.len() > 200_000);
+    assert!(rendered.contains("\"tool\": \"apply_patch\""));
+    Ok(())
 }
 
 #[test]
@@ -1260,8 +1271,7 @@ fn format_guardian_action_pretty_reports_no_truncation_for_small_payload() -> se
 
     let rendered = format_guardian_action_pretty(&action)?;
 
-    assert!(rendered.text.contains("\"tool\": \"apply_patch\""));
-    assert!(!rendered.truncated);
+    assert!(rendered.contains("\"tool\": \"apply_patch\""));
     Ok(())
 }
 
@@ -1334,7 +1344,7 @@ async fn build_guardian_prompt_items_keeps_required_node_repl_reviews_generic() 
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("Assess the exact planned action below."));
     assert!(text.contains("Retry reason:\nRetry the authorized browser inspection."));
     assert!(text.contains("Planned action JSON:"));
@@ -1370,7 +1380,7 @@ async fn build_guardian_prompt_items_keeps_other_requests_generic() -> anyhow::R
         )
         .await?;
 
-        let text = guardian_prompt_text(&prompt.items);
+        let text = guardian_prompt_items_text(&prompt);
         assert!(text.contains("Assess the exact planned action below."));
         assert!(text.contains("Planned action JSON:"));
         assert!(!text.contains("Node REPL action JSON:"));
@@ -1455,7 +1465,7 @@ async fn build_guardian_prompt_items_explains_network_access_review_scope() -> a
     )
     .await?;
 
-    let text = guardian_prompt_text(&prompt.items);
+    let text = guardian_prompt_items_text(&prompt);
     assert!(text.contains("Below is a proposed network access request under review."));
     assert!(!text.contains("Network approval context:"));
     assert!(
@@ -2425,7 +2435,8 @@ async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Res
     )
     .await?;
     let prompt_text = prompt
-        .items
+        .context
+        .into_user_inputs()?
         .into_iter()
         .map(|item| match item {
             codex_protocol::user_input::UserInput::Text { text, .. } => text,
@@ -3760,7 +3771,8 @@ async fn guardian_review_session_config_clears_context_overrides_for_distinct_ef
         .expect("turn should be unique")
         .config = Arc::new(config);
 
-    let guardian_config = guardian_review_session_config(session.as_ref(), turn.as_ref())
+    let context = GuardianReviewContext::from(&turn);
+    let guardian_config = guardian_review_session_config(session.as_ref(), &context)
         .await
         .expect("guardian config")
         .spawn_config;
@@ -3797,7 +3809,8 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
         .expect("turn should be unique")
         .config = Arc::new(config);
 
-    let guardian_config = guardian_review_session_config(session.as_ref(), turn.as_ref())
+    let context = GuardianReviewContext::from(&turn);
+    let guardian_config = guardian_review_session_config(session.as_ref(), &context)
         .await
         .expect("guardian config")
         .spawn_config;

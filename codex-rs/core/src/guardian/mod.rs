@@ -26,6 +26,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 
+use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
@@ -56,6 +57,8 @@ pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub(crate) use review::routes_approval_to_guardian;
+#[cfg(test)]
+pub(crate) use review_session::GuardianReviewSessionManagerTestExt;
 pub use review_session::GuardianReviewSessionHost;
 pub(crate) use review_session::GuardianReviewSessionManager;
 pub(crate) use review_session::prewarm_guardian_review_session;
@@ -276,11 +279,28 @@ use prompt::build_guardian_prompt_items_with_parent_turn;
 #[cfg(test)]
 use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
-use review::GuardianReviewOutcome;
+use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
 use review::run_guardian_review_session_with_retry as run_guardian_review_session_for_test;
+
 #[cfg(test)]
-use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
+fn build_guardian_review_session_config_for_test(
+    parent_config: &Config,
+    live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
+    active_model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    model_messages: Option<&codex_protocol::openai_models::ModelMessages>,
+) -> anyhow::Result<Config> {
+    reviewer_config::build_guardian_review_session_config(
+        parent_config,
+        live_network_config,
+        active_model,
+        reasoning_effort,
+        ReasoningSummary::default(),
+        None,
+        model_messages,
+    )
+}
 
 #[cfg(test)]
 mod tests;

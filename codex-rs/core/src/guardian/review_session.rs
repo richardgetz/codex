@@ -150,6 +150,28 @@ impl GuardianReviewSessionHost {
 pub(crate) type GuardianReviewSessionManager =
     codex_guardian_reviewer::ReviewerPool<GuardianReviewSession>;
 
+/// Test-only adapters for exercising the pool's shutdown and reuse paths with
+/// an already-constructed core session. The pool itself owns the generic
+/// insertion hooks; this trait keeps the core `SessionIo` wiring private.
+#[cfg(test)]
+pub(crate) trait GuardianReviewSessionManagerTestExt {
+    fn cache_for_test(
+        &self,
+        session: Arc<Session>,
+        io: SessionIo,
+    ) -> BoxFuture<'_, ()>;
+
+    fn register_ephemeral_for_test(
+        &self,
+        session: Arc<Session>,
+        io: SessionIo,
+    ) -> BoxFuture<'_, ()>;
+
+    fn committed_fork_rollout_items_for_test(&self) -> BoxFuture<'_, Option<Vec<RolloutItem>>>;
+
+    fn send_trunk_event_raw_for_test(&self, event: Event) -> BoxFuture<'_, ()>;
+}
+
 /// Opaque host session handle. Its state belongs to the existing context builder.
 pub(crate) struct GuardianReviewSession {
     session: Arc<Session>,
@@ -170,6 +192,76 @@ struct GuardianReviewState {
 struct PendingNodeReplEvidenceAdmission {
     turn_id: String,
     response_sequence: u64,
+}
+
+#[cfg(test)]
+impl GuardianReviewSession {
+    async fn from_test_parts(session: Arc<Session>, io: SessionIo) -> Self {
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
+            session.get_config().await.as_ref(),
+            session.user_instructions().await,
+            session.clone_history().await.history_version(),
+            session.guardian_context_mode,
+        );
+        Self {
+            session,
+            io,
+            cancel_token: CancellationToken::new(),
+            reuse_key,
+            state: Mutex::new(GuardianReviewState {
+                prior_review_count: 0,
+                last_reviewed_transcript_cursor: None,
+                last_admitted_node_repl_response_sequence: 0,
+                pending_node_repl_evidence_admission: None,
+                last_committed_fork_snapshot: None,
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+impl GuardianReviewSessionManagerTestExt for GuardianReviewSessionManager {
+    fn cache_for_test(
+        &self,
+        session: Arc<Session>,
+        io: SessionIo,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            codex_guardian_reviewer::ReviewerPool::cache_for_test(
+                self,
+                GuardianReviewSession::from_test_parts(session, io).await,
+            )
+            .await;
+        })
+    }
+
+    fn register_ephemeral_for_test(
+        &self,
+        session: Arc<Session>,
+        io: SessionIo,
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            codex_guardian_reviewer::ReviewerPool::register_ephemeral_for_test(
+                self,
+                GuardianReviewSession::from_test_parts(session, io).await,
+            )
+            .await;
+        })
+    }
+
+    fn committed_fork_rollout_items_for_test(&self) -> BoxFuture<'_, Option<Vec<RolloutItem>>> {
+        Box::pin(async move {
+            let trunk = self.trunk().await?;
+            trunk.committed_fork_rollout_items_for_test().await
+        })
+    }
+
+    fn send_trunk_event_raw_for_test(&self, event: Event) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let trunk = self.trunk().await.expect("guardian trunk should exist");
+            trunk.send_trunk_event_raw_for_test(event).await;
+        })
+    }
 }
 
 fn had_prior_review_context(prompt_mode: &GuardianPromptMode) -> bool {

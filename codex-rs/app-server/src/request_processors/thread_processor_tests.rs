@@ -229,6 +229,7 @@ mod thread_processor_behavior_tests {
             active_permission_profile: None,
             environments: TurnEnvironmentSelections::new(cwd, Vec::new()),
             workspace_roots: Vec::new(),
+            runtime_workspace_roots: Vec::new(),
             profile_workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: None,
