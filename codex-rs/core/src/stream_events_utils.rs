@@ -96,7 +96,11 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
-    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+    sess.record_conversation_items(
+        turn_context,
+        turn_context.model_info(),
+        std::slice::from_ref(item),
+    )
         .await;
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
@@ -390,6 +394,7 @@ pub(crate) async fn handle_output_item_done(
                 ctx.sess
                     .record_conversation_items(
                         &ctx.turn_context,
+                        ctx.turn_context.model_info(),
                         std::slice::from_ref(&response_item),
                     )
                     .await;

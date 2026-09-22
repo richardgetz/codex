@@ -179,7 +179,7 @@ pub(super) async fn run_main_inner(
     let frontend_refresh_local_daemon = cli.frontend_reload_local_daemon_socket.clone();
     let mut daemon_exclusion = daemon_startup::exclusion(
         &cli,
-        &cli_kv_overrides,
+        &daemon_cli_kv_overrides,
         &launch_loader_overrides,
         workload_identity_selected,
         std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).as_deref(),

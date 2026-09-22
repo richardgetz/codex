@@ -893,7 +893,11 @@ pub(crate) async fn record_additional_contexts(
         return;
     }
 
-    sess.record_conversation_items(turn_context, developer_messages.as_slice())
+    sess.record_conversation_items(
+        turn_context,
+        turn_context.model_info(),
+        developer_messages.as_slice(),
+    )
         .await;
 }
 

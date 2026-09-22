@@ -1439,6 +1439,7 @@ impl Session {
         {
             self.record_conversation_items(
                 task.turn_context.as_ref(),
+                task.turn_context.model_info(),
                 std::slice::from_ref(&marker),
             )
             .await;
