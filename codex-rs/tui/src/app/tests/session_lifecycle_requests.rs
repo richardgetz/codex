@@ -801,13 +801,13 @@ async fn archive_current_thread_reports_success_only_after_archiving() -> Result
 
     app.active_thread_id = Some(ThreadId::new());
     assert_matches!(
-        app.archive_current_thread(&mut app_server).await?,
+        app.archive_current_thread(&mut app_server).await,
         AppRunControl::Continue
     );
 
     app.active_thread_id = Some(thread_id);
     assert_matches!(
-        app.archive_current_thread(&mut app_server).await?,
+        app.archive_current_thread(&mut app_server).await,
         AppRunControl::Exit(ExitReason::Archived(archived_id)) if archived_id == thread_id
     );
 
