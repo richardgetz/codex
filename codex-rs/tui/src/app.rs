@@ -253,6 +253,7 @@ mod pets;
 mod platform_actions;
 mod plugin_mentions;
 mod rate_limit_refresh;
+mod realtime_delivery;
 mod realtime_voice_calibration;
 mod recap;
 mod reconnect;
@@ -261,6 +262,7 @@ mod replay_filter;
 mod resize_reflow;
 mod resume_config;
 mod safety_buffering;
+mod server_version_notice;
 mod session_lifecycle;
 mod session_picker;
 mod side;
@@ -276,6 +278,9 @@ mod thread_session_state;
 mod thread_settings;
 mod thread_title;
 mod transcript_export;
+mod user_verification;
+mod user_verification_errors;
+mod user_verification_requests;
 mod working_directory;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -298,6 +303,10 @@ enum ThreadInteractiveRequest {
     AppLink(AppLinkViewParams),
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
+    UserVerification {
+        thread_id: ThreadId,
+        request: crate::bottom_pane::user_verification::UserVerificationRequest,
+    },
 }
 
 /// Normalize and validate an explicit startup account alias.
@@ -732,6 +741,10 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
+    pending_realtime_speech_replay: HashMap<ThreadId, Vec<(String, ThreadItem)>>,
+    pending_realtime_transcript_replay:
+        HashMap<ThreadId, VecDeque<crate::chatwidget::RealtimeTranscriptRecord>>,
+    realtime_replay_order: VecDeque<ThreadId>,
     temporary_structured_requests: HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
     /// Track title generation across thread switches and deduplicate automatic requests.
     pending_thread_titles: HashSet<(ThreadId, ThreadTitleDestination)>,
@@ -752,6 +765,7 @@ pub(crate) struct App {
     dynamic_tool_status_updates:
         tokio::sync::broadcast::Sender<codex_app_server_protocol::ThreadStatusChangedNotification>,
     dynamic_tool_tasks: HashMap<codex_app_server_protocol::RequestId, (String, JoinHandle<()>)>,
+    pending_server_version_notice: Option<crate::status::remote_connection::ServerVersionNotice>,
     /// Opens the session picker after event dispatch returns, with a fresh stack.
     pending_open_resume_picker: bool,
     /// Runs a requested /cd after event dispatch returns, with a fresh stack.

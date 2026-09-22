@@ -19,6 +19,7 @@ pub(super) struct ReconnectState {
     pub(super) offline: bool,
     pub(super) failed: bool,
     pub(super) presentation: ReconnectPresentation,
+    pub(super) seen_version_notice: Option<String>,
     pub(super) pending_remote_reload: Option<PendingRemoteReload>,
     /// Correlates the terminal response and asynchronous notification for one reload request.
     ///
@@ -193,6 +194,13 @@ impl App {
             self.reconnect.offline = true;
             self.reconnect.failed = false;
             self.reconnect.last_remote_reload_terminal = None;
+            if self.pending_server_version_notice.take().is_some() {
+                self.reconnect.seen_version_notice = None;
+                self.update_server_version_overview_notice(
+                    CODEX_CLI_VERSION,
+                    /*older_server*/ None,
+                );
+            }
             self.cancel_pending_key_chord();
             self.overlay = None;
             self.commit_animation = None;
@@ -237,6 +245,7 @@ impl App {
         app_server: &mut AppServerSession,
         app_event_rx: &mut mpsc::UnboundedReceiver<AppEvent>,
         connected: Reconnected,
+        client_version: &str,
     ) -> Result<()> {
         let Reconnected {
             mut session,
@@ -449,6 +458,37 @@ impl App {
         self.chat_widget.add_info_message(
             "Reconnected. No input was resent. Review uncertain submissions before retrying; recovered queues remain paused.".into(), /*hint*/ None,
         );
+        let connected_notice_key = crate::status::remote_connection::server_version_notice_key(
+            &self.app_server_target,
+            app_server.server_codex_home(),
+            client_version,
+            app_server.server_version(),
+        );
+        if !self.local_settings.tui.show_server_version_notice
+            || self.reconnect.seen_version_notice != connected_notice_key
+        {
+            self.reconnect.seen_version_notice = None;
+            self.update_server_version_overview_notice(
+                client_version,
+                /*older_server*/ None,
+            );
+        }
+        if let Some((notice, key)) =
+            crate::status::remote_connection::pending_server_version_notice(
+                &self.local_settings.tui,
+                &self.app_server_target,
+                app_server.server_codex_home(),
+                client_version,
+                app_server.server_version(),
+                self.reconnect.seen_version_notice.as_deref(),
+            )
+        {
+            self.reconnect.seen_version_notice = Some(key);
+            self.update_server_version_overview_notice(client_version, app_server.server_version());
+            if self.reconnect.presentation != ReconnectPresentation::Overview {
+                self.chat_widget.add_server_version_warning(notice);
+            }
+        }
         self.queue_remote_reload_status_after_reconnect();
         Ok(())
     }
