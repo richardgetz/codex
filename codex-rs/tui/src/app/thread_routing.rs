@@ -472,6 +472,9 @@ impl App {
             AppCommand::Interrupt | AppCommand::PauseActivity | AppCommand::ContinueUsage => {
                 self.current_displayed_thread_id()
             }
+            AppCommand::RealtimeConversationStart { thread_id, .. }
+            | AppCommand::RealtimeConversationStop { thread_id }
+            | AppCommand::RealtimeConversationSpeech { thread_id, .. } => Some(*thread_id),
             _ => self.active_thread_id,
         }
     }
@@ -934,10 +937,68 @@ impl App {
                 app_server.thread_agents_prune(thread_id).await?;
                 Ok(true)
             }
-            AppCommand::RealtimeConversationStart { transport, voice } => {
+            AppCommand::RealtimeConversationStartWithTransport { transport, voice } => {
                 app_server
-                    .thread_realtime_start(thread_id, transport.clone(), voice.clone())
+                    .thread_realtime_start_with_transport(
+                        thread_id,
+                        transport.clone(),
+                        voice.clone(),
+                    )
                     .await?;
+                Ok(true)
+            }
+            AppCommand::RealtimeConversationStart {
+                thread_id: realtime_thread_id,
+                offer_sdp,
+            } => {
+                if *realtime_thread_id != thread_id {
+                    return Ok(true);
+                }
+                let model = self
+                    .chat_widget
+                    .config_ref()
+                    .experimental_realtime_ws_model
+                    .clone();
+                app_server
+                    .thread_realtime_start(
+                        *realtime_thread_id,
+                        String::from(offer_sdp.clone()),
+                        model,
+                    )
+                    .await?;
+                Ok(true)
+            }
+            AppCommand::RealtimeConversationStop {
+                thread_id: realtime_thread_id,
+            } => {
+                app_server.thread_realtime_stop(*realtime_thread_id).await?;
+                Ok(true)
+            }
+            AppCommand::RealtimeConversationSpeech {
+                thread_id: realtime_thread_id,
+                attempt_id,
+                input_generation,
+                delivery_id,
+                text,
+            } => {
+                if !self.chat_widget.has_pending_realtime_speech(*delivery_id) {
+                    return Ok(true);
+                }
+                if *realtime_thread_id != thread_id
+                    || !self.chat_widget.is_current_realtime_attempt(
+                        *realtime_thread_id,
+                        *attempt_id,
+                        *input_generation,
+                    )
+                {
+                    self.chat_widget
+                        .restore_undelivered_realtime_speech(*delivery_id);
+                    return Ok(true);
+                }
+                app_server
+                    .thread_realtime_append_speech(*realtime_thread_id, text.as_str().to_owned())
+                    .await?;
+                self.chat_widget.accept_realtime_speech(*delivery_id);
                 Ok(true)
             }
             AppCommand::RealtimeConversationAudio(frame) => {

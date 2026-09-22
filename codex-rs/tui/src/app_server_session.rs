@@ -6,7 +6,6 @@
 mod fs;
 mod history;
 mod models;
-mod realtime;
 mod rollout_history;
 mod thread_list;
 
@@ -192,6 +191,8 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -2042,7 +2043,7 @@ impl AppServerSession {
         Ok(())
     }
 
-    pub(crate) async fn thread_realtime_start(
+    pub(crate) async fn thread_realtime_start_with_transport(
         &mut self,
         thread_id: ThreadId,
         transport: Option<ThreadRealtimeStartTransport>,
@@ -2053,6 +2054,49 @@ impl AppServerSession {
         let _: ThreadRealtimeStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadRealtimeStart { request_id, params })
+            .await
+            .wrap_err("thread/realtime/start failed in TUI")?;
+        Ok(())
+    }
+
+    /// Start the legacy TUI-owned WebRTC conversation used by the ChatWidget voice flow.
+    ///
+    /// The fork's current realtime controls use `thread_realtime_start` with the transport and
+    /// voice payload directly. Keeping this compatibility entrypoint lets the refreshed upstream
+    /// ChatWidget route its client-managed handoff session without reintroducing duplicate methods.
+    pub(crate) async fn thread_realtime_start(
+        &mut self,
+        thread_id: ThreadId,
+        offer_sdp: String,
+        model: Option<String>,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadRealtimeStartResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadRealtimeStart {
+                request_id,
+                params: ThreadRealtimeStartParams {
+                    thread_id: thread_id.to_string(),
+                    client_managed_handoffs: Some(true),
+                    delegation_ack_filler: None,
+                    flush_transcript_tail_on_session_end: None,
+                    codex_responses_as_items: None,
+                    codex_response_item_prefix: None,
+                    codex_response_handoff_mode: None,
+                    codex_response_handoff_channel_prefixes: None,
+                    model,
+                    output_modality: RealtimeOutputModality::Audio,
+                    include_startup_context: Some(false),
+                    initial_items: None,
+                    realtime_start_instructions: None,
+                    realtime_end_instructions: None,
+                    prompt: None,
+                    realtime_session_id: None,
+                    transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp: offer_sdp }),
+                    version: Some(RealtimeConversationVersion::V3),
+                    voice: None,
+                },
+            })
             .await
             .wrap_err("thread/realtime/start failed in TUI")?;
         Ok(())

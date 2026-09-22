@@ -66,6 +66,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
+use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::app::eta_view::EtaViewState;
 use crate::history_cell::HistoryCell;
@@ -114,6 +115,13 @@ pub(crate) struct ManagedWorktreeCreated {
         ),
         String,
     >,
+}
+
+/// Confirmed server lifecycle operations available from the agents dashboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentsOverviewAction {
+    Archive,
+    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,13 +280,6 @@ pub(crate) enum RecapTrigger {
     Manual,
 }
 
-/// Confirmed server lifecycle operations available from the agents dashboard.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AgentsOverviewAction {
-    Archive,
-    Delete,
-}
-
 #[derive(Debug)]
 pub(crate) struct AgentsOverviewThreadRefresh {
     pub(crate) threads: std::collections::HashMap<ThreadId, Option<Thread>>,
@@ -361,7 +362,7 @@ pub(crate) enum AppEvent {
     StopAgentsOverviewThread {
         thread_id: ThreadId,
     },
-    /// Hide the selected dashboard task while its lifecycle request completes.
+    /// Hide a dashboard row locally without stopping its task.
     HideAgentsOverviewThread {
         thread_id: ThreadId,
     },
@@ -450,16 +451,7 @@ pub(crate) enum AppEvent {
         op: AppCommand,
     },
 
-    /// Confirm retrying a safety-buffered turn with the server-selected model.
-    ConfirmSafetyBufferedRetry {
-        thread_id: ThreadId,
-        turn_id: String,
-        model: String,
-        turn: AppCommand,
-        prompt: UserMessage,
-    },
-
-    /// Sign the challenge associated with an approved elicitation.
+    /// Sign the challenge associated with an approved verification request.
     UserVerificationApproved {
         thread_id: ThreadId,
         server_name: String,
@@ -472,6 +464,15 @@ pub(crate) enum AppEvent {
         request_id: AppServerRequestId,
         attempt_id: Uuid,
         result: Result<codex_app_server_protocol::UserVerificationProof, String>,
+    },
+
+    /// Confirm retrying a safety-buffered turn with the server-selected model.
+    ConfirmSafetyBufferedRetry {
+        thread_id: ThreadId,
+        turn_id: String,
+        model: String,
+        turn: AppCommand,
+        prompt: UserMessage,
     },
 
     /// Interrupt, fork, and retry a safety-buffered turn with the server-selected model.
@@ -568,6 +569,18 @@ pub(crate) enum AppEvent {
     ShowManagedWorktreeActions {
         request: crate::worktree_browser::Request,
         entry: crate::worktree_browser::Entry,
+    },
+    ConfirmManagedWorktreeRemoval {
+        request: crate::worktree_browser::Request,
+        root: PathBuf,
+    },
+    RemoveManagedWorktree {
+        request: crate::worktree_browser::Request,
+        root: PathBuf,
+    },
+    ManagedWorktreeRemoved {
+        root: PathBuf,
+        result: Result<(), String>,
     },
 
     /// Change the working directory of the originating idle primary thread.
@@ -1172,6 +1185,9 @@ pub(crate) enum AppEvent {
     /// resize-reflow tail renderer.
     BeginThreadSwitchHistoryReplayBuffer,
 
+    /// Clear history queued by the previous thread before the new thread's replay events.
+    ResetTranscriptForThreadSwitch,
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     /// Insert an asynchronous result only while its originating thread remains displayed.
@@ -1233,6 +1249,25 @@ pub(crate) enum AppEvent {
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
+
+    /// Result of creating a TUI-owned WebRTC offer for an active thread.
+    RealtimeWebrtcOfferCreated {
+        thread_id: ThreadId,
+        attempt_id: u64,
+        result: Result<StartedRealtimeWebrtcSession, String>,
+    },
+
+    /// Result of establishing the WebRTC connection for an active voice attempt.
+    RealtimeWebrtcConnected {
+        thread_id: ThreadId,
+        attempt_id: u64,
+        result: Result<(), codex_realtime_webrtc::ConnectionError>,
+    },
+
+    /// Stop a TUI-owned WebRTC conversation after its widget is replaced.
+    StopRealtimeConversation {
+        thread_id: ThreadId,
+    },
 
     /// Finish a settings selection after its preceding update events have been applied.
     SettingsSelectionClosed,
