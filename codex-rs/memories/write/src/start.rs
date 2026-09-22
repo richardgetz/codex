@@ -52,6 +52,7 @@ pub fn start_memories_startup_task(
         let config = Arc::new(pipeline_config);
         let auth_manager = Arc::clone(&auth_manager);
         let parent_permission_profile = parent_permission_profile.clone();
+        let thread_for_pipeline = Arc::clone(&thread);
         let context = Arc::new(MemoryStartupContext::new(
             Arc::clone(&thread_manager),
             Arc::clone(&auth_manager),
@@ -61,7 +62,7 @@ pub fn start_memories_startup_task(
             source.clone(),
         ));
         tokio::spawn(async move {
-            let Some(_permit) = thread.memory_write_permit().await else {
+            let Some(_permit) = thread_for_pipeline.memory_write_permit().await else {
                 return;
             };
             if context.memory_store().await.is_none() {
