@@ -979,7 +979,7 @@ pub async fn run_main_with_transport_options(
             state_db: state_db.clone(),
             config_warnings,
             session_source,
-            auth_manager,
+            auth_manager: Arc::clone(&auth_manager),
             user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
                 &auth_manager,
             ))),

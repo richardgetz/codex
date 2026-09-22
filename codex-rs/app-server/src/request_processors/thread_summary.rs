@@ -220,6 +220,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
         user_preferences_memory_policy,
         usage_policy,
         team,
+        ..
     } = snapshot;
     let sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
         &permission_profile,

@@ -605,7 +605,7 @@ pub(crate) struct ThreadRequestProcessor {
 /// Outcome of trying to satisfy a resume request from an already loaded thread.
 enum RunningThreadResumeResult {
     /// The request was delegated to the loaded thread.
-    Handled,
+    Handled(tokio::sync::oneshot::Receiver<()>),
     /// No loaded thread handled the request.
     ///
     /// The optional stored thread contains the history-bearing probe that cold
@@ -2708,6 +2708,7 @@ impl ThreadRequestProcessor {
         }
 
         let request = request_id.clone();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
 
         let rollback_already_in_progress = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
@@ -2715,7 +2716,7 @@ impl ThreadRequestProcessor {
             if thread_state.pending_rollbacks.is_some() {
                 true
             } else {
-                thread_state.pending_rollbacks = Some(request.clone());
+                thread_state.pending_rollbacks = Some((request.clone(), completion_tx));
                 false
             }
         };
@@ -2740,6 +2741,7 @@ impl ThreadRequestProcessor {
 
             return Err(internal_error(format!("failed to start rollback: {err}")));
         }
+        let _ = completion_rx.await;
         Ok(())
     }
 
@@ -4123,7 +4125,10 @@ impl ThreadRequestProcessor {
             )
             .await
         {
-            Ok(RunningThreadResumeResult::Handled) => return Ok(ControlFlow::Break(())),
+            Ok(RunningThreadResumeResult::Handled(completion)) => {
+                let _ = completion.await;
+                return Ok(ControlFlow::Break(()));
+            }
             Ok(RunningThreadResumeResult::NotRunning(stored_thread)) => stored_thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4262,7 +4267,10 @@ impl ThreadRequestProcessor {
                 )
                 .await?
             {
-                RunningThreadResumeResult::Handled => Ok(ControlFlow::Break(())),
+                RunningThreadResumeResult::Handled(completion) => {
+                    let _ = completion.await;
+                    Ok(ControlFlow::Break(()))
+                }
                 RunningThreadResumeResult::NotRunning(_) => Err(invalid_request(
                     "cannot resume an unloaded multi-agent v2 sub-agent through its parent; resume the parent first, or use thread/read to inspect it",
                 )),
@@ -4977,8 +4985,9 @@ impl ThreadRequestProcessor {
             };
             let resume_cursor_store = paginated_resume.then(|| Arc::clone(&self.thread_store));
 
-            let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse(
-                Box::new(crate::thread_state::PendingThreadResumeRequest {
+            let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+            let command = crate::thread_state::ThreadListenerCommand::SendThreadResumeResponse {
+                request: Box::new(crate::thread_state::PendingThreadResumeRequest {
                     request_id: request_id.clone(),
                     history_items,
                     cold_resume_token_usage_turn_id,
@@ -4995,13 +5004,14 @@ impl ThreadRequestProcessor {
                     resume_cursor_store,
                     redact_resume_payloads,
                 }),
-            );
+                completion_tx,
+            };
             if listener_command_tx.send(command).is_err() {
                 return Err(internal_error(format!(
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            return Ok(RunningThreadResumeResult::Handled);
+            return Ok(RunningThreadResumeResult::Handled(completion_rx));
         }
         Ok(RunningThreadResumeResult::NotRunning(None))
     }

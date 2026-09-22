@@ -1049,6 +1049,7 @@ impl TurnRequestProcessor {
         if has_any_overrides {
             thread
                 .preview_thread_settings_overrides(CodexThreadSettingsOverrides {
+                    disabled_plugin_ids: None,
                     environments: environments.clone(),
                     approval_policy,
                     approvals_reviewer,
@@ -1073,6 +1074,7 @@ impl TurnRequestProcessor {
         }
 
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
+            disabled_plugin_ids: None,
             environments,
             profile_workspace_roots,
             approval_policy,
@@ -1853,6 +1855,9 @@ impl TurnRequestProcessor {
             SteerSubmission::Steered { turn_id } => turn_id,
             SteerSubmission::NotSubmitted { reason } => {
                 let (message, data, error_type) = match reason {
+                    NotSubmittedReason::ServerDraining => {
+                        return Err(crate::error_code::server_draining_error());
+                    }
                     NotSubmittedReason::NoActiveTurn | NotSubmittedReason::NotIdle => (
                         "no active turn to steer".to_string(),
                         None,
