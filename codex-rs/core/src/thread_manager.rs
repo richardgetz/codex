@@ -3100,6 +3100,14 @@ impl ThreadManagerState {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
                 if thread.is_running() {
+                    if matches!(
+                        thread.session_source,
+                        SessionSource::Internal(InternalSessionSource::Guardian)
+                    ) {
+                        return Err(CodexErr::InvalidRequest(
+                            "cannot resume a live Guardian reviewer; use thread/read to inspect it, or resume after its parent is unloaded".to_string(),
+                        ));
+                    }
                     if let Some(requested_rollout_path) = resumed.rollout_path.as_deref()
                         && thread.rollout_path().as_deref() != Some(requested_rollout_path)
                     {
@@ -3199,7 +3207,14 @@ impl ThreadManagerState {
             initial_collaboration_mode,
             requested_history_mode: history_mode,
             fork_persistence,
-            session_source,
+            session_source: match &session_source {
+                SessionSource::Internal(InternalSessionSource::Guardian) => {
+                    SessionSource::SubAgent(SubAgentSource::Other(
+                        crate::guardian::GUARDIAN_REVIEWER_NAME.to_owned(),
+                    ))
+                }
+                _ => session_source.clone(),
+            },
             forked_from_thread_id,
             parent_thread_id,
             thread_source: thread_source.clone(),
@@ -3222,7 +3237,14 @@ impl ThreadManagerState {
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
             thread_settings_override_flags,
-            git_enrichment_policy: GitEnrichmentPolicy::Fresh,
+            git_enrichment_policy: if matches!(
+                &tracked_session_source,
+                SessionSource::Internal(InternalSessionSource::Guardian)
+            ) {
+                GitEnrichmentPolicy::Skip
+            } else {
+                GitEnrichmentPolicy::Fresh
+            },
             windows_sandbox_proxy_settings_mode,
         })
         .await?;
