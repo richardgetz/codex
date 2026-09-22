@@ -56,11 +56,9 @@ pub async fn history_with_tool_call_metadata(
 ) -> Vec<codex_protocol::models::ResponseItem> {
     let history = thread.conversation_history_snapshot().await;
     let mut items = history.items().cloned().collect::<Vec<_>>();
-    thread
-        .session
-        .services
-        .executed_tool_calls
-        .attach_to_prompt(&mut items, &mut Default::default());
+    if let Some(executed_tool_calls) = thread.session.services.executed_tool_calls.as_ref() {
+        executed_tool_calls.attach_to_prompt(&mut items, &mut Default::default());
+    }
     items
 }
 

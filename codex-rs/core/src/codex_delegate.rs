@@ -86,6 +86,10 @@ pub(crate) async fn run_codex_thread_interactive(
     } else {
         Arc::clone(&parent_session.services.extensions)
     };
+    let mut thread_extension_init = codex_extension_api::ExtensionDataInit::default();
+    if is_guardian_reviewer {
+        thread_extension_init.insert(codex_extension_api::SessionIsolation::Isolated);
+    }
     let (session, io) = Session::spawn(SessionSpawnArgs {
         config,
         allow_provider_model_fallback: false,
@@ -128,7 +132,7 @@ pub(crate) async fn run_codex_thread_interactive(
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
         environment_selections: parent_environments.to_selections(),
-        thread_extension_init: codex_extension_api::ExtensionDataInit::default(),
+        thread_extension_init,
         client_mcp_extensions: parent_session.services.client_mcp_extensions.clone(),
         reserved_thread_id: None,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
@@ -176,6 +180,31 @@ pub(crate) async fn run_codex_thread_interactive(
     });
 
     Ok((session, caller_io))
+}
+
+/// Keeps delegate IO cancellation identical for standalone and manager-owned reviewers.
+pub(crate) fn forward_session_io(io: Arc<SessionIo>, cancel_token: CancellationToken) -> SessionIo {
+    let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let cancel_token_events = cancel_token.child_token();
+    let cancel_token_ops = cancel_token.child_token();
+    let agent_status = io.agent_status.clone();
+    let session_loop_termination = io.session_loop_termination.clone();
+
+    let io_for_events = Arc::clone(&io);
+    tokio::spawn(async move {
+        forward_events(io_for_events, tx_sub, cancel_token_events).await;
+    });
+    tokio::spawn(async move {
+        forward_ops(io, rx_ops, cancel_token_ops).await;
+    });
+
+    SessionIo {
+        tx_sub: tx_ops,
+        rx_event: rx_sub,
+        agent_status,
+        session_loop_termination,
+    }
 }
 
 /// Convenience wrapper for one-time use with an initial prompt.

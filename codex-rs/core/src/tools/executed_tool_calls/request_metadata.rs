@@ -15,7 +15,7 @@ impl ExecutedToolCalls {
         }
     }
 
-    fn attach_pending_to_prompt(
+    pub(crate) fn attach_pending_to_prompt(
         &self,
         items: &mut [ResponseItem],
         retry_cache: &mut ExecutedToolCallCache,

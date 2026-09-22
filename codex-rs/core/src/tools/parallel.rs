@@ -113,7 +113,7 @@ impl ToolCallRuntime {
             executed_tool_calls.record_tool_call(
                 &call,
                 &source,
-                self.step_context.tool_router.tool_mode(),
+                &self.step_context,
             );
         }
         let router = &self.tool_router;

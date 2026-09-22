@@ -62,7 +62,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     let compaction_metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
         reason,
-        CompactionImplementation::ResponsesCompact,
+        CompactionImplementation::ResponsesCompactionV2,
         phase,
     );
     run_remote_compact_task_inner(
@@ -97,7 +97,7 @@ pub(crate) async fn run_remote_compact_task(
     let compaction_metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
-        CompactionImplementation::ResponsesCompact,
+        CompactionImplementation::ResponsesCompactionV2,
         CompactionPhase::StandaloneTurn,
     );
     run_remote_compact_task_inner(

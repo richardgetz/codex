@@ -1026,6 +1026,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
             record_pending_input(
                 sess,
                 turn_context,
+                turn_context.model_info(),
                 input_item.clone(),
                 hook_outcome.additional_contexts,
                 persist_context,

@@ -729,8 +729,24 @@ impl ThreadEnvironments {
                 cfg!(unix),
             )
         };
+        let (allow_login_shell, shell_environment_policy) = installed_config
+            .as_ref()
+            .map(|config| {
+                (
+                    config.allow_login_shell,
+                    config.shell_environment_policy.clone(),
+                )
+            })
+            .unwrap_or_default();
         let task = shell_snapshot
-            .build(Arc::clone(&environment), selection.cwd, shell.clone())
+            .build(
+                Arc::clone(&environment),
+                selection.cwd,
+                shell.clone(),
+                allow_login_shell,
+                shell_environment_policy,
+                None,
+            )
             .boxed()
             .shared();
         drop(tokio::spawn(
@@ -843,7 +859,7 @@ impl TurnEnvironmentState {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct TurnEnvironmentSnapshot {
+pub struct TurnEnvironmentSnapshot {
     // Keep every selected environment, including failures, in its original order.
     pub(crate) environments: Vec<TurnEnvironmentState>,
 }

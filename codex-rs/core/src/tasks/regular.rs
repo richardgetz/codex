@@ -71,7 +71,6 @@ impl SessionTask for RegularTask {
                 run_hooks_and_record_inputs(
                     &sess,
                     &ctx,
-                    &ctx.capture_current_model_info(),
                     &input,
                     PersistContext::Standard,
                 )

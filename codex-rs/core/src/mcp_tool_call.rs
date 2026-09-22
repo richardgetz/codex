@@ -278,7 +278,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let status = if result.is_ok() { "ok" } else { "error" };
         let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
-            turn_context.as_ref(),
+            &turn_context.session_telemetry,
             &outcome,
             &server,
             &tool_name,
@@ -388,7 +388,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let status = if result.is_ok() { "ok" } else { "error" };
         let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
-            turn_context.as_ref(),
+            &turn_context.session_telemetry,
             &outcome,
             &server,
             &tool_name,
@@ -702,7 +702,7 @@ async fn handle_approved_mcp_tool_call(
 
     let outcome = mcp_call_metric_outcome(&result);
     emit_mcp_call_metrics(
-        turn_context,
+        &turn_context.session_telemetry,
         &outcome,
         &server,
         &tool_name,

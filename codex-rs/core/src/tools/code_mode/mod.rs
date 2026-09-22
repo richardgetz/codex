@@ -30,7 +30,7 @@ use crate::original_image_detail::sanitize_original_image_detail as sanitize_ima
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::tools::ExecutedToolCalls;
+use crate::tools::ExecutedToolCallRecorder;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
@@ -79,7 +79,7 @@ impl CodeModeService {
     pub(crate) fn new(
         session_provider: Arc<dyn CodeModeSessionProvider>,
         config: &CodeModeConfig,
-        executed_tool_calls: ExecutedToolCalls,
+        executed_tool_calls: Option<Arc<ExecutedToolCallRecorder>>,
     ) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new(executed_tool_calls));
         Self {

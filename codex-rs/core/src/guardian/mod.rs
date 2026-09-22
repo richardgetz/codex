@@ -46,7 +46,7 @@ pub(crate) use prompt::BUNDLED_GUARDIAN_POLICY;
 pub(crate) use prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 pub(crate) use prompt::guardian_truncate_text;
 pub(crate) use review::GuardianReviewOptions;
-pub(crate) use review::guardian_timeout_message;
+pub(crate) use codex_guardian_reviewer::guardian_timeout_message;
 pub(crate) use review::is_basic_session_source;
 pub(crate) use review::new_guardian_review_id;
 #[cfg(test)]
@@ -54,6 +54,8 @@ pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review_session::GuardianReviewSessionManager;
+pub use review_session::GuardianReviewSessionHost;
+pub(crate) use review_session::prewarm_guardian_review_session;
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
 pub(crate) use request_budget::check_prompt as check_guardian_prompt_budget;
 pub(crate) use request_budget::observe as observe_guardian_request;
@@ -105,13 +107,14 @@ impl GuardianReviewContext {
     pub(crate) fn from_resolved_settings(
         turn: Arc<TurnContext>,
         settings: &ResolvedStepSettings,
+        environments: &TurnEnvironmentSnapshot,
     ) -> Self {
         Self {
             parent_response_id: turn
                 .extension_data
                 .get::<codex_api::ResponseId>()
                 .map(|id| id.0.clone()),
-            environments: turn.environments.clone(),
+            environments: environments.clone(),
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
             reasoning_summary: settings.reasoning_summary,

@@ -927,6 +927,10 @@ impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
             }
         }
     }
+
+    async fn rollout_path(&self) -> Option<PathBuf> {
+        GuardianReviewSession::rollout_path(self).await
+    }
 }
 
 impl GuardianReviewSession {

@@ -4,6 +4,7 @@
 //! Startup and fork futures stay boxed to bound the orchestration stack frames.
 
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_analytics::GuardianReviewAnalyticsResult;
@@ -27,6 +28,7 @@ pub trait ReviewerSession: Send + Sync + 'static {
     fn cancel(&self);
     fn snapshot(&self) -> impl Future<Output = Option<Self::Snapshot>> + Send;
     fn commit_snapshot(&self) -> impl Future<Output = ()> + Send;
+    fn rollout_path(&self) -> impl Future<Output = Option<PathBuf>> + Send;
     fn shutdown(&self) -> impl Future<Output = ()> + Send;
 }
 
@@ -114,6 +116,20 @@ impl<S: ReviewerSession> ReviewerPool<S> {
             .trunk
             .as_ref()
             .map(|trunk| Arc::clone(&trunk.session))
+    }
+
+    pub async fn trunk_rollout_path(&self) -> Option<PathBuf> {
+        let trunk = self
+            .state
+            .lock()
+            .await
+            .trunk
+            .as_ref()
+            .map(|trunk| Arc::clone(&trunk.session));
+        match trunk {
+            Some(session) => session.rollout_path().await,
+            None => None,
+        }
     }
 
     /// Prepares the first reviewer without replacing a review that won the startup race.

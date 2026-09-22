@@ -29,10 +29,44 @@ use codex_protocol::protocol::TokenUsageAttribution;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_output_truncation::TruncationPolicy;
 use tokio_util::task::AbortOnDropHandle;
 
 const MAX_RATE_LIMIT_SNAPSHOTS: usize = 8;
+
+/// Runtime request effort, initially unset and established by prewarm or sampling.
+pub(crate) enum ReasoningEffortPin {
+    Unset,
+    Compacted,
+    Active {
+        model: String,
+        effort: ReasoningEffort,
+    },
+}
+
+impl ReasoningEffortPin {
+    pub(crate) fn get(&self, model: &str) -> Option<ReasoningEffort> {
+        match self {
+            Self::Active {
+                model: pinned_model,
+                effort,
+            } if pinned_model == model => Some(effort.clone()),
+            Self::Unset | Self::Compacted | Self::Active { .. } => None,
+        }
+    }
+
+    pub(crate) fn pin(&mut self, model: &str, effort: ReasoningEffort) -> ReasoningEffort {
+        if self.get(model).is_some() {
+            return effort;
+        }
+        *self = Self::Active {
+            model: model.to_owned(),
+            effort: effort.clone(),
+        };
+        effort
+    }
+}
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
@@ -40,6 +74,7 @@ pub(crate) struct SessionState {
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
+    pub(crate) reasoning_effort_pin: ReasoningEffortPin,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) rate_limits_by_limit_id: BTreeMap<String, RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
@@ -88,6 +123,7 @@ impl SessionState {
             session_configuration,
             base_instructions_provenance: None,
             history,
+            reasoning_effort_pin: ReasoningEffortPin::Unset,
             latest_rate_limits: None,
             rate_limits_by_limit_id: BTreeMap::new(),
             latest_token_usage_record: None,

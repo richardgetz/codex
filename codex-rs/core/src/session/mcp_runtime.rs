@@ -148,7 +148,12 @@ impl Session {
         mut projection: McpRuntimeProjection,
     ) -> BoxFuture<'a, McpRuntimeProjection> {
         Box::pin(async move {
-            if self.isolation == codex_extension_api::SessionIsolation::Isolated {
+            if self
+                .services
+                .thread_extension_data
+                .get::<codex_extension_api::SessionIsolation>()
+                .is_some_and(|isolation| *isolation == codex_extension_api::SessionIsolation::Isolated)
+            {
                 return projection;
             }
 

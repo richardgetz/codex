@@ -172,6 +172,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) session_tmp_agent_root: Option<AbsolutePathBuf>,
     /// Optional user-facing name for the thread, updated during the session.
     pub(super) thread_name: Option<String>,
+    /// Thread-owned plugin selection inherited by future turns.
+    pub(super) disabled_plugin_ids: Vec<String>,
     pub(super) memory_policy: MemoryAccessPolicy,
     pub(super) user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy,
     /// Per-thread usage and automatic-resume policy.
@@ -393,6 +395,7 @@ impl SessionConfiguration {
                     &self.session_source,
                 ),
             ),
+            disabled_plugin_ids: Some(self.disabled_plugin_ids.clone()),
             originator: self.originator.clone(),
         }
     }
@@ -424,6 +427,7 @@ impl SessionConfiguration {
                     &self.session_source,
                 ),
             ),
+            disabled_plugin_ids: self.disabled_plugin_ids.clone(),
         }
     }
 
@@ -458,6 +462,7 @@ impl SessionConfiguration {
                     &self.session_source,
                 ),
             ),
+            disabled_plugin_ids: Some(self.disabled_plugin_ids.clone()),
             ..Default::default()
         }
     }
@@ -519,6 +524,9 @@ impl SessionConfiguration {
         }
         if let Some(policy) = updates.user_preferences_memory_policy.clone() {
             next_configuration.user_preferences_memory_policy = policy;
+        }
+        if let Some(disabled_plugin_ids) = updates.disabled_plugin_ids.clone() {
+            next_configuration.disabled_plugin_ids = disabled_plugin_ids;
         }
         let mut usage_policy = updates.usage_policy.unwrap_or(self.usage_policy);
         if let Some(update) = updates.usage_policy_update {
@@ -849,6 +857,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) app_server_client_version: Option<String>,
     pub(crate) memory_policy: Option<MemoryAccessPolicy>,
     pub(crate) user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
+    pub(crate) disabled_plugin_ids: Option<Vec<String>>,
     pub(crate) usage_policy: Option<ThreadUsagePolicy>,
     pub(crate) usage_policy_update: Option<ThreadUsagePolicyUpdate>,
     pub(crate) team: Option<ThreadTeamSettingsUpdate>,
@@ -1340,6 +1349,7 @@ impl Session {
                                 provenance: base_instructions_provenance.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
+                            runtime_workspace_roots: None,
                             selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
@@ -1709,6 +1719,8 @@ impl Session {
                     thread_id,
                     session_telemetry.clone(),
                     state_db_ctx.clone(),
+                    None,
+                    use_executor_shell_snapshots,
                 )
             } else {
                 ShellSnapshot::disabled()
@@ -2000,7 +2012,7 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
                     Arc::clone(&code_mode_session_provider),
                     &config.code_mode,
-                    executed_tool_calls,
+                    executed_tool_calls.clone(),
                 ),
                 orchestrator_memory_generation: AtomicU64::new(0),
                 orchestrator_supervision:

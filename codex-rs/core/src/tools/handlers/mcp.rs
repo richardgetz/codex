@@ -353,6 +353,7 @@ impl McpHandler {
             tool_input: result.tool_input,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(turn.model_info()),
+            result_metadata_capture_allowed: true,
             truncation_policy,
         }))
     }
@@ -416,11 +417,6 @@ impl CoreToolRuntime for McpHandler {
 
     fn on_tool_result_accepted(&self, invocation: &ToolInvocation, result: &dyn ToolOutput) {
         // Direct calls also record sources, before the Code Mode-only evidence path below.
-        if let Some(recorder) = invocation.session.services.executed_tool_calls.as_ref()
-            && let Some(sources) = result.tool_result_sources()
-        {
-            recorder.record_tool_result_sources(&invocation.source, &invocation.call_id, sources);
-        }
         let ToolCallSource::CodeMode { cell_id, .. } = &invocation.source else {
             return;
         };

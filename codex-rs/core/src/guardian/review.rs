@@ -267,7 +267,7 @@ pub(super) async fn guardian_review_session_config(
         guardian_model.as_str(),
         guardian_reasoning_effort.clone(),
         context.reasoning_summary,
-        context.personality,
+        context.turn.config.personality,
         guardian_model_info.model_messages.as_ref(),
     )?;
     if context.model_info.computer_use_review_required() {
@@ -333,7 +333,7 @@ async fn run_guardian_review_session_before_deadline(
     };
     let (session_outcome, session_analytics_result) =
         Box::pin(super::review_session::run_guardian_review_session(
-            session.guardian_review_session(),
+            &session.guardian_review_session,
             GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_context: context.clone(),
@@ -351,7 +351,7 @@ async fn run_guardian_review_session_before_deadline(
                 guardian_review_model_overridden: session_config.model_overridden,
                 guardian_review_model_override: session_config.model_override,
                 reasoning_summary: context.reasoning_summary,
-                personality: context.personality,
+                personality: context.turn.config.personality,
                 external_cancel,
                 deadline,
             },

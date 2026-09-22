@@ -191,7 +191,6 @@ pub(super) async fn maybe_record(
                 ));
             sess.record_conversation_items(
                 turn_context,
-                turn_context.model_info(),
                 std::slice::from_ref(&response_item),
             )
             .await;
@@ -217,7 +216,6 @@ pub(super) async fn maybe_record(
         ContextualUserFragment::into(crate::context::AutoCompactFallbackPrompt::new(prompt));
     sess.record_conversation_items(
         turn_context,
-        turn_context.model_info(),
         std::slice::from_ref(&response_item),
     )
     .await;

@@ -58,6 +58,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         service_tier,
         collaboration_mode,
         personality,
+        disabled_plugin_ids,
         usage_policy,
         team,
     } = overrides;
@@ -78,6 +79,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         permission_profile,
         active_permission_profile,
         windows_sandbox_level,
+        disabled_plugin_ids,
         usage_policy,
         team,
         ..Default::default()

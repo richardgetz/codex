@@ -106,6 +106,7 @@ pub struct ThreadConfigSnapshot {
     pub reasoning_summary: Option<ReasoningSummary>,
     pub collaboration_mode: CollaborationMode,
     pub personality: Option<Personality>,
+    pub disabled_plugin_ids: Option<Vec<String>>,
     pub multi_agent_mode: MultiAgentMode,
     pub session_source: SessionSource,
     pub history_mode: ThreadHistoryMode,
@@ -165,6 +166,7 @@ impl ThreadConfigSnapshot {
             user_preferences_memory_policy: self.user_preferences_memory_policy,
             usage_policy: self.usage_policy,
             team: self.team,
+            disabled_plugin_ids: self.disabled_plugin_ids.unwrap_or_default(),
         }
     }
 
@@ -204,6 +206,7 @@ pub struct CodexThreadSettingsOverrides {
     pub service_tier: Option<Option<String>>,
     pub collaboration_mode: Option<CollaborationMode>,
     pub personality: Option<Personality>,
+    pub disabled_plugin_ids: Option<Vec<String>>,
     pub usage_policy: Option<ThreadUsagePolicy>,
     pub team: Option<ThreadTeamSettings>,
 }
@@ -854,6 +857,7 @@ impl CodexThread {
             personality,
             usage_policy,
             team,
+            disabled_plugin_ids,
         } = overrides;
         SessionSettingsUpdate {
             step_settings: StepSettingsUpdate {
@@ -872,6 +876,7 @@ impl CodexThread {
             permission_profile,
             active_permission_profile,
             windows_sandbox_level,
+            disabled_plugin_ids,
             usage_policy,
             team: None,
             team_snapshot: team,

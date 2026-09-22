@@ -135,15 +135,13 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
                         .environments
                         .iter()
                         .find_map(|state| match state {
-                            TurnEnvironmentState::Failed { selection, error }
-                                if selection.environment_id == environment_id =>
-                            {
-                                Some(error)
-                            }
+                            TurnEnvironmentState::Failed => Some(
+                                "environment failed to resolve".to_string(),
+                            ),
                             _ => None,
                         })
                 {
-                    return Err(environment_failure(&environment_id, error));
+                    return Err(environment_failure(&environment_id, &error));
                 }
                 let Some(environment) = step_context
                     .environments

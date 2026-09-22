@@ -273,6 +273,7 @@ mod mcp_runtime;
 pub(crate) mod multi_agents;
 mod realtime_history;
 mod reasoning_effort;
+pub(crate) use reasoning_effort::RequestEffortUsage;
 mod retained_context;
 mod review;
 mod rollout_budget;
@@ -748,6 +749,10 @@ impl Session {
                 ..
             } => inherited_thread_settings.as_ref(),
         };
+        let disabled_plugin_ids = inherited_thread_settings
+            .or(history_thread_settings)
+            .map(|settings| settings.disabled_plugin_ids.clone())
+            .unwrap_or_default();
         if let Some(thread_settings) = inherited_thread_settings.or(history_thread_settings)
             && let Some(team_settings) = thread_settings.team.as_ref()
         {
@@ -1079,6 +1084,7 @@ impl Session {
             codex_home: config.codex_home.clone(),
             session_tmp_agent_root: None,
             thread_name: None,
+            disabled_plugin_ids,
             memory_policy: MemoryAccessPolicy::new(
                 config.memories.use_memories,
                 config.memories.generate_memories,

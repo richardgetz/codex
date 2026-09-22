@@ -126,7 +126,6 @@ impl ReviewerSessionFactory for PreparedSession {
                     self.context.environments().clone(),
                     cancellation.clone(),
                     SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_owned()),
-                    codex_extension_api::SessionIsolation::Isolated,
                     initial_history,
                     GitEnrichmentPolicy::Skip,
                     codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve,
@@ -195,7 +194,7 @@ impl ReviewerRequest for PreparedReview {
 }
 
 pub(crate) async fn run_guardian_review_session(
-    pool: Arc<ReviewerPool<GuardianReviewSession>>,
+    pool: &ReviewerPool<GuardianReviewSession>,
     params: GuardianReviewSessionParams,
 ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
     match prepare_review(params).await {
@@ -240,6 +239,6 @@ pub(crate) fn prewarm_guardian_review_session(
             config.compaction_model_hash.as_deref(),
         )
         .await?;
-        parent.guardian_review_session().prewarm(&factory).await
+        parent.guardian_review_session.prewarm(&factory).await
     })
 }
