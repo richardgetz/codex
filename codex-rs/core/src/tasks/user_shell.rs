@@ -187,7 +187,7 @@ pub(crate) async fn execute_user_shell_command(
     let exec_command = prepare_user_shell_exec_command(
         &display_command,
         environment_shell,
-        shell_snapshot_location,
+        shell_snapshot_location.as_ref(),
         &shell_environment_policy.r#set,
         &mut exec_env_map,
     );

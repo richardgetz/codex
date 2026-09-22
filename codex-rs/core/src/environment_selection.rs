@@ -863,6 +863,7 @@ impl ThreadEnvironments {
             )
         } else {
             shell_snapshot_builder
+                .clone()
                 .build(
                     Arc::clone(&environment),
                     selection.cwd,
