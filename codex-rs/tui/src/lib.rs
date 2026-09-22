@@ -1386,7 +1386,7 @@ async fn run_ratatui_app(
         cli.startup_account_alias.as_deref(),
         cli.resume_picker || cli.resume_last || cli.resume_session_id.is_some(),
     );
-    let (login_status, mut startup_account) = if workload_identity_selected {
+    let (mut login_status, mut startup_account) = if workload_identity_selected {
         (LoginStatus::AuthMode(AuthMode::Chatgpt), None)
     } else {
         let Some(active_app_server) = app_server.as_mut() else {
@@ -1978,6 +1978,35 @@ async fn run_ratatui_app(
         },
     };
 
+    if should_switch_local_daemon_account_after_selection(
+        preserve_local_daemon_resume_owner,
+        matches!(
+            &session_selection,
+            resume_picker::SessionSelection::Resume(_)
+        ),
+    ) {
+        let Some(active_app_server) = app_server.as_mut() else {
+            unreachable!("app server should exist before deferred account selection");
+        };
+        let deferred_login_status = startup_draft
+            .run_until(&mut tui, get_login_status(active_app_server, &config))
+            .await;
+        match deferred_login_status {
+            Ok(Ok((deferred_status, account))) => {
+                login_status = deferred_status;
+                startup_account = Some(account);
+            }
+            Ok(Err(err)) => {
+                shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
+                return Err(err);
+            }
+            Err(err) => {
+                shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
+                return Err(err.into());
+            }
+        }
+    }
+
     // Persistent app-server resumes may attach to an already-running thread,
     // where resume config overrides are ignored.
     let is_persistent_resume = !matches!(&app_server_target, AppServerTarget::Embedded)
@@ -2161,6 +2190,13 @@ fn should_preserve_local_daemon_resume_owner(
     resume_requested
         && explicit_account_alias.is_none()
         && matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
+}
+
+fn should_switch_local_daemon_account_after_selection(
+    preserve_owner_until_selection: bool,
+    is_resume_selection: bool,
+) -> bool {
+    preserve_owner_until_selection && !is_resume_selection
 }
 
 async fn read_login_status(
@@ -3119,6 +3155,15 @@ requires_openai_auth = {requires_openai_auth}
             &AppServerTarget::Embedded,
             None,
             true,
+        ));
+        assert!(should_switch_local_daemon_account_after_selection(
+            true, false
+        ));
+        assert!(!should_switch_local_daemon_account_after_selection(
+            true, true
+        ));
+        assert!(!should_switch_local_daemon_account_after_selection(
+            false, false
         ));
     }
 
