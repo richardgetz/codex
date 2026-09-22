@@ -696,8 +696,10 @@ async fn empty_post_transfer_handoff_does_not_fence_startup_and_recovers() -> Re
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
     let handoff_id = write_empty_post_transfer_fixture(codex_home.path()).await?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
 
     let thread_request = mcp
         .send_thread_start_request_with_auto_env(ThreadStartParams::default())

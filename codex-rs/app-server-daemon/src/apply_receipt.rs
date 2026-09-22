@@ -216,6 +216,7 @@ impl ApplyAttemptReceipt {
 
     pub(crate) fn can_reconcile_empty_orphan(&self) -> bool {
         self.phase != ApplyPhase::Applied
+            && self.stop_started == Some(true)
             && self.stop_completed == Some(true)
             && self.handoff.is_empty_post_transfer_noop()
     }
