@@ -7970,7 +7970,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_user_message_admissions: Default::default(),
         async_hook_results,
         input_queue: super::input_queue::InputQueue::new(),
-        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
@@ -10058,6 +10057,9 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
 async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let (parent_session, parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
+    let guardian_review_session = parent_session
+        .guardian_review_session()
+        .expect("test guardian pool should be installed");
     let parent_config = Arc::clone(&parent_turn_context.config);
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
@@ -10094,7 +10096,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     <crate::guardian::GuardianReviewSessionManager as GuardianReviewSessionManagerTestExt>::cache_for_test(
-        &parent_session.guardian_review_session,
+        &guardian_review_session,
         child_session,
         child_io,
     )
@@ -10114,6 +10116,9 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
 async fn cached_guardian_subagent_exposes_its_rollout_path() {
     let (parent_session, _parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
+    let guardian_review_session = parent_session
+        .guardian_review_session()
+        .expect("test guardian pool should be installed");
 
     let (mut child_session, _child_turn_context) = make_session_and_context().await;
     let child_rollout_path = attach_thread_persistence(&mut child_session).await;
@@ -10128,17 +10133,14 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     <crate::guardian::GuardianReviewSessionManager as GuardianReviewSessionManagerTestExt>::cache_for_test(
-        &parent_session.guardian_review_session,
+        &guardian_review_session,
         child_session,
         child_io,
     )
     .await;
 
     assert_eq!(
-        parent_session
-            .guardian_review_session
-            .trunk_rollout_path()
-            .await,
+        guardian_review_session.trunk_rollout_path().await,
         Some(child_rollout_path)
     );
 }
@@ -10147,6 +10149,9 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
 async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let (parent_session, parent_turn_context) = make_session_and_context().await;
     let parent_session = Arc::new(parent_session);
+    let guardian_review_session = parent_session
+        .guardian_review_session()
+        .expect("test guardian pool should be installed");
     let parent_config = Arc::clone(&parent_turn_context.config);
     let (parent_tx_sub, parent_rx_sub) = async_channel::bounded(4);
     let (_parent_tx_event, parent_rx_event) = async_channel::unbounded();
@@ -10183,7 +10188,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     <crate::guardian::GuardianReviewSessionManager as GuardianReviewSessionManagerTestExt>::register_ephemeral_for_test(
-        &parent_session.guardian_review_session,
+        &guardian_review_session,
         child_session,
         child_io,
     )
@@ -10506,7 +10511,6 @@ where
         pending_user_message_admissions: Default::default(),
         async_hook_results,
         input_queue: super::input_queue::InputQueue::new(),
-        guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
