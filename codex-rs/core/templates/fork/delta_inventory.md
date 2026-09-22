@@ -21,6 +21,7 @@ release or merge rules.
 ## Unreleased
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
+- App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
 
 - Session-scoped `/eta` task estimates persist root/worker ownership, explicit
   lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
@@ -924,6 +925,12 @@ release or merge rules.
 - Verify app-server slash-command output retains the 200,000-character host
   cap, preserves the truncation marker beyond that bound, and stays aligned
   with Inbound's accepted response budget.
+- Verify the slash-command catalog marks `/pause` and `/continue` available,
+  rejects inline arguments, routes execution through the existing durable
+  `thread/activity/pause` and `thread/activity/continue` semantics, and emits
+  matching synchronous and `slashCommand/result` responses without synthetic
+  model turns. During graceful drain, `/continue` must retain the same
+  new-work rejection as direct `thread/activity/continue`.
 - Verify shared frontend refresh keeps the original LocalDaemon socket or
   remote endpoint/auth environment across re-exec and never starts an embedded
   replacement server when the persistent target is unavailable.

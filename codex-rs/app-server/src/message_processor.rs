@@ -482,8 +482,6 @@ impl MessageProcessor {
         );
         let remote_control_processor = RemoteControlRequestProcessor::new(remote_control_handle);
         let search_processor = SearchRequestProcessor::new(outgoing.clone());
-        let slash_command_processor =
-            SlashCommandRequestProcessor::new(account_processor.clone(), outgoing.clone());
         let thread_eta_processor = ThreadEtaRequestProcessor::new(
             outgoing.clone(),
             state_db.clone(),
@@ -543,6 +541,12 @@ impl MessageProcessor {
             thread_list_state_permit,
             Arc::clone(&skills_watcher),
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
+        );
+        let slash_command_processor = SlashCommandRequestProcessor::new(
+            account_processor.clone(),
+            turn_processor.clone(),
+            outgoing.clone(),
+            Arc::clone(&server_lifecycle),
         );
         let handoff_coordinator = HandoffCoordinator::new(
             Arc::clone(&thread_manager),
