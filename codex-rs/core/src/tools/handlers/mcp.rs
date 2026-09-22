@@ -416,8 +416,7 @@ impl CoreToolRuntime for McpHandler {
     }
 
     fn on_tool_result_accepted(&self, invocation: &ToolInvocation, result: &dyn ToolOutput) {
-        if let Some(executed_tool_calls) =
-            invocation.session.services.executed_tool_calls.as_ref()
+        if let Some(executed_tool_calls) = invocation.session.services.executed_tool_calls.as_ref()
         {
             executed_tool_calls.record_accepted_result(
                 &invocation.source,

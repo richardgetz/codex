@@ -1061,11 +1061,8 @@ pub async fn run_main_with_transport_options(
                     .await;
                 }
                 let ready_to_exit = matches!(
-                    shutdown_state.update(
-                        running_turn_count,
-                        active_admissions,
-                        connections.len(),
-                    ),
+                    shutdown_state
+                        .update(running_turn_count, active_admissions, connections.len(),),
                     ShutdownAction::Finish
                 );
                 if ready_to_exit {
@@ -1610,9 +1607,9 @@ mod tests {
     use super::ShutdownSignal;
     use super::ShutdownState;
     use super::is_fatal_config_error;
-    use super::turn_admission::TurnAdmission;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
+    use super::turn_admission::TurnAdmission;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
     use codex_config::account_registry::invalid_configured_account_alias_error;

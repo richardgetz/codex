@@ -425,10 +425,7 @@ async fn update_once(
                 } else {
                     UpdateLoopControl::Continue
                 };
-                return Ok((
-                    updater_control,
-                    Some(RestartIfRunningOutcome::Restarted),
-                ));
+                return Ok((updater_control, Some(RestartIfRunningOutcome::Restarted)));
             }
             RestartIfRunningOutcome::NotRunning => {
                 return Ok((
