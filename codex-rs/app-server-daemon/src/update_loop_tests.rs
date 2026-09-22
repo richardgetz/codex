@@ -153,6 +153,7 @@ fn manual_update_daemon(home: &TempDir) -> (Daemon, String) {
             update_pid_file: state.join("app-server-updater.pid"),
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
+            apply_receipt_file: state.join("apply-receipt.json"),
             managed_codex_bin: standalone.join("current/codex"),
         },
         release,

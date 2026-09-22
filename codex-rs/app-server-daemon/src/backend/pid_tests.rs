@@ -44,6 +44,7 @@ async fn running_launch_identity_returns_the_active_record_identity() {
         process_start_time: super::read_process_start_time(std::process::id())
             .await
             .expect("current process start time"),
+        executable_identity: None,
         launch_identity: Some(identity.clone()),
     };
     let backend = PidBackend::new(
@@ -92,6 +93,7 @@ async fn running_launch_identity_cleans_stale_record_without_returning_identity(
     let record = PidRecord {
         pid: u32::MAX,
         process_start_time: "stale".to_string(),
+        executable_identity: None,
         launch_identity: Some(LaunchIdentity {
             path: "/opt/homebrew/bin/codex-rick".into(),
             version: Some("0.154.0-rick.6".to_string()),
@@ -124,6 +126,7 @@ fn pid_records_persist_launch_identity_with_process_metadata() {
     let record = PidRecord {
         pid: 42,
         process_start_time: "started-at".to_string(),
+        executable_identity: None,
         launch_identity: Some(LaunchIdentity {
             path: "/opt/homebrew/bin/codex-rick".into(),
             version: Some("0.154.0-rick.6".to_string()),
@@ -290,11 +293,13 @@ async fn stale_record_cleanup_preserves_replacement_record() {
     let stale = PidRecord {
         pid: 1,
         process_start_time: "old".to_string(),
+        executable_identity: None,
         launch_identity: None,
     };
     let replacement = PidRecord {
         pid: 2,
         process_start_time: "new".to_string(),
+        executable_identity: None,
         launch_identity: None,
     };
     tokio::fs::write(
@@ -329,6 +334,7 @@ async fn stop_reaps_untracked_app_server_child() {
     let record = PidRecord {
         pid,
         process_start_time: read_process_start_time(pid).await.expect("start time"),
+        executable_identity: None,
         launch_identity: None,
     };
     tokio::fs::write(
@@ -367,6 +373,7 @@ async fn exited_unreaped_updater_is_reaped() {
         process_start_time: read_process_start_time(child.id())
             .await
             .expect("start time"),
+        executable_identity: None,
         launch_identity: None,
     };
     let backend =
