@@ -27,7 +27,7 @@ use super::ConnectionRequestId;
 use super::OutgoingMessageSender;
 use super::invalid_request;
 
-const MAX_OUTPUT_CHARS: usize = 20_000;
+const MAX_OUTPUT_CHARS: usize = 200_000;
 const RELOAD_HANDOFF_DELAY: Duration = Duration::from_millis(250);
 
 type ReloadLauncher = dyn Fn(std::path::PathBuf, ReloadOperation) -> std::io::Result<tokio::process::Child>

@@ -20,6 +20,8 @@ release or merge rules.
 
 ## Unreleased
 
+- App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
+
 - Session-scoped `/eta` task estimates persist root/worker ownership, explicit
   lifecycle completion/cancellation, bounded estimate revisions, dependency-aware
   aggregate finish ranges, and paginated history through app-server v2 and the
@@ -919,6 +921,9 @@ release or merge rules.
   request IDs, suppresses duplicate mutating requests while one handoff is
   pending, and queries `/reload status` after reconnect before clearing the
   client-side pending operation.
+- Verify app-server slash-command output retains the 200,000-character host
+  cap, preserves the truncation marker beyond that bound, and stays aligned
+  with Inbound's accepted response budget.
 - Verify shared frontend refresh keeps the original LocalDaemon socket or
   remote endpoint/auth environment across re-exec and never starts an embedded
   replacement server when the persistent target is unavailable.
