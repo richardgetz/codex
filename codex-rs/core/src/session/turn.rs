@@ -2089,7 +2089,7 @@ async fn run_sampling_request(
         let mut prompt_input = prompt_input;
         if let Some(executed_tool_calls) = sess.services.executed_tool_calls.as_ref()
             && executed_tool_calls
-                .attach_pending_to_prompt(&mut prompt_input, &mut executed_tool_calls_by_output)
+                .attach_to_prompt(&mut prompt_input, &mut executed_tool_calls_by_output)
         {
             codex_protocol::models::bound_executed_tool_calls_for_prompt(&mut prompt_input);
         }
@@ -2508,6 +2508,7 @@ pub(crate) async fn built_tools(
         sess,
         turn_context,
         model_info,
+        model_info.model_messages.as_ref(),
         environments,
         mcp,
         &all_mcp_tools,

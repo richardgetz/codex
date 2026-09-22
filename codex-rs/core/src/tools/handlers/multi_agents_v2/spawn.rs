@@ -12,6 +12,7 @@ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -190,18 +191,16 @@ async fn handle_spawn_agent(
                 ),
                 _ => None,
             };
-            let child_catalog = child_model_info
-                .as_ref()
-                .unwrap_or(turn.model_info())
-                .model_messages
-                .as_ref()
-                .and_then(|messages| messages.multi_agent.as_ref())
-                .and_then(|messages| messages.role.as_ref());
-            Some(resolve_usage_hints(
+            let child_model = child_model_info.as_ref().unwrap_or(turn.model_info());
+            let resolved_hints = resolve_usage_hints(
                 &config.multi_agent_v2,
-                child_catalog,
+                ResolvedModelMessages::from_model(child_model).multi_agent(),
                 !config.update_plan_enabled && config.model_catalog.is_none(),
-            ))
+            );
+            Some(crate::agent::types::ResolvedMultiAgentV2UsageHints {
+                root: resolved_hints.root,
+                subagent: resolved_hints.subagent,
+            })
         } else {
             None
         };
@@ -220,6 +219,7 @@ async fn handle_spawn_agent(
                     initial_collaboration_mode: None,
                     parent_thread_id: Some(session.thread_id),
                     parent_turn_id: Some(turn.sub_id.clone()),
+                    turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
                     root_turn_id: turn.turn_metadata_state.root_turn_id(),
                     environments: Some(step_context.environments.to_selections()),
                     multi_agent_v2_usage_hints,

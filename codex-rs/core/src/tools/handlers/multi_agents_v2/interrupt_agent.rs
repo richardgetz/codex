@@ -48,7 +48,7 @@ async fn handle_interrupt_agent(
         .agent_control
         .interrupt_spawned_agent(session.thread_id, agent_id)
         .await
-        .map_err(|err| collab_v2_agent_error(agent_id, err))?;
+        .map_err(|err| collab_agent_error(agent_id, err))?;
     let agent_path = snapshot.metadata().agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;

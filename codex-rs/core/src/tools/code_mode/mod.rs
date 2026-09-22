@@ -395,14 +395,12 @@ fn submit_nested_tool(
             cell_id: cell_id.to_string(),
         });
     let result = tool_runtime.handle_tool_call_with_source(
-        step_context,
         call,
         ToolCallSource::CodeMode {
             cell_id: cell_id.to_string(),
             runtime_tool_call_id,
         },
         cancellation_token,
-        Arc::default(),
     );
     Ok(async move { Ok(result.await?.code_mode_result()) })
 }

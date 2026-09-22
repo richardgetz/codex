@@ -630,7 +630,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
         cwd: turn_context.cwd.clone(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info().slug.clone(),
-        permission_mode: hook_permission_mode(turn_context),
+        permission_mode: hook_permission_mode(turn_context.approval_policy()),
         prompt,
     };
     let hooks = sess.hooks();
@@ -776,7 +776,7 @@ pub(crate) async fn record_pending_input(
             .await;
         }
         TurnInput::ResponseItem(item) => {
-            sess.record_annotated_conversation_items(turn_context, vec![item])
+            sess.record_annotated_conversation_items(turn_context, model_info, vec![item])
                 .await;
         }
         TurnInput::FunctionCallOutput(item) => {

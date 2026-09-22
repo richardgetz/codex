@@ -154,7 +154,7 @@ impl ToolCallRuntime {
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
         let dispatch_call_state = Arc::new(ToolCallState::default());
-        let terminal_outcome_reached = Arc::clone(&dispatch_call_state.terminal_outcome_reached);
+        let terminal_outcome_reached = Arc::clone(&dispatch_call_state);
         let dispatch_call = call.clone();
 
         let dispatch_span = trace_span!(
@@ -239,9 +239,13 @@ impl ToolCallRuntime {
                     // between this branch and its callback, and aborting/awaiting it lets that
                     // callback claim the result without leaving stale lifecycle state.
                     let terminal_outcome_claimed = if wait_for_runtime_cancellation {
-                        terminal_outcome_reached.swap(true, Ordering::AcqRel)
+                        terminal_outcome_reached
+                            .terminal_outcome_reached
+                            .swap(true, Ordering::AcqRel)
                     } else {
-                        terminal_outcome_reached.load(Ordering::Acquire)
+                        terminal_outcome_reached
+                            .terminal_outcome_reached
+                            .load(Ordering::Acquire)
                     };
                     if terminal_outcome_claimed {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?

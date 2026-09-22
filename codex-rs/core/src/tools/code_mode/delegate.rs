@@ -121,7 +121,9 @@ impl CodeModeDispatchBroker {
         step_context: Arc<StepContext>,
         tracker: SharedTurnDiffTracker,
     ) -> CodeModeDispatchWorker {
-        let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
+        let tool_router = Arc::clone(&step_context.tool_router);
+        let tool_runtime =
+            ToolCallRuntime::new(Arc::clone(&session), step_context, tool_router, tracker);
         let host = Arc::new(CoreTurnHost {
             session,
             tool_runtime,

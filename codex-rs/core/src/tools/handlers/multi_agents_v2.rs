@@ -12,6 +12,7 @@ use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::AgentPath;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
 use codex_protocol::items::CollabAgentToolCallStatus;
@@ -19,6 +20,7 @@ use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SubAgentActivityKind;
 use codex_tools::ToolName;
 use serde::Deserialize;
@@ -64,4 +66,19 @@ fn agent_message_from_tool(
     } else {
         AgentMessage::Encrypted(message)
     }
+}
+
+fn communication_from_tool_message(
+    author: AgentPath,
+    recipient: AgentPath,
+    message: String,
+    source: &crate::tools::context::ToolCallSource,
+    trigger_turn: bool,
+) -> InterAgentCommunication {
+    let mode = if trigger_turn {
+        crate::agent::types::MessageDeliveryMode::TriggerTurn
+    } else {
+        crate::agent::types::MessageDeliveryMode::QueueOnly
+    };
+    agent_message_from_tool(message, source).into_communication(author, recipient, mode)
 }
