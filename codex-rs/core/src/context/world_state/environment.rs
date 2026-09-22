@@ -503,19 +503,27 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                 is_primary: false,
             });
     }
+    // Bound the additional model context even when many selected environments fail.
+    const MAX_ERROR_BYTES: usize = 256;
+    const MAX_TOTAL_ERROR_BYTES: usize = 512;
+    let mut remaining_error_bytes = MAX_TOTAL_ERROR_BYTES;
     for environment in &snapshot.environments {
-        let TurnEnvironmentState::Failed { selection, error } = environment else {
-            continue;
-        };
-        environments
-            .entry(selection.environment_id.clone())
-            .or_insert_with(|| EnvironmentState {
-                cwd: selection.cwd.clone(),
-                status: EnvironmentStatus::Failed,
-                error: Some(error.clone()),
-                shell: None,
-                is_primary: false,
-            });
+        if let TurnEnvironmentState::Failed { selection, error } = environment {
+            let detail = error
+                [..error.floor_char_boundary(remaining_error_bytes.min(MAX_ERROR_BYTES))]
+                .to_string();
+            remaining_error_bytes = remaining_error_bytes.saturating_sub(detail.len());
+            environments.insert(
+                selection.environment_id.clone(),
+                EnvironmentState {
+                    cwd: selection.cwd.clone(),
+                    status: EnvironmentStatus::Failed,
+                    error: (!detail.is_empty()).then_some(detail),
+                    shell: None,
+                    is_primary: false,
+                },
+            );
+        }
     }
     environments
 }
