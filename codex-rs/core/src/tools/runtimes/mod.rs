@@ -606,6 +606,60 @@ fn build_proxy_env_exports(env: &HashMap<String, String>) -> (String, String) {
     )
 }
 
+fn build_brokered_credential_exports(env: &HashMap<String, String>, remove_copies: bool) -> String {
+    let mut value_copies = env
+        .keys()
+        .filter_map(|copy_key| {
+            let key = copy_key.strip_prefix(SNAPSHOT_BROKERED_VALUE_ENV_PREFIX)?;
+            is_valid_shell_variable_name(key).then_some((key, copy_key))
+        })
+        .collect::<Vec<_>>();
+    value_copies.sort_unstable();
+    let value_exports = value_copies
+        .into_iter()
+        .map(|(key, copy_key)| {
+            let restore = format!(
+                "if [ -z \"${{{copy_key}+x}}\" ]; then exit 1; fi\nif [ -n \"${{{key}+x}}\" ] && [ -n \"${{{key}}}\" ] && [ \"${{{key}}}\" != \"${{{copy_key}}}\" ]; then export {key}=\"${{{copy_key}}}\" || exit 1; fi\nif [ -n \"${{{key}+x}}\" ] && [ -n \"${{{key}}}\" ] && [ \"${{{key}}}\" != \"${{{copy_key}}}\" ]; then exit 1; fi"
+            );
+            if remove_copies {
+                format!("{restore}\nunset {copy_key} || exit 1")
+            } else {
+                restore
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut unset_markers = env
+        .keys()
+        .filter_map(|marker_key| {
+            let key = marker_key.strip_prefix(SNAPSHOT_BROKERED_UNSET_ENV_PREFIX)?;
+            is_valid_shell_variable_name(key).then_some((key, marker_key))
+        })
+        .collect::<Vec<_>>();
+    unset_markers.sort_unstable();
+    let unset_exports = unset_markers
+        .into_iter()
+        .map(|(key, marker_key)| {
+            let restore = format!(
+                "if [ -z \"${{{marker_key}+x}}\" ]; then exit 1; fi\nif [ -n \"${{{key}+x}}\" ] && [ -n \"${{{key}}}\" ]; then unset {key} || exit 1; fi\nif [ -n \"${{{key}+x}}\" ] && [ -n \"${{{key}}}\" ]; then exit 1; fi"
+            );
+            if remove_copies {
+                format!("{restore}\nunset {marker_key} || exit 1")
+            } else {
+                restore
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let exports = join_shell_blocks([value_exports, unset_exports]);
+    if exports.is_empty() {
+        return exports;
+    }
+    format!(
+        "case $- in\n  *x*) __CODEX_SNAPSHOT_BROKER_XTRACE=1; set +x ;;\n  *) __CODEX_SNAPSHOT_BROKER_XTRACE= ;;\nesac\n{exports}\nif [ -n \"$__CODEX_SNAPSHOT_BROKER_XTRACE\" ]; then\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\n  set -x\nelse\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\nfi"
+    )
+}
+
 #[cfg(target_os = "macos")]
 fn build_codex_proxy_git_ssh_command_exports() -> (String, String) {
     let key = PROXY_GIT_SSH_COMMAND_ENV_KEY;

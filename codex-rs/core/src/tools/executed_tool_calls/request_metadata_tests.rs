@@ -96,7 +96,11 @@ async fn recorder_refreshes_without_changing_execution_features_or_claiming_miss
     let (session, turn) = crate::session::tests::make_session_and_context().await;
     let step = StepContext::for_test(Arc::new(turn));
     // The broker holds a clone before rollout enablement reaches the session.
-    let calls = session.services.executed_tool_calls.clone();
+    let calls = session
+        .services
+        .executed_tool_calls
+        .clone()
+        .expect("test config enables executed tool-call metadata");
     assert!(calls.lock_state().is_none());
     let mut next_config = (*session.get_config().await).clone();
     let mut retry_cache = HashMap::new();

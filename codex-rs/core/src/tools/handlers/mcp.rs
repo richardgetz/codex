@@ -932,6 +932,7 @@ mod tests {
             }),
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
+            result_metadata_capture_allowed: true,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
         };
         let (session, turn) = make_session_and_context().await;
