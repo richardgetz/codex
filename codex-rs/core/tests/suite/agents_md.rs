@@ -1392,8 +1392,10 @@ async fn fork_injects_changed_agents_md_once() -> Result<()> {
         .thread_manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions::new(fork_config),
+            fork_config,
             rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await?;
 

@@ -278,8 +278,10 @@ async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instruction
         .thread_manager
         .fork_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
-            codex_core::StartThreadOptions::new(fork_config),
+            fork_config,
             source_rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await?;
     submit_model_turn(&fork.thread, turn_model, ThreadSettingsOverrides::default()).await?;
@@ -1138,8 +1140,10 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
             test.thread_manager
                 .fork_thread(
                     ForkSnapshot::Interrupted,
-                    codex_core::StartThreadOptions::new(test.config.clone()),
+                    test.config.clone(),
                     rollout_path,
+                    /*thread_source*/ None,
+                    /*parent_trace*/ None,
                 )
                 .await?
                 .thread

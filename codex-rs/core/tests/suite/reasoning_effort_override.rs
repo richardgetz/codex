@@ -454,8 +454,10 @@ async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
                 .thread_manager
                 .fork_thread(
                     ForkSnapshot::Interrupted,
-                    codex_core::StartThreadOptions::new(config.clone()),
+                    config.clone(),
                     previous.codex.rollout_path().expect("rollout path"),
+                    /*thread_source*/ None,
+                    /*parent_trace*/ None,
                 )
                 .await?;
             previous.codex = forked.thread;

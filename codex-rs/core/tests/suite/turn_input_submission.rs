@@ -289,6 +289,7 @@ async fn host_drain_closes_realtime_after_handoff_error() -> anyhow::Result<()> 
                     role: "user".to_string(),
                     text: "must not start".to_string(),
                 }],
+                routing: None,
             }),
         }),
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
