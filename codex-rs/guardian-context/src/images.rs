@@ -101,6 +101,7 @@ impl TranscriptImages {
                             }
                             ContentItem::InputText { .. }
                             | ContentItem::InputAudio { .. }
+                            | ContentItem::EncryptedContent { .. }
                             | ContentItem::OutputText { .. } => {}
                         }
                     }
@@ -138,6 +139,7 @@ impl TranscriptImages {
                     }
                     | ContentItem::InputText { .. }
                     | ContentItem::InputAudio { .. }
+                    | ContentItem::EncryptedContent { .. }
                     | ContentItem::OutputText { .. } => {}
                 }
             }
