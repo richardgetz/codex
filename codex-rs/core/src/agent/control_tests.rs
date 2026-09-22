@@ -2763,7 +2763,6 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         .session
         .record_conversation_items(
             turn_context.as_ref(),
-            turn_context.model_info(),
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
@@ -3317,7 +3316,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     parent_thread
         .session
         .record_conversation_items(
-            turn_context.as_ref(), turn_context.model_info(),
+            turn_context.as_ref(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -4210,7 +4209,6 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .session
         .record_conversation_items(
             turn_context.as_ref(),
-            turn_context.model_info(),
             &[
                 assistant_message("unflushed final answer", Some(MessagePhase::FinalAnswer)),
                 spawn_agent_call(&parent_spawn_call_id),
@@ -4294,7 +4292,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .session
         .record_conversation_items(
             queued_turn_context.as_ref(),
-            queued_turn_context.model_info(),
             &[queued_communication.to_response_input_item().into()],
         )
         .await;
@@ -4311,7 +4308,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .session
         .record_conversation_items(
             triggered_turn_context.as_ref(),
-            triggered_turn_context.model_info(),
             &[triggered_communication.to_response_input_item().into()],
         )
         .await;
@@ -4325,7 +4321,6 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .session
         .record_conversation_items(
             spawn_turn_context.as_ref(),
-            spawn_turn_context.model_info(),
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
@@ -4448,7 +4443,6 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .session
         .record_conversation_items(
             startup_turn_context.as_ref(),
-            startup_turn_context.model_info(),
             &[ResponseItem::Message {
                 id: None,
                 role: "developer".to_string(),
@@ -4470,7 +4464,6 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .session
         .record_conversation_items(
             spawn_turn_context.as_ref(),
-            spawn_turn_context.model_info(),
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
@@ -4578,7 +4571,6 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
         .session
         .record_conversation_items(
             turn_context.as_ref(),
-            turn_context.model_info(),
             &[
                 ResponseItem::Message {
                     id: None,

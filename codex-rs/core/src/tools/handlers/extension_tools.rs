@@ -448,7 +448,6 @@ mod tests {
         session
             .record_conversation_items(
                 &turn,
-                turn.model_info(),
                 std::slice::from_ref(&history_item),
             )
             .await;

@@ -63,7 +63,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
     }))
     .unwrap();
     parent
-        .record_conversation_items(&turn, turn.model_info(), &[evidence])
+        .record_conversation_items(&turn, &[evidence])
         .await;
     params.parent_history = parent.clone_history().await;
 

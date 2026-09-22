@@ -547,7 +547,6 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
     session
         .record_conversation_items(
             &turn,
-            turn.model_info(),
             std::slice::from_ref(&history_item),
         )
         .await;
