@@ -191,6 +191,10 @@ release or merge rules.
 - Initial developer context keeps extension Skills world-state sections ahead of
   Apps and Plugins usage guidance, while preserving the existing App enablement,
   model-capability, and connector filtering rules.
+- Remote TUI skill discovery scopes startup and manage-skills refreshes to the
+  selected session CWD, ignores stale catalog responses for other CWDs, and
+  clears only a matching empty catalog while preserving global and repo-local
+  entries plus disabled-skill filtering.
 - Cancellation at a tool activity or parallel-dispatch boundary returns the
   normal aborted response; when cancellation and a pre-admission dispatch are
   both ready, cancellation claims the terminal outcome first while already
