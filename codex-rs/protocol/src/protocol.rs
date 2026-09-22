@@ -644,6 +644,13 @@ pub struct ThreadSettingsOverrides {
     /// Updated fallback `cwd` and environments supplied together as a complete pair.
     pub environments: Option<TurnEnvironmentSelections>,
 
+    /// Updated top-level runtime workspace roots for default environments.
+    ///
+    /// These roots are independent of explicit environment selections and are
+    /// carried through thread settings snapshots so resume restores the same
+    /// runtime workspace scope.
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+
     /// Updated profile-defined workspace roots for status summaries and
     /// per-turn config reconstruction.
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,

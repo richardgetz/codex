@@ -100,6 +100,7 @@ pub struct ThreadConfigSnapshot {
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub environments: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
+    pub runtime_workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -158,6 +159,7 @@ impl ThreadConfigSnapshot {
             permission_profile: self.permission_profile,
             active_permission_profile: self.active_permission_profile,
             cwd,
+            runtime_workspace_roots: Some(self.runtime_workspace_roots.clone()),
             reasoning_effort: self.reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             personality: self.personality,
@@ -173,6 +175,7 @@ impl ThreadConfigSnapshot {
     fn into_thread_settings_overrides(self) -> CodexThreadSettingsOverrides {
         CodexThreadSettingsOverrides {
             environments: Some(self.environments),
+            runtime_workspace_roots: Some(self.runtime_workspace_roots),
             profile_workspace_roots: Some(self.profile_workspace_roots),
             approval_policy: Some(self.approval_policy),
             approvals_reviewer: Some(self.approvals_reviewer),
@@ -193,6 +196,7 @@ impl ThreadConfigSnapshot {
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
     pub environments: Option<TurnEnvironmentSelections>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
     pub approvals_reviewer: Option<ApprovalsReviewer>,
@@ -842,6 +846,7 @@ impl CodexThread {
     fn thread_settings_update(overrides: CodexThreadSettingsOverrides) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
             environments,
+            runtime_workspace_roots,
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
@@ -871,6 +876,7 @@ impl CodexThread {
                 approvals_reviewer,
             },
             environments,
+            runtime_workspace_roots,
             profile_workspace_roots,
             sandbox_policy,
             permission_profile,

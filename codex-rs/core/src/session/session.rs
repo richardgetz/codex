@@ -46,6 +46,7 @@ use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_skills::SkillError;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_git_discovery::GitRootDiscovery;
+use codex_utils_path::replace_path_and_deduplicate;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
@@ -165,6 +166,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Legacy thread cwd used when a turn does not select an environment.
     pub(super) legacy_fallback_cwd: AbsolutePathBuf,
+    /// Top-level runtime workspace roots, independent of explicit environment selections.
+    pub(super) runtime_workspace_roots: Vec<AbsolutePathBuf>,
     /// Directory containing all Codex state for this session.
     pub(super) codex_home: AbsolutePathBuf,
     /// Session-owned temporary root exposed to this thread's sandbox and
@@ -374,6 +377,7 @@ impl SessionConfiguration {
                 environment_selections,
             ),
             workspace_roots,
+            runtime_workspace_roots: self.runtime_workspace_roots.clone(),
             profile_workspace_roots: permission_profile.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.step_settings.collaboration_mode.reasoning_effort(),
@@ -414,6 +418,7 @@ impl SessionConfiguration {
             permission_profile: self.materialized_permission_profile(environment_selections),
             active_permission_profile: self.active_permission_profile(),
             cwd: self.legacy_fallback_cwd.clone(),
+            runtime_workspace_roots: Some(self.runtime_workspace_roots.clone()),
             reasoning_effort: self.step_settings.collaboration_mode.reasoning_effort(),
             reasoning_summary: self.step_settings.reasoning_summary,
             personality: self.step_settings.personality,
@@ -560,6 +565,15 @@ impl SessionConfiguration {
             next_configuration.legacy_fallback_cwd = environments.legacy_fallback_cwd.clone();
         }
         let cwd_changed = next_configuration.legacy_fallback_cwd != current_cwd;
+        if let Some(runtime_workspace_roots) = &updates.runtime_workspace_roots {
+            next_configuration.runtime_workspace_roots = runtime_workspace_roots.clone();
+        } else if cwd_changed {
+            next_configuration.runtime_workspace_roots = replace_path_and_deduplicate(
+                next_configuration.runtime_workspace_roots,
+                current_cwd.as_path(),
+                next_configuration.legacy_fallback_cwd.clone(),
+            );
+        }
 
         if let Some(permission_profile) = updates.permission_profile.clone() {
             let active_permission_profile =
@@ -847,6 +861,7 @@ pub(crate) struct SessionSettingsCommit {
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) step_settings: StepSettingsUpdate,
     pub(crate) environments: Option<TurnEnvironmentSelections>,
+    pub(crate) runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) sandbox_policy: Option<SandboxPolicy>,
     pub(crate) permission_profile: Option<PermissionProfile>,
@@ -1349,7 +1364,9 @@ impl Session {
                                 provenance: base_instructions_provenance.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
-                            runtime_workspace_roots: None,
+                            runtime_workspace_roots: Some(
+                                session_configuration.runtime_workspace_roots.clone(),
+                            ),
                             selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,

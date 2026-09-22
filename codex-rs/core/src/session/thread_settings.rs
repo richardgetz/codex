@@ -45,6 +45,7 @@ pub(super) async fn update(
 pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
         environments,
+        runtime_workspace_roots,
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
@@ -74,6 +75,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
             approvals_reviewer,
         },
         environments,
+        runtime_workspace_roots,
         profile_workspace_roots,
         sandbox_policy,
         permission_profile,

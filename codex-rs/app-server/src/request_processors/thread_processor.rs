@@ -145,10 +145,10 @@ fn collect_resume_override_mismatches(
     }
     if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
         let requested_runtime_workspace_roots = requested_runtime_workspace_roots.to_vec();
-        if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
+        if requested_runtime_workspace_roots != config_snapshot.runtime_workspace_roots {
             mismatch_details.push(format!(
                 "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
-                config_snapshot.workspace_roots
+                config_snapshot.runtime_workspace_roots
             ));
         }
     }
