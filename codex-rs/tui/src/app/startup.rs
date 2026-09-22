@@ -776,6 +776,7 @@ Fix the config and retry.\n\
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
             initial_history_replay_buffer: None,
+            pending_thread_switch_resets: 0,
             scrollback_has_older_history: false,
             commit_animation: None,
             status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
