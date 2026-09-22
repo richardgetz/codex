@@ -32,6 +32,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
 use codex_sandboxing::SandboxCommand;
 use codex_shell_command::bash::parse_shell_script_into_commands;
+use codex_shell_command::shell_snapshot::posix_env_path_expansion_function;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
@@ -502,15 +503,31 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
+    let brokered = env
+        .get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
+        .is_some_and(|active| active == "1");
     let flag = command[1].as_str();
-    if flag != "-lc" {
+    if flag != "-lc" && !(brokered && flag == "-c") {
         return command.to_vec();
     }
 
     let snapshot_path = snapshot.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
+    let command_uses_session_zsh =
+        session_shell.shell_type == ShellType::Zsh && command[0] == shell_path.as_ref();
+    let reuse_session_shell = brokered
+        && command[0] == shell_path.as_ref()
+        && matches!(session_shell.shell_type, ShellType::Bash | ShellType::Zsh);
+    let original_shell_is_zsh = command_uses_session_zsh
+        || codex_shell_command::shell_detect::detect_shell_type(&command[0])
+            == Some(ShellType::Zsh);
+    let brokered_zsh_flag = if flag == "-lc" { "-lfc" } else { "-fc" };
+    let original_shell_flag = if brokered && original_shell_is_zsh {
+        brokered_zsh_flag
+    } else {
+        "-c"
+    };
     let original_shell = shell_single_quote(&command[0]);
-    let original_script = shell_single_quote(&command[2]);
     let snapshot_path = shell_single_quote(snapshot_path.as_ref());
     let trailing_args = command[3..]
         .iter()
@@ -524,9 +541,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         CODEX_PERMISSION_PROFILE_ENV_VAR,
         CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
         PLUGIN_METRICS_OUTPUT_ENV_VAR,
-        "TMPDIR",
-        "TMP",
-        "TEMP",
     ] {
         if let Some(value) = env.get(key) {
             override_env.insert(key.to_string(), value.clone());
@@ -542,25 +556,156 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         ],
     );
     let (proxy_captures, proxy_exports) = build_proxy_env_exports(env);
+    let (env_captures, replayed_startup_capture, env_exports) = if brokered {
+        let bash_env_key = SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY;
+        let posix_env_key = SNAPSHOT_ORIGINAL_POSIX_ENV_ENV_KEY;
+        let startup_env_key =
+            if session_shell.shell_type == ShellType::Sh && env.contains_key(posix_env_key) {
+                posix_env_key
+            } else {
+                bash_env_key
+            };
+        let alternate_startup_env_key = if startup_env_key == posix_env_key {
+            bash_env_key
+        } else {
+            posix_env_key
+        };
+        let zdotdir_key = SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY;
+        let expand_env_function = posix_env_path_expansion_function();
+        (
+            format!(
+                r#"__CODEX_SNAPSHOT_ORIGINAL_ENV_SET="${{ENV+x}}"
+__CODEX_SNAPSHOT_ORIGINAL_ENV="${{ENV-}}"
+{expand_env_function}
+__codex_snapshot_expand_env_with_zdotdir() (
+  if [ -n "${{{zdotdir_key}+x}}" ]; then
+    export ZDOTDIR="${{{zdotdir_key}}}"
+  elif [ -n "${{ZSH_VERSION-}}" ] && [ "${{ZDOTDIR-}}" = /dev/null ]; then
+    unset ZDOTDIR
+  fi
+  __codex_snapshot_expand_env "$1"
+)
+__CODEX_SNAPSHOT_PROTECTED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "${{{startup_env_key}-}}"
+)
+__CODEX_SNAPSHOT_ALTERNATE_PROTECTED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "${{{alternate_startup_env_key}-}}"
+)"#
+            ),
+            "__CODEX_SNAPSHOT_REPLAYED_BASH_ENV=\"${BASH_ENV-}\"".to_string(),
+            format!(
+                r#"__CODEX_SNAPSHOT_CURRENT_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "${{ENV-}}"
+)
+__CODEX_SNAPSHOT_ORIGINAL_EXPANDED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "$__CODEX_SNAPSHOT_ORIGINAL_ENV"
+)
+__CODEX_SNAPSHOT_REPLAYED_PROTECTED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "$__CODEX_SNAPSHOT_REPLAYED_BASH_ENV"
+)
+unset -f __codex_snapshot_expand_env __codex_snapshot_expand_env_with_zdotdir
+__codex_snapshot_env_is_protected() (
+  for __codex_protected_env in \
+    "$__CODEX_SNAPSHOT_PROTECTED_ENV" \
+    "$__CODEX_SNAPSHOT_ALTERNATE_PROTECTED_ENV" \
+    "$__CODEX_SNAPSHOT_REPLAYED_PROTECTED_ENV"; do
+    if [ -n "$__codex_protected_env" ] &&
+      {{ [ "$1" = "$__codex_protected_env" ] ||
+        [ "$1" -ef "$__codex_protected_env" ] 2>/dev/null; }}; then
+      return 0
+    fi
+  done
+  return 1
+)
+if __codex_snapshot_env_is_protected "$__CODEX_SNAPSHOT_CURRENT_ENV"; then
+  if [ -n "$__CODEX_SNAPSHOT_ORIGINAL_ENV_SET" ] &&
+    ! __codex_snapshot_env_is_protected "$__CODEX_SNAPSHOT_ORIGINAL_EXPANDED_ENV"; then
+    builtin export ENV="$__CODEX_SNAPSHOT_ORIGINAL_ENV" 2>/dev/null ||
+      command export ENV="$__CODEX_SNAPSHOT_ORIGINAL_ENV" || exit 1
+    [ "${{ENV-}}" = "$__CODEX_SNAPSHOT_ORIGINAL_ENV" ] || exit 1
+  else
+    builtin unset ENV 2>/dev/null || command unset ENV || exit 1
+    [ -z "${{ENV+x}}" ] || exit 1
+  fi
+fi
+unset -f __codex_snapshot_env_is_protected
+unset __CODEX_SNAPSHOT_ORIGINAL_ENV_SET __CODEX_SNAPSHOT_ORIGINAL_ENV \
+  __CODEX_SNAPSHOT_PROTECTED_ENV __CODEX_SNAPSHOT_ALTERNATE_PROTECTED_ENV \
+  __CODEX_SNAPSHOT_REPLAYED_BASH_ENV __CODEX_SNAPSHOT_REPLAYED_PROTECTED_ENV \
+  __CODEX_SNAPSHOT_CURRENT_ENV __CODEX_SNAPSHOT_ORIGINAL_EXPANDED_ENV \
+  {bash_env_key} {posix_env_key}"#
+            ),
+        )
+    } else {
+        (String::new(), String::new(), String::new())
+    };
+    let zsh_startup_exports = if brokered && session_shell.shell_type == ShellType::Zsh {
+        let key = SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY;
+        format!(
+            "if [ -n \"${{{key}+x}}\" ]; then\n  export ZDOTDIR=\"${{{key}}}\"\nelif [ \"${{ZDOTDIR-}}\" = /dev/null ]; then\n  unset ZDOTDIR\nfi\nunset {key}"
+        )
+    } else {
+        String::new()
+    };
+    // Zsh always reads the global zshenv, even with `-f`. Keep private copies of child-visible
+    // dummy values until the command shell has finished startup, then remove the copies.
+    let outer_brokered_credential_exports = if brokered {
+        build_brokered_credential_exports(env, /*remove_copies*/ false)
+    } else {
+        String::new()
+    };
+    let inner_brokered_credential_exports = if brokered {
+        build_brokered_credential_exports(env, /*remove_copies*/ true)
+    } else {
+        String::new()
+    };
+    let original_script = if !inner_brokered_credential_exports.is_empty() {
+        format!("{inner_brokered_credential_exports}\n{}", command[2])
+    } else {
+        command[2].clone()
+    };
     let runtime_path_prepend_exports =
         runtime_path_prepends.shell_exports_after_snapshot(explicit_env_overrides);
-    let override_captures = join_shell_blocks([override_captures, proxy_captures]);
+    let override_captures = join_shell_blocks([
+        outer_brokered_credential_exports.clone(),
+        override_captures,
+        proxy_captures,
+        env_captures,
+    ]);
     let override_exports = join_shell_blocks([
+        outer_brokered_credential_exports.clone(),
+        replayed_startup_capture,
         override_exports,
         proxy_exports,
         runtime_path_prepend_exports,
+        env_exports,
+        zsh_startup_exports,
+        outer_brokered_credential_exports,
     ]);
+    let run_original = if reuse_session_shell {
+        original_script
+    } else {
+        let original_script = shell_single_quote(&original_script);
+        format!("exec '{original_shell}' {original_shell_flag} '{original_script}'{trailing_args}")
+    };
     let rewritten_script = if override_exports.is_empty() {
-        format!(
-            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
+        format!("if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{run_original}")
     } else {
         format!(
-            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\n{run_original}"
         )
     };
 
-    vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+    let wrapper_flag = if brokered && session_shell.shell_type == ShellType::Zsh {
+        brokered_zsh_flag
+    } else {
+        "-c"
+    };
+    let mut rewritten = vec![shell_path.to_string(), wrapper_flag.to_string(), rewritten_script];
+    if reuse_session_shell {
+        rewritten.extend_from_slice(&command[3..]);
+    }
+    rewritten
 }
 
 fn build_override_exports(
@@ -586,6 +731,11 @@ fn build_proxy_env_exports(env: &HashMap<String, String>) -> (String, String) {
         .copied()
         .chain(codex_network_proxy::brokered_credential_env_keys(env))
         .chain(CUSTOM_CA_ENV_KEYS)
+        .chain(
+            env.get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
+                .filter(|active| active.as_str() == "1")
+                .map(|_| "BASH_ENV"),
+        )
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.sort_unstable();
@@ -702,7 +852,7 @@ fn build_override_exports_for_keys(variable_prefix: &str, keys: &[&str]) -> (Str
             let set_var = format!("{variable_prefix}_SET_{idx}");
             let value_var = format!("{variable_prefix}_{idx}");
             format!(
-                "if [ -n \"${{{set_var}}}\" ]; then export {key}=\"${{{value_var}}}\"; else unset {key}; fi"
+                "if [ -n \"${{{set_var}}}\" ]; then\n  if [ -z \"${{{key}+x}}\" ] || [ \"${{{key}-}}\" != \"${{{value_var}}}\" ]; then export {key}=\"${{{value_var}}}\"; else export {key}; fi\nelse builtin unset {key} 2>/dev/null || command unset {key}; fi\nbuiltin unset {set_var} {value_var} 2>/dev/null || command unset {set_var} {value_var}"
             )
         })
         .collect::<Vec<_>>()
