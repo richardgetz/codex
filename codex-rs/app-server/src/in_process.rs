@@ -117,6 +117,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
             | ServerNotification::ThreadSettingsUpdated(_)
             | ServerNotification::ThreadActivityUpdated(_)
             | ServerNotification::ThreadEtaUpdated(_)
+            | ServerNotification::ThreadAttachmentUpdated(_)
             | ServerNotification::ServerLifecycleUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::ItemCompleted(ItemCompletedNotification {
