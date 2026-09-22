@@ -4257,7 +4257,10 @@ impl Config {
             file_system_sandbox_policy = file_system_sandbox_policy
                 .with_materialized_project_roots_for_path_uris(&configured_workspace_roots);
             let mut permission_profile = if let Some(permission_profile) =
-                builtin_permission_profile(default_permissions, builtin_workspace_write_settings)
+                builtin_permission_profile(
+                    default_permissions,
+                    builtin_workspace_write_settings.as_ref(),
+                )
             {
                 permission_profile
             } else {
