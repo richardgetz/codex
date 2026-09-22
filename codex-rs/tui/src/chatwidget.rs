@@ -496,11 +496,11 @@ use self::user_messages::ThreadComposerState;
 pub(crate) use self::user_messages::ThreadInputState;
 pub(crate) use self::user_messages::ThreadInputStateRestoreMode;
 pub(crate) use self::user_messages::UserMessage;
-use self::user_messages::UserMessageSource;
 use self::user_messages::UserMessageDisplay;
 #[cfg(test)]
 use self::user_messages::UserMessageHistoryOverride;
 use self::user_messages::UserMessageHistoryRecord;
+use self::user_messages::UserMessageSource;
 use self::user_messages::app_server_text_elements;
 pub(crate) use self::user_messages::create_initial_user_message;
 pub(crate) use self::user_messages::mention_bindings_from_user_inputs;
@@ -1488,12 +1488,22 @@ impl ChatWidget {
         items: &[UserInput],
         client_id: Option<&str>,
         from_replay: bool,
+        turn_id: &str,
     ) {
+        if let Some(input) = realtime::realtime_delegation_input(items) {
+            if !from_replay && self.should_hide_realtime_delegation(turn_id) {
+                return;
+            }
+            let projected = [UserInput::Text {
+                text: realtime::realtime_delegation_display_text(input),
+                text_elements: Vec::new(),
+            }];
+            self.on_committed_user_message(&projected, client_id, from_replay, turn_id);
+            return;
+        }
         if items.iter().any(is_realtime_delegation_input) {
-            // Realtime handoffs and transcript-tail flushes are internal context envelopes. The
-            // live GPT-Live transcript is already rendered through realtime notifications, so
-            // showing this model-facing wrapper would duplicate the voice conversation and expose
-            // implementation details in the TUI.
+            // Malformed handoff envelopes are internal context and must never be shown live.
+            // Keep the historical replay path quiet as well because no safe display text exists.
             if !from_replay {
                 self.transcript.realtime_turn_active = true;
             }

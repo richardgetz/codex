@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/realtime_tests/caption_replay.rs
-assertion_line: 1586
+assertion_line: 68
 expression: rendered
 ---
 
