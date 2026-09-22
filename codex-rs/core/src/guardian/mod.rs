@@ -57,10 +57,10 @@ pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub(crate) use review::routes_approval_to_guardian;
-#[cfg(test)]
-pub(crate) use review_session::GuardianReviewSessionManagerTestExt;
 pub use review_session::GuardianReviewSessionHost;
 pub(crate) use review_session::GuardianReviewSessionManager;
+#[cfg(test)]
+pub(crate) use review_session::GuardianReviewSessionManagerTestExt;
 pub(crate) use review_session::prewarm_guardian_review_session;
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
 pub(crate) use runtime::ReviewAction;
@@ -269,6 +269,8 @@ use approval_request::guardian_assessment_action;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]
+use codex_guardian_reviewer::GuardianReviewOutcome;
+#[cfg(test)]
 use prompt::GuardianPromptMode;
 #[cfg(test)]
 use prompt::GuardianTranscriptCursor;
@@ -278,8 +280,6 @@ use prompt::build_guardian_prompt_items;
 use prompt::build_guardian_prompt_items_with_parent_turn;
 #[cfg(test)]
 use prompt::render_guardian_transcript_entries;
-#[cfg(test)]
-use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
 use review::run_guardian_review_session_with_retry as run_guardian_review_session_for_test;
 

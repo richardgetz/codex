@@ -704,7 +704,11 @@ unset __CODEX_SNAPSHOT_ORIGINAL_ENV_SET __CODEX_SNAPSHOT_ORIGINAL_ENV \
     } else {
         "-c"
     };
-    let mut rewritten = vec![shell_path.to_string(), wrapper_flag.to_string(), rewritten_script];
+    let mut rewritten = vec![
+        shell_path.to_string(),
+        wrapper_flag.to_string(),
+        rewritten_script,
+    ];
     if reuse_session_shell {
         rewritten.extend_from_slice(&command[3..]);
     }

@@ -155,11 +155,7 @@ pub(crate) type GuardianReviewSessionManager =
 /// insertion hooks; this trait keeps the core `SessionIo` wiring private.
 #[cfg(test)]
 pub(crate) trait GuardianReviewSessionManagerTestExt {
-    fn cache_for_test(
-        &self,
-        session: Arc<Session>,
-        io: SessionIo,
-    ) -> BoxFuture<'_, ()>;
+    fn cache_for_test(&self, session: Arc<Session>, io: SessionIo) -> BoxFuture<'_, ()>;
 
     fn register_ephemeral_for_test(
         &self,
@@ -221,11 +217,7 @@ impl GuardianReviewSession {
 
 #[cfg(test)]
 impl GuardianReviewSessionManagerTestExt for GuardianReviewSessionManager {
-    fn cache_for_test(
-        &self,
-        session: Arc<Session>,
-        io: SessionIo,
-    ) -> BoxFuture<'_, ()> {
+    fn cache_for_test(&self, session: Arc<Session>, io: SessionIo) -> BoxFuture<'_, ()> {
         Box::pin(async move {
             codex_guardian_reviewer::ReviewerPool::<GuardianReviewSession>::cache_for_test(
                 self,

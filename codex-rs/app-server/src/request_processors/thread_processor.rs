@@ -2630,7 +2630,11 @@ impl ThreadRequestProcessor {
         codex_thread
             .checkpoint_thread_settings()
             .await
-            .map_err(|err| internal_error(format!("failed to checkpoint thread settings after revert: {err}")))?;
+            .map_err(|err| {
+                internal_error(format!(
+                    "failed to checkpoint thread settings after revert: {err}"
+                ))
+            })?;
         Self::set_app_server_client_info(
             codex_thread.as_ref(),
             app_server_client_name,

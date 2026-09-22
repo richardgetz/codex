@@ -970,9 +970,9 @@ fn collect_guardian_transcript_entries(
         /*permissions*/ None,
         /*node_repl*/ None,
     )
-        .expect("collect Guardian context")
-        .transcript_entries()
-        .to_vec()
+    .expect("collect Guardian context")
+    .transcript_entries()
+    .to_vec()
 }
 
 #[test]
