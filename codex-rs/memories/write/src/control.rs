@@ -3,6 +3,7 @@ use std::path::Path;
 pub async fn clear_memory_roots_contents(codex_home: &Path) -> std::io::Result<()> {
     for memory_root in [
         codex_home.join("memories"),
+        codex_home.join("memories_v2"),
         codex_home.join("memories_extensions"),
         codex_home.join("user_preferences_memory"),
         codex_home.join("orchestrator_memory"),

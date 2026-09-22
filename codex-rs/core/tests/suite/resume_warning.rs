@@ -36,6 +36,7 @@ fn resume_history(
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         cwd: config.cwd.clone(),
         workspace_roots: None,
         current_date: None,

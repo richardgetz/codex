@@ -15,6 +15,7 @@ use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 use crate::CODEX_APPS_MCP_SERVER_NAME;
+use crate::McpProtocolMode;
 
 use super::McpEnvironmentAuthority;
 use super::McpPluginAttribution;
@@ -228,6 +229,7 @@ fn disabled_winner_remains_a_veto_when_the_catalog_is_extended() {
         Some(&super::ResolvedMcpServer {
             source: extension_source("hosted"),
             config: expected,
+            protocol_mode: None,
         })
     );
 }
@@ -260,6 +262,7 @@ fn disabled_discovered_plugin_remains_a_veto_for_runtime_overlays() {
         Some(&super::ResolvedMcpServer {
             source: extension_source("hosted"),
             config: expected,
+            protocol_mode: None,
         })
     );
 }
@@ -332,6 +335,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         Some(&super::ResolvedMcpServer {
             source: selected_plugin_source("selected-alpha"),
             config: selected,
+            protocol_mode: None,
         })
     );
     assert_eq!(
@@ -358,6 +362,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         Some(&super::ResolvedMcpServer {
             source: selected_plugin_source("selected-alpha"),
             config: refreshed,
+            protocol_mode: None,
         })
     );
 
@@ -374,6 +379,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         Some(&super::ResolvedMcpServer {
             source: McpServerSource::Config,
             config: configured,
+            protocol_mode: None,
         })
     );
 }
@@ -405,6 +411,7 @@ fn disabled_selected_plugin_does_not_veto_runtime_overlays() {
         Some(&super::ResolvedMcpServer {
             source: extension_source("hosted"),
             config: extension,
+            protocol_mode: None,
         })
     );
 }
@@ -430,6 +437,7 @@ fn equal_precedence_uses_insertion_order_not_source_identity() {
         Some(&super::ResolvedMcpServer {
             source: compatibility_source("a-second"),
             config: server("https://second.example/mcp"),
+            protocol_mode: None,
         })
     );
     let mut builder = catalog.to_builder();
@@ -449,6 +457,59 @@ fn equal_precedence_uses_insertion_order_not_source_identity() {
                 remove(compatibility_source("remove-last")),
             ],
         }]
+    );
+}
+
+#[test]
+fn extension_protocol_mode_follows_the_winner_through_materialization() {
+    let config = server("https://apps.example/mcp");
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(
+        McpServerRegistration::from_extension(
+            "apps".to_string(),
+            "loser",
+            /*contribution_order*/ 0,
+            config.clone(),
+        )
+        .with_protocol_mode(McpProtocolMode::V20260728),
+    );
+    builder.register(McpServerRegistration::from_extension(
+        "apps".to_string(),
+        "winner",
+        /*contribution_order*/ 1,
+        config.clone(),
+    ));
+    let without_override = builder.build();
+    assert_eq!(
+        without_override
+            .server("apps")
+            .and_then(ResolvedMcpServer::protocol_mode),
+        None
+    );
+
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(
+        McpServerRegistration::from_extension(
+            "apps".to_string(),
+            "winner",
+            /*contribution_order*/ 1,
+            config,
+        )
+        .with_protocol_mode(McpProtocolMode::Legacy),
+    );
+    let with_override = builder.build();
+    assert!(!without_override.has_same_servers(&with_override));
+
+    let refreshed = server("https://refreshed.example/mcp");
+    let materialized = with_override
+        .with_materialized_servers(HashMap::from([("apps".to_string(), refreshed.clone())]));
+    assert_eq!(
+        materialized.server("apps"),
+        Some(&ResolvedMcpServer {
+            source: extension_source("winner"),
+            config: refreshed,
+            protocol_mode: Some(McpProtocolMode::Legacy),
+        })
     );
 }
 

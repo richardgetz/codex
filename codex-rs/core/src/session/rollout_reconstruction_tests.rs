@@ -389,6 +389,7 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,
@@ -444,6 +445,7 @@ async fn record_initial_history_resumed_hydrates_previous_turn_settings_from_lif
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,
@@ -1736,6 +1738,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: Some("root-turn".to_string()),
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,
@@ -1838,6 +1841,7 @@ async fn record_initial_history_resumed_turn_context_after_compaction_reestablis
             final_output_json_schema: None,
             truncation_policy: None,
             root_turn_id: Some("root-turn".to_string()),
+            disabled_plugin_ids: None,
             #[allow(deprecated)]
             cwd: turn_context.cwd.clone(),
             workspace_roots: None,
@@ -2115,6 +2119,7 @@ async fn record_initial_history_resumed_aborted_turn_without_id_clears_active_tu
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,
@@ -2258,6 +2263,7 @@ async fn record_initial_history_resumed_unmatched_abort_preserves_active_turn_fo
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,
@@ -2393,6 +2399,7 @@ async fn record_initial_history_resumed_trailing_incomplete_turn_compaction_clea
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,
@@ -2576,6 +2583,7 @@ async fn record_initial_history_resumed_replaced_incomplete_compacted_turn_clear
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         workspace_roots: None,

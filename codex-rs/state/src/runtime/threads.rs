@@ -1273,7 +1273,7 @@ ON CONFLICT(id) DO UPDATE SET
                 .execute(self.logs_pool.as_ref())
                 .await?;
             self.thread_queue.delete_thread_queue(*thread_id).await?;
-            self.memories.delete_thread_memory(*thread_id).await?;
+            self.delete_versioned_thread_memory(*thread_id).await?;
             self.thread_goals.delete_thread_goal(*thread_id).await?;
         }
 
@@ -2825,6 +2825,7 @@ mod tests {
                 parent_thread_id: None,
                 timestamp: metadata.created_at.to_rfc3339(),
                 cwd: PathBuf::new(),
+                runtime_workspace_roots: None,
                 originator: String::new(),
                 cli_version: String::new(),
                 source: SessionSource::Cli,
@@ -2896,6 +2897,7 @@ mod tests {
                 parent_thread_id: None,
                 timestamp: created_at,
                 cwd: PathBuf::new(),
+                runtime_workspace_roots: None,
                 originator: String::new(),
                 cli_version: String::new(),
                 source: SessionSource::Cli,

@@ -119,6 +119,7 @@ mod request_user_input;
 mod search;
 mod separators;
 mod session;
+mod spoken_artifacts;
 mod startup_warnings;
 
 pub(crate) use approvals::*;
