@@ -309,7 +309,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
     let server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
     create_team_config_toml(codex_home.path(), &server.uri())?;
-    write_models_cache(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())

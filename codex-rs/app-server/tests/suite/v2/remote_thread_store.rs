@@ -238,7 +238,7 @@ async fn thread_attachment_operations_without_sqlite_return_method_not_found() -
     }
 
     client.shutdown().await?;
-    assert_no_local_persistence_artifacts(codex_home.path())?;
+    assert_no_local_persistence_artifacts(codex_home.path(), &[])?;
     Ok(())
 }
 

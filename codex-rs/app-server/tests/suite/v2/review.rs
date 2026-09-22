@@ -376,7 +376,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
 
     let codex_home = TempDir::new()?;
     create_team_config_toml(codex_home.path(), &server.uri())?;
-    write_models_cache(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
     let colliding_skill_dir = codex_home.path().join("skills/review-agent-collision");
     std::fs::create_dir_all(&colliding_skill_dir)?;
     std::fs::write(

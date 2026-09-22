@@ -512,7 +512,7 @@ async fn assert_thread_fork_preserves_team_settings(
     source_mode: TeamMode,
 ) -> Result<()> {
     let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
     write_team_fork_config(
         codex_home.path(),
         &server.uri(),
@@ -659,7 +659,7 @@ async fn thread_fork_explicit_model_and_effort_overrides_win_over_off_team_snaps
 {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
     write_team_fork_config(
         codex_home.path(),
         &server.uri(),

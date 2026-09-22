@@ -1321,7 +1321,7 @@ async fn thread_resume_explicit_model_and_effort_overrides_win_over_off_team_sna
 {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    write_models_cache(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
     write_team_resume_config(
         codex_home.path(),
         &server.uri(),
