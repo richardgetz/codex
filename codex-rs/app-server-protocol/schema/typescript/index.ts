@@ -90,6 +90,7 @@ export type { ThreadMemoryMode } from "./ThreadMemoryMode";
 export type { Tool } from "./Tool";
 export type { UserPreferencesMemoryBucket } from "./UserPreferencesMemoryBucket";
 export type { UserPreferencesMemoryBucketPolicy } from "./UserPreferencesMemoryBucketPolicy";
+export type { ToolExposureSurface } from "./ToolExposureSurface";
 export type { Verbosity } from "./Verbosity";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WebSearchContextSize } from "./WebSearchContextSize";

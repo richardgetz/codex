@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ pub(crate) const MAX_SHUTDOWN_GRACE_SECONDS: u32 = 5 * 60;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DaemonSettings {
     pub(crate) remote_control_enabled: bool,
+    pub(crate) feature_overrides: BTreeMap<String, bool>,
     pub(crate) auto_update_enabled: bool,
     pub(crate) update_interval_minutes: u32,
     pub(crate) shutdown_grace_seconds: u32,
@@ -31,6 +33,7 @@ impl Default for DaemonSettings {
     fn default() -> Self {
         Self {
             remote_control_enabled: false,
+            feature_overrides: BTreeMap::new(),
             auto_update_enabled: true,
             update_interval_minutes: DEFAULT_UPDATE_INTERVAL_MINUTES,
             shutdown_grace_seconds: DEFAULT_SHUTDOWN_GRACE_SECONDS,
@@ -44,6 +47,8 @@ impl Default for DaemonSettings {
 struct StoredSettings {
     #[serde(default)]
     remote_control_enabled: bool,
+    #[serde(default)]
+    feature_overrides: BTreeMap<String, bool>,
     #[serde(default = "default_shutdown_grace_seconds")]
     shutdown_grace_seconds: u32,
     #[serde(default)]
@@ -56,6 +61,7 @@ impl Default for StoredSettings {
     fn default() -> Self {
         Self {
             remote_control_enabled: false,
+            feature_overrides: BTreeMap::new(),
             shutdown_grace_seconds: DEFAULT_SHUTDOWN_GRACE_SECONDS,
             updater: UpdaterSettings::default(),
             managed_codex_path: None,
@@ -129,6 +135,7 @@ impl DaemonSettings {
         validate_shutdown_grace(stored.shutdown_grace_seconds)?;
         let settings = Self {
             remote_control_enabled: stored.remote_control_enabled,
+            feature_overrides: stored.feature_overrides,
             auto_update_enabled: stored.updater.auto_update_enabled,
             update_interval_minutes: stored.updater.update_interval_minutes,
             shutdown_grace_seconds: stored.shutdown_grace_seconds,
@@ -208,6 +215,14 @@ impl DaemonSettings {
             }
         }
         let temporary_path = path.with_extension("tmp");
+        if self.feature_overrides.is_empty() {
+            settings.remove("featureOverrides");
+        } else {
+            settings.insert(
+                "featureOverrides".to_string(),
+                serde_json::to_value(&self.feature_overrides)?,
+            );
+        }
         let contents =
             serde_json::to_vec_pretty(&settings).context("failed to serialize settings")?;
         fs::write(&temporary_path, contents)
@@ -246,6 +261,38 @@ impl DaemonSettings {
             update_interval_minutes: self.update_interval_minutes,
         }
     }
+}
+
+pub(crate) async fn telemetry_tags(path: &Path) -> Result<[(&'static str, &'static str); 4]> {
+    let raw: Map<String, Value> = read_settings(path).await?;
+    // Validate the same snapshot used for presence checks, using the existing settings parser.
+    let settings: StoredSettings = serde_json::from_value(Value::Object(raw.clone()))?;
+    settings.updater.validate()?;
+    validate_shutdown_grace(settings.shutdown_grace_seconds)?;
+    let updater = raw.get("updater");
+    let presence = |configured| if configured { "configured" } else { "default" };
+    Ok([
+        (
+            "auto_update",
+            if settings.updater.auto_update_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        ),
+        (
+            "auto_update_setting",
+            presence(updater.is_some_and(|value| value.get("autoUpdateEnabled").is_some())),
+        ),
+        (
+            "update_interval_setting",
+            presence(updater.is_some_and(|value| value.get("updateIntervalMinutes").is_some())),
+        ),
+        (
+            "shutdown_grace_setting",
+            presence(raw.contains_key("shutdownGraceSeconds")),
+        ),
+    ])
 }
 
 async fn read_settings<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {

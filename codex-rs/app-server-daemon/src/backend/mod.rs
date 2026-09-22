@@ -2,6 +2,7 @@ mod pid;
 #[cfg(windows)]
 pub(crate) mod windows;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -25,19 +26,26 @@ pub(crate) struct BackendPaths {
     pub(crate) update_pid_file: PathBuf,
     pub(crate) remote_control_enabled: bool,
     pub(crate) reload_enabled: bool,
+    pub(crate) feature_overrides: BTreeMap<String, bool>,
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
-    PidBackend::new_with_reload(
+    let mut backend = PidBackend::new_with_reload(
         paths.codex_bin,
         paths.pid_file,
         paths.remote_control_enabled,
         paths.reload_enabled,
-    )
+    );
+    backend.feature_overrides = paths.feature_overrides;
+    backend
 }
 
 pub(crate) fn pid_update_loop_backend(paths: BackendPaths) -> PidBackend {
-    PidBackend::new_update_loop(paths.codex_bin, paths.update_pid_file)
+    PidBackend::new_update_loop(
+        paths.codex_bin,
+        paths.update_pid_file,
+        /*restore_release*/ None,
+    )
 }
 
 pub(crate) async fn running_launch_identity(pid_file: &Path) -> Result<Option<LaunchIdentity>> {

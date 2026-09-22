@@ -1399,6 +1399,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             session_start_source: None,
             thread_source: None,
             project_id: None,
+            daybreak_enabled: None,
             dynamic_tools: None,
             environments: Some(vec![TurnEnvironmentParams {
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),

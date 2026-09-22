@@ -255,9 +255,9 @@ impl ToolExecutor<ToolInvocation> for McpHandler {
                 .map(str::to_string),
         });
 
-        ToolSearchInfo::from_spec(
+        ToolSearchInfo::from_shared_spec(
             build_mcp_search_text(&self.tool_info),
-            self.spec(),
+            Arc::clone(&self.spec),
             source_info,
         )
     }
@@ -282,6 +282,15 @@ impl McpHandler {
                 self.tool_info.tool.name.as_ref(),
             )
             .await;
+        // Use the executed call's binding; a later catalog refresh must not change eligibility.
+        let result_metadata_capture_allowed = invocation
+            .session
+            .services
+            .analytics_events_client
+            .is_enabled()
+            && prepared_mcp_call
+                .as_ref()
+                .is_some_and(codex_mcp::PreparedMcpCall::is_host_owned_apps);
         let mcp_tool = prepared_mcp_call.as_ref().map(|call| {
             McpToolContext::from_prepared_call(
                 call,
@@ -295,7 +304,7 @@ impl McpHandler {
         });
         notify_tool_start(&invocation, mcp_tool.as_ref()).await;
 
-        let originating_item_id = invocation.originating_item_id().await;
+        let originating_call = invocation.originating_call().await;
         let ToolInvocation {
             session,
             step_context,
@@ -339,7 +348,7 @@ impl McpHandler {
             &step_context,
             &cancellation_token,
             call_id.clone(),
-            originating_item_id,
+            originating_call,
             &self.tool_info,
             prepared_mcp_call,
             self.hook_tool_name(),
@@ -353,7 +362,7 @@ impl McpHandler {
             tool_input: result.tool_input,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(turn.model_info()),
-            result_metadata_capture_allowed: true,
+            result_metadata_capture_allowed,
             truncation_policy,
         }))
     }
@@ -497,7 +506,10 @@ impl CoreToolRuntime for McpHandler {
                         load_data_url_for_prompt_uncached(&image_url, PromptImageMode::Original)
                             .ok()?;
                         captured_image_bytes = next_image_bytes;
-                        Some(UserInput::Image { image_url, detail })
+                        Some(UserInput::Image {
+                            image: codex_protocol::models::ImageReference::Inline { image_url },
+                            detail,
+                        })
                     }
                     _ => None,
                 }

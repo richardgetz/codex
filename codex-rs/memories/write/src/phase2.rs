@@ -135,7 +135,7 @@ pub async fn run(
     {
         tracing::error!("Phase 2 no changes");
         // We check only after sync of the file system.
-        job::succeed(
+        if job::succeed(
             context.as_ref(),
             &db,
             &claim,
@@ -143,7 +143,11 @@ pub async fn run(
             &raw_memories,
             "succeeded_no_workspace_changes",
         )
-        .await;
+        .await
+        {
+            drop(phase_two_e2e_timer);
+            context.record_storage_size(&root).await;
+        }
         return;
     }
 
@@ -178,8 +182,7 @@ pub async fn run(
         config.memories.version,
         agent,
         phase_two_e2e_timer,
-    )
-    .await;
+    );
 
     // 10. Emit dispatch metrics.
     let counters = Counters {
@@ -195,8 +198,11 @@ async fn sync_phase2_workspace_inputs(
 ) -> std::io::Result<()> {
     let raw_memory_count = raw_memories.len();
     sync_rollout_summaries_from_memories(root, raw_memories, raw_memory_count).await?;
-    if config.memories.version == MemoryVersion::V1 {
-        rebuild_raw_memories_file_from_memories(root, raw_memories, raw_memory_count).await?;
+    match config.memories.version {
+        MemoryVersion::V1 => {
+            rebuild_raw_memories_file_from_memories(root, raw_memories, raw_memory_count).await?
+        }
+        MemoryVersion::V2 => {}
     }
     prune_old_extension_resources(root).await;
     Ok(())
@@ -363,7 +369,7 @@ mod agent {
 
     /// Handle the agent while it is running.
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn handle(
+    pub(super) fn handle(
         context: Arc<MemoryStartupContext>,
         claim: Claim,
         new_watermark: i64,
@@ -373,88 +379,97 @@ mod agent {
         agent: SpawnedConsolidationAgent,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
-        let Some(db) = context.memory_store().await else {
-            return;
-        };
-
-        let _phase_two_e2e_timer = phase_two_e2e_timer;
-        let SpawnedConsolidationAgent { thread_id, thread } = agent;
-
-        // Loop the agent until we have the final status.
-        let final_status = loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
-
-        let agent_completed = matches!(final_status, AgentStatus::Completed(_));
-        if agent_completed
-            && let Some(token_usage) = thread
-                .token_usage_info()
-                .await
-                .map(|info| info.total_token_usage)
-        {
-            emit_token_usage_metrics(context.as_ref(), &token_usage);
-        }
-
-        if let Err(err) = context
-            .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
-            .await
-        {
-            warn!("failed to auto-close global memory consolidation agent {thread_id}: {err}");
-            // Keep the existing lease until it expires so another worker cannot race a
-            // consolidation agent whose shutdown has not completed.
-            return;
-        }
-
-        let artifacts_valid = if agent_completed {
-            match validate_consolidation_artifacts_for_version(&memory_root, version).await {
-                Ok(()) => true,
-                Err(err) => {
-                    tracing::error!("memory consolidation artifacts are invalid: {err}");
-                    job::failed(context.as_ref(), &db, &claim, "failed_invalid_artifacts").await;
-                    false
-                }
-            }
-        } else {
-            false
-        };
-
-        if agent_completed && artifacts_valid {
-            // Do not reset the workspace baseline if we lost the lock.
-            let still_owns_lock = match db
-                .heartbeat_global_phase2_job(&claim.token, crate::stage_two::JOB_LEASE_SECONDS)
-                .await
-                .inspect_err(|err| {
-                    tracing::error!(
-                        "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
-                    );
-                }) {
-                Ok(true) => true,
-                Ok(false) => {
-                    tracing::error!(
-                        "lost global memory consolidation ownership before resetting workspace baseline"
-                    );
-                    false
-                }
-                Err(_) => {
-                    job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership").await;
-                    false
-                }
+        tokio::spawn(async move {
+            let Some(db) = context.memory_store().await else {
+                return;
             };
-            if still_owns_lock {
-                if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
-                    tracing::error!("failed resetting memory workspace baseline: {err}");
-                    job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
-                } else if !job::succeed(
-                    context.as_ref(),
-                    &db,
-                    &claim,
-                    new_watermark,
-                    &selected_outputs,
-                    "succeeded",
-                )
+            let SpawnedConsolidationAgent { thread_id, thread } = agent;
+
+            // Loop the agent until we have the final status.
+            let final_status =
+                loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
+
+            let agent_completed = matches!(final_status, AgentStatus::Completed(_));
+            if agent_completed
+                && let Some(token_usage) = thread
+                    .token_usage_info()
+                    .await
+                    .map(|info| info.total_token_usage)
+            {
+                emit_token_usage_metrics(context.as_ref(), &token_usage);
+            }
+
+            if let Err(err) = context
+                .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
                 .await
-                {
-                    tracing::error!(
-                        "failed marking global memory consolidation job succeeded after resetting workspace baseline"
-                    );
+            {
+                warn!("failed to auto-close global memory consolidation agent {thread_id}: {err}");
+                // Keep the existing lease until it expires so another worker cannot race a
+                // consolidation agent whose shutdown has not completed.
+                return;
+            }
+
+            let artifacts_valid = if agent_completed {
+                match validate_consolidation_artifacts_for_version(&memory_root, version).await {
+                    Ok(()) => true,
+                    Err(err) => {
+                        tracing::error!("memory consolidation artifacts are invalid: {err}");
+                        job::failed(context.as_ref(), &db, &claim, "failed_invalid_artifacts")
+                            .await;
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            if agent_completed && artifacts_valid {
+                // Do not reset the workspace baseline if we lost the lock.
+                let still_owns_lock = match db
+                    .heartbeat_global_phase2_job(
+                        &claim.token,
+                        crate::stage_two::JOB_LEASE_SECONDS,
+                    )
+                    .await
+                    .inspect_err(|err| {
+                        tracing::error!(
+                            "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
+                        );
+                    }) {
+                    Ok(true) => true,
+                    Ok(false) => {
+                        tracing::error!(
+                            "lost global memory consolidation ownership before resetting workspace baseline"
+                        );
+                        false
+                    }
+                    Err(_) => {
+                        job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership")
+                            .await;
+                        false
+                    }
+                };
+                if still_owns_lock {
+                    if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
+                        tracing::error!("failed resetting memory workspace baseline: {err}");
+                        job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
+                    } else if !job::succeed(
+                        context.as_ref(),
+                        &db,
+                        &claim,
+                        new_watermark,
+                        &selected_outputs,
+                        "succeeded",
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "failed marking global memory consolidation job succeeded after resetting workspace baseline"
+                        );
+                    } else {
+                        drop(phase_two_e2e_timer);
+                        context.record_storage_size(&memory_root).await;
+                    }
                 }
             } else if !agent_completed {
                 if let Err(err) = remove_memory_symlinks(&memory_root).await {
@@ -462,9 +477,7 @@ mod agent {
                 }
                 job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
             }
-        } else if !agent_completed {
-            job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
-        }
+        });
     }
 
     async fn loop_agent(
@@ -503,7 +516,8 @@ mod agent {
                 _ = status_poll_interval.tick() => {
                 }
                 _ = heartbeat_interval.tick() => {
-                    match db.heartbeat_global_phase2_job(
+                    match db
+                        .heartbeat_global_phase2_job(
                             &token,
                             crate::stage_two::JOB_LEASE_SECONDS,
                         )

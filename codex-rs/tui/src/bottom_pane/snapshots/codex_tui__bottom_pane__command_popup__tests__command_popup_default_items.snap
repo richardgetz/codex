@@ -17,7 +17,7 @@ expression: commands
 /rename - rename the current thread
 /new - start a new chat during a conversation
 /archive - archive this session
-/delete - permanently delete this session and exit
+/delete - permanently delete this session
 /resume - resume a saved chat
 /fork - fork the current chat
 /app - continue this session in the Desktop app
@@ -28,17 +28,20 @@ expression: commands
 /eta - show stored task estimates for this session
 /agent - switch the active agent thread
 /agents-prune - close idle agents in this session
-/agents - view and switch between all active agent sessions
+/agents - open the agent command center
 /side - start a side conversation in an ephemeral fork
 /copy - copy the last response or part of it
 /export - export the conversation as markdown
 /raw - toggle raw scrollback mode for copy-friendly terminal selection
+/tui - choose the TUI mode for the next launch
 /diff - show git diff (including untracked files)
 /mention - mention a file
 /status - show current session configuration and token usage
 /spend - show daily estimated API spend and token trends
 /mic - control realtime voice, microphone, and speaker devices
 /voice - enable realtime voice, select voices, or tune client-side effects/profiles
+/daemon - Manage the local background server.
+/warnings - view retained warnings and diagnostic details
 /cd - change the current working directory
 /pwd - show the current working directory
 /pause - pause this Lead/Worker session after in-flight work drains

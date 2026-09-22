@@ -1,5 +1,7 @@
 use crate::ApplicationRequirementsToml;
 use codex_features::FeatureToml;
+use codex_model_provider_info::ModelProviderInfo;
+pub use codex_model_provider_info::ResidencyRequirement;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
@@ -11,10 +13,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Error as _;
-use serde::de::value::Error as ValueDeserializerError;
-use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::path::PathBuf;
@@ -167,6 +168,8 @@ pub struct ConfigRequirements {
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
+    pub model_provider: Option<Sourced<String>>,
+    pub model_providers: Option<Sourced<HashMap<String, ModelProviderInfo>>>,
     pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub allow_login_shell: Option<Sourced<bool>>,
     pub allow_browser: Option<Sourced<bool>>,
@@ -176,7 +179,6 @@ pub struct ConfigRequirements {
     pub auto_review_required_models: Option<Sourced<BTreeSet<String>>>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
-    pub windows_sandbox_private_desktop: Option<Sourced<bool>>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
@@ -210,6 +212,8 @@ impl Default for ConfigRequirements {
             sqlite_home: None,
             log_dir: None,
             model_catalog_json: None,
+            model_provider: None,
+            model_providers: None,
             check_for_update_on_startup: None,
             allow_login_shell: None,
             allow_browser: None,
@@ -231,7 +235,6 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
             ),
-            windows_sandbox_private_desktop: None,
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
                 /*source*/ None,
@@ -432,6 +435,7 @@ pub struct NetworkRequirementsToml {
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+    /// MXC requires true when managed networking is enabled; an explicit false is rejected.
     pub allow_local_binding: Option<bool>,
     /// Requirements-only header injections. These annotate matching requests
     /// without changing whether non-matching requests are allowed.
@@ -707,25 +711,49 @@ impl FilesystemDenyReadPattern {
     }
 
     pub fn from_input(input: &str) -> Result<Self, String> {
+        codex_utils_path_uri::PathUri::validate_config_path_text(
+            input,
+            crate::path_context::convention(),
+        )
+        .map_err(|error| error.to_string())?;
         if !input.chars().any(is_glob_metacharacter) {
             let path = deserialize_absolute_path(input)?;
-            return Ok(Self(path.to_string_lossy().into_owned()));
+            validate_literal_denial_path(&path)?;
+            return Ok(Self(path));
         }
 
         let (directory_prefix, suffix) = split_glob_pattern(input);
+        if crate::path_context::convention() == codex_utils_path_uri::PathConvention::Windows
+            && matches!(input.as_bytes(), [b'/' | b'\\', b'/' | b'\\', ..])
+            && !matches!(
+                directory_prefix.as_bytes(),
+                [b'/' | b'\\', b'/' | b'\\', ..]
+            )
+        {
+            return Err(
+                "filesystem denial glob requires a literal UNC server and share".to_string(),
+            );
+        }
         let normalized_prefix = if directory_prefix.is_empty() {
             deserialize_absolute_path(".")?
         } else {
             deserialize_absolute_path(directory_prefix)?
         };
-        let normalized_prefix = normalized_prefix.to_string_lossy();
+        // The prefix is literal even when supplied home/base facts contain
+        // glob syntax. Reject it before appending the user's pattern suffix.
+        validate_literal_denial_path(&normalized_prefix)?;
         let normalized = if suffix.is_empty() {
-            normalized_prefix.into_owned()
+            normalized_prefix
         } else if normalized_prefix == "/" {
             format!("/{suffix}")
         } else {
             format!("{normalized_prefix}/{suffix}")
         };
+        codex_utils_path_uri::PathUri::validate_config_path_text(
+            &normalized,
+            crate::path_context::convention(),
+        )
+        .map_err(|error| error.to_string())?;
         Ok(Self(normalized))
     }
 }
@@ -746,9 +774,16 @@ impl<'de> Deserialize<'de> for FilesystemDenyReadPattern {
     }
 }
 
-fn deserialize_absolute_path(input: &str) -> Result<AbsolutePathBuf, String> {
-    AbsolutePathBuf::deserialize(StrDeserializer::<ValueDeserializerError>::new(input))
-        .map_err(|err| err.to_string())
+fn validate_literal_denial_path(path: &str) -> Result<(), String> {
+    let convention = crate::path_context::convention();
+    codex_utils_path_uri::LegacyAppPathString::from_string(path)
+        .to_path_uri(convention)
+        .and_then(|path| path.validate_glob_directory(convention))
+        .map_err(|error| error.to_string())
+}
+
+fn deserialize_absolute_path(input: &str) -> Result<String, String> {
+    crate::path_context::resolve(input)
 }
 
 fn split_glob_pattern(input: &str) -> (&str, &str) {
@@ -764,7 +799,8 @@ fn split_glob_pattern(input: &str) -> (&str, &str) {
     match separator_index {
         Some(0) => ("/", &input[1..]),
         Some(index)
-            if cfg!(windows)
+            if crate::path_context::convention()
+                == codex_utils_path_uri::PathConvention::Windows
                 && index == 2
                 && input.as_bytes().get(1) == Some(&b':')
                 && input.as_bytes().get(2).is_some() =>
@@ -777,7 +813,7 @@ fn split_glob_pattern(input: &str) -> (&str, &str) {
 }
 
 fn is_path_separator(ch: char) -> bool {
-    if cfg!(windows) {
+    if crate::path_context::convention() == codex_utils_path_uri::PathConvention::Windows {
         ch == '/' || ch == '\\'
     } else {
         ch == '/'
@@ -832,13 +868,19 @@ impl fmt::Display for WebSearchModeRequirement {
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct WindowsRequirementsToml {
-    pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxModeToml>>,
-    pub sandbox_private_desktop: Option<bool>,
+    pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxImplementationToml>>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowsSandboxImplementationToml {
+    Elevated,
+    Unelevated,
 }
 
 impl WindowsRequirementsToml {
     pub fn is_empty(&self) -> bool {
-        self.allowed_sandbox_implementations.is_none() && self.sandbox_private_desktop.is_none()
+        self.allowed_sandbox_implementations.is_none()
     }
 }
 
@@ -991,6 +1033,10 @@ pub struct ConfigRequirementsToml {
     pub sqlite_home: Option<AbsolutePathBuf>,
     pub log_dir: Option<AbsolutePathBuf>,
     pub model_catalog_json: Option<AbsolutePathBuf>,
+    /// Exact provider selection, overriding local and session configuration.
+    pub model_provider: Option<String>,
+    /// Complete provider definitions; each entry replaces the configured provider.
+    pub model_providers: Option<HashMap<String, ModelProviderInfo>>,
     pub check_for_update_on_startup: Option<bool>,
     pub allow_login_shell: Option<bool>,
     pub allow_browser: Option<bool>,
@@ -1098,6 +1144,8 @@ pub struct ConfigRequirementsWithSources {
     pub sqlite_home: Option<Sourced<AbsolutePathBuf>>,
     pub log_dir: Option<Sourced<AbsolutePathBuf>>,
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
+    pub model_provider: Option<Sourced<String>>,
+    pub model_providers: Option<Sourced<HashMap<String, ModelProviderInfo>>>,
     pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub allow_login_shell: Option<Sourced<bool>>,
     pub allow_browser: Option<Sourced<bool>>,
@@ -1159,6 +1207,8 @@ impl ConfigRequirementsWithSources {
             sqlite_home: _,
             log_dir: _,
             model_catalog_json: _,
+            model_provider: _,
+            model_providers: _,
             check_for_update_on_startup: _,
             allow_login_shell: _,
             allow_browser: _,
@@ -1215,6 +1265,8 @@ impl ConfigRequirementsWithSources {
                 sqlite_home,
                 log_dir,
                 model_catalog_json,
+                model_provider,
+                model_providers,
                 check_for_update_on_startup,
                 allow_login_shell,
                 allow_browser,
@@ -1299,6 +1351,8 @@ impl ConfigRequirementsWithSources {
             sqlite_home,
             log_dir,
             model_catalog_json,
+            model_provider,
+            model_providers,
             check_for_update_on_startup,
             allow_login_shell,
             allow_browser,
@@ -1341,6 +1395,8 @@ impl ConfigRequirementsWithSources {
             sqlite_home: sqlite_home.map(|sourced| sourced.value),
             log_dir: log_dir.map(|sourced| sourced.value),
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
+            model_provider: model_provider.map(|sourced| sourced.value),
+            model_providers: model_providers.map(|sourced| sourced.value),
             check_for_update_on_startup: check_for_update_on_startup.map(|sourced| sourced.value),
             allow_login_shell: allow_login_shell.map(|sourced| sourced.value),
             allow_browser: allow_browser.map(|sourced| sourced.value),
@@ -1421,12 +1477,6 @@ impl From<SandboxMode> for SandboxModeRequirement {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ResidencyRequirement {
-    Us,
-}
-
 impl ConfigRequirementsToml {
     pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
         let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
@@ -1452,6 +1502,8 @@ impl ConfigRequirementsToml {
             && self.sqlite_home.is_none()
             && self.log_dir.is_none()
             && self.model_catalog_json.is_none()
+            && self.model_provider.is_none()
+            && self.model_providers.as_ref().is_none_or(HashMap::is_empty)
             && self.check_for_update_on_startup.is_none()
             && self.allow_login_shell.is_none()
             && self.allow_browser.is_none()
@@ -1550,6 +1602,10 @@ impl ConfigRequirementsToml {
         apply_exact!(sqlite_home);
         apply_exact!(log_dir);
         apply_exact!(model_catalog_json);
+        apply_exact!(model_provider);
+        if let Some(providers) = &self.model_providers {
+            config.model_providers.extend(providers.clone());
+        }
         apply_exact!(check_for_update_on_startup);
         apply_exact!(allow_login_shell);
         apply_exact!(allow_browser);
@@ -1565,21 +1621,23 @@ impl ConfigRequirementsToml {
         if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
             config.feedback.get_or_insert_default().enabled = Some(enabled);
         }
-        if let Some(sandbox_private_desktop) = self
-            .windows
-            .as_ref()
-            .and_then(|windows| windows.sandbox_private_desktop)
-        {
-            config
-                .windows
-                .get_or_insert_default()
-                .sandbox_private_desktop = Some(sandbox_private_desktop);
-        }
     }
 
     /// Returns the exact managed field affected by editing `segments`.
     pub fn exact_requirement_for_config_path(&self, segments: &[String]) -> Option<&'static str> {
-        let managed_fields: [(bool, &[&str], &'static str); 10] = [
+        if self.model_providers.as_ref().is_some_and(|providers| {
+            providers
+                .keys()
+                .any(|id| config_paths_overlap(segments, &["model_providers", id]))
+        }) {
+            return Some("model_providers");
+        }
+        let managed_fields: [(bool, &[&str], &'static str); 11] = [
+            (
+                self.model_provider.is_some(),
+                &["model_provider"],
+                "model_provider",
+            ),
             (self.sqlite_home.is_some(), &["sqlite_home"], "sqlite_home"),
             (self.log_dir.is_some(), &["log_dir"], "log_dir"),
             (
@@ -1609,14 +1667,6 @@ impl ConfigRequirementsToml {
                     .is_some(),
                 &["feedback", "enabled"],
                 "feedback.enabled",
-            ),
-            (
-                self.windows
-                    .as_ref()
-                    .and_then(|windows| windows.sandbox_private_desktop)
-                    .is_some(),
-                &["windows", "sandbox_private_desktop"],
-                "windows.sandbox_private_desktop",
             ),
             (
                 self.cli_auth_credentials_store.is_some(),
@@ -1680,6 +1730,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             sqlite_home,
             log_dir,
             model_catalog_json,
+            model_provider,
+            model_providers,
             check_for_update_on_startup,
             allow_login_shell,
             allow_browser,
@@ -1858,60 +1910,62 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
-        let (windows_sandbox_mode, windows_sandbox_private_desktop) = match windows {
+        let windows_sandbox_mode = match windows {
             Some(Sourced {
                 value:
                     WindowsRequirementsToml {
-                        allowed_sandbox_implementations,
-                        sandbox_private_desktop,
+                        allowed_sandbox_implementations: Some(implementations),
                     },
                 source: requirement_source,
             }) => {
-                let sandbox_private_desktop = sandbox_private_desktop
-                    .map(|value| Sourced::new(value, requirement_source.clone()));
-                let sandbox_mode = match allowed_sandbox_implementations {
-                    Some(implementations) => {
-                        if implementations.is_empty() {
-                            return Err(ConstraintError::empty_field(
-                                "windows.allowed_sandbox_implementations",
-                            ));
-                        }
-                        // Prefer elevated when both Windows sandbox implementations are allowed.
-                        let initial_value =
-                            if implementations.contains(&WindowsSandboxModeToml::Elevated) {
-                                WindowsSandboxModeToml::Elevated
-                            } else {
-                                WindowsSandboxModeToml::Unelevated
-                            };
+                if implementations.is_empty() {
+                    return Err(ConstraintError::empty_field(
+                        "windows.allowed_sandbox_implementations",
+                    ));
+                }
+                // Prefer elevated when both Windows sandbox implementations are allowed.
+                let initial_value =
+                    if implementations.contains(&WindowsSandboxImplementationToml::Elevated) {
+                        WindowsSandboxModeToml::Elevated
+                    } else {
+                        WindowsSandboxModeToml::Unelevated
+                    };
 
-                        let requirement_source_for_error = requirement_source.clone();
-                        let constrained = Constrained::new(
-                            Some(initial_value),
-                            move |candidate| match candidate {
-                                Some(candidate) if implementations.contains(candidate) => Ok(()),
-                                _ => Err(ConstraintError::InvalidValue {
-                                    field_name: "windows.sandbox",
-                                    candidate: format!("{candidate:?}"),
-                                    allowed: format!("{implementations:?}"),
-                                    requirement_source: requirement_source_for_error.clone(),
-                                }),
-                            },
-                        )?;
-                        ConstrainedWithSource::new(constrained, Some(requirement_source))
-                    }
-                    None => ConstrainedWithSource::new(
-                        Constrained::allow_any(/*initial_value*/ None),
-                        /*source*/ None,
-                    ),
-                };
-                (sandbox_mode, sandbox_private_desktop)
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained =
+                    Constrained::new(Some(initial_value), move |candidate| match candidate {
+                        Some(WindowsSandboxModeToml::Mxc) => Ok(()),
+                        Some(WindowsSandboxModeToml::Elevated)
+                            if implementations
+                                .contains(&WindowsSandboxImplementationToml::Elevated) =>
+                        {
+                            Ok(())
+                        }
+                        Some(WindowsSandboxModeToml::Unelevated)
+                            if implementations
+                                .contains(&WindowsSandboxImplementationToml::Unelevated) =>
+                        {
+                            Ok(())
+                        }
+                        _ => Err(ConstraintError::InvalidValue {
+                            field_name: "windows.sandbox",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{implementations:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        }),
+                    })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => (
-                ConstrainedWithSource::new(
-                    Constrained::allow_any(/*initial_value*/ None),
-                    /*source*/ None,
-                ),
-                None,
+            Some(Sourced {
+                value:
+                    WindowsRequirementsToml {
+                        allowed_sandbox_implementations: None,
+                    },
+                ..
+            })
+            | None => ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
             ),
         };
         let exec_policy = match rules {
@@ -2045,6 +2099,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             sqlite_home,
             log_dir,
             model_catalog_json,
+            model_provider,
+            model_providers,
             check_for_update_on_startup,
             allow_login_shell,
             allow_browser,
@@ -2054,7 +2110,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             auto_review_required_models,
             permission_profile,
             windows_sandbox_mode,
-            windows_sandbox_private_desktop,
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,
@@ -2148,10 +2203,6 @@ mod tests {
             feedback: Some(FeedbackConfigToml {
                 enabled: Some(false),
             }),
-            windows: Some(WindowsRequirementsToml {
-                sandbox_private_desktop: Some(false),
-                ..Default::default()
-            }),
             ..Default::default()
         };
         let cases: &[(&[&str], Option<&str>)] = &[
@@ -2170,16 +2221,8 @@ mod tests {
             (&["allow_login_shell"], Some("allow_login_shell")),
             (&["allow_browser"], Some("allow_browser")),
             (&["feedback", "enabled"], Some("feedback.enabled")),
-            (
-                &["windows", "sandbox_private_desktop"],
-                Some("windows.sandbox_private_desktop"),
-            ),
             (&[], Some("sqlite_home")),
             (&["feedback"], Some("feedback.enabled")),
-            (
-                &["windows", "sandbox_private_desktop", "value"],
-                Some("windows.sandbox_private_desktop"),
-            ),
             (&["feedback", "other"], None),
             (&["windows", "sandbox"], None),
         ];
@@ -2222,6 +2265,8 @@ mod tests {
             sqlite_home,
             log_dir,
             model_catalog_json,
+            model_provider,
+            model_providers,
             check_for_update_on_startup,
             allow_login_shell,
             allow_browser,
@@ -2269,6 +2314,10 @@ mod tests {
             sqlite_home: sqlite_home.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             log_dir: log_dir.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             model_catalog_json: model_catalog_json
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            model_provider: model_provider
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            model_providers: model_providers
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             check_for_update_on_startup: check_for_update_on_startup
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2773,8 +2822,7 @@ mod tests {
             enabled: Some(false),
         };
         let windows = WindowsRequirementsToml {
-            allowed_sandbox_implementations: None,
-            sandbox_private_desktop: Some(true),
+            allowed_sandbox_implementations: Some(vec![WindowsSandboxImplementationToml::Elevated]),
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
@@ -2791,6 +2839,8 @@ mod tests {
             sqlite_home: Some(sqlite_home.clone()),
             log_dir: Some(log_dir.clone()),
             model_catalog_json: Some(model_catalog_json.clone()),
+            model_provider: Some("gateway".to_string()),
+            model_providers: Some(HashMap::new()),
             check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
             allow_browser: Some(false),
@@ -2851,6 +2901,8 @@ mod tests {
                 sqlite_home: Some(Sourced::new(sqlite_home, source.clone())),
                 log_dir: Some(Sourced::new(log_dir, source.clone())),
                 model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone())),
+                model_provider: Some(Sourced::new("gateway".to_string(), source.clone())),
+                model_providers: Some(Sourced::new(HashMap::new(), source.clone())),
                 check_for_update_on_startup: Some(Sourced::new(
                     /*value*/ false,
                     source.clone(),
@@ -3725,6 +3777,12 @@ allowed_approvals_reviewers = ["user"]
                 .windows_sandbox_mode
                 .can_set(&Some(WindowsSandboxModeToml::Unelevated))
                 .is_err()
+        );
+        assert!(
+            requirements
+                .windows_sandbox_mode
+                .can_set(&Some(WindowsSandboxModeToml::Mxc))
+                .is_ok()
         );
         assert!(requirements.windows_sandbox_mode.can_set(&None).is_err());
 

@@ -15,7 +15,10 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { ThreadTeamSettings } from "./ThreadTeamSettings";
 import type { ThreadUsagePolicy } from "./ThreadUsagePolicy";
 
-export type ThreadSettings = {cwd: AbsolutePathBuf, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, activePermissionProfile: ActivePermissionProfile | null, model: string, modelProvider: string, serviceTier: string | null, effort: ReasoningEffort | null, summary: ReasoningSummary | null, collaborationMode: CollaborationMode, personality: Personality | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
+export type ThreadSettings = {/**
+ * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
+ */
+disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, activePermissionProfile: ActivePermissionProfile | null, model: string, modelProvider: string, serviceTier: string | null, effort: ReasoningEffort | null, summary: ReasoningSummary | null, collaborationMode: CollaborationMode, personality: Personality | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
  * Current per-thread usage and automatic-resume policy.
  */
 usagePolicy: ThreadUsagePolicy, /**

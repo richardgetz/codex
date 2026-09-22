@@ -29,6 +29,7 @@ use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermiss
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference as CoreImageReference;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
@@ -271,6 +272,7 @@ fn thread_resume_params_accept_turns_page_bootstrap() {
 #[test]
 fn thread_resume_response_round_trips_initial_turns_page() {
     let response = ThreadResumeResponse {
+        disabled_plugin_ids: Vec::new(),
         thread: Thread {
             originator: Some("future_client".to_string()),
             environments: Some(vec![ThreadEnvironment {
@@ -330,6 +332,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
         user_preferences_memory_policy: Default::default(),
         usage_policy: ThreadUsagePolicy::default(),
         team: None,
+        collaboration_mode: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: Some(TurnsPage {
             data: Vec::new(),
@@ -2261,6 +2264,9 @@ fn config_approvals_reviewer_is_marked_experimental() {
 fn config_requirements_granular_allowed_approval_policy_is_marked_experimental() {
     let reason =
         crate::experimental_api::ExperimentalApi::experimental_reason(&ConfigRequirements {
+            model_provider: None,
+            model_providers: None,
+            allowed_login_methods: None,
             application: None,
             cli_auth_credentials_store: None,
             chatgpt_base_url: None,
@@ -2297,7 +2303,6 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             check_for_update_on_startup: None,
             allow_login_shell: None,
             feedback: None,
-            windows_sandbox_private_desktop: None,
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));
@@ -2460,6 +2465,41 @@ fn mcp_server_elicitation_request_from_core_url_request() {
             elicitation_id: "elicitation-123".to_string(),
         }
     );
+}
+
+#[test]
+fn mcp_server_user_verification_metadata_round_trips_from_core() {
+    for meta in [
+        None,
+        Some(json!({"example/display": {"label": "Operation"}})),
+    ] {
+        let mut wire = json!({
+            "mode": "openai/userVerification",
+            "title": "Approve",
+            "description": "Review operation",
+            "challenge": "AQID",
+        });
+        if let Some(meta) = &meta {
+            wire["_meta"] = meta.clone();
+        }
+        let core: CoreElicitationRequest = serde_json::from_value(wire.clone()).unwrap();
+        let request = McpServerElicitationRequest::try_from(core).unwrap();
+        assert_eq!(
+            request,
+            McpServerElicitationRequest::UserVerification {
+                meta: meta.clone(),
+                title: "Approve".into(),
+                description: "Review operation".into(),
+                challenge: "AQID".into(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_value::<McpServerElicitationRequest>(wire.clone()).unwrap(),
+            request
+        );
+        wire["_meta"] = json!(meta);
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+    }
 }
 
 #[test]
@@ -2723,6 +2763,7 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
 fn mcp_server_status_serializes_absent_server_info_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
+            server_capabilities: None,
             tools_error: None,
             name: "not-ready".to_string(),
             runtime_status: None,
@@ -2744,6 +2785,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
                 "runtimeStatus": null,
                 "pluginId": null,
                 "serverInfo": null,
+                "serverCapabilities": null,
                 "tools": {},
                 "toolsError": null,
                 "resources": [],
@@ -2770,6 +2812,7 @@ fn mcp_server_status_accepts_older_inventory_without_runtime_status() {
     assert_eq!(
         status,
         McpServerStatus {
+            server_capabilities: None,
             tools_error: None,
             name: "older-server".to_string(),
             runtime_status: None,
@@ -2842,6 +2885,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
 fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
+            server_capabilities: None,
             tools_error: None,
             name: "initialized".to_string(),
             runtime_status: None,
@@ -2869,6 +2913,7 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
                 "name": "initialized",
                 "runtimeStatus": null,
                 "pluginId": "lookup@test",
+                "serverCapabilities": null,
                 "serverInfo": {
                     "name": "lookup-server",
                     "title": null,
@@ -3171,7 +3216,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 text_elements: Vec::new(),
             },
             CoreUserInput::Image {
-                image_url: "https://example.com/image.png".to_string(),
+                image: CoreImageReference::Inline {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
                 detail: Some(ImageDetail::Original),
             },
             CoreUserInput::LocalImage {
@@ -3206,7 +3253,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                     text_elements: Vec::new(),
                 },
                 UserInput::Image {
-                    url: "https://example.com/image.png".to_string(),
+                    image: ImageReference::Inline {
+                        url: "https://example.com/image.png".to_string(),
+                    },
                     detail: Some(ImageDetail::Original),
                 },
                 UserInput::LocalImage {
@@ -3346,6 +3395,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let command_item = TurnItem::CommandExecution(CommandExecutionItem {
+        model_context: None,
         id: "exec-1".to_string(),
         plugin_id: Some("sample@openai-curated".to_string()),
         script_path: Some("scripts/run.py".to_string()),
@@ -3378,6 +3428,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItem::from(command_item),
         ThreadItem::CommandExecution {
+            model_context: None,
             id: "exec-1".to_string(),
             plugin_id: Some("sample@openai-curated".to_string()),
             script_path: Some("scripts/run.py".to_string()),
@@ -3590,6 +3641,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         arguments: json!({"arg": "value"}),
         connector_id: Some("calendar".to_string()),
         mcp_app_resource_uri: Some("app://connector".to_string()),
+        mcp_app_ui: None,
         link_id: Some("link_calendar".to_string()),
         app_name: Some("Calendar".to_string()),
         action_name: Some("create_event".to_string()),
@@ -3617,6 +3669,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 action_name: Some("create_event".to_string()),
             }),
             mcp_app_resource_uri: Some("app://connector".to_string()),
+            mcp_app_ui: None,
             plugin_id: Some("sample@test".to_string()),
             read_only_hint: Some(true),
             result: None,
@@ -3632,6 +3685,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         arguments: JsonValue::Null,
         connector_id: None,
         mcp_app_resource_uri: None,
+        mcp_app_ui: None,
         link_id: None,
         app_name: None,
         action_name: None,
@@ -3658,6 +3712,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             arguments: JsonValue::Null,
             app_context: None,
             mcp_app_resource_uri: None,
+            mcp_app_ui: None,
             plugin_id: None,
             read_only_hint: Some(false),
             result: Some(Box::new(McpToolCallResult {
@@ -3687,6 +3742,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
             action_name: Some("create_event".to_string()),
         }),
         mcp_app_resource_uri: Some("app://connector".to_string()),
+        mcp_app_ui: None,
         plugin_id: None,
         read_only_hint: Some(false),
         result: None,
@@ -3711,6 +3767,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
                 "actionName": "create_event",
             },
             "mcpAppResourceUri": "app://connector",
+            "mcpAppUi": null,
             "pluginId": null,
             "readOnlyHint": false,
             "result": null,
@@ -3741,16 +3798,84 @@ fn mcp_tool_call_app_context_serializes_missing_mixed_version_fields_as_null() {
     );
 }
 
+/// Keeps the existing URL form stable while exposing file-backed images as `fileId`.
+#[test]
+fn user_input_image_references_round_trip_with_stable_wire_shapes() {
+    let cases = [
+        (
+            UserInput::Image {
+                image: ImageReference::Inline {
+                    url: "data:image/png;base64,AAA".to_string(),
+                },
+                detail: Some(ImageDetail::High),
+            },
+            json!({
+                "type": "image",
+                "url": "data:image/png;base64,AAA",
+                "detail": "high",
+            }),
+        ),
+        (
+            UserInput::Image {
+                image: ImageReference::File {
+                    file_id: "file_123".to_string(),
+                },
+                detail: Some(ImageDetail::Original),
+            },
+            json!({
+                "type": "image",
+                "fileId": "file_123",
+                "detail": "original",
+            }),
+        ),
+    ];
+
+    for (input, wire_value) in cases {
+        assert_eq!(
+            serde_json::to_value(&input).expect("user input should serialize"),
+            wire_value,
+        );
+        assert_eq!(
+            serde_json::from_value::<UserInput>(wire_value).expect("user input should deserialize"),
+            input,
+        );
+    }
+}
+
+/// Preserves durable file identity in both directions at the Core boundary.
+#[test]
+fn file_image_user_input_converts_both_directions() {
+    let app_server_input = UserInput::Image {
+        image: ImageReference::File {
+            file_id: "file_123".to_string(),
+        },
+        detail: Some(ImageDetail::High),
+    };
+    let core_input = CoreUserInput::Image {
+        image: CoreImageReference::File {
+            file_id: "file_123".to_string(),
+        },
+        detail: Some(ImageDetail::High),
+    };
+
+    assert_eq!(app_server_input.clone().into_core(), core_input);
+    assert_eq!(UserInput::from(core_input), app_server_input);
+}
+
 #[test]
 fn user_input_into_core_preserves_media_fields() {
     assert_eq!(
         UserInput::Image {
-            url: "https://example.com/image.png".to_string(),
+            image: ImageReference::Inline {
+                url: "https://example.com/image.png".to_string(),
+            },
             detail: Some(ImageDetail::Original),
         }
         .into_core(),
         CoreUserInput::Image {
-            image_url: "https://example.com/image.png".to_string(),
+            image: CoreImageReference::Inline {
+                image_url: "https://example.com/image.png".to_string(),
+            },
             detail: Some(ImageDetail::Original),
         }
     );
@@ -4724,6 +4849,7 @@ fn codex_error_info_serializes_http_status_code_in_camel_case() {
 fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
         (CoreCodexErrorInfo::CyberPolicy, json!("cyberPolicy")),
+        (CoreCodexErrorInfo::BioPolicy, json!("other")),
         (
             CoreCodexErrorInfo::RateLimitExceeded,
             json!("rateLimitExceeded"),
@@ -5076,6 +5202,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     );
 
     let without_override = TurnStartParams {
+        disabled_plugin_ids: None,
         thread_id: "thread_123".to_string(),
         client_user_message_id: None,
         input: vec![],

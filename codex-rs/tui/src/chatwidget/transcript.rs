@@ -56,6 +56,9 @@ pub(super) struct TranscriptState {
     pub(super) realtime_handoff_output_suppressed: bool,
     /// Bounded completed GPT-Live transcript entries available through `/voice history`.
     pub(super) realtime_history: VecDeque<RealtimeTranscriptHistoryEntry>,
+    /// Shared retained rows for concurrently running dynamic tools, removed on completion.
+    pub(super) dynamic_calls:
+        std::collections::HashMap<String, crate::history_cell::DynamicToolCallCell>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
     /// One bounded entry shared by layout and paint across unchanged active-cell frames.

@@ -1,33 +1,35 @@
 ---
 source: core/tests/suite/model_visible_layout.rs
-assertion_line: 495
 expression: "format_labeled_requests_snapshot(\"First post-resume turn where resumed config model differs from rollout and personality changes.\",\n&[(\"Last Request Before Resume\", &initial_request),\n(\"First Request After Resume\", &resumed_request),])"
 ---
 Scenario: First post-resume turn where resumed config model differs from rollout and personality changes.
 
-## Last Request Before Resume
-00:message/developer[6]:
-    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
-    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
-    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
-    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
-    [05] <SKILLS_INSTRUCTIONS>
-    [06] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:seed resume history
+## Window 1
+-- request 1 (turn; Last Request Before Resume) --
+00:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    seed resume history
 
-## First Request After Resume
-00:message/developer[6]:
-    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
-    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
-    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
-    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
-    [05] <SKILLS_INSTRUCTIONS>
-    [06] <PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:seed resume history
-03:message/assistant:recorded before resume
-04:message/developer:<model_switch>\nThe user was previously using a different model. Please continue the conversatio...
-05:message/developer:<PERMISSIONS_INSTRUCTIONS>
-06:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-07:message/user:resume and change personality
+## Window 2 (after request 1: settings changed (model))
+-- request 2 (turn; First Request After Resume) --
+00:message/developer[2]:
+    [01] <SKILLS_INSTRUCTIONS>
+    [02] <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    seed resume history
+03:message/assistant:
+    recorded before resume
+04:message/developer:
+    <MODEL_SWITCH>
+05:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+06:message/user:
+    <ENVIRONMENT_CONTEXT>
+07:message/user:
+    resume and change personality

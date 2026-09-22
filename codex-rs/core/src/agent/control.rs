@@ -2,11 +2,12 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::agent::types::AgentMetadata;
+use crate::agent::types::LiveAgent;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::CodexThread;
@@ -17,7 +18,6 @@ use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
-use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
@@ -28,6 +28,7 @@ use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::turn_timing::now_unix_timestamp_ms;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
+use codex_extension_api::ThreadInstructionsProvider;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
@@ -61,12 +62,12 @@ use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
@@ -77,7 +78,6 @@ use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
 
-pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
@@ -89,11 +89,18 @@ use crate::agent::eta_reminders::EtaReminderController;
 mod activity;
 mod execution;
 mod handoff;
+mod budget;
+mod completion;
+mod delivery;
+mod inspection;
+mod interrupt;
 mod legacy;
 mod residency;
+mod sender_context;
 mod service_tier;
 mod spawn;
 mod usage_policy;
+mod target;
 mod user_authorization;
 mod worker_handoff;
 mod worker_limit;
@@ -101,52 +108,14 @@ mod worker_limit;
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SpawnAgentForkMode {
-    FullHistory,
-    LastNTurns(usize),
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SpawnAgentOptions {
-    pub(crate) fork_parent_spawn_call_id: Option<String>,
-    pub(crate) fork_mode: Option<SpawnAgentForkMode>,
-    pub(crate) initial_collaboration_mode: Option<CollaborationMode>,
-    pub(crate) parent_thread_id: Option<ThreadId>,
-    pub(crate) parent_turn_id: Option<String>,
-    pub(crate) root_turn_id: Option<String>,
-    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
-    pub(crate) multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
-    pub(crate) cyber_access_program: Option<CyberAccessProgram>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LiveAgent {
-    pub(crate) thread_id: ThreadId,
-    pub(crate) metadata: AgentMetadata,
-    pub(crate) status: AgentStatus,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct ListedAgent {
-    pub(crate) agent_name: String,
-    pub(crate) agent_status: AgentStatus,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PruneIdleAgentsReport {
-    pub(crate) closed: Vec<ThreadId>,
-    pub(crate) failed: Vec<(ThreadId, String)>,
-}
-
 /// Control-plane handle for multi-agent operations.
-/// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
+/// `LocalAgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
-/// An `AgentControl` instance is intended to be created at most once per root thread/session
-/// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
+/// An `LocalAgentControl` instance is intended to be created at most once per root thread/session
+/// tree. That same `LocalAgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
 #[derive(Clone)]
-pub(crate) struct AgentControl {
+pub(crate) struct LocalAgentControl {
     /// session_id is equal to the root thread's ID.
     session_id: SessionId,
     /// Weak handle back to the global thread registry/state.
@@ -163,6 +132,8 @@ pub(crate) struct AgentControl {
     rollout_budget: Arc<RolloutBudget>,
     /// The user-selected root routing tier, shared by the entire agent tree.
     root_service_tier: Arc<ArcSwapOption<String>>,
+    /// Retains the root's opt-in instruction provider even when the root is unloaded.
+    shared_thread_instructions_provider: Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
     /// The complete root usage policy, shared by the entire agent tree.
     root_usage_policy: Arc<ArcSwap<ThreadUsagePolicy>>,
     /// Serializes root usage-toggle commits with descendant synchronization.
@@ -215,7 +186,7 @@ pub(crate) struct AgentControl {
     eta_reminders: Arc<EtaReminderController>,
 }
 
-impl Default for AgentControl {
+impl Default for LocalAgentControl {
     fn default() -> Self {
         Self::new(
             Weak::default(),
@@ -225,8 +196,8 @@ impl Default for AgentControl {
     }
 }
 
-impl AgentControl {
-    /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
+impl LocalAgentControl {
+    /// Construct a new `LocalAgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(
         manager: Weak<ThreadManagerState>,
         thread_id_generator: ThreadIdGenerator,
@@ -242,6 +213,7 @@ impl AgentControl {
             team_worker_limiter: Arc::default(),
             rollout_budget: Arc::default(),
             root_service_tier: Arc::new(ArcSwapOption::from(None)),
+            shared_thread_instructions_provider: Arc::default(),
             root_usage_policy: Arc::new(ArcSwap::from_pointee(ThreadUsagePolicy::default())),
             root_usage_auto_resume_update: Arc::new(Mutex::new(())),
             root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
@@ -288,8 +260,24 @@ impl AgentControl {
         (self.thread_id_generator)()
     }
 
-    pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
-        self.rollout_budget.as_ref()
+    pub(crate) fn root_thread_instructions_provider(
+        &self,
+        root_thread_id: ThreadId,
+        provider: Option<Arc<dyn ThreadInstructionsProvider>>,
+    ) -> Option<Arc<dyn ThreadInstructionsProvider>> {
+        let provider = match self.manager.upgrade() {
+            Some(manager) => manager.shared_thread_instructions_provider(root_thread_id, provider),
+            None => provider,
+        };
+        if let Some(provider) = provider
+            .as_ref()
+            .filter(|provider| provider.share_with_subagents())
+        {
+            let _ = self
+                .shared_thread_instructions_provider
+                .set(Arc::clone(provider));
+        }
+        provider
     }
 
     /// Send rich user input items to an existing agent thread.
@@ -848,34 +836,10 @@ impl AgentControl {
         &self,
         agent_id: ThreadId,
     ) -> Option<ThreadConfigSnapshot> {
-        let Ok(state) = self.upgrade() else {
-            return None;
-        };
-        let Ok(thread) = state.get_thread(agent_id).await else {
-            return None;
-        };
-        Some(thread.config_snapshot().await)
-    }
-
-    pub(crate) async fn resolve_agent_reference(
-        &self,
-        _current_thread_id: ThreadId,
-        current_session_source: &SessionSource,
-        agent_reference: &str,
-    ) -> CodexResult<ThreadId> {
-        let current_agent_path = current_session_source
-            .get_agent_path()
-            .unwrap_or_else(AgentPath::root);
-        let agent_path = current_agent_path
-            .resolve(agent_reference)
-            .map_err(CodexErr::UnsupportedOperation)?;
-        if let Some(thread_id) = self.state.agent_id_for_path(&agent_path) {
-            return Ok(thread_id);
+        match self.inspect_agent(agent_id).await.ok()? {
+            crate::agent::api::AgentInfo::Loaded { config, .. } => Some(*config),
+            crate::agent::api::AgentInfo::Unloaded(_) => None,
         }
-        Err(CodexErr::UnsupportedOperation(format!(
-            "live agent path `{}` not found",
-            agent_path.as_str()
-        )))
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
@@ -961,7 +925,7 @@ impl AgentControl {
         &self,
         current_session_source: &SessionSource,
         path_prefix: Option<&str>,
-    ) -> CodexResult<Vec<ListedAgent>> {
+    ) -> CodexResult<Vec<LiveAgent>> {
         let state = self.upgrade()?;
         let resolved_prefix = path_prefix
             .map(|prefix| {
@@ -995,9 +959,14 @@ impl AgentControl {
             && let Some(root_thread_id) = self.state.agent_id_for_path(&root_path)
             && let Ok(root_thread) = state.get_thread(root_thread_id).await
         {
-            agents.push(ListedAgent {
-                agent_name: root_path.to_string(),
-                agent_status: root_thread.agent_status().await,
+            agents.push(LiveAgent {
+                thread_id: root_thread_id,
+                metadata: AgentMetadata {
+                    agent_id: Some(root_thread_id),
+                    agent_path: Some(root_path),
+                    ..Default::default()
+                },
+                status: root_thread.agent_status().await,
             });
         }
 
@@ -1015,14 +984,10 @@ impl AgentControl {
             let Ok(thread) = state.get_thread(thread_id).await else {
                 continue;
             };
-            let agent_name = metadata
-                .agent_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| thread_id.to_string());
-            agents.push(ListedAgent {
-                agent_name,
-                agent_status: thread.agent_status().await,
+            agents.push(LiveAgent {
+                thread_id,
+                metadata,
+                status: thread.agent_status().await,
             });
         }
 

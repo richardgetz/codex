@@ -57,6 +57,9 @@ pub(super) async fn update(
                 }),
             })
             .await;
+    } else {
+        // Standalone settings changes supersede a pending automatic continuation.
+        session.state.lock().await.last_started_turn_id = None;
     }
 }
 
