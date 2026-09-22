@@ -1,11 +1,61 @@
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::GetMetadataOptions;
+use codex_exec_server::ReadFileOptions;
 use codex_utils_path_uri::PathUri;
-use codex_utils_plugins::plugin_namespace_for_root_uri;
+use codex_utils_plugins::DISCOVERABLE_PLUGIN_MANIFEST_PATHS;
 use futures::StreamExt;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
 use super::discovery::MAX_CONCURRENT_SKILL_LOADS;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPluginManifestName {
+    #[serde(default)]
+    name: String,
+}
+
+/// Resolves a legacy core-skills plugin manifest through its executor filesystem.
+///
+/// The maintained `core-skills` loader still accepts remote executor filesystems, while the
+/// shared plugin helper now uses the newer environment-bound accessor API. Keep this adapter
+/// local so the legacy loader preserves its captured filesystem authority and sandbox argument.
+async fn plugin_namespace_for_root_uri(
+    fs: &dyn ExecutorFileSystem,
+    plugin_root: &PathUri,
+) -> Option<String> {
+    let mut manifest_path = None;
+    for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
+        let candidate = plugin_root.join(relative_path).ok()?;
+        match fs
+            .get_metadata(&candidate, GetMetadataOptions::default(), /*sandbox*/ None)
+            .await
+        {
+            Ok(metadata) if metadata.is_file => {
+                manifest_path = Some(candidate);
+                break;
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    let contents = fs
+        .read_file_text(
+            &manifest_path?,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
+        .await
+        .ok()?;
+    let RawPluginManifestName { name: raw_name } = serde_json::from_str(&contents).ok()?;
+    Some(
+        plugin_root
+            .basename()
+            .filter(|_| raw_name.trim().is_empty())
+            .unwrap_or(raw_name),
+    )
+}
 
 /// Resolves the namespace prefix applied to skill names during one skills scan.
 ///
