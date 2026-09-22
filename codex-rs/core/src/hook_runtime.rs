@@ -747,7 +747,7 @@ pub(crate) async fn inspect_pending_input(
 pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    model_info: &ModelInfo,
+    _model_info: &ModelInfo,
     pending_input: TurnInput,
     additional_contexts: Vec<String>,
     persist_context: PersistContext,

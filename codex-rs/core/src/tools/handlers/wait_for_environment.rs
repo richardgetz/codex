@@ -143,7 +143,7 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
                             _ => None,
                         })
                 {
-                    return Err(environment_failure(&environment_id, &error));
+                    return Err(environment_failure(&environment_id, error));
                 }
                 let Some(environment) = step_context
                     .environments
