@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_async_utils::OrCancelExt;
+use codex_extension_api::LoadedUserInstructions;
 use codex_history::InitialHistory;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InternalSessionSource;
@@ -73,6 +74,11 @@ impl ManagedReviewerThreads {
             session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
             thread_source: Some(ThreadSource::GuardianReview),
             environments: Some(context.environments().to_selections()),
+            inherited_environments: Some(context.environments().clone()),
+            user_instructions: Some(LoadedUserInstructions {
+                instructions: parent.user_instructions().await,
+                warnings: Vec::new(),
+            }),
             client_mcp_extensions: parent.services.client_mcp_extensions.clone(),
             ..StartThreadOptions::new(config)
         };

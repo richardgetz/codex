@@ -305,6 +305,10 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
+    /// Existing environment bindings captured by an internal caller.
+    pub inherited_environments: Option<TurnEnvironmentSnapshot>,
+    /// Explicit instructions carried by an internal caller instead of loading them again.
+    pub user_instructions: Option<LoadedUserInstructions>,
     pub thread_extension_init: ExtensionDataInit,
     pub client_mcp_extensions: ClientMcpExtensions,
     /// Thread ID reserved before startup so the caller can associate host-owned state with it.
@@ -338,6 +342,8 @@ impl StartThreadOptions {
             metrics_service_name: None,
             parent_trace: None,
             environments: None,
+            inherited_environments: None,
+            user_instructions: None,
             thread_extension_init: ExtensionDataInit::default(),
             client_mcp_extensions: ClientMcpExtensions::default(),
             reserved_thread_id: None,
@@ -3078,10 +3084,13 @@ impl ThreadManagerState {
             metrics_service_name,
             parent_trace,
             environments,
+            inherited_environments: captured_environments,
+            user_instructions: supplied_user_instructions,
             thread_extension_init,
             client_mcp_extensions,
             reserved_thread_id,
         } = options;
+        let inherited_environments = captured_environments.or(inherited_environments);
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(
@@ -3159,6 +3168,7 @@ impl ThreadManagerState {
                 .await,
             )
         };
+        let user_instructions = supplied_user_instructions.unwrap_or(user_instructions);
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
