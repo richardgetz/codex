@@ -1,6 +1,7 @@
 //! Keeps the older remote server notice in the overview's shared view state.
 
 use super::*;
+use crate::AppServerTarget;
 
 impl App {
     pub(super) fn refresh_server_version_overview_notice(&mut self, client_version: &str) {

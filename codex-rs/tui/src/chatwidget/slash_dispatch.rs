@@ -2320,7 +2320,7 @@ impl ChatWidget {
         self.queued_command_drain_result(cmd)
     }
 
-    pub(super) fn builtin_command_flags(&self) -> BuiltinCommandFlags {
+    pub(crate) fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         #[cfg(target_os = "windows")]
         let allow_elevate_sandbox = {
             let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);

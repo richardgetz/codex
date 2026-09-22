@@ -304,6 +304,7 @@ use codex_protocol::user_input::TextElement;
 mod agents_navigation;
 mod attachment_state;
 mod completion_target;
+mod composer_layout;
 mod draft_state;
 mod footer_state;
 mod history_search;
@@ -323,6 +324,7 @@ use self::history_search::HistorySearchSession;
 use self::popup_state::ActivePopup;
 use self::popup_state::DismissedToken;
 use self::popup_state::PopupState;
+use crate::bottom_pane::voice_strip::VoiceStrip;
 use self::slash_input::SlashInput;
 use self::slash_input::SlashValidation;
 use self::slash_input::SubmissionValidation;
@@ -531,6 +533,7 @@ pub(crate) struct ChatComposer {
     effort_tier: Option<EffortTier>,
     effort_animation_style: Option<IgnitionStyle>,
     effort_ignition: Option<EffortIgnition>,
+    voice_strip: Option<VoiceStrip>,
     astra_sparkle: Option<sparkle::Sparkle>,
     effort_status_line_transition: Option<EffortStatusLineTransition>,
     effort_observed: bool,
@@ -579,6 +582,7 @@ pub(crate) struct ChatComposer {
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
     personality_command_enabled: bool,
+    voice_command_enabled: bool,
     provenance_commands_enabled: bool,
     worktrees_enabled: bool,
     windows_degraded_sandbox_active: bool,
@@ -734,6 +738,7 @@ impl ChatComposer {
             effort_tier: None,
             effort_animation_style: None,
             effort_ignition: None,
+            voice_strip: None,
             astra_sparkle: None,
             effort_status_line_transition: None,
             effort_observed: false,
@@ -768,6 +773,7 @@ impl ChatComposer {
             mentions_v2_enabled: false,
             goal_command_enabled: false,
             personality_command_enabled: false,
+            voice_command_enabled: false,
             provenance_commands_enabled: false,
             worktrees_enabled: false,
             windows_degraded_sandbox_active: false,
@@ -973,6 +979,10 @@ impl ChatComposer {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.goal_command_enabled = enabled;
+    }
+
+    pub fn set_voice_command_enabled(&mut self, enabled: bool) {
+        self.voice_command_enabled = enabled;
     }
 
     /// Replace composer, editor, and footer-hint key bindings from one runtime snapshot.
