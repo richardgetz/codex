@@ -102,9 +102,11 @@ pub(crate) async fn run_codex_thread_interactive(
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
         extensions,
         conversation_history,
-        disabled_plugin_ids: None,
         requested_history_mode: None,
-        fork_persistence: ForkPersistence::Copied,
+        fork_persistence: ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         session_source,
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
@@ -257,6 +259,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
+                        client_user_message_id: None,
                         trace: None,
                         parent_turn_id: None,
                         root_turn_id: None,
