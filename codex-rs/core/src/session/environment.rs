@@ -266,7 +266,6 @@ impl Session {
                     .add_local_writable_root(root);
             }
         }
-        }
         Ok(())
     }
 
