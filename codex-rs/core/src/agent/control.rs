@@ -35,7 +35,6 @@ use codex_history::RolloutItem;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -57,8 +56,6 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::ThreadUsagePolicy;
-use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
@@ -79,6 +76,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use self::execution::AgentExecutionLimiter;
+pub(crate) use crate::agent::types::SpawnAgentForkMode;
+pub(crate) use crate::agent::types::SpawnAgentOptions;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
 use self::residency::V2Residency;
@@ -107,6 +106,17 @@ mod worker_limit;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
+
+/// Outcome of pruning idle agents in the current session tree.
+///
+/// A subtree is reported as closed when its root was closed successfully or was already gone.
+/// Other close failures are retained with their thread ID so callers can surface actionable
+/// diagnostics without turning a partially successful prune into a hard failure.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PruneIdleAgentsReport {
+    pub(crate) closed: Vec<ThreadId>,
+    pub(crate) failed: Vec<(ThreadId, String)>,
+}
 
 /// Control-plane handle for multi-agent operations.
 /// `LocalAgentControl` is held by each session (via `SessionServices`). It provides capability to
@@ -262,6 +272,12 @@ impl LocalAgentControl {
 
     pub(crate) fn generate_thread_id(&self) -> ThreadId {
         (self.thread_id_generator)()
+    }
+
+    /// Expose the shared rollout budget to legacy fork operations that need to re-arm a reminder
+    /// after restoring a thread's history.
+    pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
+        self.rollout_budget.as_ref()
     }
 
     pub(crate) fn root_thread_instructions_provider(
