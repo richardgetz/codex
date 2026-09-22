@@ -261,19 +261,19 @@ impl App {
             &app_server_target,
             app_server.server_version(),
         );
-        let initial_server_version_notice = if !matches!(app_server_target, AppServerTarget::Embedded)
-        {
-            crate::status::remote_connection::pending_server_version_notice(
-                &local_settings.tui,
-                &app_server_target,
-                app_server.server_codex_home(),
-                CODEX_CLI_VERSION,
-                app_server.server_version(),
-                /*last_shown*/ None,
-            )
-        } else {
-            None
-        };
+        let initial_server_version_notice =
+            if !matches!(app_server_target, AppServerTarget::Embedded) {
+                crate::status::remote_connection::pending_server_version_notice(
+                    &local_settings.tui,
+                    &app_server_target,
+                    app_server.server_codex_home(),
+                    CODEX_CLI_VERSION,
+                    app_server.server_version(),
+                    /*last_shown*/ None,
+                )
+            } else {
+                None
+            };
         if let Err(err) = startup_draft.flush_pending_events(tui).await {
             return shutdown_on_startup_error(app_server, err).await;
         }
@@ -820,6 +820,7 @@ Fix the config and retry.\n\
             pending_app_server_requests: PendingAppServerRequests::default(),
             dynamic_tool_status_updates,
             dynamic_tool_tasks: HashMap::new(),
+            pending_startup_thread_start,
             pending_server_version_notice: if pending_startup_thread_start {
                 initial_server_version_notice
                     .as_ref()
@@ -827,7 +828,6 @@ Fix the config and retry.\n\
             } else {
                 None
             },
-            pending_startup_thread_start,
             pending_open_resume_picker: false,
             pending_working_directory_change: None,
             pending_start_managed_worktree: None,
