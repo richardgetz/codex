@@ -89,6 +89,11 @@ impl Harness {
         TuiEventStream::new(
             self.broker.clone(),
             self.draws.resubscribe(),
+            /*mac_keyboard_rx*/ None,
+            /*mac_keyboard_focused*/ None,
+            /*mac_keyboard_cmux_focus*/ None,
+            /*mac_keyboard_paused*/ None,
+            /*mac_keyboard_release_pending*/ None,
             Arc::new(AtomicBool::new(/*v*/ false)),
             #[cfg(unix)]
             crate::tui::job_control::SuspendContext::new(),
