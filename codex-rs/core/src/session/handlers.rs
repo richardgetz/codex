@@ -1170,7 +1170,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context, replay_items.as_slice())
+    sess.apply_rollout_reconstruction(&turn_context, replay_items.as_slice())
         .await;
     {
         let mut state = sess.state.lock().await;
@@ -1183,7 +1183,6 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     sess.services
         .thread_extension_data
         .remove::<NodeReplReviewEvidence>();
-    sess.guardian_review_session.invalidate().await;
     sess.services
         .agent_control
         .rollout_budget()
@@ -1577,8 +1576,6 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         sess.mcp_refresh.close();
         sess.services.mcp_runtime.shutdown().await;
     }
-    sess.guardian_review_session.shutdown().await;
-
     crate::hook_runtime::run_session_end_hooks(sess).await;
     emit_thread_stop_lifecycle(sess).await;
 }

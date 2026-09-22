@@ -1214,7 +1214,6 @@ async fn review_guardian_mcp_elicitation(
         match call_id {
             Some(call_id) => match session
                 .mcp_tool_approval_metadata(&turn_context.sub_id, call_id)
-                .await
             {
                 Some((Some(invocation), metadata)) => {
                     let connector_id = elicitation_connector_id(&request.elicitation);
@@ -1279,8 +1278,8 @@ async fn review_guardian_mcp_elicitation(
             Some(
                 crate::mcp_tool_call::build_guardian_mcp_tool_review_request(
                     call_id,
-                    invocation,
-                    Some(metadata),
+                    &invocation,
+                    Some(&metadata),
                 ),
             )
         } else {

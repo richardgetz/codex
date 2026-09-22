@@ -5298,21 +5298,6 @@ impl Session {
         )
         .or_cancel(cancellation_token)
         .await??;
-        // Publish inventory after planning rather than during finalization, so constructing
-        // additional candidate plans cannot overwrite turn-wide metadata.
-        if turn_context
-            .config
-            .tool_registry
-            .turn_metadata_includes_tool_info
-            && turn_context.model_info().use_responses_lite
-        {
-            turn_context.turn_metadata_state.set_tool_namespaces_info(
-                tool_router
-                    .tool_namespaces_info()
-                    .cloned()
-                    .unwrap_or_default(),
-            );
-        }
         Ok(Arc::new(StepContext {
             settings,
             token_budget,
