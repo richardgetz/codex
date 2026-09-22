@@ -1,7 +1,6 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::context::world_state::validate_managed_developer_instructions;
-use crate::guardian::BUNDLED_GUARDIAN_POLICY;
 use crate::orchestrator_supervision::root as orchestrator_supervision_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::tools::handlers::builtin_scratchpad::run_lifecycle_cleanup as run_scratchpad_lifecycle_cleanup;
@@ -241,6 +240,7 @@ pub use permission_profile_selection::ResolvedPermissionProfileSelection;
 pub use permission_profile_selection::resolve_permission_profile_selection;
 pub use permissions::CompiledPermissionProfile;
 pub use permissions::WorkspaceWriteSettings;
+pub(crate) use permissions::builtin_permission_profile;
 pub use permissions::compile_permission_profile;
 pub(crate) use permissions::is_builtin_permission_profile_name;
 pub use permissions::network_proxy_config_from_profile_network;
@@ -4252,8 +4252,8 @@ impl Config {
                     }
                 }
             }
-            configured_workspace_roots.sort();
-            configured_workspace_roots.dedup();
+            let mut seen = HashSet::new();
+            configured_workspace_roots.retain(|root| seen.insert(root.clone()));
             file_system_sandbox_policy = file_system_sandbox_policy
                 .with_materialized_project_roots_for_path_uris(&configured_workspace_roots);
             let mut permission_profile = if let Some(permission_profile) =

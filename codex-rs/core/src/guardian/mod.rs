@@ -47,8 +47,6 @@ pub(crate) use decision::spawn_approval_decision;
 pub(crate) use input_budget::PendingReviewContext;
 pub(crate) use input_budget::check_pending as check_pending_guardian_input;
 pub(crate) use input_budget::finalize as finalize_guardian_input;
-pub(crate) use prompt::BUNDLED_GUARDIAN_POLICY;
-pub(crate) use prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 pub(crate) use prompt::guardian_truncate_text;
 pub(crate) use request_budget::ExhaustedReviewBudget;
 pub(crate) use request_budget::check_prompt as check_guardian_prompt_budget;

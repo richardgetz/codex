@@ -286,9 +286,9 @@ async fn run_compact_task_inner_impl(
         let mut turn_input = history
             .clone()
             .for_prompt(&turn_context.model_info().input_modalities);
-        sess.services
-            .executed_tool_calls
-            .attach_to_compaction_prompt(&mut turn_input);
+        if let Some(executed_tool_calls) = sess.services.executed_tool_calls.as_ref() {
+            executed_tool_calls.attach_to_compaction_prompt(&mut turn_input);
+        }
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,

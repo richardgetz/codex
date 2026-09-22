@@ -62,7 +62,7 @@ impl Session {
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(
                     turn_context,
-                    &turn_context.initial_environments.environments,
+                    &turn_context.initial_environments,
                     None,
                 )
                 .await
