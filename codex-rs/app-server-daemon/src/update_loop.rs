@@ -182,7 +182,16 @@ async fn run_with_http(
                     }
                     continue;
                 }
-                match update_once(http, daemon, running_updater_identity, &mut terminate, UpdateTrigger::Scheduled).await {
+                match update_once(
+                    http,
+                    daemon,
+                    running_updater_identity,
+                    &mut terminate,
+                    &mut listener,
+                    UpdateTrigger::Scheduled,
+                )
+                .await
+                {
                     Ok((UpdateLoopControl::Continue, Some(_))) => {
                         manual_handoff_pending = true;
                         next_check = Instant::now();
@@ -222,8 +231,14 @@ async fn adopt_managed_updater(
     }
     #[cfg(unix)]
     {
-        let _ = listener;
-        reexec_managed_updater(&managed_bin).map(|_| UpdateLoopControl::Stop)
+        drop(listener.take());
+        match reexec_managed_updater(&managed_bin) {
+            Ok(()) => Ok(UpdateLoopControl::Stop),
+            Err(err) => {
+                restore_updater_listener(daemon, listener).await?;
+                Err(err)
+            }
+        }
     }
     #[cfg(windows)]
     {
@@ -269,6 +284,7 @@ async fn update_once(
     daemon: &Daemon,
     running_updater_identity: &ExecutableIdentity,
     terminate: &mut Signal,
+    listener: &mut Option<codex_uds::UnixListener>,
     trigger: UpdateTrigger,
 ) -> Result<(UpdateLoopControl, Option<RestartIfRunningOutcome>)> {
     if trigger == UpdateTrigger::Scheduled
@@ -276,6 +292,9 @@ async fn update_once(
             .await?
             .auto_update_enabled
     {
+        return Ok((UpdateLoopControl::Stop, None));
+    }
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
         return Ok((UpdateLoopControl::Stop, None));
     }
     if release_selection_unstable(daemon, trigger)? {
@@ -319,6 +338,9 @@ async fn update_once(
     if release_selection_unstable(daemon, trigger)? {
         return Ok((UpdateLoopControl::Continue, None));
     }
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok((UpdateLoopControl::Stop, None));
+    }
 
     let managed_codex_bin =
         resolved_managed_codex_bin(&daemon.current_managed_codex_bin()?).await?;
@@ -343,10 +365,42 @@ async fn update_once(
         } else {
             crate::UpdaterRefreshMode::None
         };
-        match daemon
+        let listener_was_detached =
+            if updater_refresh_mode == crate::UpdaterRefreshMode::ReexecIfManagedBinaryChanged {
+                drop(listener.take());
+                true
+            } else {
+                false
+            };
+        let outcome = match daemon
             .try_restart_if_running(restart_mode, updater_refresh_mode, &managed_codex_bin)
-            .await?
+            .await
         {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                #[cfg(unix)]
+                if listener_was_detached {
+                    restore_updater_listener(daemon, listener).await?;
+                }
+                #[cfg(windows)]
+                if listener_was_detached {
+                    let settings = daemon.load_settings().await?;
+                    let replacement = crate::backend::pid_update_loop_backend(
+                        daemon.backend_paths_with_bin(&settings, &managed_codex_bin),
+                    );
+                    replacement.wait_for_ownership().await?;
+                    restore_updater_listener(daemon, listener).await?;
+                }
+                return Err(err);
+            }
+        };
+        if daemon.load_settings().await?.managed_codex_path.is_some() {
+            return Ok((UpdateLoopControl::Stop, None));
+        }
+        if outcome != RestartIfRunningOutcome::Restarted && listener_was_detached {
+            restore_updater_listener(daemon, listener).await?;
+        }
+        match outcome {
             RestartIfRunningOutcome::Busy => {
                 if sleep_or_terminate(RESTART_RETRY_INTERVAL, terminate).await {
                     return Ok((UpdateLoopControl::Stop, None));
@@ -403,6 +457,20 @@ async fn update_once(
             }
         }
     }
+}
+
+async fn restore_updater_listener(
+    daemon: &Daemon,
+    listener: &mut Option<codex_uds::UnixListener>,
+) -> Result<()> {
+    let socket_path = daemon.manual_update_socket_path();
+    match tokio::fs::remove_file(&socket_path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    *listener = Some(codex_uds::UnixListener::bind(&socket_path).await?);
+    Ok(())
 }
 
 fn release_selection_unstable(daemon: &Daemon, trigger: UpdateTrigger) -> Result<bool> {

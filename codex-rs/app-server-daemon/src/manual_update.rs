@@ -210,11 +210,13 @@ pub(super) async fn run(
     let managed_codex_path = daemon.current_managed_codex_bin()?;
     let (_, previous_release, _) = selected_release(daemon)?;
     let previous_identity = executable_identity(&managed_codex_path).await?;
+    let mut updater_listener = None;
     let (control, restart) = update_once(
         http,
         daemon,
         running_updater_identity,
         terminate,
+        &mut updater_listener,
         UpdateTrigger::Manual,
     )
     .await?;
