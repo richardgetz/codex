@@ -18,6 +18,7 @@ use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 use codex_install_context::InstallContext;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CREDENTIAL_BROKER_ACTIVE_ENV_KEY;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
@@ -38,6 +39,68 @@ use std::path::Path;
 
 pub(crate) mod apply_patch;
 pub(crate) mod unified_exec;
+
+const SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_BASH_ENV";
+const SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_ZDOTDIR";
+const SNAPSHOT_BROKERED_VALUE_ENV_PREFIX: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_VALUE_";
+const SNAPSHOT_BROKERED_UNSET_ENV_PREFIX: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_UNSET_";
+
+pub(crate) fn prepare_brokered_shell_snapshot_env(
+    env: &mut HashMap<String, String>,
+    shell_snapshot: Option<&AbsolutePathBuf>,
+    shell: &Shell,
+) {
+    if shell_snapshot.is_some()
+        && env
+            .get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
+            .is_some_and(|active| active == "1")
+    {
+        if !cfg!(windows) {
+            env.retain(|key, _| {
+                !key.starts_with(SNAPSHOT_BROKERED_VALUE_ENV_PREFIX)
+                    && !key.starts_with(SNAPSHOT_BROKERED_UNSET_ENV_PREFIX)
+            });
+            for key in codex_network_proxy::brokered_credential_value_env_keys(env) {
+                if is_valid_shell_variable_name(&key)
+                    && let Some(value) = env.get(&key).cloned()
+                {
+                    env.insert(format!("{SNAPSHOT_BROKERED_VALUE_ENV_PREFIX}{key}"), value);
+                }
+            }
+            for key in codex_network_proxy::brokered_credential_marker_env_keys(env) {
+                if !is_valid_shell_variable_name(&key) {
+                    continue;
+                }
+                if let Some(value) = env.get(&key).cloned() {
+                    env.entry(format!("{SNAPSHOT_BROKERED_VALUE_ENV_PREFIX}{key}"))
+                        .or_insert(value);
+                } else {
+                    env.insert(
+                        format!("{SNAPSHOT_BROKERED_UNSET_ENV_PREFIX}{key}"),
+                        "1".to_string(),
+                    );
+                }
+            }
+        }
+        let bash_env = env.remove("BASH_ENV");
+        if !cfg!(windows)
+            && let Some(bash_env) = bash_env
+            && !bash_env.is_empty()
+        {
+            env.insert(SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY.to_string(), bash_env);
+        } else {
+            env.remove(SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY);
+        }
+        if shell.shell_type == ShellType::Zsh {
+            if let Some(zdotdir) = env.remove("ZDOTDIR") {
+                env.insert(SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY.to_string(), zdotdir);
+            } else {
+                env.remove(SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY);
+            }
+            env.insert("ZDOTDIR".to_string(), "/dev/null".to_string());
+        }
+    }
+}
 
 /// Resolve a plain Playwright CLI script to a direct executable command.
 ///

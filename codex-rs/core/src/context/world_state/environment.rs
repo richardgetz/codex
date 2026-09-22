@@ -503,6 +503,20 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
                 is_primary: false,
             });
     }
+    for environment in &snapshot.environments {
+        let TurnEnvironmentState::Failed { selection, error } = environment else {
+            continue;
+        };
+        environments
+            .entry(selection.environment_id.clone())
+            .or_insert_with(|| EnvironmentState {
+                cwd: selection.cwd.clone(),
+                status: EnvironmentStatus::Failed,
+                error: Some(error.clone()),
+                shell: None,
+                is_primary: false,
+            });
+    }
     environments
 }
 

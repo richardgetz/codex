@@ -15,6 +15,7 @@ use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
+use crate::shell_snapshot::ShellSnapshotSandbox;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::RuntimePathPrepends;
@@ -288,16 +289,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             .as_ref()
             .unwrap_or(session_shell.as_ref());
         let environment_is_remote = req.turn_environment.environment.is_remote();
-        let shell_snapshot_location = if environment_is_remote {
-            None
-        } else {
-            // TODO(anp): Make shell snapshot lookup accept PathUri.
-            let native_cwd = req
-                .cwd
-                .to_abs_path()
-                .map_err(|err| ToolError::Rejected(err.to_string()))?;
-            req.turn_environment.shell_snapshot(&native_cwd)
-        };
         let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
         let launch_sandbox_permissions = sandbox_permissions_preserving_denied_reads(
             req.sandbox_permissions,
@@ -307,6 +298,30 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             req.network.as_ref(),
             launch_sandbox_permissions,
         ));
+        let shell_snapshot = if environment_is_remote {
+            None
+        } else {
+            // TODO(anp): Make shell snapshot lookup accept PathUri.
+            let native_cwd = req
+                .cwd
+                .to_abs_path()
+                .map_err(|err| ToolError::Rejected(err.to_string()))?;
+            req.turn_environment
+                .shell_snapshot(
+                    &native_cwd,
+                    base_command,
+                    shell,
+                    &ctx.step_context.turn.config,
+                    Some(ShellSnapshotSandbox::new(
+                        attempt,
+                        managed_network,
+                        &req.turn_environment.selection.environment_id,
+                        req.additional_permissions.as_ref(),
+                    )),
+                )
+                .await
+        };
+        let shell_snapshot_location = shell_snapshot.as_ref().map(|snapshot| snapshot.path());
         let env = exec_env_for_sandbox_permissions(&req.env, launch_sandbox_permissions);
         let (mut env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
