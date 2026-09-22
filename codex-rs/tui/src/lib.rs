@@ -1985,11 +1985,8 @@ async fn run_ratatui_app(
             resume_picker::SessionSelection::Resume(_)
         ),
     ) {
-        let Some(active_app_server) = app_server.as_mut() else {
-            unreachable!("app server should exist before deferred account selection");
-        };
         let deferred_login_status = startup_draft
-            .run_until(&mut tui, get_login_status(active_app_server, &config))
+            .run_until(&mut tui, get_login_status(&mut app_server, &config))
             .await;
         match deferred_login_status {
             Ok(Ok((deferred_status, account))) => {
@@ -1997,11 +1994,11 @@ async fn run_ratatui_app(
                 startup_account = Some(account);
             }
             Ok(Err(err)) => {
-                shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
+                shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
                 return Err(err);
             }
             Err(err) => {
-                shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
+                shutdown_startup_session(Some(app_server), &mut terminal_restore_guard).await;
                 return Err(err.into());
             }
         }
