@@ -222,6 +222,9 @@ async fn adopt_managed_updater(
     running_identity: &ExecutableIdentity,
     listener: &mut Option<codex_uds::UnixListener>,
 ) -> Result<UpdateLoopControl> {
+    if daemon.load_settings().await?.managed_codex_path.is_some() {
+        return Ok(UpdateLoopControl::Stop);
+    }
     let managed_bin = resolved_managed_codex_bin(&daemon.current_managed_codex_bin()?).await?;
     if executable_identity(&managed_bin).await? == *running_identity {
         return Ok(UpdateLoopControl::Continue);
@@ -231,6 +234,9 @@ async fn adopt_managed_updater(
     }
     #[cfg(unix)]
     {
+        if daemon.load_settings().await?.managed_codex_path.is_some() {
+            return Ok(UpdateLoopControl::Stop);
+        }
         drop(listener.take());
         match reexec_managed_updater(&managed_bin) {
             Ok(()) => Ok(UpdateLoopControl::Stop),
@@ -242,8 +248,12 @@ async fn adopt_managed_updater(
     }
     #[cfg(windows)]
     {
+        let settings = daemon.load_settings().await?;
+        if settings.managed_codex_path.is_some() {
+            return Ok(UpdateLoopControl::Stop);
+        }
         let replacement = crate::backend::pid_update_loop_backend(
-            daemon.backend_paths_with_bin(&daemon.load_settings().await?, &managed_bin),
+            daemon.backend_paths_with_bin(&settings, &managed_bin),
         );
         listener.take();
         if let Err(err) = replacement.replace_current_updater().await {
