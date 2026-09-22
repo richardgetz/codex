@@ -366,12 +366,14 @@ fn empty_post_transfer_orphan_is_reconcilable_after_completed_stop() {
     };
 
     assert!(receipt.can_reconcile_empty_orphan());
-    assert!(HandoffRpcError {
-        method: "thread/handoff/status".to_string(),
-        message: "unknown handoff id handoff-1".to_string(),
-        receipt: None,
-    }
-    .is_unknown_handoff());
+    assert!(
+        HandoffRpcError {
+            method: "thread/handoff/status".to_string(),
+            message: "unknown handoff id handoff-1".to_string(),
+            receipt: None,
+        }
+        .is_unknown_handoff()
+    );
 }
 
 #[test]

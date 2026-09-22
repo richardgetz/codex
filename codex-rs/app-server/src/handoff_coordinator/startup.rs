@@ -165,9 +165,8 @@ fn pending_handoff_ids(journals: &[HandoffJournal]) -> Vec<String> {
     let mut ids = journals
         .iter()
         .filter(|journal| journal.requires_recovery())
-        .filter_map(|journal| {
-            is_displayable_handoff_id(&journal.handoff_id).then(|| journal.handoff_id.clone())
-        })
+        .filter(|&journal| is_displayable_handoff_id(&journal.handoff_id))
+        .map(|journal| journal.handoff_id.clone())
         .collect::<Vec<_>>();
     ids.sort();
     ids.truncate(MAX_PENDING_HANDOFF_IDS_IN_ERROR);
