@@ -784,7 +784,7 @@ async fn recover_of_terminal_needs_attention_does_not_rearm_account_fence() -> R
 async fn active_handoff_still_fences_account_switch() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
-    write_active_recovery_fixture(codex_home.path()).await?;
+    let handoff_id = write_active_recovery_fixture(codex_home.path()).await?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -798,6 +798,7 @@ async fn active_handoff_still_fences_account_switch() -> Result<()> {
     )
     .await??;
     assert!(error.error.message.contains("recovery is pending"));
+    assert!(error.error.message.contains(&handoff_id));
     Ok(())
 }
 
