@@ -686,9 +686,14 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup().await?;
-        let transport =
-            self.build_api_transport(&client_setup.api_provider, RESPONSES_COMPACT_ENDPOINT)?;
+        let client_setup = self
+            .current_client_setup(ClientRouting::ConfiguredProvider)
+            .await?;
+        let transport = self.build_api_transport(
+            &client_setup.api_provider,
+            RESPONSES_COMPACT_ENDPOINT,
+            client_setup.redirect_policy,
+        )?;
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
             AuthRequestTelemetryContext::new(
@@ -1473,7 +1478,6 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
-        self.websocket_session.endpoint = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;

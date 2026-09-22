@@ -438,7 +438,6 @@ async fn run_remote_compaction_request_v2(
             {
                 continue;
             }
-            Err(err) if !err.is_retryable() => return Err(err),
             Err(err) => {
                 handle_response_stream_error(
                     &mut retry_state,

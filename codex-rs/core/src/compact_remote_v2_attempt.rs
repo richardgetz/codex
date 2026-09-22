@@ -71,9 +71,9 @@ pub(super) async fn run_remote_compact_v2_attempt(
         .into_iter()
         .map(|envelope| (envelope.item, envelope.metadata))
         .unzip();
-    sess.services
-        .executed_tool_calls
-        .attach_to_compaction_prompt(&mut input);
+    if let Some(executed_tool_calls) = sess.services.executed_tool_calls.as_ref() {
+        executed_tool_calls.attach_to_compaction_prompt(&mut input);
+    }
     let tool_router = &step_context.tool_router;
     input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {

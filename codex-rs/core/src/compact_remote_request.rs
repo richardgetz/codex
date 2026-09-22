@@ -74,7 +74,7 @@ pub(super) async fn run_remote_compact_attempt(
     };
     let responses_metadata = sess
         .responses_metadata(
-            turn_context.as_ref(),
+            step_context,
             CodexResponsesRequestKind::Compaction(compaction_metadata),
         )
         .await;

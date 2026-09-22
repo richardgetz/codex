@@ -1156,6 +1156,7 @@ impl CodexThread {
             .trunk()
             .await?
             .rollout_path()
+            .await
     }
 
     pub async fn load_history(
