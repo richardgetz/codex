@@ -286,7 +286,7 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(all(not(target_os = "windows"), test))]
+    #[cfg(not(target_os = "windows"))]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, _show_now: bool) {}
 
     #[cfg(any(target_os = "windows", test))]

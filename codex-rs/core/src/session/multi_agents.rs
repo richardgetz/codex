@@ -168,7 +168,10 @@ pub(crate) fn effective_multi_agent_mode(step_context: &StepContext) -> Option<M
                 if settings.effective_reasoning_effort() == Some(ReasoningEffort::Ultra) {
                     (multi_agent_messages.proactive, MultiAgentMode::Proactive)
                 } else {
-                    (multi_agent_messages.explicit, MultiAgentMode::ExplicitRequestOnly)
+                    (
+                        multi_agent_messages.explicit,
+                        MultiAgentMode::ExplicitRequestOnly,
+                    )
                 };
             match message {
                 ResolvedMessage::Catalog(text) => MultiAgentMode::Custom(text.to_owned()),

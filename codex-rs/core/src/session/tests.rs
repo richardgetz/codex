@@ -13525,7 +13525,11 @@ async fn built_tools_keeps_unavailable_mcp_placeholder_when_inventory_lists_serv
         internal_chat_message_metadata_passthrough: None,
     };
     session
-        .record_conversation_items(turn_context.as_ref(), turn_context.model_info(), &[previous_call])
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &[previous_call],
+        )
         .await;
     let step_context = session
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
@@ -14904,7 +14908,11 @@ async fn legacy_compaction_retains_only_the_selected_step(first_attempt: FirstAt
     let server = responses::start_mock_server().await;
     let (session, turn, events) = make_remote_compaction_session(&server.uri()).await;
     session
-        .record_conversation_items(&turn, turn.model_info(), &[user_message("before compaction")])
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[user_message("before compaction")],
+        )
         .await;
     session
         .spawn_task(
@@ -15025,7 +15033,11 @@ async fn interrupting_compaction_fallback_retains_last_known_step_context() {
         }))
         .await;
     session
-        .record_conversation_items(&turn, turn.model_info(), &[user_message("before compaction")])
+        .record_conversation_items(
+            &turn,
+            turn.model_info(),
+            &[user_message("before compaction")],
+        )
         .await;
     session
         .spawn_task(turn, Vec::new(), crate::tasks::RegularTask::new())
@@ -15397,7 +15409,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     tc.next_step_input.store(Arc::new(StepInputs {
         settings: Arc::new(current),
         environments: tc.next_step_input.load().environments.clone(),
-        }));
+    }));
 
     sess.on_task_finished(Arc::clone(&tc), /*task_result*/ Ok(None))
         .await;

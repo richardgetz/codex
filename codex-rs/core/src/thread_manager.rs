@@ -1452,7 +1452,8 @@ impl ThreadManager {
         options.session_source = Some(session_source);
         options.thread_source = options.thread_source.take().or(resumed_thread_source);
         let mut request = if let Some(parent) = internal_parent {
-            let mut request = ThreadSpawnRequest::new(options, parent.auth_manager, parent.agent_control);
+            let mut request =
+                ThreadSpawnRequest::new(options, parent.auth_manager, parent.agent_control);
             request.parent_thread_id = Some(parent.thread_id);
             request.parent_originator = Some(parent.originator);
             request.inherited_instructions = parent.inherited_instructions;
@@ -3217,45 +3218,41 @@ impl ThreadManagerState {
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let (
-            instructions,
-            inherited_exec_policy,
-            extensions,
-            mcp_manager,
-            multi_agent_version,
-        ) = if crate::guardian::is_basic_session_source(&session_source) {
-            (
-                inherited_instructions.unwrap_or_default(),
-                None,
-                empty_extension_registry(),
-                Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
-                Some(MultiAgentVersion::Disabled),
-            )
-        } else {
-            (
-                match inherited_instructions {
-                    Some(instructions) => instructions,
-                    None => self
-                        .instructions_for_spawn(
-                            &session_source,
-                            parent_thread_id,
-                            forked_from_thread_id,
-                            thread_instructions_provider,
-                        )
-                        .await,
-                },
-                inherited_exec_policy,
-                Arc::clone(&self.extensions),
-                Arc::clone(&self.mcp_manager),
-                self.initial_multi_agent_version_for_spawn(
-                    &initial_history,
-                    Some(&session_source),
-                    parent_thread_id,
-                    forked_from_thread_id,
+        let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
+            if crate::guardian::is_basic_session_source(&session_source) {
+                (
+                    inherited_instructions.unwrap_or_default(),
+                    None,
+                    empty_extension_registry(),
+                    Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
+                    Some(MultiAgentVersion::Disabled),
                 )
-                .await,
-            )
-        };
+            } else {
+                (
+                    match inherited_instructions {
+                        Some(instructions) => instructions,
+                        None => {
+                            self.instructions_for_spawn(
+                                &session_source,
+                                parent_thread_id,
+                                forked_from_thread_id,
+                                thread_instructions_provider,
+                            )
+                            .await
+                        }
+                    },
+                    inherited_exec_policy,
+                    Arc::clone(&self.extensions),
+                    Arc::clone(&self.mcp_manager),
+                    self.initial_multi_agent_version_for_spawn(
+                        &initial_history,
+                        Some(&session_source),
+                        parent_thread_id,
+                        forked_from_thread_id,
+                    )
+                    .await,
+                )
+            };
         let mut instructions = instructions;
         if let Some(supplied) = supplied_user_instructions {
             instructions.user = supplied.instructions;

@@ -36,7 +36,8 @@ impl Session {
             TokenCountEvent {
                 info: history.token_info(),
                 rate_limits: None,
-                rate_limit_snapshots: (!rate_limit_snapshots.is_empty()).then_some(rate_limit_snapshots),
+                rate_limit_snapshots: (!rate_limit_snapshots.is_empty())
+                    .then_some(rate_limit_snapshots),
             },
         )));
         items

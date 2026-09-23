@@ -450,8 +450,6 @@ pub(crate) use realtime::realtime_delegation_input;
 #[cfg(test)]
 pub(crate) use realtime::tests::activate_voice_for_thread;
 mod realtime_transcript;
-#[cfg(test)]
-pub(crate) use realtime::tests::commit_realtime_history_events;
 use self::realtime::RealtimeConversationUiState;
 mod reasoning_shortcuts;
 mod rendering;
@@ -478,7 +476,6 @@ mod thread_title_status;
 mod thread_usage;
 pub(crate) use self::thread_usage::ThreadUsageOutcome;
 mod tokens;
-pub(crate) use self::tokens::TokenActivityView;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
@@ -678,6 +675,9 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
+    refreshing_token_activity_output: Option<tokens::PendingTokenActivityOutput>,
+    completed_token_activity_output: Option<history_cell::CompositeHistoryCell>,
+    next_token_activity_request_id: u64,
     pending_rate_limit_reset_request_id: Option<u64>,
     pending_rate_limit_reset_idempotency_key: Option<String>,
     rate_limit_reset_picker_request_id: Option<u64>,
@@ -2221,7 +2221,11 @@ impl ChatWidget {
             && !has_realtime_transcript
             && hook_cell.is_none()
             && token_activity_cell.is_none()
-            && self.realtime_conversation.live_transcript_cells().next().is_none()
+            && self
+                .realtime_conversation
+                .live_transcript_cells()
+                .next()
+                .is_none()
             && self.realtime_conversation.pending_history_cells.is_empty()
             && rate_limit_reset_hint.is_none()
         {

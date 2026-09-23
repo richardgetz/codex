@@ -7,8 +7,8 @@
 //! Inconclusive detection keeps keyboard enhancements disabled on WSL.
 
 use std::fmt;
-use std::io::stdout;
 use std::io::Write;
+use std::io::stdout;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -37,7 +37,7 @@ pub(super) fn set_right_option_monitor_enabled(enabled: bool) {
 pub(super) fn reconfigure_keyboard_enhancement() {
     let mut writer = stdout();
     restore_keyboard_enhancement_stack(&mut writer);
-    enable_keyboard_enhancement();
+    enable_keyboard_enhancement(&mut writer);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -537,9 +537,9 @@ mod tests {
     use super::DisableModifyOtherKeys;
     use super::EnableModifyOtherKeys;
     use super::ResetKeyboardEnhancementFlags;
+    use super::VscodeDetection;
     use super::cmux_session_detected;
     use super::direct_terminal_all_keys_supported;
-    use super::VscodeDetection;
     use super::keyboard_enhancement_disabled_for;
     use super::keyboard_enhancement_flags;
     use super::parse_bool_env;

@@ -1,6 +1,7 @@
 //! Live user and assistant transcript cells for realtime voice.
 
 use super::*;
+use crate::style::user_message_style;
 use std::borrow::Cow;
 use std::sync::Mutex;
 

@@ -92,6 +92,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
                 total: tokens.clone(),
                 last: tokens.clone(),
                 model_context_window: None,
+                ..Default::default()
             },
         },
     ));
@@ -179,6 +180,7 @@ async fn selected_usage_is_cached_and_account_changes_discard_old_results() -> R
         AppServerEvent::Lagged { skipped: 1 },
         AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
             AccountUpdatedNotification {
+                account: None,
                 auth_mode: None,
                 plan_type: None,
             },

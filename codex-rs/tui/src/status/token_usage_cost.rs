@@ -1436,14 +1436,9 @@ mod tests {
                 "500K total, 100K reasoning  ~$0.25",
             ),
         ] {
-            let data = compose_status_token_usage_cost(
-                &config,
-                "openai",
-                model,
-                &usage,
-                &BTreeMap::new(),
-            )
-            .expect("usage should render");
+            let data =
+                compose_status_token_usage_cost(&config, "openai", model, &usage, &BTreeMap::new())
+                    .expect("usage should render");
 
             assert_eq!(span_text(data.summary_spans()), summary);
             assert_eq!(span_text(data.input_spans()), input);

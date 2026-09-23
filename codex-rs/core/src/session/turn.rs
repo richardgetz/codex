@@ -46,8 +46,8 @@ use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::automatic_continuation_allowed;
 use crate::session::capacity_retry::wait_for_model_capacity_retry;
-use crate::session::input_queue::PendingInputStatus;
 use crate::session::daemon_recovery::RecordedTurnInput;
+use crate::session::input_queue::PendingInputStatus;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -2088,10 +2088,8 @@ async fn run_sampling_request(
         };
         let mut prompt_input = prompt_input;
         if let Some(executed_tool_calls) = sess.services.executed_tool_calls.as_ref() {
-            executed_tool_calls.attach_to_prompt(
-                &mut prompt_input,
-                &mut executed_tool_calls_by_output,
-            );
+            executed_tool_calls
+                .attach_to_prompt(&mut prompt_input, &mut executed_tool_calls_by_output);
         }
         let prompt = build_prompt(
             prompt_input,

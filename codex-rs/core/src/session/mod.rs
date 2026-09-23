@@ -14,9 +14,9 @@ use std::time::UNIX_EPOCH;
 use crate::agent::AgentStatus;
 use crate::agent::LocalAgentControl;
 use crate::agent::agent_status_from_event;
+use crate::agent::status::is_final;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
-use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::compact;
@@ -59,13 +59,13 @@ use crate::realtime_classifier::RealtimeHandoffRoutingDecision;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_handoff::non_substantive_realtime_reasoning_effort;
 use crate::realtime_history::RealtimeEventOrder;
-use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::step_settings::StepSettings;
 use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_context::TurnEnvironment;
+use crate::session_prefix::format_inter_agent_completion_message;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::skills_load_input_from_config;
 use crate::state::ReasoningEffortPin;
@@ -138,7 +138,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::EnteredReviewModeItem;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::items::SubAgentActivityItem;
-use codex_utils_output_truncation::with_serialization_allowance;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::ActivePermissionProfile;
@@ -166,8 +165,8 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::SubAgentActivityKind;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
@@ -190,9 +189,9 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rollout::state_db;
+use codex_rollout_trace::AgentResultTracePayload;
 use codex_rollout_trace::ThreadStartedTraceMetadata;
 use codex_rollout_trace::ThreadTraceContext;
-use codex_rollout_trace::AgentResultTracePayload;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::policy_transforms::intersect_permission_profiles_with_context;
 use codex_shell_command::parse_command::parse_command;
@@ -209,6 +208,7 @@ use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_audio::prepare_response_items as prepare_audio_response_items;
 use codex_utils_git_discovery::GitRootDiscovery;
+use codex_utils_output_truncation::with_serialization_allowance;
 use codex_utils_path_uri::PathUri;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -2790,8 +2790,7 @@ impl Session {
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let mcp_inputs_changed =
-                self.mcp_inputs_differ(&state.session_configuration, &updated);
+            let mcp_inputs_changed = self.mcp_inputs_differ(&state.session_configuration, &updated);
             let usage_policy_changed =
                 state.session_configuration.usage_policy != updated.usage_policy;
             let root_usage_policy_changed =
@@ -4849,14 +4848,12 @@ impl Session {
         items: &'a [ResponseItem],
     ) -> (Cow<'a, [ResponseItem]>, Vec<ImagePreparationMetadata>) {
         let mut items = items.to_vec();
-        let image_preparation_mode = if unified_image_budget_enabled(
-            &turn_context.config.features,
-            model_info,
-        ) {
-            ImagePreparationMode::UnifiedBudget
-        } else {
-            ImagePreparationMode::DetailBased
-        };
+        let image_preparation_mode =
+            if unified_image_budget_enabled(&turn_context.config.features, model_info) {
+                ImagePreparationMode::UnifiedBudget
+            } else {
+                ImagePreparationMode::DetailBased
+            };
         let image_resize_notice_mode = if turn_context
             .config
             .features
@@ -4984,7 +4981,7 @@ impl Session {
             items,
             image_preparations,
         )
-            .await;
+        .await;
     }
 
     async fn record_prepared_conversation_items(
@@ -4994,7 +4991,8 @@ impl Session {
         mut items: Vec<ResponseItemEnvelope>,
         image_preparations: Vec<ImagePreparationMetadata>,
     ) {
-        let policy: codex_utils_output_truncation::TruncationPolicy = model_info.truncation_policy.into();
+        let policy: codex_utils_output_truncation::TruncationPolicy =
+            model_info.truncation_policy.into();
         for envelope in &mut items {
             if matches!(
                 envelope.item,

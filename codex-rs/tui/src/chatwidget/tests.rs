@@ -296,10 +296,10 @@ mod startup_submission_tests;
 mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
-#[path = "tests/team_activity_tests.rs"]
-mod team_activity;
 #[path = "tests/subagent_activity_tests.rs"]
 mod subagent_activity;
+#[path = "tests/team_activity_tests.rs"]
+mod team_activity;
 mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;

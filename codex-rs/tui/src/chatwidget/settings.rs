@@ -4,6 +4,27 @@ use super::*;
 use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
+    pub(crate) fn set_personality(
+        &mut self,
+        personality: codex_protocol::config_types::Personality,
+    ) {
+        self.config.personality = Some(personality);
+    }
+
+    pub(super) fn current_model_supports_personality(&self) -> bool {
+        let model = self.current_model();
+        self.model_catalog
+            .try_list_models()
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.supports_personality)
+            })
+            .unwrap_or(false)
+    }
+
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         if let Err(err) = self

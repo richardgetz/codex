@@ -61,6 +61,7 @@ impl LocalSettings {
             tui: Tui {
                 notification_settings: config.tui_notifications.clone(),
                 animations: animations && system_motion == crate::motion::MotionMode::Animated,
+                whimsy: config.tui_whimsy,
                 screen_reader_detection_done: None,
                 effects: config.tui_effects,
                 rendering: config.tui_rendering,

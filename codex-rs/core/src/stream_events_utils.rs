@@ -101,7 +101,7 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
         turn_context.model_info(),
         std::slice::from_ref(item),
     )
-        .await;
+    .await;
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(

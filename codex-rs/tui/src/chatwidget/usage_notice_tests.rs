@@ -330,6 +330,8 @@ async fn overlapping_reads_keep_older_success_when_newer_read_fails() -> color_e
                 AppEvent::RateLimitsLoaded {
                     request_id,
                     origin: RateLimitRefreshOrigin::StatusCommand { request_id },
+                    account_alias: None,
+                    account_generation: 0,
                     hard_stop_generation: 0,
                     result: result.map(|update| {
                         serde_json::from_value(serde_json::json!({"rateLimits": update})).unwrap()

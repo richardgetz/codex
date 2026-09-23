@@ -18,7 +18,7 @@ fn assignments_reach_all_fourteen_default_accents() {
             .map(|id| color_for_id(ThreadId::from_u128(id), &colors))
             .collect();
         assert_eq!(assigned.len(), 14);
-        assert_eq!(assigned, colors.iter().copied().collect());
+        assert_eq!(assigned, colors.iter().copied().collect::<HashSet<_>>());
     }
 }
 

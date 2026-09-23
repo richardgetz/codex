@@ -217,7 +217,7 @@ impl ChatWidget {
                         None
                     } else {
                         self.session_model_selection_action(
-                            model.clone(),
+                            model,
                             Some(preset.default_reasoning_effort),
                         )
                     },
@@ -366,7 +366,7 @@ impl ChatWidget {
             model_ids,
             SelectionViewParams {
                 view_id: Some(view_id),
-                footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
+                footer_hint: Some(standard_popup_hint_line()),
                 items,
                 header,
                 ..SelectionViewParams::picker()

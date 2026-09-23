@@ -11,8 +11,8 @@ use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
-use std::path::PathBuf;
 use ratatui::widgets::Wrap;
+use std::path::PathBuf;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;

@@ -898,7 +898,7 @@ pub(crate) async fn record_additional_contexts(
         turn_context.model_info(),
         developer_messages.as_slice(),
     )
-        .await;
+    .await;
 }
 
 fn additional_context_messages(additional_contexts: Vec<String>) -> Vec<ResponseItem> {

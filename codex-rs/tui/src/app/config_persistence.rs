@@ -6,6 +6,7 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
+use codex_protocol::config_types::Personality;
 
 async fn build_config_on_runtime_worker(
     builder: ConfigBuilder,
@@ -271,6 +272,7 @@ impl App {
                 approvals_reviewer,
                 Some(permission_profile.clone()),
                 active_permission_profile,
+                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
@@ -854,6 +856,7 @@ impl App {
                 approvals_reviewer_override,
                 permission_profile_override,
                 active_permission_profile_override,
+                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
@@ -1136,6 +1139,11 @@ impl App {
         false
     }
 
+    pub(super) fn on_update_personality(&mut self, personality: Personality) {
+        self.config.personality = Some(personality);
+        self.chat_widget.set_personality(personality);
+    }
+
     pub(super) fn sync_tui_theme_selection(&mut self, name: String) {
         self.local_settings.tui.theme = Some(name.clone());
         self.chat_widget.set_tui_theme(Some(name));
@@ -1278,6 +1286,7 @@ impl App {
             Some(self.config.approvals_reviewer),
             /*permission_profile*/ None,
             Some(auto_review_preset.active_permission_profile),
+            /*windows_sandbox_level*/ None,
             /*model*/ None,
             /*effort*/ None,
             /*summary*/ None,
@@ -1678,6 +1687,7 @@ mod tests {
     async fn local_daemon_resume_preserves_owner_settings_without_explicit_overrides() {
         let mut app = make_test_app().await;
         app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
             endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
                 socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
             },
@@ -1693,6 +1703,7 @@ mod tests {
     async fn local_daemon_resume_keeps_explicit_session_overrides() {
         let mut app = make_test_app().await;
         app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
             endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
                 socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
             },

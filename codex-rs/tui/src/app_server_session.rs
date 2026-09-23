@@ -195,6 +195,7 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -3737,16 +3738,19 @@ mod tests {
         assert!(account_switch_needs_auth_selection(&GetAccountResponse {
             account: None,
             requires_openai_auth: true,
+            workspace_routing: None,
         }));
 
         assert!(!account_switch_needs_auth_selection(&GetAccountResponse {
             account: None,
             requires_openai_auth: false,
+            workspace_routing: None,
         }));
 
         assert!(!account_switch_needs_auth_selection(&GetAccountResponse {
             account: Some(Account::ApiKey {}),
             requires_openai_auth: true,
+            workspace_routing: None,
         }));
     }
 
@@ -4200,6 +4204,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await;
         config.model_provider_id = "oss-provider".to_string();
         let local_daemon = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
             endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
                 socket_path: AbsolutePathBuf::from_absolute_path_checked(
                     temp_dir.path().join("codex-local-daemon.sock"),
@@ -5119,6 +5124,7 @@ mod tests {
 
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
+            crate::app::WindowsSandboxHost::Local,
             /*forked_from_id*/ None,
             Some("restore".to_string()),
             /*rollout_path*/ None,

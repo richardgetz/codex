@@ -30,7 +30,11 @@ async fn plugin_namespace_for_root_uri(
     for relative_path in DISCOVERABLE_PLUGIN_MANIFEST_PATHS {
         let candidate = plugin_root.join(relative_path).ok()?;
         match fs
-            .get_metadata(&candidate, GetMetadataOptions::default(), /*sandbox*/ None)
+            .get_metadata(
+                &candidate,
+                GetMetadataOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
         {
             Ok(metadata) if metadata.is_file => {

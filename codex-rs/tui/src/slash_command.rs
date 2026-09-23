@@ -106,6 +106,7 @@ pub enum SlashCommand {
     #[strum(to_string = "stop", serialize = "clean")]
     Stop,
     Clear,
+    Personality,
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
@@ -175,6 +176,7 @@ impl SlashCommand {
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
+            SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Team => "show or toggle Lead/Worker team mode for this session",
             SlashCommand::Goal => "set or view the goal for a long-running task",
@@ -361,6 +363,7 @@ impl SlashCommand {
             SlashCommand::Diff
             | SlashCommand::Resume
             | SlashCommand::Model
+            | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Copy
             | SlashCommand::Raw

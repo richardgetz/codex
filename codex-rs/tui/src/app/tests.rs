@@ -48,6 +48,8 @@ mod misalignment_policy;
 mod model_catalog;
 #[path = "tests/model_defaults_tests.rs"]
 mod model_defaults;
+#[path = "tests/pagination_completion_tests.rs"]
+mod pagination_completion_tests;
 #[path = "tests/patch_approval_tests.rs"]
 mod patch_approval_tests;
 #[path = "tests/permission_selection_tests.rs"]
@@ -126,6 +128,7 @@ use crate::history_cell::new_session_info;
 use crate::multi_agents::AgentPickerThreadEntry;
 use crate::multi_agents::SubAgentActivityDisplay;
 use assert_matches::assert_matches;
+use codex_protocol::config_types::Personality;
 
 use crate::app_command::AppCommand as Op;
 use crate::app_event::ConsolidationScrollbackReflow;
@@ -3846,6 +3849,7 @@ default_permissions = "locked-down"
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            windows_sandbox_level: None,
             personality: None,
         }
     );
@@ -9646,6 +9650,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             Some(ActivePermissionProfile::new(
                 codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
+            /*windows_sandbox_level*/ None,
             Some("gpt-5.4".to_string()),
             Some(Some(ReasoningEffortConfig::High)),
             /*summary*/ None,
@@ -9695,6 +9700,7 @@ async fn override_turn_context_sends_thread_settings_update() {
                 collaboration_mode: collaboration_mode.clone(),
                 multi_agent_mode: Default::default(),
                 personality: Some(Personality::Pragmatic),
+                disabled_plugin_ids: Vec::new(),
                 memory_policy: MemoryAccessPolicy::default(),
                 user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(),
                 usage_policy: Default::default(),

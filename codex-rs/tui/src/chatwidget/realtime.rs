@@ -1605,10 +1605,7 @@ impl ChatWidget {
         }
         let mut cells = Vec::new();
         while let Some(cell) = self.realtime_conversation.pending_history_cells.pop_front() {
-            if let Some(active) = self.take_history_insertion_prefix(cell.as_ref()) {
-                cells.push(active);
-            }
-            cells.push(cell);
+            cells.extend(self.collect_history_cells_for_insertion(cell));
         }
         if !cells.is_empty() {
             self.bump_active_cell_revision();

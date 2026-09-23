@@ -1939,6 +1939,9 @@ impl App {
                     self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::Periodic);
                 }
             }
+            AppEvent::RefreshTokenActivity { request_id } => {
+                self.refresh_token_activity(app_server, request_id);
+            }
             AppEvent::RefreshThreadUsage {
                 thread_id,
                 request_id,
@@ -2141,6 +2144,17 @@ impl App {
                     self.chat_widget.finish_rate_limit_recovery();
                 }
             },
+            AppEvent::TokenActivityLoaded { request_id, result } => {
+                if let Err(err) = &result {
+                    tracing::warn!("account/usage/read failed during TUI refresh: {err}");
+                }
+                if self
+                    .chat_widget
+                    .finish_token_activity_refresh(request_id, result)
+                {
+                    self.insert_pending_usage_output_if_ready(tui);
+                }
+            }
             AppEvent::OpenAnalytics { view: summary_view } => {
                 tui.enter_alt_screen()?;
                 let mut view = self.retained_analytics.take().unwrap_or_else(|| {
@@ -2684,6 +2698,7 @@ impl App {
                                         Some(self.config.approvals_reviewer),
                                         Some(preset.permission_profile.clone()),
                                         Some(preset.active_permission_profile.clone()),
+                                        /*windows_sandbox_level*/ None,
                                         /*model*/ None,
                                         /*effort*/ None,
                                         /*summary*/ None,
@@ -2751,6 +2766,24 @@ impl App {
                         self.chat_widget
                             .add_error_message(format!("Failed to save default model: {error}"));
                     }
+                }
+            }
+            AppEvent::PersistPersonalitySelection { personality } => {
+                match crate::config_update::write_config_batch(
+                    app_server.request_handle(),
+                    vec![crate::config_update::replace_config_value(
+                        "personality",
+                        serde_json::json!(personality.to_string()),
+                    )],
+                )
+                .await
+                {
+                    Ok(_) => self
+                        .chat_widget
+                        .add_info_message(format!("Personality set to {personality}"), None),
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to save default personality: {err}")),
                 }
             }
             AppEvent::SelectSessionModel { model, effort } => {
@@ -3156,10 +3189,6 @@ impl App {
                     AppRunControl::Continue => {}
                     AppRunControl::Exit(reason) => return Ok(AppRunControl::Exit(reason)),
                 }
-            }
-            AppEvent::DispatchAgentsOverviewTask { prompt, cwd } => {
-                self.dispatch_agents_overview_task(app_server, prompt.into(), cwd)
-                    .await;
             }
             AppEvent::NewAgentsOverviewWorktree { cwd } => {
                 Box::pin(self.new_agents_overview_worktree(tui, app_server, cwd)).await;
@@ -3802,7 +3831,12 @@ impl App {
             runtime_keymap.validate_realtime_hotkey(self.config.realtime.hotkey.as_deref())
         {
             let params = crate::keymap_setup::build_keymap_conflict_params(
-                context, action, key, intent, err,
+                context,
+                action,
+                key,
+                intent,
+                err,
+                &runtime_keymap,
             );
             self.chat_widget.show_selection_view(params);
             return;

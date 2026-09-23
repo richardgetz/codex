@@ -1692,9 +1692,6 @@ impl App {
             self.app_event_tx
                 .send(AppEvent::EndInitialHistoryReplayBuffer);
         }
-        if matches!(presentation, ThreadAttachPresentation::PromptEdit) {
-            self.chat_widget.emit_prompt_edit_thread_event();
-        }
         self.restore_realtime_replay_state_after_replay(
             &replayed_final_items,
             retained_assistant_captions,

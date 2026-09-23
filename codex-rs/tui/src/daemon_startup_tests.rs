@@ -313,6 +313,7 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume() -> c
         .build()
         .await?;
     let mut target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: false,
         endpoint: RemoteAppServerEndpoint::UnixSocket {
             socket_path: prepared.socket_path.clone(),
         },
@@ -335,7 +336,9 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume() -> c
     .await?;
     drop(app_server);
 
-    let methods = tokio::time::timeout(Duration::from_secs(5), server).await??;
+    let methods = tokio::time::timeout(Duration::from_secs(5), server)
+        .await??
+        .expect("initialize methods should be captured");
     assert_eq!(methods, vec!["initialize".to_string()]);
     Ok(())
 }

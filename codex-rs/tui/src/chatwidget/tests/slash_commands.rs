@@ -4828,6 +4828,7 @@ async fn slash_reload_forwards_operation_arguments_for_persistent_targets() {
             },
             version: "vtest".to_string(),
             is_remote,
+            is_local_daemon: !is_remote,
         });
 
         chat.dispatch_command_with_args(SlashCommand::Reload, "recover".to_string(), Vec::new());

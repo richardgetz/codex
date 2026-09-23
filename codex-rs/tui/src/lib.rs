@@ -64,7 +64,6 @@ use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
 use codex_state::log_db;
@@ -1454,7 +1453,7 @@ async fn run_ratatui_app(
             should_show_trust_screen_flag,
         );
 
-    let config = if should_show_onboarding {
+    let mut config = if should_show_onboarding {
         if let Err(err) = startup_draft.flush_pending_events(&mut tui).await {
             shutdown_startup_session(app_server.take(), &mut terminal_restore_guard).await;
             return Err(err.into());
@@ -3327,6 +3326,7 @@ requires_openai_auth = {requires_openai_auth}
     #[test]
     fn local_daemon_resume_preserves_owner_account_without_explicit_alias() {
         let target = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
             endpoint: RemoteAppServerEndpoint::UnixSocket {
                 socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")
                     .expect("relative socket path"),

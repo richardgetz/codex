@@ -461,7 +461,9 @@ impl Daemon {
             }
             prepare_install::prepare(self, &settings).await?;
             managed.managed_codex_bin = self.current_managed_codex_bin()?;
-            let managed_codex_bin = managed.configured_managed_codex_bin(&settings).to_path_buf();
+            let managed_codex_bin = managed
+                .configured_managed_codex_bin(&settings)
+                .to_path_buf();
             managed.ensure_managed_codex_bin(&managed_codex_bin)?;
             // Only a fresh launch may replace these settings. Keep them for restarts
             // and updates, without changing the user's config or a running daemon.
@@ -471,21 +473,24 @@ impl Daemon {
             }
             let pid = managed.start_managed_backend(&settings).await?;
             let info = managed.wait_until_ready(&managed_codex_bin).await?;
-            (
-                LifecycleStatus::Started,
-                Some(BackendKind::Pid),
-                pid,
-                info,
-            )
+            (LifecycleStatus::Started, Some(BackendKind::Pid), pid, info)
         };
         if backend.is_some()
             && let Err(err) = managed.ensure_managed_updater(&settings).await
         {
             eprintln!("warning: failed to ensure managed updater after app-server start: {err:#}");
         }
-        let output_bin = managed.configured_managed_codex_bin(&settings).to_path_buf();
+        let output_bin = managed
+            .configured_managed_codex_bin(&settings)
+            .to_path_buf();
         Ok(managed
-            .output(status, backend, &output_bin, pid, Some(info.app_server_version))
+            .output(
+                status,
+                backend,
+                &output_bin,
+                pid,
+                Some(info.app_server_version),
+            )
             .await)
     }
 
@@ -507,7 +512,9 @@ impl Daemon {
                 .await?;
         }
 
-        let managed_codex_bin = managed.configured_managed_codex_bin(&settings).to_path_buf();
+        let managed_codex_bin = managed
+            .configured_managed_codex_bin(&settings)
+            .to_path_buf();
         managed.ensure_managed_codex_bin(&managed_codex_bin)?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             backend
@@ -851,7 +858,9 @@ impl Daemon {
         prepare_install::prepare(self, &settings).await?;
         let mut managed = self.clone();
         managed.managed_codex_bin = self.current_managed_codex_bin()?;
-        let managed_codex_bin = managed.configured_managed_codex_bin(&settings).to_path_buf();
+        let managed_codex_bin = managed
+            .configured_managed_codex_bin(&settings)
+            .to_path_buf();
         managed.ensure_managed_codex_bin(&managed_codex_bin)?;
         settings.save(&self.settings_file).await?;
 
@@ -861,14 +870,16 @@ impl Daemon {
                 .await?;
         }
 
-        let backend = backend::pid_backend(managed.backend_paths_with_bin(&settings, &managed_codex_bin));
+        let backend =
+            backend::pid_backend(managed.backend_paths_with_bin(&settings, &managed_codex_bin));
         backend.start().await?;
         let auto_update_enabled = managed.ensure_managed_updater(&settings).await?;
         let info = managed.wait_until_ready(&managed_codex_bin).await?;
         let managed_codex_version = managed
             .managed_codex_version_best_effort(&managed_codex_bin)
             .await;
-        let running_managed_codex_version = managed.running_managed_codex_version_best_effort().await;
+        let running_managed_codex_version =
+            managed.running_managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,

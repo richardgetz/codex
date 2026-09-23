@@ -922,6 +922,7 @@ mod tests {
                 remote_trust_key: Some("/workspace/project".to_string()),
                 is_done: false,
                 should_exit: false,
+                exit_on_auth_cancel: false,
             };
             screen.handle_key_event(key.into());
             assert!(!persist_selected_trust(&mut screen, /*request_handle*/ None).await);

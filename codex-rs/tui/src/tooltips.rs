@@ -4,6 +4,8 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use codex_config::types::TuiKeymap;
 use codex_features::FEATURES;
 use codex_features::Feature;
+#[cfg(test)]
+use codex_features::FeatureOwner;
 use codex_features::FeatureSpec;
 use codex_protocol::account::PlanType;
 use lazy_static::lazy_static;
@@ -441,6 +443,7 @@ mod tests {
             .find(|spec| spec.id == Feature::RealtimeConversation)
             .unwrap()
             .stage = codex_features::Stage::Experimental {
+            owner: FeatureOwner::Rick,
             name: "Voice conversations",
             menu_description: "Talk with Codex using /voice.",
             announcement: "NEW: Voice conversations can now be enabled from /experimental. Restart Codex after enabling, then use /voice.",

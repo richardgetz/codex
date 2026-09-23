@@ -1,9 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 3309
 expression: popup
 ---
   Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
+
 
   1. GPT-6-Astra (default)  Frontier intelligence for the most demanding work.
   2. GPT-6-Sol              Workhorse model for coding and everyday work.

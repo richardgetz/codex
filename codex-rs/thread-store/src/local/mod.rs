@@ -54,9 +54,9 @@ use tokio::sync::OwnedRwLockReadGuard;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::sync::RwLock;
 
-use crate::AppendThreadItemsParams;
 use crate::AddThreadAttachmentOutcome;
 use crate::AddThreadAttachmentParams;
+use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
 use crate::ArchiveThreadsParams;
 use crate::CreateProjectParams;

@@ -121,6 +121,7 @@ pub(crate) async fn check_directory_trust(
             remote_trust_key,
             is_done: false,
             should_exit: false,
+            exit_on_auth_cancel: false,
         };
         let result = run_onboarding_screen(
             screen,
