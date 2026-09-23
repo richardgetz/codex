@@ -56,3 +56,6 @@ wiremock = { workspace = true }
 
 [lib]
 doctest = false
+
+[package.metadata.cargo-shear]
+ignored-paths = ["src/internal_identity.rs"]

@@ -43,3 +43,11 @@ core_test_support = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.cargo-shear]
+ignored-paths = [
+    "src/async_scorer/review_evidence.rs",
+    "src/sync_reviewer/prompt.rs",
+    "src/sync_reviewer/prompt_tests.rs",
+    "src/sync_reviewer/reviewer_config_tests.rs",
+]
