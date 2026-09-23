@@ -449,6 +449,8 @@ pub(crate) use realtime::realtime_delegation_display_text;
 pub(crate) use realtime::realtime_delegation_input;
 #[cfg(test)]
 pub(crate) use realtime::tests::activate_voice_for_thread;
+#[cfg(test)]
+pub(crate) use realtime::tests::commit_realtime_history_events;
 mod realtime_transcript;
 use self::realtime::RealtimeConversationUiState;
 mod reasoning_shortcuts;

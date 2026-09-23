@@ -319,6 +319,7 @@ async fn switching_agent_threads_stops_backend_voice_once_through_app_server() -
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "user".into(),
                 text: "queued before switch".into(),
             },
@@ -369,6 +370,7 @@ async fn switching_threads_keeps_the_source_voice_partial_only_on_reattach() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "user".into(),
                 delta: "spoken partial".into(),
             },
@@ -405,6 +407,7 @@ async fn switching_threads_keeps_the_source_voice_partial_only_on_reattach() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "user".into(),
                 text: "spoken partial completed".into(),
             },
@@ -478,6 +481,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "assistant".into(),
                 text: "arrived after two switches".into(),
             },
@@ -490,6 +494,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "user".into(),
                 delta: "last ".into(),
             },
@@ -497,6 +502,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "user".into(),
                 delta: "words".into(),
             },
@@ -504,6 +510,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "user".into(),
                 text: "last words".into(),
             },
@@ -518,6 +525,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeTranscriptDelta(
             codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "assistant".into(),
                 delta: "discarded partial".into(),
             },
@@ -530,6 +538,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "assistant".into(),
                 text: String::new(),
             },
@@ -721,6 +730,7 @@ async fn inactive_voice_replay_is_bounded_and_discarded_with_its_thread() {
             &ServerNotification::ThreadRealtimeTranscriptDone(
                 codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                     thread_id: thread_id.to_string(),
+                    submission_id: String::new(),
                     role: "assistant".into(),
                     text: format!("caption {index}"),
                 },
@@ -941,6 +951,7 @@ async fn completed_voice_caption_survives_repeated_thread_replacement() {
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 role: "assistant".into(),
                 text: "spoken complete".into(),
             },
@@ -1042,6 +1053,7 @@ async fn inactive_caption_precedes_later_buffered_turn_without_start_event() {
             &ServerNotification::ThreadRealtimeTranscriptDone(
                 codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                     thread_id: source.to_string(),
+                    submission_id: String::new(),
                     role: "assistant".into(),
                     text: "Earlier spoken answer".into(),
                 },
