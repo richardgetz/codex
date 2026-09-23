@@ -20,6 +20,11 @@ release or merge rules.
 
 ## Unreleased
 
+- Interactive TUI startup gives the dedicated `codex-main` thread a 32 MiB
+  stack budget while keeping Tokio worker stacks at 16 MiB, preventing the
+  fork's large merged async dispatch path from aborting during `just codex`
+  startup.
+
 - Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
   recovery contract, account and launcher ownership, pause/continue and ETA
   APIs, and migration numbering. Upstream attachment state is adapted to the
@@ -878,6 +883,12 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify upstream refreshes retain enough dedicated `codex-main` stack for the
+  merged TUI startup futures (or reduce those frames before lowering the
+  budget), while Tokio worker stacks remain at their shared 16 MiB setting.
+  Smoke `just codex` through the loaded model screen to catch startup stack
+  regressions.
 
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source
