@@ -48,7 +48,6 @@ use crate::request_processors::ThreadEtaRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
-use crate::request_processors::ThreadResumeTarget;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::read_server_diagnostics;
@@ -824,7 +823,7 @@ impl MessageProcessor {
 
     pub(crate) async fn restore_daemon_threads(
         &self,
-        mut snapshot: codex_app_server_transport::daemon_recovery::RecoverySnapshot,
+        snapshot: codex_app_server_transport::daemon_recovery::RecoverySnapshot,
     ) {
         for thread_id in snapshot.loaded {
             let Ok(_permit) = self.turn_admission.admit() else {
@@ -832,17 +831,7 @@ impl MessageProcessor {
             };
             if let Err(err) = self
                 .thread_processor
-                .thread_resume(
-                    ThreadResumeTarget::DaemonRecovery(snapshot.interrupted.remove(&thread_id)),
-                    codex_app_server_protocol::ThreadResumeParams {
-                        thread_id: thread_id.clone(),
-                        exclude_turns: true,
-                        ..Default::default()
-                    },
-                    /*app_server_client_name*/ None,
-                    /*app_server_client_version*/ None,
-                    ClientMcpExtensions::default(),
-                )
+                .thread_resume_daemon(thread_id.clone())
                 .await
             {
                 tracing::warn!(code = err.code, "failed to restore saved daemon thread");
