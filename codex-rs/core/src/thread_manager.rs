@@ -1,3 +1,4 @@
+mod managed;
 mod shared_instructions;
 
 use crate::CodexAppsToolsCache;
