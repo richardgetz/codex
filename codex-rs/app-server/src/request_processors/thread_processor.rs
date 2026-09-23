@@ -2718,7 +2718,7 @@ impl ThreadRequestProcessor {
         })
     }
 
-    async fn thread_rollback_start(
+    pub(crate) async fn thread_rollback_start(
         &self,
         request_id: &ConnectionRequestId,
         params: ThreadRollbackParams,

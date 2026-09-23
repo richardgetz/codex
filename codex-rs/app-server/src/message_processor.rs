@@ -48,7 +48,7 @@ use crate::request_processors::ThreadEtaRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
-use crate::request_processors::thread_processor::ThreadResumeTarget;
+use crate::request_processors::ThreadResumeTarget;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::read_server_diagnostics;
@@ -1621,6 +1621,11 @@ impl MessageProcessor {
                     .thread_background_terminals_terminate(params)
                     .await
             }
+            ClientRequest::ThreadRollback { params, .. } => self
+                .thread_processor
+                .thread_rollback_start(&request_id, params)
+                .await
+                .map(|_| None),
             ClientRequest::ThreadRevert { params, .. } => {
                 self.thread_processor
                     .thread_revert(

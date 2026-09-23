@@ -123,7 +123,11 @@ impl PidBackend {
             }
         };
         command
-            .args(self.command_args_with_managed_flag(use_managed_daemon_flag))
+            .args(
+                self.command_args_with_managed_flag(use_managed_daemon_flag)
+                    .iter()
+                    .map(|arg| arg.as_ref()),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_log.into_std().await));
