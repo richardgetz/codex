@@ -2096,6 +2096,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         offer_sdp: String,
         model: Option<String>,
+        voice: Option<RealtimeVoice>,
     ) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadRealtimeStartResponse = self
@@ -2121,7 +2122,7 @@ impl AppServerSession {
                     realtime_session_id: None,
                     transport: Some(ThreadRealtimeStartTransport::Webrtc { sdp: offer_sdp }),
                     version: Some(RealtimeConversationVersion::V3),
-                    voice: None,
+                    voice,
                 },
             })
             .await

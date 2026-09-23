@@ -4,6 +4,7 @@
 //! orchestration module without changing their event wiring.
 
 use super::*;
+use codex_protocol::config_types::Personality;
 
 impl ChatWidget {
     pub(super) fn open_theme_picker(&mut self) {

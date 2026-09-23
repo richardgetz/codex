@@ -287,8 +287,15 @@ pub(super) async fn run_main_inner(
     })?;
     // Keep normal terminal signals available until local configuration is ready. Once raw
     // mode begins, StartupDraft immediately takes ownership of input.
-    let (initialized_terminal, terminal_restore_guard) = tokio::task::spawn_blocking(|| {
-        tui::init().map(|terminal| (terminal, TerminalRestoreGuard::new()))
+    let realtime_voice_enabled = presentation
+        .bootstrap_config
+        .config_toml
+        .realtime
+        .as_ref()
+        .and_then(|realtime| realtime.enabled)
+        .unwrap_or(false);
+    let (initialized_terminal, terminal_restore_guard) = tokio::task::spawn_blocking(move || {
+        tui::init(realtime_voice_enabled).map(|terminal| (terminal, TerminalRestoreGuard::new()))
     })
     .await
     .map_err(std::io::Error::other)??;

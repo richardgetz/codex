@@ -588,6 +588,7 @@ async fn connect_daemon_at(socket_path: AbsolutePathBuf) -> std::io::Result<Prep
     }
 
     let target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: false,
         endpoint: RemoteAppServerEndpoint::UnixSocket {
             socket_path: socket_path.clone(),
         },

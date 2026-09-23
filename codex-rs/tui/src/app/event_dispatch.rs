@@ -1188,6 +1188,7 @@ impl App {
                     local_daemon_socket: match &self.app_server_target {
                         crate::AppServerTarget::LocalDaemon {
                             endpoint: crate::RemoteAppServerEndpoint::UnixSocket { socket_path },
+                            ..
                         } => Some(socket_path.to_path_buf()),
                         _ => None,
                     },
@@ -1311,6 +1312,7 @@ impl App {
                     local_daemon_socket: match &self.app_server_target {
                         crate::AppServerTarget::LocalDaemon {
                             endpoint: crate::RemoteAppServerEndpoint::UnixSocket { socket_path },
+                            ..
                         } => Some(socket_path.to_path_buf()),
                         _ => None,
                     },
@@ -1324,7 +1326,7 @@ impl App {
                     return Ok(AppRunControl::Continue);
                 };
                 let local_daemon_socket = match &self.app_server_target {
-                    crate::AppServerTarget::LocalDaemon { endpoint } => match endpoint {
+                    crate::AppServerTarget::LocalDaemon { endpoint, .. } => match endpoint {
                         crate::RemoteAppServerEndpoint::UnixSocket { socket_path } => {
                             Some(socket_path.to_path_buf())
                         }
