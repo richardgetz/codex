@@ -23,9 +23,16 @@ impl MisalignmentReview {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum MisalignmentTurnSource {
+    ServerNotification,
+    AcknowledgedContinuation,
+}
+
 pub(super) struct MisalignmentViolation {
     turn_id: Option<String>,
     review: Option<Arc<MisalignmentReview>>,
+    retired_voice: bool,
 }
 
 const MISALIGNMENT_POLICY_TITLE: &str = "Chat stopped as a precaution";
@@ -82,6 +89,10 @@ impl ChatWidget {
         {
             return;
         }
+        let retired_voice = self.realtime_conversation_is_running();
+        if retired_voice {
+            self.stop_realtime_conversation();
+        }
         let review = self.thread_id.zip(turn_id.clone()).zip(details).map(
             |((thread_id, turn_id), details)| {
                 Arc::new(MisalignmentReview {
@@ -91,7 +102,11 @@ impl ChatWidget {
                 })
             },
         );
-        self.misalignment_policy_violation = Some(MisalignmentViolation { turn_id, review });
+        self.misalignment_policy_violation = Some(MisalignmentViolation {
+            turn_id,
+            review,
+            retired_voice,
+        });
         self.input_queue.clear();
         self.finalize_turn();
         self.refresh_pending_input_preview();
@@ -164,7 +179,7 @@ impl ChatWidget {
             ),
             items,
             allow_cancel: false,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 
@@ -209,15 +224,23 @@ impl ChatWidget {
                 },
             ],
             allow_cancel: false,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 
-    pub(crate) fn clear_misalignment_for_new_turn(&mut self, turn_id: &str) {
+    pub(crate) fn clear_misalignment_for_new_turn(
+        &mut self,
+        turn_id: &str,
+        source: MisalignmentTurnSource,
+    ) {
         if self
             .misalignment_policy_violation
             .as_ref()
-            .is_some_and(|violation| violation.turn_id.as_ref().is_some_and(|id| id != turn_id))
+            .is_some_and(|violation| {
+                violation.turn_id.as_ref().is_some_and(|id| id != turn_id)
+                    && (!violation.retired_voice
+                        || source == MisalignmentTurnSource::AcknowledgedContinuation)
+            })
         {
             self.misalignment_policy_violation = None;
             self.bottom_pane.dismiss_view_by_id(PRECAUTION_VIEW);

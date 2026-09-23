@@ -18,6 +18,7 @@ async fn local_daemon_frontend_refresh_carries_chat_widget_provider() -> Result<
         "the test must distinguish startup and active-thread providers"
     );
     app.app_server_target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: false,
         endpoint: RemoteAppServerEndpoint::WebSocket {
             websocket_url: "wss://example.com/".to_string(),
             auth_token: None,

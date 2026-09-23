@@ -105,3 +105,8 @@ explicit release.
 Cross-session ETA task navigation indexes are appended as
 `0063_rick_eta_cross_session_index.sql`; the keyset ordering and terminal-only retention
 queries use these indexes without changing the existing root-scoped projection.
+
+The `rust-v0.155.1` refresh keeps the already-shipped
+`0055_upstream_projects_recency.sql` migration unchanged. Its incoming thread
+attachment rename collides with that numeric version, so it is appended as
+`0064_upstream_thread_attachments.sql`.

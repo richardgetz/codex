@@ -5,6 +5,7 @@ use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_server_session::AppServerSession;
+use crate::app_server_session::personality_opt_out_only;
 use crate::chatwidget::TeamCommand;
 use crate::chatwidget::cyber_model_approval_reviewer;
 use crate::chatwidget::lead_balance_label;
@@ -19,6 +20,7 @@ use codex_app_server_protocol::ThreadTeamSettingsUpdate;
 use codex_config::types::ApprovalsReviewer;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
@@ -262,7 +264,7 @@ impl App {
     pub(super) async fn sync_active_thread_personality_setting(
         &mut self,
         app_server: &mut AppServerSession,
-        personality: codex_protocol::config_types::Personality,
+        personality: Personality,
     ) {
         let Some(thread_id) = self.active_thread_id else {
             return;
@@ -287,8 +289,6 @@ impl App {
             approvals_reviewer,
             permission_profile: _,
             active_permission_profile,
-            // TODO(anp): Support Windows sandbox updates through environment configuration;
-            // thread/settings/update cannot currently represent this override.
             windows_sandbox_level: _,
             model,
             effort,
@@ -325,6 +325,9 @@ impl App {
         thread_id: ThreadId,
         settings: &ThreadSettings,
     ) {
+        if let Some(blank) = self.agents_overview.blank_sessions.get_mut(&thread_id) {
+            apply_thread_settings_to_session(&mut blank.session, settings);
+        }
         if self.primary_thread_id == Some(thread_id)
             && let Some(session) = self.primary_session_configured.as_mut()
         {
@@ -342,8 +345,9 @@ impl App {
     pub(super) async fn send_thread_settings_update(
         &mut self,
         app_server: &mut AppServerSession,
-        params: ThreadSettingsUpdateParams,
+        mut params: ThreadSettingsUpdateParams,
     ) -> bool {
+        params.personality = personality_opt_out_only(params.personality);
         if !thread_settings_update_has_changes(&params) {
             return false;
         }

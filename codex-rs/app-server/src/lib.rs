@@ -45,7 +45,6 @@ use crate::transport::TransportEvent;
 use crate::transport::acquire_app_server_startup_lock;
 use crate::transport::app_server_startup_lock_path;
 use crate::transport::auth::policy_from_settings;
-use crate::transport::prepare_control_socket_path;
 use crate::transport::route_outgoing_envelope;
 use crate::transport::start_control_socket_acceptor;
 use crate::transport::start_remote_control;
@@ -57,6 +56,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
 use codex_app_server_protocol::TextRange as AppTextRange;
+use codex_app_server_transport::daemon_recovery_file_path;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLoadError;
 use codex_config::TextRange as CoreTextRange;
@@ -113,6 +113,7 @@ mod config_manager_service;
 mod connection_cleanup;
 mod connection_rpc_gate;
 mod current_time;
+mod daemon_thread_recovery;
 mod dynamic_tools;
 mod effective_plugin_change;
 mod error_code;
@@ -127,6 +128,7 @@ mod image_url;
 pub mod in_process;
 mod mcp_refresh;
 mod message_processor;
+mod model_catalog;
 mod models;
 mod models_refresh_worker;
 mod notification_media;
@@ -142,6 +144,7 @@ mod thread_control_runtime;
 mod thread_state;
 mod thread_status;
 mod transport;
+mod turn_admission;
 mod turn_cost_worker;
 mod user_verification;
 mod user_verification_response;
@@ -257,6 +260,7 @@ impl ShutdownState {
         signal: ShutdownSignal,
         connection_count: usize,
         running_turn_count: usize,
+        turn_admission: &turn_admission::TurnAdmission,
     ) {
         if self.requested {
             if matches!(signal, ShutdownSignal::Forceable) {
@@ -265,20 +269,26 @@ impl ShutdownState {
             return;
         }
 
+        turn_admission.begin_drain();
         self.requested = true;
         self.last_logged_running_turn_count = None;
         info!(
-            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new work is rejected while assistant turns drain)",
+            "received shutdown signal; entering graceful restart drain (connections={}, runningAssistantTurns={}, new client turns rejected)",
             connection_count, running_turn_count,
         );
     }
 
-    fn update(&mut self, running_turn_count: usize, connection_count: usize) -> ShutdownAction {
+    fn update(
+        &mut self,
+        running_turn_count: usize,
+        active_admissions: usize,
+        connection_count: usize,
+    ) -> ShutdownAction {
         if !self.requested {
             return ShutdownAction::Noop;
         }
 
-        if self.forced || running_turn_count == 0 {
+        if self.forced || (running_turn_count == 0 && active_admissions == 0) {
             if self.forced {
                 info!(
                     "received second shutdown signal; forcing restart with {running_turn_count} running assistant turn(s) and {connection_count} connection(s)"
@@ -293,7 +303,7 @@ impl ShutdownState {
 
         if self.last_logged_running_turn_count != Some(running_turn_count) {
             info!(
-                "shutdown signal restart: waiting for {running_turn_count} running assistant turn(s) to finish"
+                "shutdown signal restart: waiting for {running_turn_count} running assistant turn(s) and {active_admissions} admitted request(s) to finish"
             );
             self.last_logged_running_turn_count = Some(running_turn_count);
         }
@@ -447,6 +457,15 @@ pub async fn run_main(
         AppServerRuntimeOptions::default(),
     )
     .await
+    .map(|_| ())
+}
+
+/// Reports whether shutdown finished or the managed daemon must exit without waiting for I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppServerExit {
+    Graceful,
+    /// Executables should exit before dropping their runtime; libraries must not exit their host.
+    Forced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,6 +480,7 @@ pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_startup_mode: RemoteControlStartupMode,
     pub install_shutdown_signal_handler: bool,
+    pub managed_daemon: bool,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -470,6 +490,7 @@ impl Default for AppServerRuntimeOptions {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_startup_mode: RemoteControlStartupMode::ResolvePersisted,
             install_shutdown_signal_handler: true,
+            managed_daemon: false,
         }
     }
 }
@@ -485,7 +506,9 @@ pub async fn run_main_with_transport_options(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
-) -> IoResult<()> {
+) -> IoResult<AppServerExit> {
+    #[cfg(target_os = "windows")]
+    let _registered_core = codex_windows_sandbox::registered_core_requested();
     let loader_overrides = loader_overrides_with_test_user_config_file(
         loader_overrides,
         test_user_config_file_from_env(),
@@ -620,10 +643,9 @@ pub async fn run_main_with_transport_options(
     codex_core::otel_init::record_process_start(otel.as_ref(), OTEL_SERVICE_NAME);
     codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), OTEL_SERVICE_NAME);
     let unix_socket_startup_lock = match &transport {
-        AppServerTransport::UnixSocket { socket_path } => {
+        AppServerTransport::UnixSocket { .. } => {
             let startup_lock_path = app_server_startup_lock_path(&codex_home)?;
             let startup_lock = acquire_app_server_startup_lock(startup_lock_path).await?;
-            prepare_control_socket_path(socket_path.as_path()).await?;
             Some(startup_lock)
         }
         _ => None,
@@ -743,18 +765,21 @@ pub async fn run_main_with_transport_options(
     let single_client_mode = matches!(&transport, AppServerTransport::Stdio);
     let graceful_signal_restart_enabled =
         runtime_options.install_shutdown_signal_handler && !single_client_mode;
+    let managed_daemon = matches!(&transport, AppServerTransport::UnixSocket { .. })
+        && runtime_options.managed_daemon;
     let mut app_server_client_name_rx = None;
 
     match &transport {
         AppServerTransport::Stdio => {
             let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
             app_server_client_name_rx = Some(stdio_client_name_rx);
-            start_stdio_connection(
+            let accept_handle = start_stdio_connection(
                 transport_event_tx.clone(),
-                &mut transport_accept_handles,
                 stdio_client_name_tx,
+                runtime_options.install_shutdown_signal_handler,
             )
             .await?;
+            transport_accept_handles.push(accept_handle);
         }
         AppServerTransport::UnixSocket { socket_path } => {
             let accept_handle = start_control_socket_acceptor(
@@ -926,6 +951,7 @@ pub async fn run_main_with_transport_options(
         info!("outbound router task exited (channel closed)");
     });
 
+    let recovery_file = daemon_recovery_file_path(&config.codex_home);
     let server_lifecycle = Arc::new(ServerLifecycle::new());
     let (shutdown_signal_tx, shutdown_signal_rx) = mpsc::channel(8);
     let shutdown_signal_handle = graceful_signal_restart_enabled.then(|| {
@@ -966,7 +992,10 @@ pub async fn run_main_with_transport_options(
             state_db: state_db.clone(),
             config_warnings,
             session_source,
-            auth_manager,
+            auth_manager: Arc::clone(&auth_manager),
+            user_verification: Arc::new(crate::user_verification::Service::new(Arc::clone(
+                &auth_manager,
+            ))),
             installation_id,
             code_mode_session_provider,
             server_lifecycle: Arc::clone(&server_lifecycle),
@@ -980,20 +1009,53 @@ pub async fn run_main_with_transport_options(
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
+        let mut active_admissions_rx = processor.turn_admission.subscribe_active();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
         let mut connection_cleanup_tasks = ConnectionCleanupTasks::new();
+        let mut thread_listener_tasks = tokio::task::JoinSet::new();
         let mut remote_control_status_rx = remote_control_handle.status_receiver();
         let mut remote_control_status = remote_control_status_rx.borrow().clone();
         let transport_shutdown_token = transport_shutdown_token.clone();
         let mut shutdown_signal_rx = shutdown_signal_rx;
         async move {
+            let recovery_task = if managed_daemon {
+                match daemon_thread_recovery::start_recovery(
+                    recovery_file.clone(),
+                    Arc::clone(&processor),
+                )
+                .await
+                {
+                    Ok(task) => Some(task),
+                    Err(err) => {
+                        warn!("failed to consume daemon recovery snapshot: {err}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            // Keep force signals and daemon control events responsive while saving.
+            let mut snapshot = Box::pin(async {
+                let processor = Arc::clone(&processor);
+                let recovery_file = recovery_file.clone();
+                // Run independently: snapshot locks can require the event loop to make progress.
+                let task = tokio::spawn(async move {
+                    let saved = processor.daemon_recovery_snapshot().await;
+                    if let Err(err) = daemon_thread_recovery::snapshot(recovery_file, saved).await {
+                        warn!("failed to save threads during daemon shutdown: {err}");
+                    }
+                });
+                let _ = tokio_util::task::AbortOnDropHandle::new(task).await;
+            });
+            let mut snapshot_finished = !managed_daemon;
+            let mut clients_disconnected = false;
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
             let exit_reason = loop {
-                let running_turn_count = {
-                    let running_turn_count = running_turn_count_rx.borrow();
-                    *running_turn_count
-                };
+                // Sample admissions first: one can publish a running turn before
+                // releasing its permit, and shutdown must observe that new turn.
+                let active_admissions = *active_admissions_rx.borrow_and_update();
+                let running_turn_count = *running_turn_count_rx.borrow_and_update();
                 if let Some(snapshot) =
                     server_lifecycle.update_running_assistant_turns(running_turn_count)
                 {
@@ -1004,18 +1066,37 @@ pub async fn run_main_with_transport_options(
                     )
                     .await;
                 }
-                if matches!(
-                    shutdown_state.update(running_turn_count, connections.len()),
+                let ready_to_exit = matches!(
+                    shutdown_state
+                        .update(running_turn_count, active_admissions, connections.len(),),
                     ShutdownAction::Finish
-                ) {
-                    transport_shutdown_token.cancel();
-                    let _ = outbound_control_tx
-                        .send(OutboundControlEvent::DisconnectAll)
-                        .await;
-                    break "shutdown_requested";
+                );
+                if ready_to_exit {
+                    if let Some(task) = &recovery_task {
+                        task.abort();
+                    }
+                    let finished = snapshot_finished || shutdown_state.forced();
+                    if finished {
+                        transport_shutdown_token.cancel();
+                    }
+                    if managed_daemon && shutdown_state.forced() {
+                        break "forced_shutdown_requested";
+                    }
+                    if !clients_disconnected {
+                        let _ = outbound_control_tx
+                            .send(OutboundControlEvent::DisconnectAll)
+                            .await;
+                        clients_disconnected = true;
+                    }
+                    if finished {
+                        break "shutdown_requested";
+                    }
                 }
 
                 tokio::select! {
+                    _ = &mut snapshot, if shutdown_state.requested() && active_admissions == 0 && !snapshot_finished => {
+                        snapshot_finished = true;
+                    }
                     shutdown_signal_result = shutdown_signal_rx.recv(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
                         let Some(shutdown_signal_result) = shutdown_signal_result else {
                             break "shutdown_signal_listener_closed";
@@ -1032,7 +1113,12 @@ pub async fn run_main_with_transport_options(
                         // Keep the transition snapshot aligned with the latest watcher value.
                         let count_snapshot =
                             server_lifecycle.update_running_assistant_turns(running_turn_count);
-                        shutdown_state.on_signal(signal, connections.len(), running_turn_count);
+                        shutdown_state.on_signal(
+                            signal,
+                            connections.len(),
+                            running_turn_count,
+                            &processor.turn_admission,
+                        );
                         let lifecycle_snapshot = if !was_requested {
                             server_lifecycle.begin_drain()
                         } else if matches!(signal, ShutdownSignal::Forceable) {
@@ -1054,10 +1140,21 @@ pub async fn run_main_with_transport_options(
                             warn!("running-turn watcher closed during graceful restart drain");
                         }
                     }
+                    changed = active_admissions_rx.changed(), if shutdown_state.requested() => {
+                        if changed.is_err() {
+                            warn!("turn admission watcher closed during graceful restart drain");
+                        }
+                    }
                     event = transport_event_rx.recv() => {
                         let Some(event) = event else {
                             break "transport_channel_closed";
                         };
+                        if ready_to_exit && !matches!(&event, TransportEvent::DaemonShutdown) {
+                            if let TransportEvent::ConnectionOpened { disconnect_sender: Some(token), .. } = event {
+                                token.cancel();
+                            }
+                            continue;
+                        }
                         match event {
                             TransportEvent::DaemonShutdown => {
                                 let running_turn_count = *running_turn_count_rx.borrow();
@@ -1069,6 +1166,7 @@ pub async fn run_main_with_transport_options(
                                     ShutdownSignal::Forceable,
                                     connections.len(),
                                     running_turn_count,
+                                    &processor.turn_admission,
                                 );
                                 let lifecycle_snapshot = if !was_requested {
                                     server_lifecycle.begin_drain()
@@ -1087,6 +1185,7 @@ pub async fn run_main_with_transport_options(
                             TransportEvent::ConnectionOpened {
                                 connection_id,
                                 origin,
+                                auth,
                                 writer,
                                 disconnect_sender,
                             } => {
@@ -1117,6 +1216,7 @@ pub async fn run_main_with_transport_options(
                                     connection_id,
                                     ConnectionState::new(
                                         origin,
+                                        auth,
                                         outbound_initialized,
                                         outbound_experimental_api_enabled,
                                         outbound_opted_out_notification_methods,
@@ -1241,6 +1341,11 @@ pub async fn run_main_with_transport_options(
                         }
                     }
                     _ = connection_cleanup_tasks.reap_next() => {}
+                    result = thread_listener_tasks.join_next(), if !thread_listener_tasks.is_empty() => {
+                        if let Some(Err(err)) = result {
+                            warn!("thread listener attachment failed: {err}");
+                        }
+                    }
                     changed = remote_control_status_rx.changed() => {
                         if changed.is_err() {
                             continue;
@@ -1255,7 +1360,7 @@ pub async fn run_main_with_transport_options(
                             .send_server_notification(notification)
                             .await;
                     }
-                    created = thread_created_rx.recv(), if listen_for_threads => {
+                    created = thread_created_rx.recv(), if listen_for_threads && !ready_to_exit => {
                         match created {
                             Ok(thread_id) => {
                                 let mut initialized_connection_ids = Vec::new();
@@ -1264,12 +1369,16 @@ pub async fn run_main_with_transport_options(
                                         initialized_connection_ids.push(*connection_id);
                                     }
                                 }
-                                processor
-                                    .try_attach_thread_listener(
-                                        thread_id,
-                                        initialized_connection_ids,
-                                    )
-                                    .await;
+                                let processor = Arc::clone(&processor);
+                                // Attachment can wait on snapshot locks; keep force shutdown responsive.
+                                thread_listener_tasks.spawn(async move {
+                                    processor
+                                        .try_attach_thread_listener(
+                                            thread_id,
+                                            initialized_connection_ids,
+                                        )
+                                        .await;
+                                });
                             }
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                                 // TODO(jif) handle lag.
@@ -1286,6 +1395,11 @@ pub async fn run_main_with_transport_options(
                 }
             };
 
+            if let Some(task) = recovery_task {
+                task.abort();
+            }
+            drop(snapshot);
+            drop(thread_listener_tasks);
             if !shutdown_state.forced() {
                 futures::future::join_all(connections.iter().map(
                     |(&connection_id, connection_state)| {
@@ -1305,12 +1419,19 @@ pub async fn run_main_with_transport_options(
                 shutdown_forced = shutdown_state.forced(),
                 "processor task exited"
             );
+            if managed_daemon && shutdown_state.forced() {
+                AppServerExit::Forced
+            } else {
+                AppServerExit::Graceful
+            }
         }
     });
 
     drop(transport_event_tx);
 
-    let _ = processor_handle.await;
+    if matches!(processor_handle.await, Ok(AppServerExit::Forced)) {
+        return Ok(AppServerExit::Forced);
+    }
     let _ = outbound_handle.await;
 
     transport_shutdown_token.cancel();
@@ -1322,7 +1443,7 @@ pub async fn run_main_with_transport_options(
         let _ = handle.await;
     }
 
-    Ok(())
+    Ok(AppServerExit::Graceful)
 }
 
 struct SqliteRecoveryNotice {
@@ -1498,15 +1619,51 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::ShutdownAction;
+    use super::ShutdownSignal;
+    use super::ShutdownState;
     use super::is_fatal_config_error;
     #[cfg(debug_assertions)]
     use super::loader_overrides_with_test_user_config_file;
+    use super::turn_admission::TurnAdmission;
     #[cfg(debug_assertions)]
     use codex_config::LoaderOverrides;
     use codex_config::account_registry::invalid_configured_account_alias_error;
     #[cfg(debug_assertions)]
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn shutdown_waits_for_admitted_requests_but_force_remains_available() {
+        let admission = TurnAdmission::default();
+        let active = admission.subscribe_active();
+        let in_flight = admission.admit().expect("request admitted");
+        let mut shutdown = ShutdownState::default();
+        let connection_count = 1;
+        let running_turn_count = 0;
+        shutdown.on_signal(
+            ShutdownSignal::Forceable,
+            connection_count,
+            running_turn_count,
+            &admission,
+        );
+        assert!(matches!(
+            shutdown.update(running_turn_count, *active.borrow(), connection_count),
+            ShutdownAction::Noop
+        ));
+        shutdown.on_signal(
+            ShutdownSignal::Forceable,
+            connection_count,
+            running_turn_count,
+            &admission,
+        );
+        assert!(shutdown.forced());
+        assert!(matches!(
+            shutdown.update(running_turn_count, *active.borrow(), connection_count),
+            ShutdownAction::Finish
+        ));
+        drop(in_flight);
+    }
 
     #[test]
     fn log_format_from_env_value_matches_json_values_case_insensitively() {

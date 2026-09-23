@@ -63,7 +63,7 @@ pub(super) async fn record_turn_provenance_preflight(
     let mut scopes = vec![ScopeRef::global(), task_scope.clone()];
     let mut repository_path = None;
     let mut project_ref = None;
-    if let Some(cwd) = turn_context.environments.local_environment_cwd() {
+    if let Some(cwd) = turn_context.initial_environments.local_environment_cwd() {
         let git_repository_path = get_git_repo_root(cwd.as_path());
         let project_path = git_repository_path
             .clone()

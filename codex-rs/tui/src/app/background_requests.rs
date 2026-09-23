@@ -30,10 +30,10 @@ use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+pub(super) const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(/*secs*/ 65);
 const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
-const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(/*secs*/ 65);
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 15);
 const WORKSPACE_HEADLINE_FETCH_TIMEOUT: std::time::Duration =
@@ -77,7 +77,7 @@ impl App {
     /// Recovery requests are coalesced and bounded by the reset-request timeout. The origin
     /// also identifies command-specific completion work, such as finalizing a `/status` card,
     /// without confusing sparse inference notifications with authoritative usage responses.
-    pub(super) fn refresh_rate_limits(
+    pub(crate) fn refresh_rate_limits(
         &mut self,
         app_server: &AppServerSession,
         origin: RateLimitRefreshOrigin,
@@ -101,6 +101,7 @@ impl App {
         else {
             return;
         };
+        self.chat_widget.start_usage_notice_read(request_id);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -132,25 +133,6 @@ impl App {
         });
     }
 
-    pub(super) fn refresh_token_activity(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: u64,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                TOKEN_ACTIVITY_FETCH_TIMEOUT,
-                fetch_account_token_activity(request_handle),
-            )
-            .await
-            .map_err(|_| "account/usage/read timed out in TUI".to_string())
-            .and_then(|result| result.map_err(|err| err.to_string()));
-            app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
-        });
-    }
-
     pub(super) fn refresh_thread_usage(
         &mut self,
         app_server: &AppServerSession,
@@ -172,6 +154,25 @@ impl App {
                 request_id,
                 result,
             });
+        });
+    }
+
+    pub(super) fn refresh_token_activity(
+        &mut self,
+        app_server: &AppServerSession,
+        request_id: u64,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                TOKEN_ACTIVITY_FETCH_TIMEOUT,
+                fetch_account_token_activity(request_handle),
+            )
+            .await
+            .map_err(|_| "account/usage/read timed out in TUI".to_string())
+            .and_then(|result| result.map_err(|err| err.to_string()));
+            app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
         });
     }
 
@@ -767,6 +768,7 @@ impl App {
         };
 
         self.transcript_cells.remove(index);
+        self.native_history.retain(&self.transcript_cells);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }
@@ -839,20 +841,7 @@ pub(super) async fn fetch_account_rate_limits(
     result.wrap_err("account/rateLimits/read failed in TUI")
 }
 
-pub(super) async fn fetch_account_token_activity(
-    request_handle: AppServerRequestHandle,
-) -> Result<codex_app_server_protocol::GetAccountTokenUsageResponse> {
-    let request_id = RequestId::String(format!("account-token-usage-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::GetAccountTokenUsage {
-            request_id,
-            params: None,
-        })
-        .await
-        .wrap_err("account/usage/read failed in TUI")
-}
-
-async fn fetch_thread_usage(
+pub(super) async fn fetch_thread_usage(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
 ) -> Result<ThreadUsageOutcome> {
@@ -870,6 +859,19 @@ async fn fetch_thread_usage(
         .thread_usage
         .map(ThreadUsageOutcome::Available)
         .unwrap_or(ThreadUsageOutcome::Disabled))
+}
+
+pub(super) async fn fetch_account_token_activity(
+    request_handle: AppServerRequestHandle,
+) -> Result<GetAccountTokenUsageResponse> {
+    let request_id = RequestId::String(format!("account-token-usage-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::GetAccountTokenUsage {
+            request_id,
+            params: Some(GetAccountTokenUsageParams { thread_id: None }),
+        })
+        .await
+        .wrap_err("account/usage/read failed in TUI")
 }
 
 pub(super) async fn consume_rate_limit_reset_credit_request(
@@ -1599,6 +1601,7 @@ mod tests {
     fn mcp_inventory_maps_prefix_tool_names_by_server() {
         let statuses = vec![
             McpServerStatus {
+                server_capabilities: None,
                 tools_error: None,
                 name: "docs".to_string(),
                 runtime_status: None,
@@ -1622,6 +1625,7 @@ mod tests {
                 auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
             },
             McpServerStatus {
+                server_capabilities: None,
                 tools_error: None,
                 name: "disabled".to_string(),
                 runtime_status: None,

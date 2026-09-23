@@ -267,7 +267,7 @@ impl Daemon {
                 if let Err(error) = stop_backend_with_receipt(
                     &mut attempt,
                     &self.apply_receipt_file,
-                    backend_instance.stop(),
+                    backend_instance.stop_with_grace(settings.shutdown_grace_seconds),
                 )
                 .await
                 {
@@ -414,8 +414,12 @@ impl Daemon {
                 .await,
         );
         attempt.save(&self.apply_receipt_file).await?;
-        if let Err(error) =
-            stop_backend_with_receipt(&mut attempt, &self.apply_receipt_file, backend.stop()).await
+        if let Err(error) = stop_backend_with_receipt(
+            &mut attempt,
+            &self.apply_receipt_file,
+            backend.stop_with_grace(settings.shutdown_grace_seconds),
+        )
+        .await
         {
             return self
                 .mark_needs_attention(&mut attempt, error.to_string())

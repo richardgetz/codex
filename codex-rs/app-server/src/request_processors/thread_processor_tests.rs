@@ -229,6 +229,7 @@ mod thread_processor_behavior_tests {
             active_permission_profile: None,
             environments: TurnEnvironmentSelections::new(cwd, Vec::new()),
             workspace_roots: Vec::new(),
+            runtime_workspace_roots: Vec::new(),
             profile_workspace_roots: Vec::new(),
             ephemeral: false,
             reasoning_effort: None,
@@ -253,6 +254,7 @@ mod thread_processor_behavior_tests {
             usage_policy: Default::default(),
             multi_agent_mode: Default::default(),
             team: None,
+            disabled_plugin_ids: None,
         }
     }
 
@@ -708,10 +710,12 @@ mod thread_processor_behavior_tests {
         let session_provider = ModelProviderInfo {
             name: "session".to_string(),
             base_url: Some("http://127.0.0.1:8061/api/codex".to_string()),
+            model_catalog_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            gateway_oauth: None,
             aws: None,
             wire_api: WireApi::Responses,
             query_params: None,
@@ -1447,6 +1451,7 @@ mod thread_processor_behavior_tests {
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
                     turn_id: "turn-1".to_string(),
+                    root_turn_id: None,
                     trace_id: None,
                     started_at: None,
                     model_context_window: None,

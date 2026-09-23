@@ -46,6 +46,7 @@ mod external_agent_config_imports;
 mod goals;
 mod logs;
 mod memories;
+mod memory_versions;
 mod projects;
 mod queued_items;
 mod recovery;
@@ -56,6 +57,7 @@ mod task_estimates;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_activity;
+mod thread_attachments;
 mod thread_control;
 mod thread_inbound_messages;
 mod thread_section_order;
@@ -103,6 +105,7 @@ pub struct StateRuntime {
     logs_pool: Arc<sqlx::SqlitePool>,
     thread_goals: GoalStore,
     memories: MemoryStore,
+    memories_v2: Arc<tokio::sync::OnceCell<MemoryStore>>,
     thread_queue: SqliteQueueStore,
     task_estimates: TaskEstimateStore,
     thread_updated_at_millis: Arc<AtomicI64>,
@@ -288,6 +291,7 @@ impl StateRuntime {
         let runtime = Arc::new(Self {
             thread_goals: GoalStore::new(Arc::clone(&goals_pool)),
             memories: MemoryStore::new(Arc::clone(&memories_pool), Arc::clone(&pool)),
+            memories_v2: Arc::new(tokio::sync::OnceCell::new()),
             thread_queue: SqliteQueueStore::new(queue_pool),
             task_estimates: TaskEstimateStore::new(Arc::clone(&pool)),
             pool,
@@ -320,7 +324,7 @@ impl StateRuntime {
     }
 
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        self.memories.clear_memory_data().await?;
+        self.clear_all_memory_data().await?;
         clear_legacy_memory_data_in_state_db(&self.sqlite, &self.sqlite.state_db_path()).await?;
         Ok(())
     }
@@ -339,6 +343,9 @@ impl StateRuntime {
     pub async fn close(&self) {
         self.thread_queue.close().await;
         self.memories.close().await;
+        if let Some(memories_v2) = self.memories_v2.get() {
+            memories_v2.close().await;
+        }
         self.thread_goals.close().await;
         self.logs_pool.close().await;
         self.pool.close().await;

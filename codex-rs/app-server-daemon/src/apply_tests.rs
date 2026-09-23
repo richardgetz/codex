@@ -17,6 +17,7 @@ fn apply_requires_an_explicit_launcher() {
     let settings = DaemonSettings {
         remote_control_enabled: false,
         managed_codex_path: None,
+        ..DaemonSettings::default()
     };
 
     let error = ensure_apply_launcher(&settings).expect_err("standalone apply must be rejected");

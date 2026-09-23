@@ -567,6 +567,13 @@ client_request_definitions! {
         response: v2::UserVerificationVerifyResponse,
     },
 
+    #[experimental("userVerification/cancel")]
+    UserVerificationCancel => "userVerification/cancel" {
+        params: v2::UserVerificationCancelParams,
+        serialization: None,
+        response: v2::UserVerificationCancelResponse,
+    },
+
     /// NEW APIs
     // Thread lifecycle
     // Uses `inspect_params` because only some fields are experimental.
@@ -735,6 +742,21 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMetadataUpdateResponse,
     },
+    ThreadAttachmentAdd => "thread/attachment/add" {
+        params: v2::ThreadAttachmentAddParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadAttachmentAddResponse,
+    },
+    ThreadAttachmentList => "thread/attachment/list" {
+        params: v2::ThreadAttachmentListParams,
+        serialization: None,
+        response: v2::ThreadAttachmentListResponse,
+    },
+    ThreadAttachmentRemove => "thread/attachment/remove" {
+        params: v2::ThreadAttachmentRemoveParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadAttachmentRemoveResponse,
+    },
     ThreadSectionMove => "thread/section/move" {
         params: v2::ThreadSectionMoveParams,
         serialization: thread_id(params.thread_id),
@@ -792,11 +814,24 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadMemoryModeSetResponse,
     },
+    #[experimental("memory/status")]
+    MemoryStatus => "memory/status" {
+        params: v2::MemoryStatusParams,
+        serialization: global("memory"),
+        response: v2::MemoryStatusResponse,
+    },
     #[experimental("memory/reset")]
     MemoryReset => "memory/reset" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global("memory"),
         response: v2::MemoryResetResponse,
+    },
+    #[experimental("rollout/compress")]
+    /// Start a best-effort background compression pass for cold local rollouts.
+    RolloutCompress => "rollout/compress" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::RolloutCompressResponse,
     },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
@@ -2026,6 +2061,7 @@ server_notification_definitions! {
     ThreadReverted => "thread/reverted" (v2::ThreadRevertedNotification),
     SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
+    ThreadAttachmentUpdated => "thread/attachment/updated" (v2::ThreadAttachmentUpdatedNotification),
     ThreadGoalUpdated => "thread/goal/updated" (v2::ThreadGoalUpdatedNotification),
     ThreadGoalCleared => "thread/goal/cleared" (v2::ThreadGoalClearedNotification),
     #[experimental("thread/eta/updated")]
@@ -3333,6 +3369,7 @@ mod tests {
         let response = ClientResponse::ThreadStart {
             request_id: RequestId::Integer(7),
             response: v2::ThreadStartResponse {
+                disabled_plugin_ids: Vec::new(),
                 thread: v2::Thread {
                     originator: None,
                     environments: None,
@@ -3437,6 +3474,7 @@ mod tests {
                     "model": "gpt-5",
                     "modelProvider": "openai",
                     "serviceTier": null,
+                    "disabledPluginIds": [],
                     "cwd": absolute_path_string("tmp"),
                     "runtimeWorkspaceRoots": [],
                     "instructionSources": [absolute_path_string("tmp/AGENTS.md")],
@@ -4701,6 +4739,7 @@ mod tests {
             ServerNotification::ThreadSettingsUpdated(v2::ThreadSettingsUpdatedNotification {
                 thread_id: "thr_123".to_string(),
                 thread_settings: v2::ThreadSettings {
+                    disabled_plugin_ids: Vec::new(),
                     cwd: absolute_path("/tmp/repo"),
                     approval_policy: v2::AskForApproval::Never,
                     approvals_reviewer: v2::ApprovalsReviewer::User,

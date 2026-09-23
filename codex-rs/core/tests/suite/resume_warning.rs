@@ -36,6 +36,7 @@ fn resume_history(
         final_output_json_schema: None,
         truncation_policy: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         cwd: config.cwd.clone(),
         workspace_roots: None,
         current_date: None,
@@ -66,6 +67,7 @@ fn resume_history(
         history: Arc::new(vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: turn_id.clone(),
+                root_turn_id: None,
                 trace_id: None,
                 started_at: None,
                 model_context_window: None,

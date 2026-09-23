@@ -51,9 +51,7 @@ pub(super) async fn update_thread_metadata(
     // Codex process after the local lifecycle reservation has been acquired.
     let _writer_lock = match live_writer::rollout_path(store, thread_id).await {
         Ok(_) => None,
-        Err(ThreadStoreError::ThreadNotFound { .. }) => {
-            Some(store.writer_lock_coordinator.acquire(thread_id)?)
-        }
+        Err(ThreadStoreError::ThreadNotFound { .. }) => Some(store.acquire_writer_lock(thread_id)?),
         Err(err) => return Err(err),
     };
     let pending_patch = pending_metadata

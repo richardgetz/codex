@@ -63,6 +63,7 @@ pub(crate) struct BuiltinCommandFlags {
     pub(crate) goal_command_enabled: bool,
     pub(crate) personality_command_enabled: bool,
     pub(crate) provenance_commands_enabled: bool,
+    pub(crate) voice_command_enabled: bool,
     pub(crate) worktrees_enabled: bool,
     pub(crate) allow_elevate_sandbox: bool,
     pub(crate) side_conversation_active: bool,
@@ -87,6 +88,7 @@ pub(crate) fn builtins_for_input(flags: BuiltinCommandFlags) -> Vec<(&'static st
                     SlashCommand::Decisions | SlashCommand::PreferenceBoundaries
                 )
         })
+        .filter(|(_, cmd)| flags.voice_command_enabled || *cmd != SlashCommand::Voice)
         .filter(|(_, cmd)| !flags.side_conversation_active || cmd.available_in_side_conversation())
         .collect()
 }
@@ -182,6 +184,7 @@ mod tests {
             goal_command_enabled: true,
             personality_command_enabled: true,
             provenance_commands_enabled: true,
+            voice_command_enabled: true,
             worktrees_enabled: true,
             allow_elevate_sandbox: true,
             side_conversation_active: false,
@@ -383,6 +386,8 @@ mod tests {
                 SlashCommand::Mention,
                 SlashCommand::Status,
                 SlashCommand::Spend,
+                SlashCommand::Daemon,
+                SlashCommand::Warnings,
                 SlashCommand::Pwd,
                 SlashCommand::Usage,
                 SlashCommand::Pause,

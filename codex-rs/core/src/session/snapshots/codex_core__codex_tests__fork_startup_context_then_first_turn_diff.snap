@@ -15,5 +15,6 @@ Scenario: First request after fork when startup preserves the parent baseline, t
 02:message/user:fork seed
 03:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
-    [02] <collaboration_mode>Fork turn collaboration instructions.</collaboration_mode>
-04:message/user:after fork
+    [02] <COLLABORATION_MODE>
+04:message/user:
+    after fork

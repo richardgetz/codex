@@ -37,6 +37,8 @@ pub(super) struct StatusCopySource {
 #[derive(Default)]
 pub(super) struct TranscriptState {
     pub(super) active_cell: Option<Box<dyn HistoryCell>>,
+    /// Inserts a separator before the next completed agent message after history flushes.
+    pub(super) needs_final_message_separator: bool,
     /// A realtime user transcript can stream alongside a normal assistant response.
     pub(super) realtime_user_transcript_cell: Option<RealtimeTranscriptCell>,
     /// A realtime assistant transcript can stream alongside a normal user transcript.
@@ -54,11 +56,14 @@ pub(super) struct TranscriptState {
     pub(super) realtime_handoff_output_suppressed: bool,
     /// Bounded completed GPT-Live transcript entries available through `/voice history`.
     pub(super) realtime_history: VecDeque<RealtimeTranscriptHistoryEntry>,
+    /// Shared retained rows for concurrently running dynamic tools, removed on completion.
+    pub(super) dynamic_calls:
+        std::collections::HashMap<String, crate::history_cell::DynamicToolCallCell>,
     /// Monotonic-ish counter used to invalidate transcript overlay caching.
     pub(super) active_cell_revision: u64,
     /// One bounded entry shared by layout and paint across unchanged active-cell frames.
     pub(super) active_cell_layout: Cell<Option<ActiveCellLayoutCache>>,
-    /// Markdown of the most recently completed agent response for whole-response copying.
+    /// Markdown of the most recently completed agent message for whole-response copying.
     pub(super) last_agent_markdown: Option<String>,
     /// Original source of that response, before display sanitization, for exact block copying.
     pub(super) last_agent_source: Option<String>,
@@ -69,10 +74,6 @@ pub(super) struct TranscriptState {
     pub(super) latest_proposed_plan_markdown: Option<String>,
     /// Whether this turn already produced a copyable response.
     pub(super) saw_copy_source_this_turn: bool,
-    /// Whether the next streamed assistant content should be preceded by a final message separator.
-    pub(super) needs_final_message_separator: bool,
-    /// Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
-    pub(super) had_work_activity: bool,
     /// Whether the current turn emitted a plan update.
     pub(super) saw_plan_update_this_turn: bool,
     /// Whether the current turn emitted a proposed plan item that has not been superseded by a
@@ -130,7 +131,6 @@ impl TranscriptState {
         self.last_completed_agent_message = None;
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
-        self.had_work_activity = false;
         self.latest_proposed_plan_markdown = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;

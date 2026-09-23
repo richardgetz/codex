@@ -4,6 +4,8 @@ mod daemon_shutdown;
 pub use daemon_shutdown::DAEMON_SHUTDOWN_FILE_ENV;
 #[cfg(windows)]
 pub use daemon_shutdown::daemon_shutdown_signal;
+mod connection_auth;
+pub mod daemon_recovery;
 /// Only managed app-server launches accept the local socket shutdown request.
 pub const DAEMON_SHUTDOWN_SOCKET_ENV: &str = "CODEX_DAEMON_SHUTDOWN_SOCKET";
 /// Marks an app-server process launched by the local daemon's managed backend.
@@ -21,6 +23,7 @@ pub const APP_SERVER_DAEMON_RELOAD_ENV: &str = "CODEX_APP_SERVER_DAEMON_RELOAD";
 mod outgoing_message;
 mod transport;
 
+pub use connection_auth::ConnectionAuth;
 pub use outgoing_message::ConnectionId;
 pub use outgoing_message::OutgoingError;
 pub use outgoing_message::OutgoingMessage;
@@ -45,7 +48,7 @@ pub use transport::acquire_app_server_startup_lock;
 pub use transport::app_server_control_socket_path;
 pub use transport::app_server_startup_lock_path;
 pub use transport::auth;
-pub use transport::prepare_control_socket_path;
+pub use transport::daemon_recovery_file_path;
 pub use transport::start_control_socket_acceptor;
 pub use transport::start_remote_control;
 pub use transport::start_stdio_connection;

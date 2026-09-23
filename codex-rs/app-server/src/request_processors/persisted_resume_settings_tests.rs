@@ -53,6 +53,7 @@ fn settings_snapshot(
         permission_profile: PermissionProfile::read_only(),
         active_permission_profile,
         cwd: cwd(),
+        runtime_workspace_roots: None,
         reasoning_effort: None,
         reasoning_summary: None,
         personality: None,
@@ -68,6 +69,7 @@ fn settings_snapshot(
         user_preferences_memory_policy: Default::default(),
         usage_policy: Default::default(),
         team: None,
+        disabled_plugin_ids: Vec::new(),
     }
 }
 
@@ -81,6 +83,7 @@ fn turn_context_item(
         turn_id: Some(turn_id.to_string()),
         trace_id: None,
         root_turn_id: None,
+        disabled_plugin_ids: None,
         cwd: cwd(),
         workspace_roots: Some(vec![cwd()]),
         current_date: None,

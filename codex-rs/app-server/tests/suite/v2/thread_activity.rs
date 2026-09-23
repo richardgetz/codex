@@ -526,7 +526,7 @@ async fn run_cold_resume_case(
     };
     mock_config.write(codex_home.path())?;
     if multi_agent_v2 {
-        write_models_cache(codex_home.path())?;
+        write_models_cache(codex_home.path()).await?;
     }
     let mut old_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())

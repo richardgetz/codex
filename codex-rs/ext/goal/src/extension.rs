@@ -15,8 +15,10 @@ use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
 use codex_extension_api::TokenUsageContributor;
+use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolLifecycleContributor;
 use codex_extension_api::ToolLifecycleFuture;
@@ -103,11 +105,12 @@ where
         Box::pin(async move {
             let config = (self.goal_config)(input.config);
             let enabled = config.enabled;
-            let tools_available_for_thread = input.persistent_thread_state_available
-                && !matches!(
-                    input.session_source,
-                    SessionSource::SubAgent(SubAgentSource::Review)
-                );
+            let tools_visible_for_thread = !matches!(
+                input.session_source,
+                SessionSource::SubAgent(SubAgentSource::Review)
+            );
+            let tools_available_for_thread =
+                input.persistent_thread_state_available && tools_visible_for_thread;
             input.thread_store.insert(config);
             let accounting_state = input
                 .thread_store
@@ -151,6 +154,7 @@ where
                         analytics: self.analytics.clone(),
                         enabled,
                         tools_available_for_thread,
+                        tools_visible_for_thread,
                         root_accounting_state,
                     },
                 )
@@ -233,6 +237,10 @@ where
                 return;
             }
 
+            let Some(token_usage_at_turn_start) = input.token_usage_at_turn_start else {
+                tracing::warn!("skipping goal turn accounting: token baseline unavailable");
+                return;
+            };
             let intent_generation = runtime.begin_background_wait_turn(input.turn_id).await;
 
             if let Err(err) = self
@@ -248,7 +256,7 @@ where
             accounting.start_turn(
                 input.turn_id,
                 input.collaboration_mode.mode,
-                input.token_usage_at_turn_start,
+                token_usage_at_turn_start,
             );
             accounting.set_turn_intent_generation(input.turn_id, intent_generation);
             if matches!(
@@ -582,16 +590,16 @@ where
             .get::<GoalExtensionConfig>()
             .and_then(|config| config.max_goal_token_budget);
 
-        vec![
-            Arc::new(GoalToolExecutor::get(
+        let tools = [
+            GoalToolExecutor::get(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
-            )),
-            Arc::new(GoalToolExecutor::create(
+            ),
+            GoalToolExecutor::create(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
@@ -599,16 +607,23 @@ where
                 self.event_emitter.clone(),
                 self.metrics.clone(),
                 max_goal_token_budget,
-            )),
-            Arc::new(GoalToolExecutor::update(
+            ),
+            GoalToolExecutor::update(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
-            )),
-        ]
+            ),
+        ];
+        tools
+            .into_iter()
+            .map(|mut tool| {
+                tool.execution_allowed = runtime.tools_available();
+                Arc::new(tool) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
+            })
+            .collect()
     }
 }
 

@@ -26,6 +26,7 @@ use core_test_support::responses;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 #[cfg(unix)]
 use std::process::Command as StdCommand;
 use tempfile::TempDir;
@@ -47,12 +48,64 @@ async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Resu
         _server,
         mut process,
         mut ws,
-        ..
+        thread_id,
+        turn_id,
     } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
 
     send_sigint(&process)?;
     assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
 
+    send_turn_start_request(&mut ws, /*id*/ 4, &thread_id).await?;
+    let rejected = read_error_for_id(&mut ws, /*id*/ 4).await?;
+    assert_eq!(rejected.error.code, -32600);
+    assert_eq!(rejected.error.data, None);
+
+    send_request(
+        &mut ws,
+        "thread/read",
+        /*id*/ 5,
+        Some(json!({"threadId": thread_id, "includeTurns": false})),
+    )
+    .await?;
+    read_response_for_id(&mut ws, /*id*/ 5).await?;
+
+    for (method, params) in [
+        (
+            "thread/shellCommand",
+            json!({"threadId": thread_id, "command": "echo blocked"}),
+        ),
+        (
+            "turn/steer",
+            json!({"threadId": thread_id, "expectedTurnId": turn_id, "input": []}),
+        ),
+        ("thread/queue/start", json!({"threadId": thread_id})),
+        ("thread/start", json!({})),
+        ("thread/fork", json!({"threadId": thread_id})),
+        ("thread/resume", json!({"threadId": thread_id})),
+        ("thread/delete", json!({"threadId": thread_id})),
+        (
+            "thread/settings/update",
+            json!({"threadId": thread_id, "model": "other"}),
+        ),
+        (
+            "turn/settings/update",
+            json!({"threadId": thread_id, "turnId": "unused", "model": "other"}),
+        ),
+        (
+            "thread/revert",
+            json!({"threadId": thread_id, "beforeTurnId": "unused"}),
+        ),
+        (
+            "review/start",
+            json!({"threadId": thread_id, "target": {"type": "uncommittedChanges"}}),
+        ),
+    ] {
+        send_request(&mut ws, method, /*id*/ 9, Some(params)).await?;
+        assert_eq!(
+            read_error_for_id(&mut ws, /*id*/ 9).await?.error,
+            rejected.error
+        );
+    }
     let status = wait_for_process_exit_within(
         &mut process,
         Duration::from_secs(10),

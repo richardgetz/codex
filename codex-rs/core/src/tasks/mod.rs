@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use codex_diagnostics::Gauge;
 use codex_extension_api::ThreadIdleCause;
+use codex_extension_api::TurnStartPhase;
 use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -549,8 +550,12 @@ impl Session {
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
             .await;
-        self.emit_turn_start_lifecycle(turn_context.as_ref(), &token_usage_at_turn_start)
-            .await;
+        self.emit_turn_start_lifecycle(
+            turn_context.as_ref(),
+            Some(&token_usage_at_turn_start),
+            TurnStartPhase::BeforeTaskRegistration,
+        )
+        .await;
 
         let mut active = self.active_turn.lock().await;
         if let Some(target_turn_state) = active.as_ref().and_then(|active_turn| {
@@ -1439,6 +1444,7 @@ impl Session {
         {
             self.record_conversation_items(
                 task.turn_context.as_ref(),
+                task.turn_context.model_info(),
                 std::slice::from_ref(&marker),
             )
             .await;

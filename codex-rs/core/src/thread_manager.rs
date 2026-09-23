@@ -1,5 +1,9 @@
+mod managed;
+mod shared_instructions;
+
 use crate::CodexAppsToolsCache;
 use crate::agent::AgentControl;
+use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -46,6 +50,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::LoadedUserInstructions;
+use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
@@ -294,10 +299,32 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
+/// Captured parent identity for an internal child, including inline parents that
+/// do not have a public entry in the thread manager. Authentication and the shared
+/// agent budget remain bound to the parent that created this value.
+#[derive(Clone)]
+pub struct InternalSessionParent {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) agent_control: AgentControl,
+    pub(crate) originator: String,
+    pub(crate) inherited_instructions: Option<SessionInstructions>,
+}
+
 pub struct StartThreadOptions {
     pub config: Config,
+    /// Host-owned provider for this root thread's additional instructions.
+    ///
+    /// Core composes these after the global [`UserInstructionsProvider`]
+    /// snapshot and before repository instructions. `None` or blank provider
+    /// output clears only the thread contribution. Hosts own fetching and
+    /// caching, and must supply a provider again when cold-resuming a thread or
+    /// forking an offline source.
+    pub thread_instructions_provider: Option<Arc<dyn ThreadInstructionsProvider>>,
     pub allow_provider_model_fallback: bool,
     pub initial_history: InitialHistory,
+    /// Parent captured for `start_thread`, including a parent not in the live registry.
+    pub internal_parent: Option<InternalSessionParent>,
     pub history_mode: Option<ThreadHistoryMode>,
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
@@ -305,6 +332,10 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
+    /// Existing environment bindings captured by an internal caller.
+    pub inherited_environments: Option<TurnEnvironmentSnapshot>,
+    /// Explicit instructions carried by an internal caller instead of loading them again.
+    pub user_instructions: Option<LoadedUserInstructions>,
     pub thread_extension_init: ExtensionDataInit,
     pub client_mcp_extensions: ClientMcpExtensions,
     /// Thread ID reserved before startup so the caller can associate host-owned state with it.
@@ -329,8 +360,10 @@ impl StartThreadOptions {
     pub fn new(config: Config) -> Self {
         Self {
             config,
+            thread_instructions_provider: None,
             allow_provider_model_fallback: false,
             initial_history: InitialHistory::New,
+            internal_parent: None,
             history_mode: None,
             session_source: None,
             thread_source: None,
@@ -338,6 +371,8 @@ impl StartThreadOptions {
             metrics_service_name: None,
             parent_trace: None,
             environments: None,
+            inherited_environments: None,
+            user_instructions: None,
             thread_extension_init: ExtensionDataInit::default(),
             client_mcp_extensions: ClientMcpExtensions::default(),
             reserved_thread_id: None,
@@ -346,15 +381,18 @@ impl StartThreadOptions {
 }
 
 struct ThreadSpawnRequest {
+    startup: Option<Arc<crate::session::startup::SessionStartup>>,
     options: StartThreadOptions,
     thread_settings_override_flags: ThreadSettingsOverrideFlags,
     auth_manager: Arc<AuthManager>,
     agent_control: AgentControl,
     parent_thread_id: Option<ThreadId>,
+    parent_originator: Option<String>,
     forked_from_thread_id: Option<ThreadId>,
     initial_collaboration_mode: Option<CollaborationMode>,
     fork_persistence: ForkPersistence,
     inherited_environments: Option<TurnEnvironmentSnapshot>,
+    inherited_instructions: Option<SessionInstructions>,
     inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     user_shell_override: Option<crate::shell::Shell>,
 }
@@ -366,11 +404,13 @@ impl ThreadSpawnRequest {
         agent_control: AgentControl,
     ) -> Self {
         Self {
+            startup: None,
             options,
             thread_settings_override_flags: ThreadSettingsOverrideFlags::default(),
             auth_manager,
             agent_control,
             parent_thread_id: None,
+            parent_originator: None,
             forked_from_thread_id: None,
             initial_collaboration_mode: None,
             fork_persistence: ForkPersistence::Copied {
@@ -378,6 +418,7 @@ impl ThreadSpawnRequest {
                 inherited_thread_settings: None,
             },
             inherited_environments: None,
+            inherited_instructions: None,
             inherited_exec_policy: None,
             user_shell_override: None,
         }
@@ -422,6 +463,7 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environment_selections: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
+    pub(crate) inherited_instructions: Option<SessionInstructions>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     pub(crate) client_mcp_extensions: Option<ClientMcpExtensions>,
 }
@@ -433,6 +475,7 @@ pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     /// Process-wide admission fence used while taking an all-root handoff snapshot.
     handoff: Arc<ThreadManagerHandoffState>,
+    shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
     thread_created_tx: broadcast::Sender<ThreadId>,
     thread_id_generator: ThreadIdGenerator,
     auth_manager: Arc<AuthManager>,
@@ -494,11 +537,17 @@ pub fn thread_store_from_config(
                         warn!("failed to migrate legacy rollouts on startup: {err}");
                     }
                     if compression_enabled {
-                        codex_rollout::spawn_rollout_compression_worker(codex_home);
+                        codex_rollout::spawn_rollout_compression_worker(
+                            codex_home,
+                            codex_rollout::RolloutCompressionTrigger::Startup,
+                        );
                     }
                 });
             } else if compression_enabled {
-                codex_rollout::spawn_rollout_compression_worker(config.codex_home.to_path_buf());
+                codex_rollout::spawn_rollout_compression_worker(
+                    config.codex_home.to_path_buf(),
+                    codex_rollout::RolloutCompressionTrigger::Startup,
+                );
             }
             store
         }
@@ -570,6 +619,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 handoff: Arc::new(ThreadManagerHandoffState::default()),
+                shared_thread_instructions: Default::default(),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager,
@@ -719,6 +769,7 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 handoff: Arc::new(ThreadManagerHandoffState::default()),
+                shared_thread_instructions: Default::default(),
                 thread_created_tx,
                 thread_id_generator: default_thread_id_generator(),
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
@@ -1280,6 +1331,7 @@ impl ThreadManager {
         Box::pin(self.start_thread_inner(
             options,
             /*forked_from_thread_id*/ None,
+            /*startup*/ None,
             ThreadSettingsOverrideFlags::default(),
         ))
         .await
@@ -1356,6 +1408,7 @@ impl ThreadManager {
         &self,
         mut options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        startup: Option<Arc<crate::session::startup::SessionStartup>>,
         thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
@@ -1368,12 +1421,23 @@ impl ThreadManager {
         });
         self.validate_environment_selections(&environments)?;
         options.environments = Some(environments);
-        let agent_control = self.agent_control_for_config(&options.config);
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
-        let session_source = options.session_source.unwrap_or(resumed_session_source);
+        let session_source = options
+            .session_source
+            .take()
+            .unwrap_or(resumed_session_source);
+        let internal_parent = options.internal_parent.take();
+        if internal_parent.is_some()
+            && (!matches!(session_source, SessionSource::Internal(_))
+                || matches!(options.initial_history, InitialHistory::Resumed(_)))
+        {
+            return Err(CodexErr::InvalidRequest(
+                "a captured internal parent requires a new or forked internal session".to_owned(),
+            ));
+        }
         let inherited_exec_policy = if crate::guardian::is_basic_session_source(&session_source) {
             None
         } else {
@@ -1387,10 +1451,26 @@ impl ThreadManager {
         };
         options.session_source = Some(session_source);
         options.thread_source = options.thread_source.take().or(resumed_thread_source);
-        let mut request =
-            ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
+        let mut request = if let Some(parent) = internal_parent {
+            let mut request =
+                ThreadSpawnRequest::new(options, parent.auth_manager, parent.agent_control);
+            request.parent_thread_id = Some(parent.thread_id);
+            request.parent_originator = Some(parent.originator);
+            request.inherited_instructions = parent.inherited_instructions;
+            request.forked_from_thread_id = request.options.initial_history.forked_from_id();
+            request
+        } else {
+            let agent_control = self.agent_control_for_config(&options.config);
+            let mut request = ThreadSpawnRequest::new(
+                options,
+                Arc::clone(&self.state.auth_manager),
+                agent_control,
+            );
+            request.forked_from_thread_id = forked_from_thread_id;
+            request
+        };
+        request.startup = startup;
         request.thread_settings_override_flags = thread_settings_override_flags;
-        request.forked_from_thread_id = forked_from_thread_id;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.state.spawn_thread(request)).await
     }
@@ -1475,6 +1555,7 @@ impl ThreadManager {
         self.start_thread_inner(
             options,
             Some(forked_from_thread_id),
+            /*startup*/ None,
             thread_settings_override_flags,
         )
         .await
@@ -2538,6 +2619,15 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) fn shared_thread_instructions_provider(
+        &self,
+        root_thread_id: ThreadId,
+        provider: Option<Arc<dyn ThreadInstructionsProvider>>,
+    ) -> Option<Arc<dyn ThreadInstructionsProvider>> {
+        self.shared_thread_instructions
+            .for_root(root_thread_id, provider)
+    }
+
     pub(crate) fn begin_handoff(&self) -> CodexResult<ThreadManagerHandoffGuard> {
         self.handoff.begin()
     }
@@ -2744,53 +2834,41 @@ impl ThreadManagerState {
         resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
     }
 
-    /// Resolves the provider snapshot for a newly spawned runtime.
+    /// Selects instruction sources for a newly spawned runtime without loading providers.
     ///
-    /// Loads a fresh provider snapshot for:
-    /// - fresh root threads;
-    /// - cold resumes;
-    /// - root forks.
-    ///
-    /// Uses an existing snapshot for:
-    /// - subagents, which inherit from their parent without invoking the
-    ///   provider;
-    /// - running resumes and compaction paths, which retain the live session.
-    ///
-    /// Provider warnings only apply to fresh loads. If a parent runtime is no
-    /// longer available, its child starts without provider instructions rather
-    /// than loading independently.
-    async fn user_instructions_for_spawn(
+    /// Root threads retain the global provider and any supplied thread provider.
+    /// Subagents inherit the applied parent snapshot and any provider explicitly
+    /// shared by that parent. The session's instruction manager loads providers at
+    /// startup and at subsequent model-request boundaries.
+    async fn instructions_for_spawn(
         &self,
         session_source: &SessionSource,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
-    ) -> LoadedUserInstructions {
-        let is_root_agent = !session_source.is_non_root_agent();
-        if is_root_agent {
-            return self
-                .user_instructions_provider
-                .load_user_instructions()
-                .await;
-        }
-
+        thread_provider: Option<Arc<dyn ThreadInstructionsProvider>>,
+    ) -> SessionInstructions {
         let inherited_thread_id = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id, ..
             }) => Some(*parent_thread_id),
             _ => parent_thread_id.or(forked_from_thread_id),
         };
-        let instructions = match inherited_thread_id {
-            // The spawn path retains only thread IDs, so look up the live
-            // runtime again here to inherit its user instructions.
+        let inherited = match inherited_thread_id {
             Some(thread_id) => match self.get_thread(thread_id).await {
-                Ok(thread) => thread.session.user_instructions().await,
-                Err(_) => None,
+                Ok(thread) => thread.session.inherited_instructions().await,
+                Err(_) => SessionInstructions::default(),
             },
-            None => None,
+            None => SessionInstructions::default(),
         };
-        LoadedUserInstructions {
-            instructions,
-            warnings: Vec::new(),
+        if session_source.is_non_root_agent() {
+            inherited
+        } else {
+            SessionInstructions {
+                user_provider: Some(Arc::clone(&self.user_instructions_provider)),
+                thread_provider,
+                thread: inherited.thread,
+                ..Default::default()
+            }
         }
     }
 
@@ -2818,6 +2896,7 @@ impl ThreadManagerState {
         session_source: &SessionSource,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
+        parent_originator: Option<String>,
     ) -> String {
         let persisted_originator = initial_history.get_session_originator();
         let inherited_originator = match initial_history {
@@ -2847,7 +2926,7 @@ impl ThreadManagerState {
             metrics_service_name,
             env_originator,
             persisted_originator,
-            inherited_originator,
+            inherited_originator.or(parent_originator),
             originator().value,
         )
     }
@@ -2964,6 +3043,7 @@ impl ThreadManagerState {
             parent_thread_id,
             environment_selections,
             inherited_environments,
+            inherited_instructions,
             inherited_exec_policy,
             client_mcp_extensions,
         } = options;
@@ -2989,6 +3069,7 @@ impl ThreadManagerState {
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
         request.parent_thread_id = parent_thread_id;
         request.inherited_environments = inherited_environments;
+        request.inherited_instructions = inherited_instructions;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.spawn_thread(request)).await
     }
@@ -3054,23 +3135,28 @@ impl ThreadManagerState {
     async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
         let ThreadSpawnRequest {
+            startup,
             options,
             thread_settings_override_flags,
             auth_manager,
             agent_control,
             parent_thread_id,
+            parent_originator,
             forked_from_thread_id,
             initial_collaboration_mode,
             fork_persistence,
             inherited_environments,
+            inherited_instructions,
             inherited_exec_policy,
             user_shell_override,
         } = request;
         let activity_control = agent_control.clone();
         let StartThreadOptions {
-            config,
+            mut config,
+            thread_instructions_provider,
             allow_provider_model_fallback,
             initial_history,
+            internal_parent: _,
             history_mode,
             session_source,
             thread_source,
@@ -3078,10 +3164,13 @@ impl ThreadManagerState {
             metrics_service_name,
             parent_trace,
             environments,
+            inherited_environments: captured_environments,
+            user_instructions: supplied_user_instructions,
             thread_extension_init,
             client_mcp_extensions,
             reserved_thread_id,
         } = options;
+        let inherited_environments = captured_environments.or(inherited_environments);
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(
@@ -3100,6 +3189,14 @@ impl ThreadManagerState {
             let mut threads = self.threads.write().await;
             if let Some(thread) = threads.get(&resumed.conversation_id).cloned() {
                 if thread.is_running() {
+                    if matches!(
+                        thread.session_source,
+                        SessionSource::Internal(InternalSessionSource::Guardian)
+                    ) {
+                        return Err(CodexErr::InvalidRequest(
+                            "cannot resume a live Guardian reviewer; use thread/read to inspect it, or resume after its parent is unloaded".to_string(),
+                        ));
+                    }
                     if let Some(requested_rollout_path) = resumed.rollout_path.as_deref()
                         && thread.rollout_path().as_deref() != Some(requested_rollout_path)
                     {
@@ -3108,49 +3205,60 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
+                    drop(threads);
+                    let session_configured = thread
+                        .startup_metadata()
+                        .to_session_configured_event(initial_history.get_event_msgs());
                     return Ok(NewThread {
                         thread_id: resumed.conversation_id,
-                        session_configured: thread.session_configured(),
+                        session_configured,
                         thread,
                     });
                 }
                 threads.remove(&resumed.conversation_id);
             }
         }
-        let (
-            user_instructions,
-            inherited_exec_policy,
-            extensions,
-            mcp_manager,
-            multi_agent_version,
-        ) = if crate::guardian::is_basic_session_source(&session_source) {
-            (
-                LoadedUserInstructions::default(),
-                None,
-                empty_extension_registry(),
-                Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
-                Some(MultiAgentVersion::Disabled),
-            )
-        } else {
-            (
-                self.user_instructions_for_spawn(
-                    &session_source,
-                    parent_thread_id,
-                    forked_from_thread_id,
+        let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
+            if crate::guardian::is_basic_session_source(&session_source) {
+                (
+                    inherited_instructions.unwrap_or_default(),
+                    None,
+                    empty_extension_registry(),
+                    Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
+                    Some(MultiAgentVersion::Disabled),
                 )
-                .await,
-                inherited_exec_policy,
-                Arc::clone(&self.extensions),
-                Arc::clone(&self.mcp_manager),
-                self.initial_multi_agent_version_for_spawn(
-                    &initial_history,
-                    Some(&session_source),
-                    parent_thread_id,
-                    forked_from_thread_id,
+            } else {
+                (
+                    match inherited_instructions {
+                        Some(instructions) => instructions,
+                        None => {
+                            self.instructions_for_spawn(
+                                &session_source,
+                                parent_thread_id,
+                                forked_from_thread_id,
+                                thread_instructions_provider,
+                            )
+                            .await
+                        }
+                    },
+                    inherited_exec_policy,
+                    Arc::clone(&self.extensions),
+                    Arc::clone(&self.mcp_manager),
+                    self.initial_multi_agent_version_for_spawn(
+                        &initial_history,
+                        Some(&session_source),
+                        parent_thread_id,
+                        forked_from_thread_id,
+                    )
+                    .await,
                 )
-                .await,
-            )
-        };
+            };
+        let mut instructions = instructions;
+        if let Some(supplied) = supplied_user_instructions {
+            instructions.user = supplied.instructions;
+            instructions.user_provider = None;
+            config.startup_warnings.extend(supplied.warnings);
+        }
         let parent_rollout_thread_trace = self
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
@@ -3162,6 +3270,7 @@ impl ThreadManagerState {
                 &session_source,
                 parent_thread_id,
                 forked_from_thread_id,
+                parent_originator,
             )
             .await;
         let source_changed_during_startup = Arc::new(AtomicBool::new(false));
@@ -3182,9 +3291,10 @@ impl ThreadManagerState {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
         let (session, io) = Session::spawn(SessionSpawnArgs {
+            startup,
             config,
             allow_provider_model_fallback,
-            user_instructions,
+            instructions,
             installation_id: self.installation_id.clone(),
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
@@ -3199,7 +3309,14 @@ impl ThreadManagerState {
             initial_collaboration_mode,
             requested_history_mode: history_mode,
             fork_persistence,
-            session_source,
+            session_source: match &session_source {
+                SessionSource::Internal(InternalSessionSource::Guardian) => {
+                    SessionSource::SubAgent(SubAgentSource::Other(
+                        crate::guardian::GUARDIAN_REVIEWER_NAME.to_owned(),
+                    ))
+                }
+                _ => session_source.clone(),
+            },
             forked_from_thread_id,
             parent_thread_id,
             thread_source: thread_source.clone(),
@@ -3207,6 +3324,7 @@ impl ThreadManagerState {
             agent_control,
             dynamic_tools,
             metrics_service_name,
+            image_store: Arc::clone(&self.image_store),
             inherited_environments,
             inherited_exec_policy,
             parent_rollout_thread_trace,
@@ -3222,7 +3340,14 @@ impl ThreadManagerState {
             external_time_provider: self.external_time_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
             thread_settings_override_flags,
-            git_enrichment_policy: GitEnrichmentPolicy::Fresh,
+            git_enrichment_policy: if matches!(
+                &tracked_session_source,
+                SessionSource::Internal(InternalSessionSource::Guardian)
+            ) {
+                GitEnrichmentPolicy::Skip
+            } else {
+                GitEnrichmentPolicy::Fresh
+            },
             windows_sandbox_proxy_settings_mode,
         })
         .await?;
@@ -3276,7 +3401,7 @@ impl ThreadManagerState {
                 let thread = Arc::new(CodexThread::new(
                     session,
                     io,
-                    session_configured.clone(),
+                    (&session_configured).into(),
                     session_configured.rollout_path.clone(),
                     session_source,
                 ));

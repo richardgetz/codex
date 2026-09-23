@@ -704,6 +704,18 @@ fn built_in_rate_for_model(
             /*input_usd_per_1m*/ 1.75, /*cached_input_usd_per_1m*/ 0.175,
             /*output_usd_per_1m*/ 14.0,
         )),
+        ("gpt-6-sol", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 2.0, /*cached_input_usd_per_1m*/ 0.20,
+                /*cache_write_usd_per_1m*/ 2.50, /*output_usd_per_1m*/ 10.0,
+            ))
+        }
+        ("gpt-6-luna", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.10, /*cached_input_usd_per_1m*/ 0.01,
+                /*cache_write_usd_per_1m*/ 0.125, /*output_usd_per_1m*/ 0.50,
+            ))
+        }
         ("gpt-6-astra", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Short) => {
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 10.0, /*cached_input_usd_per_1m*/ 1.0,
@@ -782,6 +794,18 @@ fn built_in_rate_for_model(
                 /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 1.80,
             ))
         }
+        ("gpt-6-sol", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 4.0, /*cached_input_usd_per_1m*/ 0.40,
+                /*cache_write_usd_per_1m*/ 5.0, /*output_usd_per_1m*/ 15.0,
+            ))
+        }
+        ("gpt-6-luna", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
+                /*cache_write_usd_per_1m*/ 0.25, /*output_usd_per_1m*/ 0.75,
+            ))
+        }
         ("gpt-6-astra", TOKEN_USAGE_STANDARD_SERVICE_TIER, ContextLength::Long) => {
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 20.0, /*cached_input_usd_per_1m*/ 2.0,
@@ -822,10 +846,34 @@ fn built_in_rate_for_model(
                 /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 2.40,
             ))
         }
+        ("gpt-6-sol", "priority" | "fast", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 4.0, /*cached_input_usd_per_1m*/ 0.40,
+                /*cache_write_usd_per_1m*/ 5.0, /*output_usd_per_1m*/ 20.0,
+            ))
+        }
+        ("gpt-6-luna", "priority" | "fast", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
+                /*cache_write_usd_per_1m*/ 0.25, /*output_usd_per_1m*/ 1.0,
+            ))
+        }
         ("gpt-6-astra", "priority" | "fast", ContextLength::Short) => {
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 20.0, /*cached_input_usd_per_1m*/ 2.0,
                 /*cache_write_usd_per_1m*/ 25.0, /*output_usd_per_1m*/ 100.0,
+            ))
+        }
+        ("gpt-6-sol", "priority" | "fast", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 8.0, /*cached_input_usd_per_1m*/ 0.80,
+                /*cache_write_usd_per_1m*/ 10.0, /*output_usd_per_1m*/ 30.0,
+            ))
+        }
+        ("gpt-6-luna", "priority" | "fast", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.40, /*cached_input_usd_per_1m*/ 0.04,
+                /*cache_write_usd_per_1m*/ 0.50, /*output_usd_per_1m*/ 1.50,
             ))
         }
         ("gpt-6-astra", "priority" | "fast", ContextLength::Long) => {
@@ -878,6 +926,18 @@ fn built_in_rate_for_model(
                 /*cache_write_usd_per_1m*/ 0.125, /*output_usd_per_1m*/ 0.60,
             ))
         }
+        ("gpt-6-sol", "flex" | "batch", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 1.0, /*cached_input_usd_per_1m*/ 0.10,
+                /*cache_write_usd_per_1m*/ 1.25, /*output_usd_per_1m*/ 5.0,
+            ))
+        }
+        ("gpt-6-luna", "flex" | "batch", ContextLength::Short) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.05, /*cached_input_usd_per_1m*/ 0.005,
+                /*cache_write_usd_per_1m*/ 0.0625, /*output_usd_per_1m*/ 0.25,
+            ))
+        }
         ("gpt-6-astra", "flex" | "batch", ContextLength::Short) => {
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 5.0, /*cached_input_usd_per_1m*/ 0.50,
@@ -908,6 +968,18 @@ fn built_in_rate_for_model(
             Some(rate_with_cache_write(
                 /*input_usd_per_1m*/ 0.20, /*cached_input_usd_per_1m*/ 0.02,
                 /*cache_write_usd_per_1m*/ 0.25, /*output_usd_per_1m*/ 0.90,
+            ))
+        }
+        ("gpt-6-sol", "flex" | "batch", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 2.0, /*cached_input_usd_per_1m*/ 0.20,
+                /*cache_write_usd_per_1m*/ 2.50, /*output_usd_per_1m*/ 7.50,
+            ))
+        }
+        ("gpt-6-luna", "flex" | "batch", ContextLength::Long) => {
+            Some(rate_with_cache_write(
+                /*input_usd_per_1m*/ 0.10, /*cached_input_usd_per_1m*/ 0.01,
+                /*cache_write_usd_per_1m*/ 0.125, /*output_usd_per_1m*/ 0.375,
             ))
         }
         ("gpt-6-astra", "flex" | "batch", ContextLength::Long) => {
@@ -1332,6 +1404,46 @@ mod tests {
             span_text(data.output_spans()),
             "500K total, 100K reasoning  ~$3.00"
         );
+    }
+
+    #[test]
+    fn cost_uses_gpt_6_sol_and_luna_cache_write_rates() {
+        let config = TuiStatusTokenUsage {
+            enabled: true,
+            daily_spend_retention_days: 30,
+            model_rates: BTreeMap::new(),
+        };
+        let usage = TokenUsage {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 200_000,
+            cache_write_tokens: 100_000,
+            output_tokens: 500_000,
+            reasoning_output_tokens: 100_000,
+            total_tokens: 1_500_000,
+        };
+
+        for (model, summary, input, output) in [
+            (
+                "gpt-6-sol",
+                "1.5M API-equivalent tokens  ~$6.69",
+                "1M total, 200K cached, 100K cache writes, 700K billable  ~$1.69",
+                "500K total, 100K reasoning  ~$5.00",
+            ),
+            (
+                "gpt-6-luna",
+                "1.5M API-equivalent tokens  ~$0.33",
+                "1M total, 200K cached, 100K cache writes, 700K billable  ~$0.08",
+                "500K total, 100K reasoning  ~$0.25",
+            ),
+        ] {
+            let data =
+                compose_status_token_usage_cost(&config, "openai", model, &usage, &BTreeMap::new())
+                    .expect("usage should render");
+
+            assert_eq!(span_text(data.summary_spans()), summary);
+            assert_eq!(span_text(data.input_spans()), input);
+            assert_eq!(span_text(data.output_spans()), output);
+        }
     }
 
     #[test]

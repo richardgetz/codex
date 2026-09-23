@@ -19,6 +19,7 @@ use crate::session::session::SessionSettingsUpdate;
 use crate::session::thread_settings;
 use crate::session::turn_context::NewTurnContextOptions;
 use crate::session::turn_input;
+use crate::state::ReasoningEffortPin;
 use crate::tools::handlers::builtin_scratchpad::ScratchpadCheckpointRestore;
 use crate::tools::handlers::builtin_scratchpad::restore_thread_scratchpad_checkpoint;
 use crate::tools::handlers::builtin_scratchpad::scratchpad_absent_update_event;
@@ -494,6 +495,12 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
                     current_context.as_ref(),
                     EventMsg::TurnStarted(TurnStartedEvent {
                         turn_id: current_context.sub_id.clone(),
+                        root_turn_id: Some(
+                            current_context
+                                .turn_metadata_state
+                                .root_turn_id()
+                                .unwrap_or_else(|| current_context.sub_id.clone()),
+                        ),
                         trace_id: current_context.trace_id.clone(),
                         started_at: current_context
                             .turn_timing_state
@@ -818,6 +825,8 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 }
 
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+    // Stop the old turn before the compact task picks up the next turn's environments.
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
     let turn_context = sess
         .new_turn_with_default_settings(sub_id, Default::default())
         .await;
@@ -1161,12 +1170,19 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .into_iter()
         .chain(std::iter::once(RolloutItem::EventMsg(rollback_msg.clone())))
         .collect::<Vec<_>>();
-    sess.apply_rollout_reconstruction(turn_context.as_ref(), replay_items.as_slice())
+    sess.apply_rollout_reconstruction(&turn_context, replay_items.as_slice())
         .await;
+    {
+        let mut state = sess.state.lock().await;
+        // Keep the baseline while startup prewarm is retained for the first turn,
+        // including when its task has not established the pin yet.
+        if state.startup_prewarm.is_none() {
+            state.reasoning_effort_pin = ReasoningEffortPin::Unset;
+        }
+    }
     sess.services
         .thread_extension_data
         .remove::<NodeReplReviewEvidence>();
-    sess.guardian_review_session.invalidate().await;
     sess.services
         .agent_control
         .rollout_budget()
@@ -1194,7 +1210,6 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
     .await;
     restore_scratchpad_after_thread_rollback(&turn_context, sess).await;
 }
-
 pub(super) async fn persist_thread_memory_mode_update(
     sess: &Session,
     mode: ThreadMemoryMode,
@@ -1561,9 +1576,8 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         sess.mcp_refresh.close();
         sess.services.mcp_runtime.shutdown().await;
     }
-    sess.guardian_review_session.shutdown().await;
-
     crate::hook_runtime::run_session_end_hooks(sess).await;
+    emit_thread_stop_lifecycle(sess).await;
 }
 
 pub(super) async fn emit_thread_stop_lifecycle(sess: &Session) {
@@ -1590,8 +1604,6 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         i64::try_from(turn_count).unwrap_or(0),
         &[],
     );
-
-    emit_thread_stop_lifecycle(sess.as_ref()).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -2160,7 +2172,6 @@ pub(super) async fn submission_loop(
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
-        emit_thread_stop_lifecycle(sess.as_ref()).await;
         if let Some(live_thread) = sess.live_thread()
             && let Err(err) = live_thread.shutdown().await
         {

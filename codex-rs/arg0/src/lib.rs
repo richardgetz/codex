@@ -20,6 +20,10 @@ use tempfile::TempDir;
 
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+// The interactive TUI's startup future keeps several large async dispatch frames live while it
+// enters the event loop. Give the dedicated codex-main thread more headroom without increasing
+// every Tokio worker stack.
+const CODEX_MAIN_THREAD_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
@@ -100,6 +104,9 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     }
 
     let argv1 = args.next().unwrap_or_default();
+    if argv1 == codex_sandboxing::CODEX_WINDOWS_MXC_ARG1 {
+        codex_sandboxing::run_windows_mxc_main();
+    }
     #[cfg(unix)]
     if argv1 == CODEX_ARG0_EXEC_HELPER_ARG1 {
         codex_exec_server::run_arg0_exec_helper_main();
@@ -232,7 +239,7 @@ where
     // top-level future on the caller's OS stack.
     let handle = std::thread::Builder::new()
         .name("codex-main".to_string())
-        .stack_size(THREAD_STACK_SIZE_BYTES)
+        .stack_size(CODEX_MAIN_THREAD_STACK_SIZE_BYTES)
         .spawn(move || {
             let runtime = build_runtime()?;
             runtime.block_on(run_main_with_arg0_guard(

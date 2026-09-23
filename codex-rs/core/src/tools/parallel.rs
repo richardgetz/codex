@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -19,6 +18,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolPayload;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
@@ -110,11 +110,7 @@ impl ToolCallRuntime {
             .enabled(codex_features::Feature::ExecutedToolCallMetadata)
             && let Some(executed_tool_calls) = self.session.services.executed_tool_calls.as_ref()
         {
-            executed_tool_calls.record_tool_call(
-                &call,
-                &source,
-                self.step_context.tool_router.tool_mode(),
-            );
+            executed_tool_calls.record_tool_call(&call, &source, &self.step_context);
         }
         let router = &self.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
@@ -157,8 +153,8 @@ impl ToolCallRuntime {
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
-        let terminal_outcome_reached = Arc::new(AtomicBool::new(false));
-        let dispatch_terminal_outcome_reached = Arc::clone(&terminal_outcome_reached);
+        let dispatch_call_state = Arc::new(ToolCallState::default());
+        let terminal_outcome_reached = Arc::clone(&dispatch_call_state);
         let dispatch_call = call.clone();
 
         let dispatch_span = trace_span!(
@@ -218,14 +214,14 @@ impl ToolCallRuntime {
                 }
 
                 router
-                    .dispatch_tool_call_with_terminal_outcome(
+                    .dispatch_tool_call_with_state(
                         session,
                         step_context,
                         invocation_cancellation_token,
                         tracker,
                         dispatch_call,
                         source,
-                        dispatch_terminal_outcome_reached,
+                        dispatch_call_state,
                     )
                     .instrument(dispatch_span.clone())
                     .await
@@ -243,9 +239,13 @@ impl ToolCallRuntime {
                     // between this branch and its callback, and aborting/awaiting it lets that
                     // callback claim the result without leaving stale lifecycle state.
                     let terminal_outcome_claimed = if wait_for_runtime_cancellation {
-                        terminal_outcome_reached.swap(true, Ordering::AcqRel)
+                        terminal_outcome_reached
+                            .terminal_outcome_reached
+                            .swap(true, Ordering::AcqRel)
                     } else {
-                        terminal_outcome_reached.load(Ordering::Acquire)
+                        terminal_outcome_reached
+                            .terminal_outcome_reached
+                            .load(Ordering::Acquire)
                     };
                     if terminal_outcome_claimed {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?

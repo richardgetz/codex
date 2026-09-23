@@ -23,6 +23,7 @@ use serde_json::Value as JsonValue;
 use crate::LazyMcpServerInfo;
 use crate::McpConfig;
 use crate::binding_clients::McpBindingClients;
+use crate::client_tool_catalog::ToolCatalogSnapshot;
 use crate::connection_manager::McpConnectionSet;
 use crate::rmcp_client::ManagedClient;
 use crate::server::McpServerMetadata;
@@ -193,7 +194,7 @@ pub struct PreparedMcpCall {
     connections: Arc<McpConnectionSet>,
     client: Arc<ManagedClient>,
     config: Arc<McpConfig>,
-    catalog_revision: u64,
+    catalog_snapshot: Arc<ToolCatalogSnapshot>,
     tool_info: ToolInfo,
     server_name: String,
     server_metadata: McpServerMetadata,
@@ -210,7 +211,7 @@ impl PreparedMcpCall {
         connections: Arc<McpConnectionSet>,
         client: Arc<ManagedClient>,
         config: Arc<McpConfig>,
-        catalog_revision: u64,
+        catalog_snapshot: Arc<ToolCatalogSnapshot>,
         tool_info: ToolInfo,
         server_metadata: McpServerMetadata,
         plugin_id: Option<String>,
@@ -222,7 +223,7 @@ impl PreparedMcpCall {
             connections,
             client,
             config,
-            catalog_revision,
+            catalog_snapshot,
             tool_info,
             server_name,
             server_metadata,
@@ -320,7 +321,7 @@ impl PreparedMcpCall {
     }
 
     /// Runs irreversible call preparation and execution under the authority of
-    /// this call's exact catalog revision and the extensions owned by the Codex session.
+    /// this call's captured catalog and the extensions owned by the Codex session.
     /// A caller-supplied timeout can further restrict the server's configured timeout.
     pub async fn call_with_preparation<F, Fut>(
         &self,
@@ -340,7 +341,7 @@ impl PreparedMcpCall {
         let tool_name = self.tool_info.tool.name.to_string();
         self.client
             .tool_catalog
-            .run_with_revision(self.catalog_revision, || async {
+            .run_with_snapshot(&self.catalog_snapshot, || async {
                 let (arguments, meta) = prepare().await?;
                 let timeout_deadline =
                     effective_timeout.map(|timeout| tokio::time::Instant::now() + timeout);

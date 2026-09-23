@@ -1,6 +1,6 @@
 //! Shares the root user's selected routing tier across the entire agent tree.
 
-use super::AgentControl;
+use super::LocalAgentControl;
 use crate::session::new_submission_id;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
@@ -9,7 +9,7 @@ use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use std::sync::Arc;
 use tokio::sync::MutexGuard;
 
-impl AgentControl {
+impl LocalAgentControl {
     /// Returns the latest user-selected tier for this root and all its descendants.
     pub(crate) fn root_service_tier(&self) -> Option<String> {
         self.root_service_tier

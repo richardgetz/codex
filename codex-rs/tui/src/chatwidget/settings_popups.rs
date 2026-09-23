@@ -1,9 +1,11 @@
 //! Settings-adjacent popup surfaces for `ChatWidget`.
 //!
-//! This keeps theme, personality, and experimental-feature UI out of the main
+//! This keeps theme and experimental-feature UI out of the main
 //! orchestration module without changing their event wiring.
 
 use super::*;
+use crate::render::renderable::ColumnRenderable;
+use codex_protocol::config_types::Personality;
 
 impl ChatWidget {
     pub(super) fn open_theme_picker(&mut self) {

@@ -20,6 +20,24 @@ release or merge rules.
 
 ## Unreleased
 
+- Interactive TUI startup gives the dedicated `codex-main` thread a 32 MiB
+  stack budget while keeping Tokio worker stacks at 16 MiB, preventing the
+  fork's large merged async dispatch path from aborting during `just codex`
+  startup.
+
+- Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
+  recovery contract, account and launcher ownership, pause/continue and ETA
+  APIs, and migration numbering. Upstream attachment state is adapted to the
+  fork by retaining shipped migration `0055` and appending attachment schema
+  changes at `0064`; refreshes must keep both the upstream managed updater and
+  these fork-owned lifecycle gates.
+
+- The stable model catalog includes GPT-6 Sol and Luna (client minimum
+  `0.155.0`, medium defaults), routes built-in 5.4/5.5/5.6 upgrades and the
+  default Luna fallback to those targets, and reports their standard, long
+  context, Fast, and Flex status pricing. Explicit historical model IDs remain
+  selectable.
+
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
 
@@ -866,6 +884,12 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify upstream refreshes retain enough dedicated `codex-main` stack for the
+  merged TUI startup futures (or reduce those frames before lowering the
+  budget), while Tokio worker stacks remain at their shared 16 MiB setting.
+  Smoke `just codex` through the loaded model screen to catch startup stack
+  regressions.
+
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source
   freeze with exact-revision handoff, and preservation of active
@@ -877,6 +901,10 @@ release or merge rules.
   completion. Process/output watchers must not be treated as automatic model
   wakes, arbitrary commands must not subscribe idle workers, and missing
   callbacks require an explicit check.
+
+- Verify upstream model refreshes preserve the GPT-6 Sol/Luna catalog entries,
+  migration mappings, Luna fallback, and standard/long/Fast/Flex status pricing
+  while keeping explicit historical model IDs selectable.
 
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered

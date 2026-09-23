@@ -62,7 +62,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     let compaction_metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Auto,
         reason,
-        CompactionImplementation::ResponsesCompact,
+        CompactionImplementation::ResponsesCompactionV2,
         phase,
     );
     run_remote_compact_task_inner(
@@ -87,6 +87,7 @@ pub(crate) async fn run_remote_compact_task(
         .await?;
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         turn_id: turn_context.sub_id.clone(),
+        root_turn_id: turn_context.turn_metadata_state.root_turn_id(),
         trace_id: turn_context.trace_id.clone(),
         started_at: turn_context.turn_timing_state.started_at_unix_secs().await,
         model_context_window: turn_context.model_context_window(),
@@ -97,7 +98,7 @@ pub(crate) async fn run_remote_compact_task(
     let compaction_metadata = CompactionTurnMetadata::new(
         CompactionTrigger::Manual,
         CompactionReason::UserRequested,
-        CompactionImplementation::ResponsesCompact,
+        CompactionImplementation::ResponsesCompactionV2,
         CompactionPhase::StandaloneTurn,
     );
     run_remote_compact_task_inner(
@@ -302,6 +303,7 @@ async fn run_remote_compact_task_inner_impl(
             window_ids: new_window_ids,
             compaction_response_id: None,
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
+            reviewer_compaction_hash: None,
         },
     )
     .await;

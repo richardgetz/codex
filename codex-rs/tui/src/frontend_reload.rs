@@ -12,6 +12,7 @@ pub(crate) fn restore_terminal_before_fatal_exit() {
     if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
         let _ = tui::restore_after_exit();
     }
+    startup_recovery::print_unsent_draft();
 }
 
 const FRONTEND_RELOAD_THREAD_ENV: &str = "CODEX_TUI_RELOAD_THREAD_ID";

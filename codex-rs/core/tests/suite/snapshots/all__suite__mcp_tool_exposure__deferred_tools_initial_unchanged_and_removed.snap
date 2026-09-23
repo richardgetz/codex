@@ -4,55 +4,49 @@ expression: "format_labeled_requests_snapshot(\"Initially available deferred too
 ---
 Scenario: Initially available deferred tools remain unchanged until disabling Calendar removes them.
 
-## Initially available
-00:message/developer[6]:
-    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
-    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
-    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
-    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
-    [05] <PERMISSIONS_INSTRUCTIONS>
-    [06] <tools>
-         Deferred tool namespaces:
-         - mcp__codex_apps__calendar: Plan events and manage your calendar.
-         </tools>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:inspect initially available deferred tools
+## Window 1
+-- request 1 (turn; Initially available) --
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <APPS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        </tools>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    inspect initially available deferred tools
+-- request 2 (turn; Unchanged follow-up) --
+03:message/assistant:
+    done
+04:message/user:
+    inspect unchanged deferred tools
 
-## Unchanged follow-up
-00:message/developer[6]:
-    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
-    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
-    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
-    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
-    [05] <PERMISSIONS_INSTRUCTIONS>
-    [06] <tools>
-         Deferred tool namespaces:
-         - mcp__codex_apps__calendar: Plan events and manage your calendar.
-         </tools>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:inspect initially available deferred tools
-03:message/assistant:done
-04:message/user:inspect unchanged deferred tools
-
-## Removed and empty
-00:message/developer[6]:
-    [01] <conventional_commits>\n## Conventional Commits\nWhen creating or reviewing git commit messages,...
-    [02] <git_intent_notes>\n## Git Intent Notes\nFor code changes, preserve the why in git notes under `...
-    [03] <scratchpad_instructions>\n## Built-in Scratchpad\nThe built-in `scratchpad` tool namespace is a...
-    [04] <fork_help>\n## Rick Fork Guidance\nThis build includes fork-only behavior beyond upstream/mainl...
-    [05] <PERMISSIONS_INSTRUCTIONS>
-    [06] <tools>
-         Deferred tool namespaces:
-         - mcp__codex_apps__calendar: Plan events and manage your calendar.
-         </tools>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-02:message/user:inspect initially available deferred tools
-03:message/assistant:done
-04:message/user:inspect unchanged deferred tools
-05:message/assistant:done
-06:message/developer:<tools>
-Removed deferred tool namespaces:
-- mcp__codex_apps__calendar: Plan events and manage your calendar.
-No deferred tool namespaces remain.
-</tools>
-07:message/user:inspect removed deferred tools
+## Window 2 (after request 2: settings changed (tools))
+-- request 3 (turn; Removed and empty) --
+00:message/developer[3]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <APPS_INSTRUCTIONS>
+    [03] <tools>
+        Deferred tool namespaces:
+        - mcp__codex_apps__calendar: Plan events and manage your calendar.
+        </tools>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    inspect initially available deferred tools
+03:message/assistant:
+    done
+04:message/user:
+    inspect unchanged deferred tools
+05:message/assistant:
+    done
+06:message/developer:
+    <tools>
+    Removed deferred tool namespaces:
+    - mcp__codex_apps__calendar: Plan events and manage your calendar.
+    No deferred tool namespaces remain.
+    </tools>
+07:message/user:
+    inspect removed deferred tools
