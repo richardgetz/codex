@@ -22,4 +22,4 @@ serde_json = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [package.metadata.cargo-shear]
-ignored-paths = ["src/retention.rs", "src/retention_tests.rs"]
+ignored-paths = ["src/retention.rs"]

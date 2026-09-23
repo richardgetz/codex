@@ -48,6 +48,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 ignored-paths = [
     "src/async_scorer/review_evidence.rs",
     "src/sync_reviewer/prompt.rs",
-    "src/sync_reviewer/prompt_tests.rs",
     "src/sync_reviewer/reviewer_config_tests.rs",
 ]
