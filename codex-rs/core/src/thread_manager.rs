@@ -381,6 +381,7 @@ impl StartThreadOptions {
 }
 
 struct ThreadSpawnRequest {
+    startup: Option<Arc<crate::session::startup::SessionStartup>>,
     options: StartThreadOptions,
     thread_settings_override_flags: ThreadSettingsOverrideFlags,
     auth_manager: Arc<AuthManager>,
@@ -403,6 +404,7 @@ impl ThreadSpawnRequest {
         agent_control: AgentControl,
     ) -> Self {
         Self {
+            startup: None,
             options,
             thread_settings_override_flags: ThreadSettingsOverrideFlags::default(),
             auth_manager,
@@ -1329,6 +1331,7 @@ impl ThreadManager {
         Box::pin(self.start_thread_inner(
             options,
             /*forked_from_thread_id*/ None,
+            /*startup*/ None,
             ThreadSettingsOverrideFlags::default(),
         ))
         .await
@@ -1405,6 +1408,7 @@ impl ThreadManager {
         &self,
         mut options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        startup: Option<Arc<crate::session::startup::SessionStartup>>,
         thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
@@ -1464,6 +1468,7 @@ impl ThreadManager {
             request.forked_from_thread_id = forked_from_thread_id;
             request
         };
+        request.startup = startup;
         request.thread_settings_override_flags = thread_settings_override_flags;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.state.spawn_thread(request)).await
@@ -1549,6 +1554,7 @@ impl ThreadManager {
         self.start_thread_inner(
             options,
             Some(forked_from_thread_id),
+            /*startup*/ None,
             thread_settings_override_flags,
         )
         .await
@@ -3128,6 +3134,7 @@ impl ThreadManagerState {
     async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
         let ThreadSpawnRequest {
+            startup,
             options,
             thread_settings_override_flags,
             auth_manager,
@@ -3287,7 +3294,7 @@ impl ThreadManagerState {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
         let (session, io) = Session::spawn(SessionSpawnArgs {
-            startup: None,
+            startup,
             config,
             allow_provider_model_fallback,
             instructions,
