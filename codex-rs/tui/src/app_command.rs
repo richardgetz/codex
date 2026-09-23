@@ -488,3 +488,7 @@ impl From<Op> for AppCommand {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "app_command_tests.rs"]
+mod tests;

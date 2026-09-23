@@ -243,7 +243,11 @@ mod bedrock_catalog_tests;
 mod collaboration_catalog_tests;
 #[path = "tests/compaction_tests.rs"]
 mod compaction_tests;
+#[path = "tests/completion_styling_tests.rs"]
+mod completion_styling;
 mod composer_submission;
+#[path = "tests/computer_activity_tests.rs"]
+mod computer_activity_tests;
 #[path = "tests/config_errors_tests.rs"]
 mod config_errors;
 #[path = "tests/copy_export_picker_tests.rs"]
@@ -280,6 +284,8 @@ mod popups_and_settings;
 mod rate_limit_recovery_tests;
 #[path = "tests/realtime_tests.rs"]
 mod realtime;
+#[path = "tests/reasoning_status_tests.rs"]
+mod reasoning_status_tests;
 #[path = "tests/replay_render_tests.rs"]
 mod replay_render_tests;
 mod review_mode;

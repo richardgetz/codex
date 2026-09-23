@@ -63,6 +63,14 @@ mod history_hydration_tests;
 mod permission_shortcuts_tests;
 mod plugin_catalog;
 mod rate_limits;
+#[path = "tests/realtime_handoff_e2e.rs"]
+mod realtime_handoff_e2e;
+#[path = "tests/realtime_requests.rs"]
+mod realtime_requests;
+#[path = "tests/realtime_start.rs"]
+mod realtime_start;
+#[path = "tests/reasoning_resume_tests.rs"]
+mod reasoning_resume_tests;
 #[path = "tests/recap_generation_tests.rs"]
 mod recap_generation;
 #[path = "tests/reload_provider_tests.rs"]
