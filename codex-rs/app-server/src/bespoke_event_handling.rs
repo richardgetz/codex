@@ -1,3 +1,5 @@
+use crate::error_code::internal_error;
+use crate::error_code::invalid_request;
 use crate::notification_media::without_notification_media;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
@@ -71,7 +73,9 @@ use codex_app_server_protocol::ThreadRealtimeSdpNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification;
+use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
+use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::ToolRequestUserInputOption;
@@ -103,6 +107,7 @@ use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -120,6 +125,7 @@ use codex_protocol::request_permissions::RequestPermissionsResponse as CoreReque
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_shell_command::parse_command::shlex_join;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
@@ -145,6 +151,7 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
     conversation_id: ThreadId,
@@ -153,6 +160,8 @@ pub(crate) async fn apply_bespoke_event_handling(
     outgoing: ThreadScopedOutgoingMessageSender,
     thread_state: Arc<tokio::sync::Mutex<ThreadState>>,
     thread_watch_manager: ThreadWatchManager,
+    thread_list_state_permit: Arc<tokio::sync::Semaphore>,
+    fallback_model_provider: String,
 ) {
     let Event {
         id: event_turn_id,
@@ -1361,7 +1370,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await;
                 let mut response = match thread_rollback_response_from_stored_thread(
                     stored_thread,
-                    conversation.session_configured().session_id.to_string(),
+                    conversation.id().to_string(),
                     fallback_model_provider.as_str(),
                     config_snapshot.cwd(),
                     loaded_status,
@@ -3089,6 +3098,8 @@ mod tests {
                 self.outgoing.clone(),
                 self.thread_state.clone(),
                 self.thread_watch_manager.clone(),
+                test_thread_list_state_permit(),
+                "test-provider".to_string(),
             )
             .await;
         }
@@ -3939,6 +3950,8 @@ mod tests {
             outgoing.clone(),
             Arc::clone(&thread_state),
             thread_watch_manager.clone(),
+            test_thread_list_state_permit(),
+            "test-provider".to_string(),
         )
         .await;
 
@@ -3979,6 +3992,8 @@ mod tests {
                 outgoing.clone(),
                 Arc::clone(&thread_state),
                 thread_watch_manager.clone(),
+                test_thread_list_state_permit(),
+                "test-provider".to_string(),
             )
             .await;
 
@@ -4059,6 +4074,8 @@ mod tests {
             outgoing,
             new_thread_state(),
             thread_watch_manager.clone(),
+            test_thread_list_state_permit(),
+            "test-provider".to_string(),
         )
         .await;
 
@@ -4146,6 +4163,8 @@ mod tests {
             outgoing,
             new_thread_state(),
             ThreadWatchManager::new(),
+            test_thread_list_state_permit(),
+            "test-provider".to_string(),
         )
         .await;
 

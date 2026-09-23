@@ -229,6 +229,7 @@ pub(crate) fn thread_settings_from_core_snapshot(
     )
     .into();
     ThreadSettings {
+        disabled_plugin_ids: Vec::new(),
         sandbox_policy,
         cwd,
         approval_policy: approval_policy.into(),

@@ -235,6 +235,14 @@ impl ThreadScopedOutgoingMessageSender {
     {
         self.outgoing.send_response(request_id, response).await;
     }
+
+    pub(crate) async fn send_error(
+        &self,
+        request_id: ConnectionRequestId,
+        error: impl Into<JSONRPCErrorError>,
+    ) {
+        self.outgoing.send_error(request_id, error).await;
+    }
 }
 
 impl OutgoingMessageSender {

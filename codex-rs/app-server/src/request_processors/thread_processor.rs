@@ -725,7 +725,7 @@ impl ThreadRequestProcessor {
         &self,
         thread_id: String,
     ) -> Result<(), JSONRPCErrorError> {
-        let target = ThreadResumeTarget::DaemonRecovery;
+        let target = ThreadResumeTarget::DaemonRecovery(None);
         let params = ThreadResumeParams {
             thread_id,
             exclude_turns: true,
@@ -1384,6 +1384,8 @@ impl ThreadRequestProcessor {
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             thread_watch_manager: self.thread_watch_manager.clone(),
+            thread_list_state_permit: self.thread_list_state_permit.clone(),
+            fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
@@ -1551,6 +1553,8 @@ impl ThreadRequestProcessor {
             outgoing: Arc::clone(&self.outgoing),
             pending_thread_unloads: Arc::clone(&self.pending_thread_unloads),
             thread_watch_manager: self.thread_watch_manager.clone(),
+            thread_list_state_permit: self.thread_list_state_permit.clone(),
+            fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
@@ -4135,7 +4139,7 @@ impl ThreadRequestProcessor {
                 self.outgoing.send_error(request_id.clone(), error).await;
                 Ok(ControlFlow::Break(()))
             }
-            ThreadResumeTarget::DaemonRecovery => Err(error),
+            ThreadResumeTarget::DaemonRecovery(_) => Err(error),
         }
     }
 
@@ -4560,7 +4564,7 @@ impl ThreadRequestProcessor {
                 session_configured,
                 ..
             }) => {
-                if matches!(target, ThreadResumeTarget::DaemonRecovery) {
+                if matches!(target, ThreadResumeTarget::DaemonRecovery(_)) {
                     self.thread_watch_manager
                         .upsert_thread_silently(&thread_id.to_string())
                         .await;

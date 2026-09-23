@@ -48,6 +48,7 @@ use crate::request_processors::ThreadEtaRequestProcessor;
 use crate::request_processors::ThreadGoalRequestProcessor;
 use crate::request_processors::ThreadQueueRequestProcessor;
 use crate::request_processors::ThreadRequestProcessor;
+use crate::request_processors::thread_processor::ThreadResumeTarget;
 use crate::request_processors::TurnRequestProcessor;
 use crate::request_processors::WindowsSandboxRequestProcessor;
 use crate::request_processors::read_server_diagnostics;
@@ -552,11 +553,12 @@ impl MessageProcessor {
             pending_thread_unloads,
             thread_state_manager,
             thread_watch_manager,
+            Arc::clone(&thread_list_state_permit),
             Arc::clone(&skills_watcher),
             turn_cost_worker.as_ref().map(TurnCostWorker::handle),
         );
         let slash_command_processor = SlashCommandRequestProcessor::new(
-            account_processor.clone(),
+            account_processor.as_ref().clone(),
             turn_processor.clone(),
             outgoing.clone(),
             Arc::clone(&server_lifecycle),

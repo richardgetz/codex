@@ -105,6 +105,7 @@ pub(crate) struct TurnSummary {
 #[derive(Default)]
 pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
+    pub(crate) pending_rollbacks: Option<(ConnectionRequestId, oneshot::Sender<()>)>,
     pub(crate) turn_summary: TurnSummary,
     pub(crate) last_terminal_turn_id: Option<String>,
     /// Lets an internal runtime replacement wait until the old listener has processed Core's
