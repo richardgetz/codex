@@ -449,14 +449,68 @@ impl LocalAgentControl {
                     );
                 }
                 if !persisted {
-                    // Retain the local mailbox only for a reversible abort. The failure bit makes
-                    // the coordinator keep the old owner and publish NeedsAttention instead of
-                    // treating this callback as transferable.
+                    // Retain this result on the old owner only for a reversible abort. The failure
+                    // bit makes the coordinator keep the old owner and publish NeedsAttention
+                    // instead of treating this callback as transferable.
                     self.mark_handoff_delivery_failed();
                     if let Some(state) = state
                         && let Ok(thread) = state.get_thread(agent_id).await
                     {
-                        if team_lead_completion {
+                        if team_lead_completion && !communication.trigger_turn {
+                            let session = Arc::clone(&thread.session);
+                            let _team_lead_turn_admission =
+                                session.team_lead_turn_admission.lock().await;
+                            if session.is_team_lead().await {
+                                let config = session.get_config().await;
+                                if config.effective_team_lead_work_policy()
+                                    == TeamLeadWorkPolicy::ManagerOnly
+                                {
+                                    // Preserve the completion in the same bounded batch as normal
+                                    // delivery. Its flush waits for a reversible handoff seal to
+                                    // reopen admission.
+                                    let generation = session
+                                        .input_queue
+                                        .enqueue_team_lead_completion(communication)
+                                        .await;
+                                    drop(_team_lead_turn_admission);
+                                    session
+                                        .schedule_manager_completion_batch_flush(generation)
+                                        .await;
+                                } else {
+                                    // A completion classified under manager-only may reach this
+                                    // fallback after the Lead switched back to prompt-guided.
+                                    let mut communication = communication;
+                                    communication.trigger_turn = true;
+                                    session
+                                        .input_queue
+                                        .enqueue_team_lead_mailbox_communication(
+                                            communication,
+                                            start_options,
+                                        )
+                                        .await;
+                                    drop(_team_lead_turn_admission);
+                                    let agent_control = self.clone();
+                                    tokio::spawn(async move {
+                                        let admission = loop {
+                                            match agent_control.begin_handoff_admission() {
+                                                Ok(admission) => break admission,
+                                                Err(_) => {
+                                                    agent_control
+                                                        .wait_for_handoff_admission_open()
+                                                        .await;
+                                                }
+                                            }
+                                        };
+                                        session
+                                            .maybe_start_turn_for_pending_work_with_admission(
+                                                uuid::Uuid::new_v4().to_string(),
+                                                admission,
+                                            )
+                                            .await;
+                                    });
+                                }
+                            }
+                        } else if team_lead_completion {
                             thread
                                 .session
                                 .input_queue

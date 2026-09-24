@@ -1035,6 +1035,13 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
             .blockers
             .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox)
         {
+            assert!(
+                preflight
+                    .blockers
+                    .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence),
+                "the test should exercise the process-local fallback after durable completion \
+                 persistence fails"
+            );
             break;
         }
         assert!(
@@ -1046,12 +1053,13 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
 
     tokio::time::sleep(Duration::from_millis(151)).await;
     assert!(test.codex.handoff_admission_sealed());
-    assert!(test
-        .codex
-        .handoff_preflight()
-        .await
+    let preflight = test.codex.handoff_preflight().await;
+    assert!(preflight
         .blockers
         .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox));
+    assert!(preflight
+        .blockers
+        .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence));
     assert!(
         !root_after_completion.requests().iter().any(|request| {
             response_request_has_model(request, LEAD_MODEL)

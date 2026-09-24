@@ -26,6 +26,7 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+use crate::agent::control::HandoffAdmissionGuard;
 use crate::agent::control::TeamWorkerLease;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
@@ -783,6 +784,31 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        self.maybe_start_turn_for_pending_work_inner(
+            sub_id,
+            /*pre_acquired_admission*/ None,
+        )
+            .await;
+    }
+
+    /// Starts a pending-work turn while retaining an admission permit acquired by the caller.
+    ///
+    /// This closes the gap between waiting for handoff admission to reopen and the scheduler's
+    /// final automatic-turn admission boundary.
+    pub(crate) async fn maybe_start_turn_for_pending_work_with_admission(
+        self: &Arc<Self>,
+        sub_id: String,
+        admission: HandoffAdmissionGuard,
+    ) {
+        self.maybe_start_turn_for_pending_work_inner(sub_id, Some(admission))
+            .await;
+    }
+
+    async fn maybe_start_turn_for_pending_work_inner(
+        self: &Arc<Self>,
+        sub_id: String,
+        mut pre_acquired_admission: Option<HandoffAdmissionGuard>,
+    ) {
         if self.is_activity_paused() {
             return;
         }
@@ -794,12 +820,16 @@ impl Session {
                 return;
             }
 
-            // Reserve the final automatic-turn admission only after confirming mailbox work.
-            // The permit is released before a capacity wait and reacquired on the next pass, so
-            // a sealed handoff is never held hostage by an unavailable Worker slot.
-            let admission = match self.services.agent_control.begin_handoff_admission() {
-                Ok(admission) => admission,
-                Err(_) => return,
+            // Use a caller-held permit when available. Otherwise reserve the final automatic-turn
+            // admission only after confirming mailbox work. The permit is released before a
+            // capacity wait and reacquired on the next pass, so a sealed handoff is never held
+            // hostage by an unavailable Worker slot.
+            let admission = match pre_acquired_admission.take() {
+                Some(admission) => admission,
+                None => match self.services.agent_control.begin_handoff_admission() {
+                    Ok(admission) => admission,
+                    Err(_) => return,
+                },
             };
             let turn_state = {
                 let mut active_turn = self.active_turn.lock().await;

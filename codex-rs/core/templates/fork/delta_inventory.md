@@ -59,7 +59,10 @@ release or merge rules.
   input, action messages, failures, escalation, oversight deadlines, and
   dependency handoffs remain immediate. An undelivered completion batch blocks
   daemon handoff, and its quiet-window wake retries after an aborted handoff
-  reopens admission. Switching back to `prompt_guided` immediately releases
+  reopens admission. If durable handoff persistence fails, the process-local
+  manager-only completion fallback enters that same bounded batch and arms its
+  admission-aware flush, so reopening a failed handoff does not strand the wake.
+  Switching back to `prompt_guided` immediately releases
   buffered Worker completions even while other Workers remain active, and a
   queue-only completion admitted under the previous policy becomes an immediate
   wake if it reaches the Lead after the switch.
@@ -1118,6 +1121,9 @@ release or merge rules.
   escalation, dependency handoffs, and the configured oversight deadline remain
   immediate. Verify a buffered completion blocks daemon handoff and its batch
   wake retries after an aborted handoff reopens admission.
+  Verify a durable-persistence failure retains a manager-only completion in the
+  bounded completion batch and schedules its flush to retry after the handoff
+  seal opens; no Lead request may start while the seal remains active.
   Verify switching from `manager_only` to `prompt_guided` releases buffered
   completions while other Workers remain active, and that queue-only completions
   arriving after the switch wake the Lead immediately.
