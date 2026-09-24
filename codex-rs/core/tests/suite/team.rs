@@ -71,6 +71,8 @@ const THIRD_DIRECT_CALL_ID: &str = "team-third-direct";
 const FIRST_DIRECT_GATE_CALL_ID: &str = "team-first-direct-gate";
 const ROOT_DIRECT_GATE_CALL_ID: &str = "team-root-direct-gate";
 
+#[path = "team_manager_only.rs"]
+mod manager_only;
 #[path = "team_activity.rs"]
 mod team_activity;
 #[path = "team_idle.rs"]

@@ -364,6 +364,16 @@ impl ToolRouter {
         source: ToolCallSource,
         call_state: Option<Arc<ToolCallState>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        if !crate::tools::manager_only::allows_registered_tool(
+            &step_context.turn,
+            &self.registry,
+            &call.tool_name,
+        ) {
+            return Err(FunctionCallError::RespondToModel(
+                crate::tools::manager_only::denial_message(&call.tool_name),
+            ));
+        }
+
         let ToolCall {
             tool_name,
             call_id,
