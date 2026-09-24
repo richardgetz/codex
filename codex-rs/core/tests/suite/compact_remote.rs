@@ -528,6 +528,78 @@ async fn remote_compact_v2_records_usage_before_output_validation() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chatgpt_auto_compact_uses_v2_when_flag_disabled() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_auto_env_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_auto_compact_token_limit = Some(200);
+                let _ = config.features.disable(Feature::RemoteCompactionV2);
+            }),
+    )
+    .await?;
+    let response_mock = responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("message-before", "before automatic compaction"),
+                responses::ev_completed_with_tokens("response-before", /*total_tokens*/ 500),
+            ]),
+            sse(vec![
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "CHATGPT_AUTOMATIC_COMPACTION_SUMMARY",
+                    },
+                }),
+                responses::ev_completed("response-compact"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("message-after", "after automatic compaction"),
+                responses::ev_completed("response-after"),
+            ]),
+        ],
+    )
+    .await;
+
+    let test = harness.test();
+    test.submit_turn("before automatic compact").await?;
+    test.submit_turn("after automatic compact").await?;
+
+    let response_requests = response_mock.requests();
+    assert_eq!(response_requests.len(), 3);
+    assert!(
+        response_requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses")
+    );
+    assert!(
+        response_requests[1]
+            .header("x-codex-beta-features")
+            .as_deref()
+            .is_some_and(|value| value
+                .split(',')
+                .any(|feature| feature == "remote_compaction_v2")),
+        "expected automatic compaction to advertise the remote_compaction_v2 beta feature"
+    );
+    assert_eq!(
+        response_requests[1]
+            .inputs_of_type("compaction_trigger")
+            .len(),
+        1
+    );
+    assert!(response_requests[2].input().iter().any(|item| {
+        item["type"] == "compaction"
+            && item["encrypted_content"] == "CHATGPT_AUTOMATIC_COMPACTION_SUMMARY"
+    }));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn amazon_bedrock_automatic_compaction_uses_v2_responses_endpoint() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
