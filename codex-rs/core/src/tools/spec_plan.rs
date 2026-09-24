@@ -460,7 +460,7 @@ pub(crate) fn finalize_tool_router(
     hosted_specs: Vec<ToolSpec>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
-    crate::tools::manager_only::restrict_registry(turn_context, &mut registry);
+    crate::tools::manager_only::restrict_registry(turn_context, model_info, &mut registry);
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
     let tool_mode = effective_tool_mode(turn_context, model_info);
     let code_mode_enabled = matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly);

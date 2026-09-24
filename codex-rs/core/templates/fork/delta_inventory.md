@@ -41,8 +41,10 @@ release or merge rules.
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
   and review while Workers retain normal tool access and execute their assigned
-  work. The policy is captured in thread snapshots so resume and fork preserve
-  the selected mode, while legacy snapshots keep the default.
+  work. In Code Mode and Code Mode Only, the Lead can use the Code Mode wrapper
+  with its manager tools, and nested dispatch still denies execution tools.
+  The policy is captured in thread snapshots so resume and fork preserve the
+  selected mode, while legacy snapshots keep the default.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -1080,8 +1082,11 @@ release or merge rules.
   it preserves human alignment, planning, delegation, coordination, and review;
   routine task execution stays with Workers, who keep normal tool access without
   requiring Lead approval or check-ins for tool use. Verify Worker model context
-  and tool access remain unchanged, and routine completion batches do not wake
-  the Lead before actionable outcomes or the configured oversight deadline.
+  and tool access remain unchanged, Code Mode exposes manager tools under the
+  configured/default namespaces while blocking shell and execution calls at the
+  nested runtime dispatch boundary, and `prompt_guided` retains its existing
+  Code Mode exposure. Routine completion batches do not wake the Lead before
+  actionable outcomes or the configured oversight deadline.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,

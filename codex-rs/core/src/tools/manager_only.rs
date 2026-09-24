@@ -1,6 +1,9 @@
 use crate::session::team::effective_role_for_session_source;
 use crate::session::turn_context::TurnContext;
+use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TeamMode;
 use codex_tools::ResponsesApiNamespaceTool;
@@ -81,6 +84,17 @@ pub(crate) fn allows_tool(turn_context: &TurnContext, tool_name: &ToolName) -> b
         return true;
     }
 
+    // Code Mode's broker sends each nested call back through ToolRouter, where
+    // the normal manager allow-list below still applies.
+    if tool_name.is_default_namespace()
+        && matches!(
+            tool_name.name.as_str(),
+            crate::tools::code_mode::PUBLIC_TOOL_NAME | crate::tools::code_mode::WAIT_TOOL_NAME
+        )
+    {
+        return true;
+    }
+
     if tool_name.namespace.as_deref()
         == Some(crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE)
     {
@@ -93,6 +107,10 @@ pub(crate) fn allows_tool(turn_context: &TurnContext, tool_name: &ToolName) -> b
 
     if turn_context.multi_agent_version != MultiAgentVersion::V2 {
         return false;
+    }
+
+    if tool_name.is_default_namespace() && tool_name.name == "send_message_action" {
+        return true;
     }
 
     let v2_namespace_matches = if crate::tools::spec_plan::namespace_tools_enabled(turn_context) {
@@ -126,7 +144,11 @@ pub(crate) fn allows_registered_tool(
         || (registry.is_trusted_tool(tool_name) && allows_tool(turn_context, tool_name))
 }
 
-pub(crate) fn restrict_registry(turn_context: &TurnContext, registry: &mut ToolRegistry) {
+pub(crate) fn restrict_registry(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    registry: &mut ToolRegistry,
+) {
     if !is_manager_only_lead(turn_context) {
         return;
     }
@@ -139,6 +161,62 @@ pub(crate) fn restrict_registry(turn_context: &TurnContext, registry: &mut ToolR
     for tool_name in disallowed_tools {
         registry.remove(&tool_name);
     }
+
+    enable_code_mode_for_manager_coordination(turn_context, model_info, registry);
+}
+
+fn enable_code_mode_for_manager_coordination(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    registry: &mut ToolRegistry,
+) {
+    let tool_mode = crate::tools::effective_tool_mode(turn_context, model_info);
+    let code_mode_exposure = match tool_mode {
+        ToolMode::CodeMode => ToolExposure::Direct,
+        ToolMode::CodeModeOnly => ToolExposure::CodeModeOnly,
+        ToolMode::Direct => return,
+    };
+
+    for tool in registry.entries_mut() {
+        if !is_manager_coordination_tool(turn_context, &tool.runtime.tool_name())
+            || tool.exposure != ToolExposure::DirectModelOnly
+        {
+            continue;
+        }
+        // V2 coordination is direct-only by default; ManagerOnly can still use it
+        // through Code Mode. The configured direct-only namespace override runs next.
+        tool.exposure = code_mode_exposure;
+    }
+}
+
+fn is_manager_coordination_tool(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
+    if tool_name.namespace.as_deref()
+        == Some(crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE)
+    {
+        return TEAM_MANAGER_V1_TOOLS.contains(&tool_name.name.as_str());
+    }
+
+    if turn_context.multi_agent_version != MultiAgentVersion::V2 {
+        return false;
+    }
+
+    if tool_name.is_default_namespace() && tool_name.name == "send_message_action" {
+        return true;
+    }
+
+    let v2_namespace_matches = if crate::tools::spec_plan::namespace_tools_enabled(turn_context) {
+        match turn_context.config.multi_agent_v2.tool_namespace.as_deref() {
+            Some(namespace) => tool_name.namespace.as_deref() == Some(namespace),
+            None => tool_name.is_default_namespace(),
+        }
+    } else {
+        tool_name.is_default_namespace()
+    };
+    if !v2_namespace_matches {
+        return false;
+    }
+
+    TEAM_MANAGER_V2_TOOLS.contains(&tool_name.name.as_str())
 }
 
 pub(crate) fn denial_message(tool_name: &ToolName) -> String {

@@ -2,6 +2,9 @@ use crate::session::tests::update_turn_settings_for_test;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use codex_config::TeamLeadWorkPolicy;
+use codex_config::TeamModelProfile;
+use codex_config::TeamModelProfiles;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -21,6 +24,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -3401,6 +3405,140 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
             "expected {tool_name} in agents namespace"
         );
     }
+}
+
+#[tokio::test]
+async fn manager_only_code_mode_exposes_v2_coordination_without_lead_execution() {
+    let manager_only = probe(|turn| {
+        configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::ManagerOnly, None);
+    })
+    .await;
+
+    manager_only.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "request_user_input",
+    ]);
+    manager_only.assert_visible_lacks(&["agents", "exec_command", "write_stdin"]);
+    manager_only.assert_registered_lacks(&["exec_command", "write_stdin"]);
+    assert!(manager_only.can_manage_children);
+    assert!(!manager_only.has_terminal_controls);
+    for tool_name in ["spawn_agent", "send_message", "followup_task", "wait_agent"] {
+        let tool_name = ToolName::namespaced("agents", tool_name);
+        assert_eq!(
+            manager_only.exposure(&tool_name.to_string()),
+            ToolExposure::CodeModeOnly
+        );
+        assert!(manager_only
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &tool_name));
+    }
+    assert_eq!(
+        manager_only.exposure("send_message_action"),
+        ToolExposure::CodeModeOnly
+    );
+    assert!(manager_only
+        .code_mode_tool_names
+        .values()
+        .any(|nested| nested == &ToolName::plain("send_message_action")));
+    let ToolSpec::Freeform(exec) = manager_only.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME)
+    else {
+        panic!("expected Code Mode exec tool");
+    };
+    let spawn_agent_code_mode_name =
+        codex_tools::code_mode_name_for_tool_name(&ToolName::namespaced("agents", "spawn_agent"));
+    assert!(exec
+        .description
+        .contains(&format!("{spawn_agent_code_mode_name}(args:")));
+    assert!(!exec.description.contains("exec_command(args:"));
+    assert!(!manager_only
+        .code_mode_tool_names
+        .values()
+        .any(|nested| nested == &ToolName::plain("exec_command")));
+
+    let prompt_guided = probe(|turn| {
+        configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::PromptGuided, None);
+    })
+    .await;
+
+    prompt_guided.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "agents",
+    ]);
+    assert_eq!(
+        prompt_guided.exposure(&ToolName::namespaced("agents", "spawn_agent").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+    assert!(!prompt_guided
+        .code_mode_tool_names
+        .values()
+        .any(|nested| nested == &ToolName::namespaced("agents", "spawn_agent")));
+
+    let worker = probe(|turn| {
+        configure_team_code_mode_plan(
+            turn,
+            TeamLeadWorkPolicy::ManagerOnly,
+            Some(TeamRole::Worker),
+        );
+    })
+    .await;
+    worker.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "agents",
+    ]);
+    assert_eq!(
+        worker.exposure(&ToolName::namespaced("agents", "spawn_agent").to_string()),
+        ToolExposure::DirectModelOnly
+    );
+    assert!(worker.has_terminal_controls);
+    assert!(worker
+        .code_mode_tool_names
+        .values()
+        .any(|nested| nested == &ToolName::plain("exec_command")));
+}
+
+fn configure_team_code_mode_plan(
+    turn: &mut TurnContext,
+    policy: TeamLeadWorkPolicy,
+    persisted_role: Option<TeamRole>,
+) {
+    set_features(
+        turn,
+        &[
+            Feature::CodeMode,
+            Feature::CodeModeOnly,
+            Feature::MultiAgentV2,
+            Feature::ShellTool,
+            Feature::UnifiedExec,
+        ],
+    );
+    set_feature(turn, Feature::ShellZshFork, /*enabled*/ false);
+    update_turn_settings_for_test(turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).shell_type = ConfigShellToolType::UnifiedExec;
+    });
+    update_config(turn, |config| {
+        config.team_mode = TeamMode::LeadWorker;
+        config.team_persisted_role = persisted_role;
+        config.team_runtime_profiles = Some(TeamModelProfiles {
+            lead: TeamModelProfile {
+                model: "lead-model".to_string(),
+                reasoning_effort: ReasoningEffort::Medium,
+            },
+            worker: TeamModelProfile {
+                model: "worker-model".to_string(),
+                reasoning_effort: ReasoningEffort::Medium,
+            },
+            lead_work_policy: policy,
+            lead_dynamic_handoff: false,
+            lead_balance: 3,
+            lead_oversight_timeout_minutes: 30,
+        });
+        config.multi_agent_v2.non_code_mode_only = true;
+        config.multi_agent_v2.tool_namespace = Some("agents".to_string());
+    });
 }
 
 #[tokio::test]
