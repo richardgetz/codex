@@ -1060,17 +1060,50 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         "the completion wake must remain queued while handoff admission is sealed"
     );
 
+    let request_count_before_release = root_after_completion.requests().len();
     drop(handoff);
-    let root_request = wait_for_captured_request(
-        &root_after_completion,
-        |request| {
-            response_request_has_model(request, LEAD_MODEL)
-                && request.body_contains_text(MANAGER_HANDOFF_RESULT)
-        },
-        "manager-only completion retry after handoff release",
-    )
-    .await;
-    assert!(root_request.body_contains_text(MANAGER_HANDOFF_RESULT));
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let root_request = loop {
+        let requests = root_after_completion.requests();
+        if let Some(request) = requests
+            .iter()
+            .skip(request_count_before_release)
+            .find(|request| response_request_has_model(request, LEAD_MODEL))
+        {
+            break request.clone();
+        }
+        if Instant::now() >= deadline {
+            let post_release_requests = requests
+                .iter()
+                .skip(request_count_before_release)
+                .map(|request| {
+                    json!({
+                        "model": request.body_json()["model"],
+                        "user_input": request.message_input_text_groups("user"),
+                        "has_completion_marker":
+                            request.body_contains_text(MANAGER_HANDOFF_RESULT),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if post_release_requests.is_empty() {
+                panic!(
+                    "manager-only completion retry after handoff release produced no Responses request"
+                );
+            }
+            panic!(
+                "manager-only completion retry after handoff release produced no request using \
+                 the expected Lead model {LEAD_MODEL}; captured post-release Responses requests \
+                 (model, user input, marker): {post_release_requests:#?}"
+            );
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    let root_user_input = root_request.message_input_text_groups("user");
+    assert!(
+        root_request.body_contains_text(MANAGER_HANDOFF_RESULT),
+        "the first post-release Lead request omitted the Worker result marker; user input: {root_user_input:#?}"
+    );
     wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
