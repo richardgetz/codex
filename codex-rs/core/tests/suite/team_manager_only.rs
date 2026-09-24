@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::openai_models::ToolMode;
 
 const MANAGER_ONLY_PROMPT: &str = "delegate this implementation task";
 const MANAGER_ONLY_WORKER_TASK: &str = "implement the delegated feature";
@@ -91,11 +92,14 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
     )
     .await;
 
+    // These model catalog entries default to CodeModeOnly; exercise the direct tool gate here.
     let mut builder = test_codex()
         .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
             model_info.multi_agent_version = Some(MultiAgentVersion::V2);
         })
         .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
             model_info.multi_agent_version = Some(MultiAgentVersion::V1);
         })
         .with_model(INITIAL_MODEL)
