@@ -79,6 +79,56 @@ async fn manager_only_allows_default_v2_collaboration_when_namespaces_are_disabl
 }
 
 #[tokio::test]
+async fn manager_only_allows_code_mode_entrypoints_in_the_default_namespace() {
+    let (_session, turn_context) =
+        manager_only_context(MultiAgentVersion::V2, /*namespace_tools*/ false).await;
+
+    for name in [
+        crate::tools::code_mode::PUBLIC_TOOL_NAME,
+        crate::tools::code_mode::WAIT_TOOL_NAME,
+    ] {
+        assert!(allows_tool(&turn_context, &ToolName::plain(name)));
+        assert!(allows_tool(
+            &turn_context,
+            &ToolName::namespaced("functions", name)
+        ));
+        assert!(!allows_tool(
+            &turn_context,
+            &ToolName::namespaced("agents", name)
+        ));
+    }
+
+    let mut registry = ToolRegistry::default();
+    registry.add(ManagerOnlyTestTool::new("exec"));
+    registry.add(ManagerOnlyTestTool::new("exec_command"));
+    assert!(allows_registered_tool(
+        &turn_context,
+        &registry,
+        &ToolName::plain("exec")
+    ));
+    assert!(!allows_registered_tool(
+        &turn_context,
+        &registry,
+        &ToolName::plain("exec_command")
+    ));
+
+    let mut external_registry = ToolRegistry::default();
+    assert!(external_registry.register_external(Arc::new(ManagerOnlyTestTool::new("exec"))));
+    assert!(allows_tool(&turn_context, &ToolName::plain("exec")));
+    assert!(!allows_registered_tool(
+        &turn_context,
+        &external_registry,
+        &ToolName::plain("exec")
+    ));
+    restrict_registry(
+        &turn_context,
+        turn_context.model_info(),
+        &mut external_registry,
+    );
+    assert!(external_registry.entries().next().is_none());
+}
+
+#[tokio::test]
 async fn manager_only_allows_review_support_tools_by_exact_namespace() {
     let (_session, turn_context) =
         manager_only_context(MultiAgentVersion::V2, /*namespace_tools*/ false).await;
@@ -122,9 +172,52 @@ async fn manager_only_does_not_trust_an_external_tool_by_its_allowed_name() {
         &registry,
         &tool_name
     ));
-    restrict_registry(&turn_context, &mut registry);
+    restrict_registry(&turn_context, turn_context.model_info(), &mut registry);
     assert!(registry.entries().next().is_none());
 }
+
+struct ManagerOnlyTestTool {
+    name: String,
+}
+
+impl ManagerOnlyTestTool {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+        }
+    }
+}
+
+impl ToolExecutor<ToolInvocation> for ManagerOnlyTestTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(self.name.clone())
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: self.name.clone(),
+            description: "Test tool.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::default(),
+            output_schema: None,
+        })
+    }
+
+    fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        Box::pin(async {
+            Ok(Box::new(FunctionToolOutput::from_text(
+                "unexpected tool execution".to_string(),
+                Some(true),
+            )) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
+impl CoreToolRuntime for ManagerOnlyTestTool {}
 
 struct UntrustedManagerNameTool;
 
