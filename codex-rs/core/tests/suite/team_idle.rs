@@ -797,6 +797,199 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     Ok(())
 }
 
+const MANAGER_HANDOFF_ROOT_PROMPT: &str = "delegate one worker before handoff";
+const MANAGER_HANDOFF_WORKER_TASK: &str = "manager handoff worker task";
+const MANAGER_HANDOFF_SPAWN_CALL_ID: &str = "manager-handoff-spawn";
+const MANAGER_HANDOFF_GATE_CALL_ID: &str = "manager-handoff-gate";
+const MANAGER_HANDOFF_RESULT: &str = "manager handoff retry result marker";
+
+#[tokio::test(flavor = "current_thread")]
+async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": MANAGER_HANDOFF_WORKER_TASK,
+        "task_name": "manager_handoff_worker",
+        "fork_turns": "none",
+    }))?;
+    let delay_args = serde_json::to_string(&json!({"sleep_before_ms": 2_000}))?;
+    let root_initial = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_HANDOFF_ROOT_PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-root-initial"),
+            ev_function_call_with_namespace(
+                MANAGER_HANDOFF_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("manager-handoff-root-initial"),
+        ]),
+    )
+    .await;
+    let worker_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_HANDOFF_WORKER_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-worker-gate"),
+            ev_function_call(
+                MANAGER_HANDOFF_GATE_CALL_ID,
+                "test_sync_tool",
+                &delay_args,
+            ),
+            ev_completed("manager-handoff-worker-gate"),
+        ]),
+    )
+    .await;
+    let worker_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-worker-completion"),
+            ev_assistant_message("manager-handoff-worker-message", MANAGER_HANDOFF_RESULT),
+            ev_completed("manager-handoff-worker-completion"),
+        ]),
+    )
+    .await;
+    let root_after_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, MANAGER_HANDOFF_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-root-completion"),
+            ev_assistant_message(
+                "manager-handoff-root-completion-message",
+                "the Worker completion was reviewed after handoff reopened",
+            ),
+            ev_completed("manager-handoff-root-completion"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("team profiles")
+                .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: MANAGER_HANDOFF_ROOT_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &root_initial,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_HANDOFF_ROOT_PROMPT)
+        },
+        "manager-only Worker spawn before handoff",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_captured_request(
+        &worker_gate,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request.body_contains_text(MANAGER_HANDOFF_WORKER_TASK)
+        },
+        "Worker active before handoff",
+    )
+    .await;
+
+    // Hold the tree while the real Worker is delayed before its terminal report.
+    let handoff = test.codex.begin_handoff()?;
+    wait_for_captured_request(
+        &worker_completion,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
+        },
+        "Worker completion while handoff is sealed",
+    )
+    .await;
+
+    let mailbox_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let preflight = test.codex.handoff_preflight().await;
+        if preflight
+            .blockers
+            .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < mailbox_deadline,
+            "manager-only Worker completion should reach the Lead mailbox"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(151)).await;
+    assert!(test.codex.handoff_admission_sealed());
+    assert!(test
+        .codex
+        .handoff_preflight()
+        .await
+        .blockers
+        .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox));
+    assert!(root_after_completion.requests().is_empty());
+
+    drop(handoff);
+    let root_request = wait_for_captured_request(
+        &root_after_completion,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_HANDOFF_RESULT)
+        },
+        "manager-only completion retry after handoff release",
+    )
+    .await;
+    assert!(root_request.body_contains_text(MANAGER_HANDOFF_RESULT));
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline() -> Result<()> {
     skip_if_no_network!(Ok(()));
