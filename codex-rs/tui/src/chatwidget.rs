@@ -644,6 +644,9 @@ pub(crate) struct ChatWidget {
     /// Team mode requested by the user until the server confirms it in a
     /// thread settings snapshot.
     pending_team_command: Option<TeamCommand>,
+    /// Identifies the current pending team command so delayed timeout events
+    /// cannot clear a later retry of the same command.
+    pending_team_command_request_id: Option<uuid::Uuid>,
     /// Effective per-thread policy for reset-aware usage continuation.
     thread_usage_policy: ThreadUsagePolicy,
     /// Root-scoped Lead/Worker activity shown in status surfaces.

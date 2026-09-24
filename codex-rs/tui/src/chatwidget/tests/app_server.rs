@@ -721,14 +721,26 @@ async fn team_work_policy_update_handles_matching_and_stale_server_notifications
         policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
     });
     chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification.clone()),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.pending_team_command.is_some());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    notification
+        .thread_settings
+        .team
+        .as_mut()
+        .expect("test notification has team settings")
+        .lead_work_policy = Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly);
+    chat.handle_server_notification(
         ServerNotification::ThreadSettingsUpdated(notification),
         /*replay_kind*/ None,
     );
-    let failure = drain_insert_history(&mut rx);
+    let confirmation = drain_insert_history(&mut rx);
     assert!(chat.pending_team_command.is_none());
-    assert_eq!(failure.len(), 1);
-    assert!(lines_to_single_string(&failure[0])
-        .contains("did not apply the requested Lead work policy"));
+    assert_eq!(confirmation.len(), 1);
+    assert!(lines_to_single_string(&confirmation[0]).contains("Lead work policy: manager only"));
 }
 
 #[tokio::test]
@@ -737,16 +749,38 @@ async fn team_work_policy_update_timeout_clears_unconfirmed_request() {
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
     let _ = drain_insert_history(&mut rx);
-    chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
-        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
-    });
-
-    chat.on_team_work_policy_update_timeout(
+    let request_id = chat.set_pending_team_command(
         crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
             policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
         },
     );
 
+    chat.on_team_work_policy_update_timeout(request_id);
+
+    assert!(chat.pending_team_command.is_none());
+    let failure = drain_insert_history(&mut rx);
+    assert_eq!(failure.len(), 1);
+    assert!(lines_to_single_string(&failure[0]).contains("did not confirm"));
+}
+
+#[tokio::test]
+async fn stale_team_work_policy_timeout_does_not_clear_retried_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    let command = crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    };
+    let old_request_id = chat.set_pending_team_command(command.clone());
+    let current_request_id = chat.set_pending_team_command(command);
+
+    chat.on_team_work_policy_update_timeout(old_request_id);
+
+    assert!(chat.pending_team_command.is_some());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.on_team_work_policy_update_timeout(current_request_id);
     assert!(chat.pending_team_command.is_none());
     let failure = drain_insert_history(&mut rx);
     assert_eq!(failure.len(), 1);

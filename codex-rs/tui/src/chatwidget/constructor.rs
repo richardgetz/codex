@@ -136,6 +136,7 @@ impl ChatWidget {
             active_collaboration_mask,
             team_settings: None,
             pending_team_command: None,
+            pending_team_command_request_id: None,
             thread_usage_policy: codex_app_server_protocol::ThreadUsagePolicy {
                 auto_resume: usage_auto_resume_enabled,
                 ..Default::default()

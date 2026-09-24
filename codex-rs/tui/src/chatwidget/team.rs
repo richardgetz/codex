@@ -293,19 +293,24 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn set_pending_team_command(&mut self, command: TeamCommand) {
+    pub(crate) fn set_pending_team_command(&mut self, command: TeamCommand) -> uuid::Uuid {
+        let request_id = uuid::Uuid::new_v4();
         self.pending_team_command = Some(command);
+        self.pending_team_command_request_id = Some(request_id);
+        request_id
     }
 
     pub(crate) fn clear_pending_team_command(&mut self) {
         self.pending_team_command = None;
+        self.pending_team_command_request_id = None;
     }
 
-    pub(crate) fn on_team_work_policy_update_timeout(&mut self, command: TeamCommand) {
-        if self.pending_team_command.as_ref() != Some(&command) {
+    pub(crate) fn on_team_work_policy_update_timeout(&mut self, request_id: uuid::Uuid) {
+        if self.pending_team_command_request_id != Some(request_id) {
             return;
         }
-        let TeamCommand::ConfigureWorkPolicy { policy } = command else {
+        let Some(TeamCommand::ConfigureWorkPolicy { policy }) = self.pending_team_command.clone()
+        else {
             return;
         };
         if self.team_settings.as_ref().is_some_and(|team| {
@@ -323,7 +328,7 @@ impl ChatWidget {
                     .to_string(),
             );
         }
-        self.pending_team_command = None;
+        self.clear_pending_team_command();
     }
 
     /// Shows confirmation only when the server snapshot matches the requested mode.
@@ -344,7 +349,7 @@ impl ChatWidget {
             | TeamCommand::SelectProfile { .. }
             | TeamCommand::SelectBalance
             | TeamCommand::SelectWorkPolicy => {
-                self.pending_team_command = None;
+                self.clear_pending_team_command();
                 return;
             }
             TeamCommand::ConfigureProfile {
@@ -354,7 +359,7 @@ impl ChatWidget {
             } => {
                 if team_profile_matches(team, role, &model, &effort) {
                     self.add_info_message(format_team_status(Some(team)), None);
-                    self.pending_team_command = None;
+                    self.clear_pending_team_command();
                 }
                 return;
             }
@@ -365,7 +370,7 @@ impl ChatWidget {
                     == balance
                 {
                     self.add_info_message(format_team_status(Some(team)), None);
-                    self.pending_team_command = None;
+                    self.clear_pending_team_command();
                 }
                 return;
             }
@@ -377,18 +382,19 @@ impl ChatWidget {
                 {
                     self.add_info_message(format_team_status(Some(team)), None);
                 } else {
-                    self.add_error_message(
-                        "The app server did not apply the requested Lead work policy. Update the server and try again."
-                            .to_string(),
-                    );
+                    // Settings notifications have no request identity and can
+                    // arrive out of order. A snapshot that does not match the
+                    // requested policy cannot reject this update; the bounded
+                    // timeout reports failure if no matching snapshot arrives.
+                    return;
                 }
-                self.pending_team_command = None;
+                self.clear_pending_team_command();
                 return;
             }
         };
         if team.mode == expected_mode {
             self.add_info_message(format_team_status(Some(team)), None);
-            self.pending_team_command = None;
+            self.clear_pending_team_command();
         }
     }
 }

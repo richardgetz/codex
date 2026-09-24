@@ -135,20 +135,17 @@ impl App {
                     ),
                     _ => format!("Switching this session to Lead/Worker team mode {mode_label}…"),
                 };
-                let timeout_command = matches!(
-                    &command,
-                    TeamCommand::ConfigureWorkPolicy { .. }
-                )
-                .then_some(command.clone());
-                self.chat_widget.set_pending_team_command(command);
+                let waits_for_policy_snapshot =
+                    matches!(&command, TeamCommand::ConfigureWorkPolicy { .. });
+                let timeout_request_id = self.chat_widget.set_pending_team_command(command);
                 self.chat_widget.add_info_message(message, /*hint*/ None);
-                if let Some(command) = timeout_command {
+                if waits_for_policy_snapshot {
                     let app_event_tx = self.app_event_tx.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(TEAM_WORK_POLICY_UPDATE_TIMEOUT).await;
                         app_event_tx.send(AppEvent::TeamWorkPolicyUpdateTimeout {
                             thread_id,
-                            command,
+                            request_id: timeout_request_id,
                         });
                     });
                 }

@@ -2300,10 +2300,13 @@ impl App {
             AppEvent::TeamCommand { thread_id, command } => {
                 self.handle_team_command(app_server, thread_id, command).await;
             }
-            AppEvent::TeamWorkPolicyUpdateTimeout { thread_id, command } => {
+            AppEvent::TeamWorkPolicyUpdateTimeout {
+                thread_id,
+                request_id,
+            } => {
                 if self.active_thread_id == Some(thread_id) {
                     self.chat_widget
-                        .on_team_work_policy_update_timeout(command);
+                        .on_team_work_policy_update_timeout(request_id);
                 }
             }
             AppEvent::UpdatePersonality(personality) => {

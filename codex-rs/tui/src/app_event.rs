@@ -1287,7 +1287,7 @@ pub(crate) enum AppEvent {
     /// Bound waiting for an app-server snapshot after a Lead work-policy update.
     TeamWorkPolicyUpdateTimeout {
         thread_id: ThreadId,
-        command: TeamCommand,
+        request_id: Uuid,
     },
 
     /// Update the current personality in the running app and widget.
