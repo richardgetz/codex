@@ -1052,7 +1052,13 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         .await
         .blockers
         .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox));
-    assert!(root_after_completion.requests().is_empty());
+    assert!(
+        !root_after_completion.requests().iter().any(|request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_HANDOFF_RESULT)
+        }),
+        "the completion wake must remain queued while handoff admission is sealed"
+    );
 
     drop(handoff);
     let root_request = wait_for_captured_request(
