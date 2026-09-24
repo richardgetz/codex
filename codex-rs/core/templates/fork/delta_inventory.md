@@ -41,10 +41,17 @@ release or merge rules.
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
   and review while Workers retain normal tool access and execute their assigned
-  work. In Code Mode and Code Mode Only, the Lead can use the Code Mode wrapper
-  with its manager tools, and nested dispatch still denies execution tools.
-  The policy is captured in thread snapshots so resume and fork preserve the
-  selected mode, while legacy snapshots keep the default.
+  work. The runtime gate keeps shell and execution tools from the Lead while
+  preserving coordination, planning, and selected read-only support tools.
+  In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
+  tools, while nested dispatch still denies execution tools. The policy is
+  captured in thread snapshots so resume and fork preserve the selected mode,
+  while legacy snapshots keep the default. Successful direct Worker completions
+  are summarized in one bounded Lead wake after the direct Workers finish; user
+  input, action messages, failures, escalation, oversight deadlines, and
+  dependency handoffs remain immediate. An undelivered completion batch blocks
+  daemon handoff, and its quiet-window wake retries after an aborted handoff
+  reopens admission.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -1085,8 +1092,15 @@ release or merge rules.
   and tool access remain unchanged, Code Mode exposes manager tools under the
   configured/default namespaces while blocking shell and execution calls at the
   nested runtime dispatch boundary, and `prompt_guided` retains its existing
-  Code Mode exposure. Routine completion batches do not wake the Lead before
-  actionable outcomes or the configured oversight deadline.
+  Code Mode exposure. The manager-only runtime gate keeps coordination,
+  planning, and selected read-only support tools available to the Lead while
+  denying shell and execution tools; Worker tool access remains unchanged.
+  Successful direct Worker completions stay
+  quiet while another direct Worker remains active, and one bounded batch wake
+  follows the completion boundary. User input, action messages, failures,
+  escalation, dependency handoffs, and the configured oversight deadline remain
+  immediate. Verify a buffered completion blocks daemon handoff and its batch
+  wake retries after an aborted handoff reopens admission.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,

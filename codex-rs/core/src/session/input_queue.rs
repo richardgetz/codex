@@ -115,6 +115,14 @@ struct PendingMailboxCommunication {
 struct TeamLeadProgressBuffer {
     entries: VecDeque<TeamLeadProgressEntry>,
     bytes: usize,
+    completion_generation: u64,
+    completion_pending: bool,
+}
+
+#[derive(Clone, Copy)]
+enum TeamLeadProgressKind {
+    Routine,
+    Completion,
 }
 
 struct TeamLeadProgressEntry {
@@ -159,6 +167,26 @@ impl InputQueue {
     /// Retains routine Worker progress without publishing mailbox activity. The bounded buffer is
     /// summarized only when an actionable wake reaches the Lead.
     pub(crate) async fn enqueue_team_lead_progress(&self, communication: InterAgentCommunication) {
+        self.enqueue_team_lead_progress_entry(communication, TeamLeadProgressKind::Routine)
+            .await;
+    }
+
+    /// Retains a bounded terminal Worker result for the manager-only completion batch.
+    /// The generation lets a short quiet-window flush coalesce concurrent completions while
+    /// actionable input can drain the same buffer first.
+    pub(crate) async fn enqueue_team_lead_completion(
+        &self,
+        communication: InterAgentCommunication,
+    ) -> u64 {
+        self.enqueue_team_lead_progress_entry(communication, TeamLeadProgressKind::Completion)
+            .await
+    }
+
+    async fn enqueue_team_lead_progress_entry(
+        &self,
+        communication: InterAgentCommunication,
+        kind: TeamLeadProgressKind,
+    ) -> u64 {
         let message = if communication.encrypted_content.is_some() {
             "[encrypted routine progress]".to_string()
         } else {
@@ -170,6 +198,10 @@ impl InputQueue {
         };
         let entry_bytes = entry.author.len() + entry.message.len() + 4;
         let mut progress = self.team_lead_progress.lock().await;
+        if let TeamLeadProgressKind::Completion = kind {
+            progress.completion_generation = progress.completion_generation.wrapping_add(1);
+            progress.completion_pending = true;
+        }
         progress.bytes = progress.bytes.saturating_add(entry_bytes);
         progress.entries.push_back(entry);
         while progress.entries.len() > TEAM_LEAD_PROGRESS_MAX_ITEMS
@@ -183,6 +215,12 @@ impl InputQueue {
                 .bytes
                 .saturating_sub(removed.author.len() + removed.message.len() + 4);
         }
+        progress.completion_generation
+    }
+
+    pub(crate) async fn manager_completion_batch_is_pending(&self, generation: u64) -> bool {
+        let progress = self.team_lead_progress.lock().await;
+        progress.completion_pending && progress.completion_generation == generation
     }
 
     /// Drains routine progress into a fixed-size summary for an actionable Lead wake.
@@ -193,6 +231,7 @@ impl InputQueue {
         }
         let entries = progress.entries.drain(..).collect::<Vec<_>>();
         progress.bytes = 0;
+        progress.completion_pending = false;
         let mut lines = Vec::new();
         let mut summary_bytes = "Routine Worker progress summary (".len()
             + entries.len().to_string().len()
@@ -220,6 +259,8 @@ impl InputQueue {
         let mut progress = self.team_lead_progress.lock().await;
         progress.entries.clear();
         progress.bytes = 0;
+        progress.completion_generation = progress.completion_generation.wrapping_add(1);
+        progress.completion_pending = false;
     }
 
     pub(crate) async fn subscribe_activity(
@@ -1040,6 +1081,32 @@ mod tests {
             .enqueue_mailbox_communication(trigger_mail, Default::default())
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn manager_completion_batch_stays_bounded_and_drains_once() {
+        let input_queue = InputQueue::new();
+        let worker = AgentPath::try_from("/root/worker").expect("agent path");
+        let latest_generation = input_queue
+            .enqueue_team_lead_completion(make_mail(
+                worker,
+                AgentPath::root(),
+                "completion result",
+                /*trigger_turn*/ false,
+            ))
+            .await;
+
+        assert!(input_queue.manager_completion_batch_is_pending(latest_generation).await);
+        assert_eq!(
+            input_queue.take_team_progress_summary().await,
+            Some(
+                "Routine Worker progress summary (1 retained updates):\n- /root/worker: completion result"
+                    .to_string()
+            )
+        );
+        assert!(!input_queue
+            .manager_completion_batch_is_pending(latest_generation)
+            .await);
     }
 
     #[tokio::test]

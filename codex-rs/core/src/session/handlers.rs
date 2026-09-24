@@ -586,9 +586,25 @@ async fn inter_agent_communication_inner(
         if !sess.is_team_lead().await {
             return;
         }
-        sess.input_queue
-            .enqueue_team_lead_progress(communication)
-            .await;
+        if team_lead_trigger
+            && sess
+                .get_config()
+                .await
+                .effective_team_lead_work_policy()
+                == codex_config::TeamLeadWorkPolicy::ManagerOnly
+        {
+            let generation = sess
+                .input_queue
+                .enqueue_team_lead_completion(communication)
+                .await;
+            drop(_team_lead_turn_admission);
+            sess.schedule_manager_completion_batch_flush(generation)
+                .await;
+        } else {
+            sess.input_queue
+                .enqueue_team_lead_progress(communication)
+                .await;
+        }
         crate::agent_communication::emit_agent_communication_receive(&sub_id);
         return;
     }

@@ -263,6 +263,7 @@ pub(crate) use capacity_retry::wait_for_active_turn_model_capacity_retry;
 mod activity;
 mod code_mode_warning;
 mod config_lock;
+mod completion_batch;
 pub(crate) mod context_window;
 mod continuous_loopback;
 mod daemon_recovery;
@@ -3845,6 +3846,7 @@ impl Session {
                     communication,
                     context,
                     TurnStartOptions::default(),
+                    &status,
                 )
                 .await
         } else {

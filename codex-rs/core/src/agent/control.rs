@@ -28,6 +28,7 @@ use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::turn_timing::now_unix_timestamp_ms;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
+use codex_config::TeamLeadWorkPolicy;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -353,10 +354,25 @@ impl LocalAgentControl {
     pub(crate) async fn send_team_lead_completion(
         &self,
         agent_id: ThreadId,
-        communication: InterAgentCommunication,
+        mut communication: InterAgentCommunication,
         agent_communication_context: AgentCommunicationContext,
         start_options: TurnStartOptions,
+        status: &AgentStatus,
     ) -> CodexResult<String> {
+        if matches!(status, AgentStatus::Completed(_))
+            && let Ok(state) = self.upgrade()
+            && let Ok(thread) = state.get_thread(agent_id).await
+        {
+            let config = thread.session.get_config().await;
+            if thread.session.is_team_lead().await
+                && config.effective_team_lead_work_policy() == TeamLeadWorkPolicy::ManagerOnly
+            {
+                // Successful Worker results wait at the batch boundary. Bound the envelope before
+                // it reaches persistence fallback or the Lead progress buffer.
+                communication.trigger_turn = false;
+                communication.content = crate::session::truncate_message(&communication.content);
+            }
+        }
         self.send_inter_agent_communication_with_delivery_kind(
             agent_id,
             communication,
@@ -1282,6 +1298,7 @@ impl LocalAgentControl {
                             communication,
                             context,
                             TurnStartOptions::default(),
+                            &status,
                         )
                         .await
                 } else {
@@ -1325,6 +1342,46 @@ impl LocalAgentControl {
                 }
             };
             if parent_thread.session.is_team_lead().await {
+                if matches!(status, AgentStatus::Completed(_))
+                    && parent_thread
+                        .session
+                        .get_config()
+                        .await
+                        .effective_team_lead_work_policy()
+                        == TeamLeadWorkPolicy::ManagerOnly
+                    && let Some(child_agent_path) = child_agent_path.clone()
+                    && let Some(parent_agent_path) = child_agent_path
+                        .as_str()
+                        .rsplit_once('/')
+                        .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+                    && let Some(message) = format_inter_agent_completion_message(
+                        parent_agent_path.clone(),
+                        child_agent_path.clone(),
+                        &status,
+                    )
+                {
+                    let communication = InterAgentCommunication::new(
+                        child_agent_path,
+                        parent_agent_path,
+                        Vec::new(),
+                        message,
+                        /*trigger_turn*/ true,
+                    );
+                    let context = AgentCommunicationContext::new(
+                        AgentCommunicationKind::Result,
+                        child_thread_id,
+                    );
+                    let _ = control
+                        .send_team_lead_completion(
+                            parent_thread_id,
+                            communication,
+                            context,
+                            TurnStartOptions::default(),
+                            &status,
+                        )
+                        .await;
+                    return;
+                }
                 // Legacy V1 workers report completion through a context fragment rather than an
                 // InterAgentCommunication. A parked Team Lead still needs an actionable wake for
                 // that terminal result, so route it through the same bounded wake path used by
@@ -1361,11 +1418,9 @@ impl LocalAgentControl {
                 parent_thread.session.cancel_lead_oversight().await;
                 parent_thread
                     .session
-                    .enqueue_lead_wakeup_with_admission(
-                        &format!(
-                            "Worker {child_reference} completed with status {status:?}; review the result."
-                        ),
-                    )
+                    .enqueue_lead_wakeup_with_admission(&format!(
+                        "Worker {child_reference} completed with status {status:?}; review the result."
+                    ))
                     .await;
                 drop(handoff_admission);
                 parent_thread
