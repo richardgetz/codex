@@ -301,6 +301,31 @@ impl ChatWidget {
         self.pending_team_command = None;
     }
 
+    pub(crate) fn on_team_work_policy_update_timeout(&mut self, command: TeamCommand) {
+        if self.pending_team_command.as_ref() != Some(&command) {
+            return;
+        }
+        let TeamCommand::ConfigureWorkPolicy { policy } = command else {
+            return;
+        };
+        if self.team_settings.as_ref().is_some_and(|team| {
+            team.lead_work_policy
+                .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                == policy
+        }) {
+            self.add_info_message(
+                format_team_status(self.team_settings.as_ref()),
+                None,
+            );
+        } else {
+            self.add_error_message(
+                "The app server did not confirm the Lead work policy update. Check /team status; if it is unchanged, update the server and try again."
+                    .to_string(),
+            );
+        }
+        self.pending_team_command = None;
+    }
+
     /// Shows confirmation only when the server snapshot matches the requested mode.
     ///
     /// A settings notification can carry `team: None` while a thread is still being

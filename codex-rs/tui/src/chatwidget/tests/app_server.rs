@@ -732,6 +732,28 @@ async fn team_work_policy_update_handles_matching_and_stale_server_notifications
 }
 
 #[tokio::test]
+async fn team_work_policy_update_timeout_clears_unconfirmed_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    });
+
+    chat.on_team_work_policy_update_timeout(
+        crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+            policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+        },
+    );
+
+    assert!(chat.pending_team_command.is_none());
+    let failure = drain_insert_history(&mut rx);
+    assert_eq!(failure.len(), 1);
+    assert!(lines_to_single_string(&failure[0]).contains("did not confirm"));
+}
+
+#[tokio::test]
 async fn team_toggle_pending_state_clears_on_terminal_error_but_survives_retry() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     let thread_id = ThreadId::new();

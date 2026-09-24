@@ -26,6 +26,9 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
+use std::time::Duration;
+
+const TEAM_WORK_POLICY_UPDATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl App {
     pub(super) async fn handle_team_command(
@@ -132,8 +135,23 @@ impl App {
                     ),
                     _ => format!("Switching this session to Lead/Worker team mode {mode_label}…"),
                 };
+                let timeout_command = matches!(
+                    &command,
+                    TeamCommand::ConfigureWorkPolicy { .. }
+                )
+                .then_some(command.clone());
                 self.chat_widget.set_pending_team_command(command);
                 self.chat_widget.add_info_message(message, /*hint*/ None);
+                if let Some(command) = timeout_command {
+                    let app_event_tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(TEAM_WORK_POLICY_UPDATE_TIMEOUT).await;
+                        app_event_tx.send(AppEvent::TeamWorkPolicyUpdateTimeout {
+                            thread_id,
+                            command,
+                        });
+                    });
+                }
             }
             Ok(false) => {
                 self.chat_widget.clear_pending_team_command();
