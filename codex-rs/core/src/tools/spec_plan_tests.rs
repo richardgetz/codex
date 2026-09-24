@@ -3429,33 +3429,40 @@ async fn manager_only_code_mode_exposes_v2_coordination_without_lead_execution()
             manager_only.exposure(&tool_name.to_string()),
             ToolExposure::CodeModeOnly
         );
-        assert!(manager_only
-            .code_mode_tool_names
-            .values()
-            .any(|nested| nested == &tool_name));
+        assert!(
+            manager_only
+                .code_mode_tool_names
+                .values()
+                .any(|nested| nested == &tool_name)
+        );
     }
     assert_eq!(
         manager_only.exposure("send_message_action"),
         ToolExposure::CodeModeOnly
     );
-    assert!(manager_only
-        .code_mode_tool_names
-        .values()
-        .any(|nested| nested == &ToolName::plain("send_message_action")));
+    assert!(
+        manager_only
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::plain("send_message_action"))
+    );
     let ToolSpec::Freeform(exec) = manager_only.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME)
     else {
         panic!("expected Code Mode exec tool");
     };
     let spawn_agent_code_mode_name =
         codex_tools::code_mode_name_for_tool_name(&ToolName::namespaced("agents", "spawn_agent"));
-    assert!(exec
-        .description
-        .contains(&format!("{spawn_agent_code_mode_name}(args:")));
+    assert!(
+        exec.description
+            .contains(&format!("{spawn_agent_code_mode_name}(args:"))
+    );
     assert!(!exec.description.contains("exec_command(args:"));
-    assert!(!manager_only
-        .code_mode_tool_names
-        .values()
-        .any(|nested| nested == &ToolName::plain("exec_command")));
+    assert!(
+        !manager_only
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::plain("exec_command"))
+    );
 
     let prompt_guided = probe(|turn| {
         configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::PromptGuided, None);
@@ -3471,10 +3478,12 @@ async fn manager_only_code_mode_exposes_v2_coordination_without_lead_execution()
         prompt_guided.exposure(&ToolName::namespaced("agents", "spawn_agent").to_string()),
         ToolExposure::DirectModelOnly
     );
-    assert!(!prompt_guided
-        .code_mode_tool_names
-        .values()
-        .any(|nested| nested == &ToolName::namespaced("agents", "spawn_agent")));
+    assert!(
+        !prompt_guided
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::namespaced("agents", "spawn_agent"))
+    );
 
     let worker = probe(|turn| {
         configure_team_code_mode_plan(
@@ -3494,10 +3503,12 @@ async fn manager_only_code_mode_exposes_v2_coordination_without_lead_execution()
         ToolExposure::DirectModelOnly
     );
     assert!(worker.has_terminal_controls);
-    assert!(worker
-        .code_mode_tool_names
-        .values()
-        .any(|nested| nested == &ToolName::plain("exec_command")));
+    assert!(
+        worker
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::plain("exec_command"))
+    );
 }
 
 fn configure_team_code_mode_plan(

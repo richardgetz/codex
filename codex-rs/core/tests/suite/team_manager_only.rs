@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_custom_tool_call;
 
 const MANAGER_ONLY_PROMPT: &str = "delegate this implementation task";
@@ -344,6 +345,11 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
                 .enable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
+            // This fixture only runs harmless echo commands; avoid nesting Seatbelt under
+            // a Seatbelt test runner so the Worker can exercise its execution tool locally.
+            config
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+                .expect("DangerFullAccess test policy");
             let profiles = config.team.profiles.as_mut().expect("team profiles");
             profiles.lead.model = lead_model.to_string();
             profiles.lead_work_policy = codex_config::TeamLeadWorkPolicy::ManagerOnly;
@@ -397,7 +403,7 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         "Code Mode Lead should not receive direct execution tools: {function_tools:?}"
     );
 
-    let denial_request = wait_for_captured_request(
+    let _denial_request = wait_for_captured_request(
         &lead_denial,
         |request| {
             response_request_has_model(request, lead_model)
@@ -409,7 +415,16 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         "manager-only Lead after nested Code Mode delegation",
     )
     .await;
-    let denied_tool_output = denial_request
+    let denied_tool_response = wait_for_captured_request(
+        &lead_final,
+        |request| {
+            response_request_has_model(request, lead_model)
+                && response_request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
+        },
+        "manager-only Lead after denied execution",
+    )
+    .await;
+    let denied_tool_output = denied_tool_response
         .function_call_output_text(LEAD_EXEC_CALL_ID)
         .expect("Lead execution call response");
     assert!(
@@ -464,14 +479,5 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
     })
     .await;
 
-    let _lead_final_request = wait_for_captured_request(
-        &lead_final,
-        |request| {
-            response_request_has_model(request, lead_model)
-                && response_request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
-        },
-        "manager-only Lead after denied execution",
-    )
-    .await;
     Ok(())
 }
