@@ -141,7 +141,12 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         "manager-only Lead",
     )
     .await;
-    let lead_tools = lead_request.body_json()["tools"].to_string();
+    let lead_tools = lead_request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("Lead Responses Lite tool definitions")["tools"]
+        .to_string();
     assert!(
         !lead_tools.contains("exec_command"),
         "manager_only Lead should not receive execution tools: {lead_tools}"
@@ -177,7 +182,12 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         "Worker",
     )
     .await;
-    let worker_tools = worker_request.body_json()["tools"].to_string();
+    let worker_tools = worker_request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("Worker Responses Lite tool definitions")["tools"]
+        .to_string();
     assert!(
         worker_tools.contains("exec_command"),
         "Worker should retain execution tools: {worker_tools}"
