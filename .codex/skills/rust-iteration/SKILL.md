@@ -17,7 +17,7 @@ Write down the claim the run must establish. A successful result proves only its
 | “Does this Rust production target compile?” | Use `cargo check -p <crate>` for the narrowest affected consumer; use `just codex` when the CLI and code-mode host are the intended consumers. Include downstream consumers only when the change reaches them. |
 | “Does this behavior work?” | `just test -p <crate> <test-filter>` for a focused regression test. The package/target controls what compiles; the filter only narrows which tests run. |
 | “Did an API/schema change regenerate correctly?” | Run the relevant generator once after the source shape is settled, inspect the generated diff, then validate its narrow consumer. |
-| “Is the final patch formatted/lint-clean?” | Always run required `just fmt` after code edits. For a large Rust change, run scoped `just fix -p <project>` before the final `just fmt`, as required by `AGENTS.md`. |
+| “Is the final patch formatted/lint-clean?” | For a large Rust change, run `just fix -p <project>` when no shared crate changed; if a shared crate changed, use unscoped `just fix` as required by `AGENTS.md`. Then run required `just fmt` after code edits. |
 
 Do not substitute one kind of proof for another. A successful app build does not establish test-only behavior, and a passing focused test does not prove a separate binary consumer compiles when it is outside that test target.
 
@@ -34,6 +34,6 @@ Do not substitute one kind of proof for another. A successful app build does not
 
 ## After semantic validation
 
-Run `just fix -p <project>` only when the change is large enough to require it under `AGENTS.md`; always run `just fmt` after code edits. Run each required finalization step once, in the prescribed order. Mechanical changes do not justify repeating a completed semantic test loop. If finalization exposes or introduces a substantive code change, report that the final source revision is not covered by the earlier result and follow the repository's validation rules.
+For a large change, run `just fix -p <project>` only when no shared crate changed. If the change modifies a shared crate, run unscoped `just fix` as required by `AGENTS.md`. Always run `just fmt` after code edits. Run each required finalization step once, in the prescribed order. Mechanical changes do not justify repeating a completed semantic test loop. If finalization exposes or introduces a substantive code change, report that the final source revision is not covered by the earlier result and follow the repository's validation rules.
 
 Keep PR CI evidence tied to its head SHA. A green run on an older commit does not validate a later push; a new commit should trigger CI for the new revision.
