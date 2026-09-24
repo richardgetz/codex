@@ -536,6 +536,7 @@ const MANAGER_BATCH_FIRST_SPAWN_CALL_ID: &str = "manager-batch-first-spawn";
 const MANAGER_BATCH_SECOND_SPAWN_CALL_ID: &str = "manager-batch-second-spawn";
 const MANAGER_BATCH_FIRST_GATE_CALL_ID: &str = "manager-batch-first-gate";
 const MANAGER_BATCH_SECOND_GATE_CALL_ID: &str = "manager-batch-second-gate";
+const MANAGER_BATCH_ROOT_WAIT_CALL_ID: &str = "manager-batch-root-wait";
 const MANAGER_BATCH_ACTION_CALL_ID: &str = "manager-batch-action";
 const MANAGER_BATCH_GATE_ID: &str = "manager-batch-gate";
 const MANAGER_BATCH_ACTION_MESSAGE: &str = "second worker asks for immediate review";
@@ -568,6 +569,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "target": "/root",
         "message": MANAGER_BATCH_ACTION_MESSAGE,
     }))?;
+    let root_wait_args = serde_json::to_string(&json!({ "timeout_ms": 1 }))?;
 
     let root_initial = mount_sse_once_match(
         &server,
@@ -594,10 +596,40 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
+    let root_after_spawns = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_FIRST_SPAWN_CALL_ID,
+                )
+                && request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_SECOND_SPAWN_CALL_ID,
+                )
+                && !request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                )
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-wait"),
+            ev_function_call_with_namespace(
+                MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                &root_wait_args,
+            ),
+            ev_completed("manager-batch-root-wait"),
+        ]),
+    )
+    .await;
     let root_after_action = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
                 && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
                 && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
@@ -613,6 +645,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
                 && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         },
@@ -757,12 +790,33 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "manager-only Worker spawns",
     )
     .await;
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    wait_for_captured_request(
+        &root_after_spawns,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_FIRST_SPAWN_CALL_ID,
+                )
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_SECOND_SPAWN_CALL_ID,
+                )
+                && !response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                )
+        },
+        "normal manager-only Lead continuation after Worker spawns",
+    )
+    .await;
 
     wait_for_captured_request(
         &root_after_action,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
                 && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
         },
         "immediate manager-only action wake",
@@ -780,6 +834,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "manager-only Worker completion batch",
     )
     .await;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let lead_requests = server
         .received_requests()
@@ -789,11 +844,35 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         .filter(|request| {
             request.url.path() == "/v1/responses" && request_has_model(request, LEAD_MODEL)
         })
+        .collect::<Vec<_>>();
+    let action_wakes = lead_requests
+        .iter()
+        .filter(|request| {
+            request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        })
         .count();
     assert_eq!(
-        lead_requests, 3,
-        "the action and two Worker completions should wake the Lead only twice"
+        action_wakes, 1,
+        "the Worker action should wake the waiting Lead immediately"
     );
+
+    let completion_wakes = lead_requests
+        .iter()
+        .filter(|request| {
+            body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                || body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completion_wakes.len(),
+        1,
+        "both successful Worker completions should share one Lead wake"
+    );
+    assert!(body_contains(completion_wakes[0], MANAGER_BATCH_FIRST_RESULT));
+    assert!(body_contains(completion_wakes[0], MANAGER_BATCH_SECOND_RESULT));
     Ok(())
 }
 
