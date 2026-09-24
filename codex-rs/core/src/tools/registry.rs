@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -338,6 +339,8 @@ pub(crate) struct RegisteredTool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
+    // Keep the registration source so role policies cannot trust an external tool by name alone.
+    trusted_tool_names: HashSet<ToolName>,
     first_collision: Option<ToolName>,
     pub(crate) tool_policy: Arc<ToolPolicy>,
 }
@@ -389,9 +392,11 @@ impl ToolRegistry {
         if !self.tool_policy.allows(&tool_name) {
             return;
         }
+        let trusted_tool_name = tool_name.clone();
         match self.tools.entry(tool_name) {
             Entry::Vacant(entry) => {
                 entry.insert(RegisteredTool { runtime, exposure });
+                self.trusted_tool_names.insert(trusted_tool_name);
             }
             Entry::Occupied(entry) => {
                 let tool_name = entry.key();
@@ -411,8 +416,10 @@ impl ToolRegistry {
         }
 
         let exposure = runtime.exposure();
+        let trusted_tool_name = tool_name.clone();
         self.tools
             .shift_insert(0, tool_name, RegisteredTool { runtime, exposure });
+        self.trusted_tool_names.insert(trusted_tool_name);
     }
 
     pub(crate) fn register_external(&mut self, runtime: Arc<dyn CoreToolRuntime>) -> bool {
@@ -465,13 +472,18 @@ impl ToolRegistry {
     }
 
     pub(crate) fn remove(&mut self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        self.tools
-            .shift_remove(&tool_name.clone().with_default_namespace())
-            .map(|tool| tool.runtime)
+        let tool_name = tool_name.clone().with_default_namespace();
+        self.trusted_tool_names.remove(&tool_name);
+        self.tools.shift_remove(&tool_name).map(|tool| tool.runtime)
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = &RegisteredTool> {
         self.tools.values()
+    }
+
+    pub(crate) fn is_trusted_tool(&self, tool_name: &ToolName) -> bool {
+        self.trusted_tool_names
+            .contains(&tool_name.clone().with_default_namespace())
     }
 
     pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut RegisteredTool> {
