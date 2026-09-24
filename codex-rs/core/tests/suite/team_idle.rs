@@ -943,7 +943,7 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         &worker_completion,
         |request| {
             response_request_has_model(request, WORKER_MODEL)
-                && request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
+                && response_request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
         },
         "Worker completion while handoff is sealed",
     )
