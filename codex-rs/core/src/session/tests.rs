@@ -116,6 +116,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::turn_input::HandoffBlocker;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
@@ -15927,6 +15928,25 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
         (sess.input_queue.get_pending_input(&sess.active_turn).await).0,
         vec![TurnInput::InterAgentCommunication(communication)],
     );
+}
+
+#[tokio::test]
+async fn handoff_preflight_blocks_buffered_manager_completion() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .input_queue
+        .enqueue_team_lead_completion(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("worker path should parse"),
+            AgentPath::root(),
+            Vec::new(),
+            "worker completion pending Lead review".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+
+    let preflight = session.handoff_preflight().await;
+
+    assert!(preflight.blockers.contains(&HandoffBlocker::PendingMailbox));
 }
 
 #[tokio::test]

@@ -223,6 +223,10 @@ impl InputQueue {
         progress.completion_pending && progress.completion_generation == generation
     }
 
+    pub(crate) async fn has_pending_manager_completion(&self) -> bool {
+        self.team_lead_progress.lock().await.completion_pending
+    }
+
     /// Drains routine progress into a fixed-size summary for an actionable Lead wake.
     pub(crate) async fn take_team_progress_summary(&self) -> Option<String> {
         let mut progress = self.team_lead_progress.lock().await;
