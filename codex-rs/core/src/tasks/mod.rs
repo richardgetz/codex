@@ -795,13 +795,17 @@ impl Session {
     ///
     /// This closes the gap between waiting for handoff admission to reopen and the scheduler's
     /// final automatic-turn admission boundary.
-    pub(crate) async fn maybe_start_turn_for_pending_work_with_admission(
+    pub(crate) fn maybe_start_turn_for_pending_work_with_admission(
         self: &Arc<Self>,
         sub_id: String,
         admission: HandoffAdmissionGuard,
-    ) {
-        self.maybe_start_turn_for_pending_work_inner(sub_id, Some(admission))
-            .await;
+    ) -> BoxFuture<'static, ()> {
+        let session = Arc::clone(self);
+        Box::pin(async move {
+            session
+                .maybe_start_turn_for_pending_work_inner(sub_id, Some(admission))
+                .await;
+        })
     }
 
     async fn maybe_start_turn_for_pending_work_inner(
