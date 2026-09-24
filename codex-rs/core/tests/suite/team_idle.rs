@@ -1021,13 +1021,16 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
 
     // Hold the tree while the real Worker is delayed before its terminal report.
     let handoff = test.codex.begin_handoff()?;
-    wait_for_captured_request(
+    // The gate tool sleeps for 2s, so allow continuation overhead here while keeping the
+    // post-release retry bound below at 2s.
+    wait_for_captured_request_with_timeout(
         &worker_completion,
         |request| {
             response_request_has_model(request, WORKER_MODEL)
                 && response_request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
         },
         "Worker completion while handoff is sealed",
+        Duration::from_secs(/*secs*/ 5),
     )
     .await;
 

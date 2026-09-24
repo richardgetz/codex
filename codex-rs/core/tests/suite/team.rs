@@ -199,7 +199,22 @@ async fn wait_for_captured_request(
     predicate: impl Fn(&ResponsesRequest) -> bool,
     label: &str,
 ) -> ResponsesRequest {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    wait_for_captured_request_with_timeout(
+        response,
+        predicate,
+        label,
+        Duration::from_secs(/*secs*/ 2),
+    )
+    .await
+}
+
+async fn wait_for_captured_request_with_timeout(
+    response: &ResponseMock,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+    label: &str,
+    timeout: Duration,
+) -> ResponsesRequest {
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(request) = response
             .requests()
