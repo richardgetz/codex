@@ -236,8 +236,8 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
     Ok(())
 }
 
-#[test_case("gpt-6-sol"; "GPT-6 Sol")]
-#[test_case("gpt-6-astra"; "GPT-6 Astra")]
+#[test_case::test_case("gpt-6-sol"; "GPT-6 Sol")]
+#[test_case::test_case("gpt-6-astra"; "GPT-6 Astra")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
     lead_model: &'static str,
