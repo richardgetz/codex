@@ -909,6 +909,22 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         ]),
     )
     .await;
+    let root_after_spawn = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_HANDOFF_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-root-after-spawn"),
+            ev_assistant_message(
+                "manager-handoff-root-after-spawn-message",
+                "the Worker was spawned; I will review its completion",
+            ),
+            ev_completed("manager-handoff-root-after-spawn"),
+        ]),
+    )
+    .await;
     let worker_terminal = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -923,10 +939,14 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         .set_delay(Duration::from_secs(/*secs*/ 2)),
     )
     .await;
-    // Capture the first otherwise-unhandled /responses request, then validate its model and
-    // content below so the failure reports mismatches instead of treating them as no request.
-    let root_after_completion = mount_sse_once(
+    // Keep the normal post-spawn Lead continuation separate so this response is reserved for the
+    // completion wake. ResponseMock records requests before this route's predicate is evaluated.
+    let root_after_completion = mount_sse_once_match(
         &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, MANAGER_HANDOFF_RESULT)
+        },
         sse(vec![
             ev_response_created("manager-handoff-root-completion"),
             ev_assistant_message(
@@ -986,6 +1006,18 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         "manager-only Worker spawn before handoff",
     )
     .await;
+    wait_for_captured_request(
+        &root_after_spawn,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_HANDOFF_SPAWN_CALL_ID,
+                )
+        },
+        "normal manager-only Lead continuation after Worker spawn",
+    )
+    .await;
     wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     wait_for_captured_request(
         &worker_terminal,
@@ -997,6 +1029,11 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     )
     .await;
 
+    let lead_request_count_before_handoff = root_after_completion
+        .requests()
+        .iter()
+        .filter(|request| response_request_has_model(request, LEAD_MODEL))
+        .count();
     // The Worker turn has started and its POST is captured; the delayed terminal SSE lets that
     // turn finish under the seal without requiring another model or tool admission.
     let handoff = test.codex.begin_handoff()?;
@@ -1032,25 +1069,46 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     assert!(preflight
         .blockers
         .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence));
-    let requests_before_release = root_after_completion.requests();
+    let lead_requests_while_sealed = root_after_completion
+        .requests()
+        .into_iter()
+        .filter(|request| response_request_has_model(request, LEAD_MODEL))
+        .collect::<Vec<_>>();
+    let unexpected_sealed_requests = lead_requests_while_sealed
+        .iter()
+        .skip(lead_request_count_before_handoff)
+        .map(|request| {
+            json!({
+                "model": request.body_json()["model"],
+                "user_input": request.message_input_text_groups("user"),
+                "has_completion_marker": request.body_contains_text(MANAGER_HANDOFF_RESULT),
+            })
+        })
+        .collect::<Vec<_>>();
     assert!(
-        requests_before_release.is_empty(),
-        "the catch-all /responses mock must not capture a request while handoff admission is sealed"
+        unexpected_sealed_requests.is_empty(),
+        "unexpected Lead request while handoff admission is sealed; captured (model, user input, marker): \
+         {unexpected_sealed_requests:#?}"
     );
 
-    let request_count_before_release = requests_before_release.len();
     drop(handoff);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let root_request = loop {
-        let requests = root_after_completion.requests();
-        if let Some(request) = requests.get(request_count_before_release) {
+        let lead_requests = root_after_completion
+            .requests()
+            .into_iter()
+            .filter(|request| response_request_has_model(request, LEAD_MODEL))
+            .collect::<Vec<_>>();
+        if let Some(request) = lead_requests.get(lead_request_count_before_handoff) {
             break request.clone();
         }
         if Instant::now() >= deadline {
-            let post_release_requests = requests
-                .iter()
-                .skip(request_count_before_release)
+            let post_release_requests = root_after_completion
+                .requests()
+                .into_iter()
+                .filter(|request| response_request_has_model(request, LEAD_MODEL))
+                .skip(lead_request_count_before_handoff)
                 .map(|request| {
                     json!({
                         "model": request.body_json()["model"],
