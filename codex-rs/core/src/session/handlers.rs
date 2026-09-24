@@ -572,7 +572,7 @@ async fn inter_agent_communication_inner(
     team_lead_trigger: bool,
     handoff_admission: Option<crate::agent::control::HandoffAdmissionGuard>,
 ) {
-    let trigger_turn = communication.trigger_turn;
+    let mut trigger_turn = communication.trigger_turn;
     let is_team_lead = sess.is_team_lead().await;
     if trigger_turn && team_lead_trigger && !is_team_lead {
         // Completion was admitted while this parent was a Lead, but Team mode was disabled
@@ -586,27 +586,37 @@ async fn inter_agent_communication_inner(
         if !sess.is_team_lead().await {
             return;
         }
-        if team_lead_trigger
-            && sess
+        if team_lead_trigger {
+            if sess
                 .get_config()
                 .await
                 .effective_team_lead_work_policy()
                 == codex_config::TeamLeadWorkPolicy::ManagerOnly
-        {
-            let generation = sess
-                .input_queue
-                .enqueue_team_lead_completion(communication)
-                .await;
-            drop(_team_lead_turn_admission);
-            sess.schedule_manager_completion_batch_flush(generation)
-                .await;
+            {
+                let generation = sess
+                    .input_queue
+                    .enqueue_team_lead_completion(communication)
+                    .await;
+                drop(_team_lead_turn_admission);
+                sess.schedule_manager_completion_batch_flush(generation)
+                    .await;
+                crate::agent_communication::emit_agent_communication_receive(&sub_id);
+                return;
+            }
+
+            // A completion can be admitted as queue-only under manager-only policy, then reach
+            // this handler after a live switch back to prompt-guided. Restore its legacy trigger
+            // semantics so it is delivered immediately instead of becoming buffered progress.
+            communication.trigger_turn = true;
+            trigger_turn = true;
         } else {
             sess.input_queue
                 .enqueue_team_lead_progress(communication)
                 .await;
+            crate::agent_communication::emit_agent_communication_receive(&sub_id);
+            return;
         }
-        crate::agent_communication::emit_agent_communication_receive(&sub_id);
-        return;
+        drop(_team_lead_turn_admission);
     }
     // Serialize every actionable mailbox insertion with `/team off`. The settings commit takes
     // the same guard through its trigger cleanup, so a stale Lead completion cannot race an

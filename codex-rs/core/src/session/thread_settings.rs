@@ -5,6 +5,7 @@ use super::session::Session;
 use super::session::SessionSettingsUpdate;
 use super::step_settings::StepSettingsUpdate;
 use crate::config::ConstraintResult;
+use codex_config::TeamLeadWorkPolicy;
 use codex_history::RolloutItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -121,11 +122,17 @@ pub(super) async fn acquire_persistence_lock(session: &Session) -> SemaphorePerm
 
 /// Applies persistent settings and emits the resulting thread-owned snapshot.
 pub(super) async fn apply_update(
-    session: &Session,
+    session: &Arc<Session>,
     submission_id: String,
     updates: SessionSettingsUpdate,
 ) -> ConstraintResult<()> {
     let _settings_guard = acquire_persistence_lock(session).await;
+    let release_pending_manager_completions = updates
+        .team
+        .as_ref()
+        .is_some_and(|team| team.lead_work_policy == Some(TeamLeadWorkPolicy::PromptGuided))
+        && session.get_config().await.effective_team_lead_work_policy()
+            == TeamLeadWorkPolicy::ManagerOnly;
     let commit = session.update_settings(updates).await?;
     emit_applied(
         session,
@@ -134,6 +141,15 @@ pub(super) async fn apply_update(
         commit.usage_policy_changed,
     )
     .await;
+    drop(_settings_guard);
+    if release_pending_manager_completions
+        && let Some(generation) = session
+            .input_queue
+            .pending_manager_completion_generation()
+            .await
+    {
+        session.flush_manager_completion_batch(generation).await;
+    }
     Ok(())
 }
 

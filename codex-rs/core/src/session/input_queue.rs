@@ -227,6 +227,15 @@ impl InputQueue {
         self.team_lead_progress.lock().await.completion_pending
     }
 
+    /// Returns the latest buffered completion generation so a Lead work-policy update can
+    /// release a batch whose original quiet-window callback already observed active Workers.
+    pub(crate) async fn pending_manager_completion_generation(&self) -> Option<u64> {
+        let progress = self.team_lead_progress.lock().await;
+        progress
+            .completion_pending
+            .then_some(progress.completion_generation)
+    }
+
     /// Drains routine progress into a fixed-size summary for an actionable Lead wake.
     pub(crate) async fn take_team_progress_summary(&self) -> Option<String> {
         let mut progress = self.team_lead_progress.lock().await;

@@ -451,6 +451,310 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
     Ok(())
 }
 
+const POLICY_SWITCH_ROOT_PROMPT: &str = "delegate both workers before changing Lead policy";
+const POLICY_SWITCH_FIRST_TASK: &str = "policy switch first worker task";
+const POLICY_SWITCH_SECOND_TASK: &str = "policy switch second worker task";
+const POLICY_SWITCH_FIRST_SPAWN_CALL_ID: &str = "policy-switch-first-spawn";
+const POLICY_SWITCH_SECOND_SPAWN_CALL_ID: &str = "policy-switch-second-spawn";
+const POLICY_SWITCH_SECOND_GATE_CALL_ID: &str = "policy-switch-second-gate";
+const POLICY_SWITCH_FIRST_RESULT: &str = "policy switch first completion marker";
+const POLICY_SWITCH_SECOND_RESULT: &str = "policy switch second completion marker";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_spawn_args = serde_json::to_string(&json!({
+        "message": POLICY_SWITCH_FIRST_TASK,
+        "task_name": "policy_switch_first_worker",
+        "fork_turns": "none",
+    }))?;
+    let second_spawn_args = serde_json::to_string(&json!({
+        "message": POLICY_SWITCH_SECOND_TASK,
+        "task_name": "policy_switch_second_worker",
+        "fork_turns": "none",
+    }))?;
+    let delay_args = serde_json::to_string(&json!({"sleep_before_ms": 5_000}))?;
+
+    let root_initial = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, POLICY_SWITCH_ROOT_PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+                && !request_has_function_call_output(request, POLICY_SWITCH_FIRST_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-root-initial"),
+            ev_function_call_with_namespace(
+                POLICY_SWITCH_FIRST_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &first_spawn_args,
+            ),
+            ev_function_call_with_namespace(
+                POLICY_SWITCH_SECOND_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &second_spawn_args,
+            ),
+            ev_completed("policy-switch-root-initial"),
+        ]),
+    )
+    .await;
+    let root_after_spawns = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, POLICY_SWITCH_FIRST_SPAWN_CALL_ID)
+                && request_has_function_call_output(request, POLICY_SWITCH_SECOND_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-root-after-spawns"),
+            ev_assistant_message("policy-switch-root-waiting", "both Workers are running"),
+            ev_completed("policy-switch-root-after-spawns"),
+        ]),
+    )
+    .await;
+    let root_after_policy_switch = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, POLICY_SWITCH_FIRST_RESULT)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-root-after-policy"),
+            ev_assistant_message(
+                "policy-switch-root-after-policy-message",
+                "the buffered completion was released after the policy switch",
+            ),
+            ev_completed("policy-switch-root-after-policy"),
+        ]),
+    )
+    .await;
+    let root_after_second_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, POLICY_SWITCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-root-after-second-completion"),
+            ev_assistant_message(
+                "policy-switch-root-after-second-completion-message",
+                "the later prompt-guided completion also woke the Lead",
+            ),
+            ev_completed("policy-switch-root-after-second-completion"),
+        ]),
+    )
+    .await;
+    let first_worker = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, POLICY_SWITCH_FIRST_TASK)
+                && request_has_model(request, WORKER_MODEL)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-first-worker"),
+            ev_assistant_message("policy-switch-first-worker-result", POLICY_SWITCH_FIRST_RESULT),
+            ev_completed("policy-switch-first-worker"),
+        ]),
+    )
+    .await;
+    let second_worker_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, POLICY_SWITCH_SECOND_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, POLICY_SWITCH_SECOND_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-second-worker-gate"),
+            ev_function_call(
+                POLICY_SWITCH_SECOND_GATE_CALL_ID,
+                "test_sync_tool",
+                &delay_args,
+            ),
+            ev_completed("policy-switch-second-worker-gate"),
+        ]),
+    )
+    .await;
+    let second_worker_result = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, POLICY_SWITCH_SECOND_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-second-worker-result"),
+            ev_assistant_message(
+                "policy-switch-second-worker-message",
+                POLICY_SWITCH_SECOND_RESULT,
+            ),
+            ev_completed("policy-switch-second-worker-result"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("UnifiedExec feature");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("team profiles")
+                .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    submit_turn(
+        &test.codex,
+        POLICY_SWITCH_ROOT_PROMPT,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    wait_for_captured_request(
+        &root_initial,
+        |request| {
+            request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(POLICY_SWITCH_ROOT_PROMPT)
+        },
+        "Lead Worker delegation",
+    )
+    .await;
+    wait_for_captured_request(
+        &root_after_spawns,
+        |request| {
+            request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    POLICY_SWITCH_FIRST_SPAWN_CALL_ID,
+                )
+                && response_request_has_function_call_output(
+                    request,
+                    POLICY_SWITCH_SECOND_SPAWN_CALL_ID,
+                )
+        },
+        "Lead continuation after both Worker spawns",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let first_worker_request = wait_for_captured_request(
+        &first_worker,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request.body_contains_text(POLICY_SWITCH_FIRST_TASK)
+        },
+        "first Worker completion",
+    )
+    .await;
+    let first_worker_id = first_worker_request.body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
+        .expect("first Worker thread ID");
+    let first_worker_thread = test.thread_manager.get_thread(first_worker_id).await?;
+    wait_for_event(first_worker_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let second_worker_request = wait_for_captured_request(
+        &second_worker_gate,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request.body_contains_text(POLICY_SWITCH_SECOND_TASK)
+        },
+        "second Worker held active in its tool call",
+    )
+    .await;
+    let second_worker_tools = second_worker_request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("Worker Responses Lite tool definitions")["tools"]
+        .to_string();
+    assert!(
+        second_worker_tools.contains("exec_command"),
+        "Workers should retain normal execution tools after the Lead policy change: {second_worker_tools}"
+    );
+
+    // Let the original quiet-window callback observe that the second Worker is still active.
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::PromptGuided),
+    )
+    .await?;
+    let released_request = wait_for_captured_request(
+        &root_after_policy_switch,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(POLICY_SWITCH_FIRST_RESULT)
+        },
+        "buffered Worker completion released by the policy switch",
+    )
+    .await;
+    let lead_tools = released_request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("prompt-guided Lead tool definitions")["tools"]
+        .to_string();
+    assert!(
+        lead_tools.contains("exec_command"),
+        "prompt_guided Lead should regain execution tools after the switch: {lead_tools}"
+    );
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let _second_worker_result = wait_for_captured_request(
+        &second_worker_result,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(request, POLICY_SWITCH_SECOND_GATE_CALL_ID)
+        },
+        "second Worker completion after policy switch",
+    )
+    .await;
+    let second_lead_wake = wait_for_captured_request(
+        &root_after_second_completion,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(POLICY_SWITCH_SECOND_RESULT)
+        },
+        "prompt-guided Worker completion wake",
+    )
+    .await;
+    assert!(second_lead_wake.body_contains_text(POLICY_SWITCH_SECOND_RESULT));
+    Ok(())
+}
+
 #[test_case::test_case("gpt-6-sol"; "GPT-6 Sol")]
 #[test_case::test_case("gpt-6-astra"; "GPT-6 Astra")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

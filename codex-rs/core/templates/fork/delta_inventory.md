@@ -55,7 +55,10 @@ release or merge rules.
   input, action messages, failures, escalation, oversight deadlines, and
   dependency handoffs remain immediate. An undelivered completion batch blocks
   daemon handoff, and its quiet-window wake retries after an aborted handoff
-  reopens admission.
+  reopens admission. Switching back to `prompt_guided` immediately releases
+  buffered Worker completions even while other Workers remain active, and a
+  queue-only completion admitted under the previous policy becomes an immediate
+  wake if it reaches the Lead after the switch.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -1111,6 +1114,9 @@ release or merge rules.
   escalation, dependency handoffs, and the configured oversight deadline remain
   immediate. Verify a buffered completion blocks daemon handoff and its batch
   wake retries after an aborted handoff reopens admission.
+  Verify switching from `manager_only` to `prompt_guided` releases buffered
+  completions while other Workers remain active, and that queue-only completions
+  arriving after the switch wake the Lead immediately.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,

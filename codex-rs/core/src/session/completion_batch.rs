@@ -22,50 +22,53 @@ impl Session {
             let Some(session) = session.upgrade() else {
                 return;
             };
-            let _handoff_admission = loop {
-                match session
-                    .services
-                    .agent_control
-                    .begin_handoff_admission()
-                {
-                    Ok(admission) => break admission,
-                    Err(_) => {
-                        session
-                            .services
-                            .agent_control
-                            .wait_for_handoff_admission_open()
-                            .await;
-                    }
-                }
-            };
-            let team_lead_turn_admission = session.team_lead_turn_admission.lock().await;
-            let config = session.get_config().await;
-            if !session.is_team_lead().await
-                || config.effective_team_lead_work_policy() != TeamLeadWorkPolicy::ManagerOnly
-                || session.shutdown_requested()
-                || session.is_interrupted()
-                || session
-                    .services
-                    .agent_control
-                    .active_direct_worker_count(session.thread_id)
-                    .await
-                    != 0
-                || !session
-                    .input_queue
-                    .manager_completion_batch_is_pending(generation)
-                    .await
-            {
-                return;
-            }
-
-            // Retain the trigger through an activity pause; the ordinary scheduler holds it until
-            // `/continue` releases the root tree.
-            session
-                .enqueue_lead_wakeup_under_team_lead_admission(MANAGER_COMPLETION_WAKE)
-                .await;
-            drop(team_lead_turn_admission);
-            drop(_handoff_admission);
-            session.maybe_start_turn_for_pending_work().await;
+            session.flush_manager_completion_batch(generation).await;
         });
+    }
+
+    /// Releases a pending completion batch once its policy permits a Lead wake.
+    /// Prompt-guided policy retains the legacy per-completion wake behavior, so a batch buffered
+    /// under manager-only policy can be presented immediately after a live switch.
+    pub(crate) async fn flush_manager_completion_batch(&self, generation: u64) {
+        let _handoff_admission = loop {
+            match self.services.agent_control.begin_handoff_admission() {
+                Ok(admission) => break admission,
+                Err(_) => {
+                    self.services
+                        .agent_control
+                        .wait_for_handoff_admission_open()
+                        .await;
+                }
+            }
+        };
+        let team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
+        let config = self.get_config().await;
+        let manager_only =
+            config.effective_team_lead_work_policy() == TeamLeadWorkPolicy::ManagerOnly;
+        if !self.is_team_lead().await
+            || self.shutdown_requested()
+            || self.is_interrupted()
+            || (manager_only
+                && self
+                    .services
+                    .agent_control
+                    .active_direct_worker_count(self.thread_id)
+                    .await
+                    != 0)
+            || !self
+                .input_queue
+                .manager_completion_batch_is_pending(generation)
+                .await
+        {
+            return;
+        }
+
+        // Retain the trigger through an activity pause; the ordinary scheduler holds it until
+        // `/continue` releases the root tree.
+        self.enqueue_lead_wakeup_under_team_lead_admission(MANAGER_COMPLETION_WAKE)
+            .await;
+        drop(team_lead_turn_admission);
+        drop(_handoff_admission);
+        self.maybe_start_turn_for_pending_work().await;
     }
 }
