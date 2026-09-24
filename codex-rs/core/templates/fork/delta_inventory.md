@@ -39,10 +39,12 @@ release or merge rules.
   selectable.
 
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
-  keeps the Lead focused on user alignment, planning, delegation, coordination,
-  and review while Workers retain normal tool access and execute their assigned
-  work. The policy is captured in thread snapshots so resume and fork preserve
-  the selected mode, while legacy snapshots keep the default.
+  adds Lead-only prompt guidance for user alignment, planning, delegation,
+  coordination, and review, asking the Lead to leave routine execution to
+  Workers with their normal tool access. This is advisory model guidance: it
+  does not restrict the Lead's tools or change Worker completion and wake
+  handling. The policy is captured in thread snapshots so resume and fork
+  preserve the selected mode, while legacy snapshots keep the default.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -1076,12 +1078,11 @@ release or merge rules.
   `oversight_timeout_minutes` unchanged, and adds no polling loop.
 - Verify `[team.lead].work_policy` defaults to `prompt_guided`, accepts
   `manager_only`, and persists through thread resume and fork while legacy
-  snapshots retain the default. Verify `manager_only` applies only to the Lead:
-  it preserves human alignment, planning, delegation, coordination, and review;
-  routine task execution stays with Workers, who keep normal tool access without
-  requiring Lead approval or check-ins for tool use. Verify Worker model context
-  and tool access remain unchanged, and routine completion batches do not wake
-  the Lead before actionable outcomes or the configured oversight deadline.
+  snapshots retain the default. Verify `manager_only` adds Lead-only prompt
+  guidance for human alignment, planning, delegation, coordination, and review;
+  `prompt_guided` preserves the existing Lead guidance, and Worker model context
+  and tool access remain unchanged. Treat this as advisory guidance: it does not
+  restrict Lead tools or change completion and wake handling.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,
