@@ -5,5 +5,6 @@ expression: rendered
 ---
 • Lead/Worker team: on
 Role: Lead
+Lead work policy: manager only
 Lead: gpt-lead (max)
 Worker: gpt-worker (high)

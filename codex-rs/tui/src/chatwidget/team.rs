@@ -1,16 +1,18 @@
 //! Slash-command parsing and authoritative status rendering for Lead/Worker teams.
 
 use super::ChatWidget;
+use super::team_work_policy::lead_work_policy_label;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadTeamSettings;
 
 pub(crate) const TEAM_USAGE: &str =
-    "Usage: /team [on|off|status|balance [1..5]|lead [<model> <effort>]|worker [<model> <effort>]]";
+    "Usage: /team [on|off|status|balance [1..5]|work-policy [prompt_guided|manager_only]|lead [<model> <effort>]|worker [<model> <effort>]]";
 
 const LEAD_BALANCE_OPTIONS: [(u8, &str, &str); 5] = [
     (
@@ -57,6 +59,10 @@ pub(crate) enum TeamCommand {
     ConfigureBalance {
         balance: u8,
     },
+    SelectWorkPolicy,
+    ConfigureWorkPolicy {
+        policy: TeamLeadWorkPolicy,
+    },
 }
 
 pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str> {
@@ -74,6 +80,19 @@ pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str
                 .filter(|balance| (1..=5).contains(balance))
                 .map(|balance| TeamCommand::ConfigureBalance { balance })
                 .ok_or(TEAM_USAGE),
+            Some(_) => Err(TEAM_USAGE),
+        },
+        "work-policy" => match parts.next() {
+            None => Ok(TeamCommand::SelectWorkPolicy),
+            Some(policy) if parts.next().is_none() => match policy.to_ascii_lowercase().as_str() {
+                "prompt_guided" => Ok(TeamCommand::ConfigureWorkPolicy {
+                    policy: TeamLeadWorkPolicy::PromptGuided,
+                }),
+                "manager_only" => Ok(TeamCommand::ConfigureWorkPolicy {
+                    policy: TeamLeadWorkPolicy::ManagerOnly,
+                }),
+                _ => Err(TEAM_USAGE),
+            },
             Some(_) => Err(TEAM_USAGE),
         },
         "lead" | "worker" => {
@@ -254,7 +273,8 @@ impl ChatWidget {
             TeamCommand::Off => team.mode == TeamMode::Off,
             TeamCommand::Status
             | TeamCommand::SelectProfile { .. }
-            | TeamCommand::SelectBalance => false,
+            | TeamCommand::SelectBalance
+            | TeamCommand::SelectWorkPolicy => false,
             TeamCommand::ConfigureProfile {
                 role,
                 model,
@@ -264,6 +284,11 @@ impl ChatWidget {
                 team.lead_balance
                     .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
                     == *balance
+            }
+            TeamCommand::ConfigureWorkPolicy { policy } => {
+                team.lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                    == *policy
             }
         }
     }
@@ -292,7 +317,8 @@ impl ChatWidget {
             TeamCommand::Off => TeamMode::Off,
             TeamCommand::Status
             | TeamCommand::SelectProfile { .. }
-            | TeamCommand::SelectBalance => {
+            | TeamCommand::SelectBalance
+            | TeamCommand::SelectWorkPolicy => {
                 self.pending_team_command = None;
                 return;
             }
@@ -316,6 +342,22 @@ impl ChatWidget {
                     self.add_info_message(format_team_status(Some(team)), None);
                     self.pending_team_command = None;
                 }
+                return;
+            }
+            TeamCommand::ConfigureWorkPolicy { policy } => {
+                if team
+                    .lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                    == policy
+                {
+                    self.add_info_message(format_team_status(Some(team)), None);
+                } else {
+                    self.add_error_message(
+                        "The app server did not apply the requested Lead work policy. Update the server and try again."
+                            .to_string(),
+                    );
+                }
+                self.pending_team_command = None;
                 return;
             }
         };
@@ -356,6 +398,15 @@ pub(crate) fn format_team_status(team: Option<&ThreadTeamSettings>) -> String {
     let mut lines = vec![format!("Lead/Worker team: {mode}")];
     if let Some(role) = team.role {
         lines.push(format!("Role: {}", role_label(role)));
+    }
+    if team.role == Some(TeamRole::Lead) {
+        lines.push(format!(
+            "Lead work policy: {}",
+            lead_work_policy_label(
+                team.lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+            )
+        ));
     }
     if let Some(profile) = team_profile_line(
         "Lead",

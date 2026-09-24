@@ -633,6 +633,7 @@ async fn team_status_reflects_thread_settings_notification() {
         lead_model: Some("gpt-lead".to_string()),
         lead_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Max),
         lead_balance: Some(3),
+        lead_work_policy: Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly),
         worker_model: Some("gpt-worker".to_string()),
         worker_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
         previous_model: Some("gpt-single".to_string()),
@@ -647,6 +648,7 @@ async fn team_status_reflects_thread_settings_notification() {
         lead_model: None,
         lead_reasoning_effort: None,
         lead_balance: None,
+        lead_work_policy: None,
         worker_model: None,
         worker_reasoning_effort: None,
         previous_model: None,
@@ -673,6 +675,60 @@ async fn team_status_reflects_thread_settings_notification() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_chatwidget_snapshot!("team_status_after_thread_settings_notification", rendered);
+}
+
+#[tokio::test]
+async fn team_work_policy_update_handles_matching_and_stale_server_notifications() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.thread_settings.team = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::LeadWorker,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-lead".to_string()),
+        lead_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Max),
+        lead_balance: Some(3),
+        lead_work_policy: Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly),
+        worker_model: Some("gpt-worker".to_string()),
+        worker_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    });
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification.clone()),
+        /*replay_kind*/ None,
+    );
+    let confirmation = drain_insert_history(&mut rx);
+    assert!(chat.pending_team_command.is_none());
+    assert_eq!(confirmation.len(), 1);
+    assert!(
+        lines_to_single_string(&confirmation[0]).contains("Lead work policy: manager only")
+    );
+
+    notification
+        .thread_settings
+        .team
+        .as_mut()
+        .expect("test notification has team settings")
+        .lead_work_policy = None;
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    });
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification),
+        /*replay_kind*/ None,
+    );
+    let failure = drain_insert_history(&mut rx);
+    assert!(chat.pending_team_command.is_none());
+    assert_eq!(failure.len(), 1);
+    assert!(lines_to_single_string(&failure[0])
+        .contains("did not apply the requested Lead work policy"));
 }
 
 #[tokio::test]
