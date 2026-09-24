@@ -17,6 +17,7 @@ use super::session::SessionSettingsUpdate;
 use super::thread_settings;
 use super::turn_context::NewTurnContextOptions;
 use super::turn_context::TurnContext;
+use crate::agent::control::HandoffAdmissionGuard;
 use crate::context::GuardianContextMode;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
@@ -199,13 +200,23 @@ impl PreparedTurnInputSettings {
 
     /// Applies only persistent settings after steering succeeds. The active
     /// turn keeps its existing context; subsequent turns see the update.
-    async fn apply_steered(self, session: &Arc<Session>, submission_id: String) -> CodexResult<()> {
+    async fn apply_steered(
+        self,
+        session: &Arc<Session>,
+        submission_id: String,
+        handoff_admission: Option<&HandoffAdmissionGuard>,
+    ) -> CodexResult<()> {
         let Some(thread_settings_update) = self.thread_settings_update else {
             return Ok(());
         };
-        thread_settings::apply_update(session, submission_id, thread_settings_update)
-            .await
-            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
+        thread_settings::apply_update(
+            session,
+            submission_id,
+            thread_settings_update,
+            handoff_admission,
+        )
+        .await
+        .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
     }
 }
 
@@ -214,9 +225,12 @@ pub(super) async fn handle(
     request: TurnInputRequest,
     mode: TurnInputMode,
     submission_id: String,
+    handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> CodexResult<TurnInputSubmission> {
     match mode {
-        TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
+        TurnInputMode::StartOrSteer => {
+            start_or_steer(session, request, submission_id, handoff_admission).await
+        }
         TurnInputMode::StartIfIdle => {
             let kind = match &request.input {
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
@@ -253,7 +267,14 @@ pub(super) async fn handle(
             .await
         }
         TurnInputMode::Steer { expected_turn_id } => {
-            steer(session, request, expected_turn_id, submission_id).await
+            steer(
+                session,
+                request,
+                expected_turn_id,
+                submission_id,
+                handoff_admission,
+            )
+            .await
         }
     }
 }
@@ -284,6 +305,7 @@ async fn start_or_steer(
     session: &Arc<Session>,
     request: TurnInputRequest,
     submission_id: String,
+    handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> CodexResult<TurnInputSubmission> {
     let TurnInputRequest {
         mut input,
@@ -324,7 +346,9 @@ async fn start_or_steer(
     {
         Ok(turn_id) => {
             session.cancel_lead_oversight().await;
-            settings.apply_steered(session, submission_id).await?;
+            settings
+                .apply_steered(session, submission_id, handoff_admission)
+                .await?;
             if has_explicit_input
                 && session.is_team_lead().await
                 && let Some(summary) = session.take_lead_progress_summary().await
@@ -576,6 +600,7 @@ async fn steer(
     request: TurnInputRequest,
     expected_turn_id: String,
     submission_id: String,
+    handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> CodexResult<TurnInputSubmission> {
     let TurnInputRequest {
         mut input,
@@ -614,7 +639,9 @@ async fn steer(
             if has_explicit_input {
                 session.cancel_lead_oversight().await;
             }
-            settings.apply_steered(session, submission_id).await?;
+            settings
+                .apply_steered(session, submission_id, handoff_admission)
+                .await?;
             if session.is_team_lead().await
                 && let Some(summary) = session.take_lead_progress_summary().await
             {

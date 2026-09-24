@@ -1963,6 +1963,7 @@ pub(super) async fn submission_loop(
                         sub.id.clone(),
                         thread_settings,
                         usage_policy_update,
+                        handoff_admission.as_ref(),
                     )
                     .await;
                     false
@@ -1983,7 +1984,14 @@ pub(super) async fn submission_loop(
                     mode,
                     reply,
                 } => {
-                    let result = turn_input::handle(&sess, *request, mode, sub.id.clone()).await;
+                    let result = turn_input::handle(
+                        &sess,
+                        *request,
+                        mode,
+                        sub.id.clone(),
+                        handoff_admission.as_ref(),
+                    )
+                    .await;
                     let _ = reply.send(result);
                     false
                 }

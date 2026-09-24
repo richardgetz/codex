@@ -7143,6 +7143,7 @@ async fn compaction_checkpoint_waits_for_accepted_settings_persistence() {
             permission_profile: Some(PermissionProfile::read_only()),
             ..Default::default()
         },
+        /*handoff_admission*/ None,
     )));
     // Pause after committing settings but before their accepted snapshot is persisted.
     assert!(futures::poll!(update.as_mut()).is_pending());
@@ -7235,6 +7236,7 @@ async fn usage_policy_reset_materializes_lazy_thread_settings() {
             usage_policy: Some(ThreadUsagePolicy::default()),
             ..Default::default()
         },
+        /*handoff_admission*/ None,
     )
     .await
     .expect("usage policy reset should succeed");
@@ -15358,6 +15360,7 @@ async fn submit_steer_only(
             expected_turn_id: expected_turn_id.to_string(),
         },
         "test-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("steer-only submission should be valid")
@@ -15947,6 +15950,31 @@ async fn handoff_preflight_blocks_buffered_manager_completion() {
     let preflight = session.handoff_preflight().await;
 
     assert!(preflight.blockers.contains(&HandoffBlocker::PendingMailbox));
+}
+
+#[tokio::test]
+async fn manager_completion_flush_reuses_dispatch_admission_during_handoff() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    let handoff_admission = session
+        .services
+        .agent_control
+        .begin_handoff_admission()
+        .expect("admit settings dispatch before handoff");
+    let handoff = session
+        .services
+        .agent_control
+        .begin_handoff()
+        .expect("seal handoff admission");
+
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        session.flush_manager_completion_batch(0, Some(&handoff_admission)),
+    )
+    .await
+    .expect("flush should reuse the caller admission instead of waiting for the seal");
+
+    drop(handoff_admission);
+    handoff.wait_for_admissions().await;
 }
 
 #[tokio::test]

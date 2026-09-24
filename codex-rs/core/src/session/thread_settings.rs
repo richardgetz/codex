@@ -4,6 +4,7 @@
 use super::session::Session;
 use super::session::SessionSettingsUpdate;
 use super::step_settings::StepSettingsUpdate;
+use crate::agent::control::HandoffAdmissionGuard;
 use crate::config::ConstraintResult;
 use codex_config::TeamLeadWorkPolicy;
 use codex_history::RolloutItem;
@@ -44,10 +45,13 @@ pub(super) async fn update(
     submission_id: String,
     overrides: ThreadSettingsOverrides,
     usage_policy_update: Option<ThreadUsagePolicyUpdate>,
+    handoff_admission: Option<&HandoffAdmissionGuard>,
 ) {
     let mut updates = prepare_update(overrides);
     updates.usage_policy_update = usage_policy_update;
-    if let Err(error) = apply_update(session, submission_id.clone(), updates).await {
+    if let Err(error) =
+        apply_update(session, submission_id.clone(), updates, handoff_admission).await
+    {
         session
             .send_event_raw(Event {
                 id: submission_id,
@@ -125,6 +129,7 @@ pub(super) async fn apply_update(
     session: &Arc<Session>,
     submission_id: String,
     updates: SessionSettingsUpdate,
+    handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> ConstraintResult<()> {
     let _settings_guard = acquire_persistence_lock(session).await;
     let release_pending_manager_completions = updates
@@ -148,7 +153,9 @@ pub(super) async fn apply_update(
             .pending_manager_completion_generation()
             .await
     {
-        session.flush_manager_completion_batch(generation).await;
+        session
+            .flush_manager_completion_batch(generation, handoff_admission)
+            .await;
     }
     Ok(())
 }

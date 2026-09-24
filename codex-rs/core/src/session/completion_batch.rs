@@ -1,6 +1,7 @@
 //! Coalesces successful Worker completion reports for manager-only Team Leads.
 
 use super::session::Session;
+use crate::agent::control::HandoffAdmissionGuard;
 use codex_config::TeamLeadWorkPolicy;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,25 +23,48 @@ impl Session {
             let Some(session) = session.upgrade() else {
                 return;
             };
-            session.flush_manager_completion_batch(generation).await;
+            session
+                .flush_manager_completion_batch(generation, /*handoff_admission*/ None)
+                .await;
         });
     }
 
     /// Releases a pending completion batch once its policy permits a Lead wake.
     /// Prompt-guided policy retains the legacy per-completion wake behavior, so a batch buffered
     /// under manager-only policy can be presented immediately after a live switch.
-    pub(crate) async fn flush_manager_completion_batch(&self, generation: u64) {
-        let _handoff_admission = loop {
-            match self.services.agent_control.begin_handoff_admission() {
-                Ok(admission) => break admission,
-                Err(_) => {
-                    self.services
-                        .agent_control
-                        .wait_for_handoff_admission_open()
-                        .await;
+    pub(crate) async fn flush_manager_completion_batch(
+        &self,
+        generation: u64,
+        handoff_admission: Option<&HandoffAdmissionGuard>,
+    ) {
+        // A settings dispatch already holds admission through its caller. Reacquiring here can
+        // deadlock if a handoff seals after dispatch began: the flush waits for admission to open
+        // while the handoff waits for this dispatch to finish.
+        if let Some(handoff_admission) = handoff_admission {
+            self.flush_manager_completion_batch_under_admission(generation, handoff_admission)
+                .await;
+        } else {
+            let _handoff_admission = loop {
+                match self.services.agent_control.begin_handoff_admission() {
+                    Ok(admission) => break admission,
+                    Err(_) => {
+                        self.services
+                            .agent_control
+                            .wait_for_handoff_admission_open()
+                            .await;
+                    }
                 }
-            }
-        };
+            };
+            self.flush_manager_completion_batch_under_admission(generation, &_handoff_admission)
+                .await;
+        }
+    }
+
+    async fn flush_manager_completion_batch_under_admission(
+        &self,
+        generation: u64,
+        _handoff_admission: &HandoffAdmissionGuard,
+    ) {
         let team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
         let config = self.get_config().await;
         let manager_only =
