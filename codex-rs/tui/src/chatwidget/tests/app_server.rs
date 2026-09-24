@@ -793,6 +793,45 @@ async fn stale_team_work_policy_timeout_does_not_clear_retried_request() {
 }
 
 #[tokio::test]
+async fn stale_team_work_policy_error_does_not_clear_retried_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    let command = crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    };
+    let old_request_id = chat.set_pending_team_command(command.clone());
+    let current_request_id = chat.set_pending_team_command(command.clone());
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                misalignment: None,
+                message:
+                    "invalid thread settings override: Lead work policy is not available"
+                        .to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: thread_id.to_string(),
+            turn_id: "settings-update-old".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.pending_team_command, Some(command.clone()));
+    assert_eq!(chat.pending_team_command_request_id, Some(current_request_id));
+    let _ = drain_insert_history(&mut rx);
+
+    chat.on_team_work_policy_update_timeout(old_request_id);
+
+    assert_eq!(chat.pending_team_command, Some(command));
+    assert_eq!(chat.pending_team_command_request_id, Some(current_request_id));
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
 async fn team_toggle_pending_state_clears_on_terminal_error_but_survives_retry() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     let thread_id = ThreadId::new();

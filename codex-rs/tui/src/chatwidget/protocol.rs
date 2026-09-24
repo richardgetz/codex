@@ -242,9 +242,10 @@ impl ChatWidget {
                     }
                 } else {
                     // A queued thread-settings update can fail after its RPC acknowledgement.
-                    // Core identifies these failures with a BadRequest and the stable settings
-                    // error prefix. Keep unrelated terminal task errors from discarding the
-                    // user's pending team toggle, and leave retryable stream errors untouched.
+                    // These notifications have no client request ID, so an old policy update's
+                    // error cannot safely clear a newer request. Policy updates are cleared by
+                    // their request-scoped timeout; preserve immediate cleanup for other team
+                    // commands, and leave retryable stream errors untouched.
                     if matches!(
                         notification.error.codex_error_info.as_ref(),
                         Some(AppServerCodexErrorInfo::BadRequest)
@@ -252,6 +253,10 @@ impl ChatWidget {
                         .error
                         .message
                         .starts_with("invalid thread settings override:")
+                        && !matches!(
+                            self.pending_team_command.as_ref(),
+                            Some(TeamCommand::ConfigureWorkPolicy { .. })
+                        )
                     {
                         self.clear_pending_team_command();
                     }

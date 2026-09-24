@@ -51,8 +51,8 @@ release or merge rules.
   `thread/settings/update`; the selection takes effect on the next turn without
   changing Team mode, role, profile assignments, or global defaults. TUI updates
   wait for a matching settings snapshot or the bounded confirmation timeout;
-  stale notifications cannot reject a pending update, and old timeout callbacks
-  cannot clear a newer retry. Successful
+  stale snapshots and uncorrelated terminal errors cannot reject a pending
+  update, and old timeout callbacks cannot clear a newer retry. Successful
   direct Worker completions
   are summarized in one bounded Lead wake after the direct Workers finish; user
   input, action messages, failures, escalation, oversight deadlines, and
@@ -1120,9 +1120,10 @@ release or merge rules.
   Verify switching from `manager_only` to `prompt_guided` releases buffered
   completions while other Workers remain active, and that queue-only completions
   arriving after the switch wake the Lead immediately.
-  Verify the TUI policy
-  picker ignores mismatched settings snapshots until a matching snapshot or
-  bounded timeout, and an earlier timeout cannot clear a retried policy update.
+  Verify the TUI policy picker ignores mismatched settings snapshots and
+  uncorrelated terminal errors
+  until a matching snapshot or bounded timeout, and earlier timeout callbacks
+  cannot clear a retried policy update.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,
