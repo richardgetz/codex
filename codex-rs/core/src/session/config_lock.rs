@@ -235,12 +235,14 @@ fn save_config_resolved_fields(
     if config.team_state_persisted || config.effective_team_profiles().is_some() {
         let profile_to_toml =
             |profile: &codex_config::TeamModelProfile,
+             work_policy: Option<codex_config::TeamLeadWorkPolicy>,
              dynamic_handoff: Option<bool>,
              balance: Option<u8>,
              show_idle_notifications: Option<bool>,
              oversight_timeout_minutes: Option<u64>| TeamModelProfileToml {
                 model: Some(profile.model.clone()),
                 reasoning_effort: Some(profile.reasoning_effort.clone()),
+                work_policy,
                 balance,
                 dynamic_handoff,
                 show_idle_notifications,
@@ -258,6 +260,7 @@ fn save_config_resolved_fields(
             lead: profiles.map(|profiles| {
                 profile_to_toml(
                     &profiles.lead,
+                    Some(profiles.lead_work_policy),
                     Some(profiles.lead_dynamic_handoff),
                     Some(profiles.lead_balance),
                     Some(config.team.lead_show_idle_notifications),

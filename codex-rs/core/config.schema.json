@@ -4804,6 +4804,25 @@
         }
       ]
     },
+    "TeamLeadWorkPolicy": {
+      "description": "Selects how much task execution stays with the Lead in a Lead/Worker team.",
+      "oneOf": [
+        {
+          "description": "Preserve the existing prompt-guided Lead behavior.",
+          "enum": [
+            "prompt_guided"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Keep the Lead focused on management while Workers execute assigned work.",
+          "enum": [
+            "manager_only"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "TeamModelProfileToml": {
       "additionalProperties": false,
       "description": "A model and reasoning effort read from config.toml.",
@@ -4835,6 +4854,14 @@
         "show_idle_notifications": {
           "description": "Whether passive Lead idle and parked-wait notifications should be shown.",
           "type": "boolean"
+        },
+        "work_policy": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TeamLeadWorkPolicy"
+            }
+          ],
+          "description": "Selects how much task execution remains with the Lead."
         }
       },
       "type": "object"

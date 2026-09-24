@@ -2,6 +2,7 @@ use super::team_profiles_from_snapshot;
 use super::team_profiles_from_snapshot_with_timeout;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use codex_config::TeamLeadWorkPolicy;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfileToml;
 use codex_config::TeamModelProfiles;
@@ -44,6 +45,7 @@ fn team_snapshot_models_are_trimmed() {
                 model: "worker".to_string(),
                 reasoning_effort: ReasoningEffortConfig::High,
             },
+            lead_work_policy: TeamLeadWorkPolicy::PromptGuided,
             lead_dynamic_handoff: false,
             lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
             lead_oversight_timeout_minutes:
@@ -89,6 +91,21 @@ fn team_snapshot_preserves_dynamic_handoff_setting() {
 }
 
 #[test]
+fn team_snapshot_defaults_and_preserves_lead_work_policy() {
+    let profiles = team_profiles_from_snapshot(&snapshot("lead", "worker"))
+        .expect("valid legacy snapshot")
+        .expect("profiles");
+    assert_eq!(profiles.lead_work_policy, TeamLeadWorkPolicy::PromptGuided);
+
+    let mut settings = snapshot("lead", "worker");
+    settings.lead_work_policy = Some(TeamLeadWorkPolicy::ManagerOnly);
+    let profiles = team_profiles_from_snapshot(&settings)
+        .expect("valid manager-only snapshot")
+        .expect("profiles");
+    assert_eq!(profiles.lead_work_policy, TeamLeadWorkPolicy::ManagerOnly);
+}
+
+#[test]
 fn team_snapshot_defaults_and_validates_lead_balance() {
     let profiles = team_profiles_from_snapshot(&snapshot("lead", "worker"))
         .expect("valid snapshot")
@@ -126,6 +143,7 @@ async fn team_settings_snapshot_carries_lead_balance() -> std::io::Result<()> {
                 lead: Some(TeamModelProfileToml {
                     model: Some("lead".to_string()),
                     reasoning_effort: Some(ReasoningEffortConfig::High),
+                    work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
                     balance: Some(4),
                     dynamic_handoff: None,
                     show_idle_notifications: None,
@@ -148,5 +166,9 @@ async fn team_settings_snapshot_carries_lead_balance() -> std::io::Result<()> {
         .team_settings_snapshot(Some(TeamRole::Lead))
         .expect("configured team should have a snapshot");
     assert_eq!(snapshot.lead_balance, Some(4));
+    assert_eq!(
+        snapshot.lead_work_policy,
+        Some(TeamLeadWorkPolicy::ManagerOnly)
+    );
     Ok(())
 }

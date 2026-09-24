@@ -190,9 +190,15 @@ pub(crate) fn world_state_policy(
             } else {
                 codex_config::DEFAULT_TEAM_LEAD_BALANCE
             };
+            let lead_work_policy = if role == TeamRole::Lead {
+                config.effective_team_lead_work_policy()
+            } else {
+                codex_config::TeamLeadWorkPolicy::PromptGuided
+            };
             TeamPolicyState::new(role, worker_max_concurrent)
                 .with_dynamic_handoff(dynamic_handoff)
                 .with_lead_balance(lead_balance)
+                .with_lead_work_policy(lead_work_policy)
         })
     } else if config.team_state_persisted {
         Some(TeamPolicyState::disabled())
