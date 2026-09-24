@@ -484,10 +484,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
     });
     let first_gate_args =
         serde_json::to_string(&json!({"barrier": worker_barrier_args.clone()}))?;
-    let second_gate_args = serde_json::to_string(&json!({
-        "barrier": worker_barrier_args,
-        "sleep_after_ms": 5_000,
-    }))?;
+    let second_gate_args = serde_json::to_string(&json!({"barrier": worker_barrier_args}))?;
 
     let root_initial = mount_sse_once_match(
         &server,
@@ -611,20 +608,23 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         ]),
     )
     .await;
-    let second_worker_result = mount_sse_once_match(
+    // Keep the second Worker turn live by holding its terminal model response. The root routes
+    // require the Lead model, so this exact Worker follow-up route serves the delayed SSE.
+    let second_worker_result = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, WORKER_MODEL)
                 && request_has_function_call_output(request, POLICY_SWITCH_SECOND_GATE_CALL_ID)
         },
-        sse(vec![
+        sse_response(sse(vec![
             ev_response_created("policy-switch-second-worker-result"),
             ev_assistant_message(
                 "policy-switch-second-worker-message",
                 POLICY_SWITCH_SECOND_RESULT,
             ),
             ev_completed("policy-switch-second-worker-result"),
-        ]),
+        ]))
+        .set_delay(std::time::Duration::from_secs(/*secs*/ 5)),
     )
     .await;
 
@@ -738,6 +738,35 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "Workers should retain normal execution tools after the Lead policy change: {second_worker_tools}"
     );
 
+    // The POST is captured before Wiremock serves the delayed terminal SSE, so the Worker stays
+    // Running while the first completion batch is checked and the policy is switched.
+    let _second_worker_result_request = wait_for_captured_request(
+        &second_worker_result,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    POLICY_SWITCH_SECOND_GATE_CALL_ID,
+                )
+        },
+        "second Worker terminal response held in flight",
+    )
+    .await;
+    let second_worker_status_before_first_completion = second_worker_thread.agent_status().await;
+    pretty_assertions::assert_eq!(
+        second_worker_status_before_first_completion,
+        codex_protocol::protocol::AgentStatus::Running,
+        "second Worker should remain Running while its terminal response is delayed"
+    );
+    let second_worker_subtree_before_first_completion = test
+        .thread_manager
+        .list_open_agent_subtree_thread_ids(test.codex.id())
+        .await?;
+    assert!(
+        second_worker_subtree_before_first_completion.contains(&second_worker_id),
+        "second Worker should remain in the Lead's open subtree while its terminal response is delayed: {second_worker_subtree_before_first_completion:?}"
+    );
+
     let _first_worker_result_request = wait_for_captured_request(
         &first_worker_after_gate,
         |request| {
@@ -761,8 +790,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
     .await;
     let second_worker_status_after_first_completion = second_worker_thread.agent_status().await;
 
-    // Let the quiet-window callback observe the second Worker after both barrier participants
-    // have started. It remains active in sleep_after_ms while the first completion is buffered.
+    // Let the quiet-window callback observe the second Worker while its terminal SSE is held.
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     let requests_before_policy_switch = root_after_policy_switch.requests();
     let second_worker_status_at_checkpoint = second_worker_thread.agent_status().await;
@@ -789,9 +817,18 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
             })
         })
         .collect::<Vec<_>>();
+    pretty_assertions::assert_eq!(
+        second_worker_status_at_checkpoint,
+        codex_protocol::protocol::AgentStatus::Running,
+        "second Worker should still be Running at the manager-only batching checkpoint"
+    );
+    assert!(
+        open_subtree_at_checkpoint.contains(&second_worker_id),
+        "second Worker should remain in the Lead's open subtree at the manager-only batching checkpoint: {open_subtree_at_checkpoint:?}"
+    );
     assert!(
         premature_lead_requests.is_empty(),
-        "ManagerOnly should keep the first Worker completion buffered while the second Worker is active; second_worker_id={second_worker_id}, status_after_barrier={second_worker_status_after_barrier:?}, status_after_first_completion={second_worker_status_after_first_completion:?}, status_at_checkpoint={second_worker_status_at_checkpoint:?}, open_subtree_after_barrier={open_subtree_after_barrier:?}, open_subtree_at_checkpoint={open_subtree_at_checkpoint:?}, premature_lead_requests={premature_lead_requests:#?}"
+        "ManagerOnly should keep the first Worker completion buffered while the second Worker is active; second_worker_id={second_worker_id}, status_before_first_completion={second_worker_status_before_first_completion:?}, subtree_before_first_completion={second_worker_subtree_before_first_completion:?}, status_after_barrier={second_worker_status_after_barrier:?}, status_after_first_completion={second_worker_status_after_first_completion:?}, status_at_checkpoint={second_worker_status_at_checkpoint:?}, open_subtree_after_barrier={open_subtree_after_barrier:?}, open_subtree_at_checkpoint={open_subtree_at_checkpoint:?}, premature_lead_requests={premature_lead_requests:#?}"
     );
     let request_count_before_policy_switch = requests_before_policy_switch.len();
 
@@ -838,22 +875,14 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
     );
     wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let _second_worker_result = wait_for_captured_request(
-        &second_worker_result,
-        |request| {
-            response_request_has_model(request, WORKER_MODEL)
-                && response_request_has_function_call_output(request, POLICY_SWITCH_SECOND_GATE_CALL_ID)
-        },
-        "second Worker completion after policy switch",
-    )
-    .await;
-    let second_lead_wake = wait_for_captured_request(
+    let second_lead_wake = wait_for_captured_request_with_timeout(
         &root_after_second_completion,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
                 && request.body_contains_text(POLICY_SWITCH_SECOND_RESULT)
         },
         "prompt-guided Worker completion wake",
+        std::time::Duration::from_secs(/*secs*/ 7),
     )
     .await;
     assert!(second_lead_wake.body_contains_text(POLICY_SWITCH_SECOND_RESULT));
