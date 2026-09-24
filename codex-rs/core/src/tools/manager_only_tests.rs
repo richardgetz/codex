@@ -204,10 +204,7 @@ impl ToolExecutor<ToolInvocation> for ManagerOnlyTestTool {
         })
     }
 
-    fn handle<'a>(
-        &'a self,
-        _invocation: ToolInvocation,
-    ) -> codex_tools::ToolExecutorFuture<'a>
+    fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
     where
         ToolInvocation: 'a,
     {
