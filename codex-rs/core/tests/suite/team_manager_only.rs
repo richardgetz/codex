@@ -722,6 +722,11 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "second Worker held active in its tool call",
     )
     .await;
+    let second_worker_id = second_worker_request.body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
+        .expect("second Worker thread ID");
+    let second_worker_thread = test.thread_manager.get_thread(second_worker_id).await?;
     let second_worker_tools = second_worker_request
         .inputs_of_type("additional_tools")
         .into_iter()
@@ -745,21 +750,48 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "first Worker completion after both Workers reach the barrier",
     )
     .await;
+    let second_worker_status_after_barrier = second_worker_thread.agent_status().await;
+    let open_subtree_after_barrier = test
+        .thread_manager
+        .list_open_agent_subtree_thread_ids(test.codex.id())
+        .await?;
     wait_for_event(first_worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    let second_worker_status_after_first_completion = second_worker_thread.agent_status().await;
 
     // Let the quiet-window callback observe the second Worker after both barrier participants
     // have started. It remains active in sleep_after_ms while the first completion is buffered.
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     let requests_before_policy_switch = root_after_policy_switch.requests();
-    assert!(
-        !requests_before_policy_switch.iter().any(|request| {
+    let second_worker_status_at_checkpoint = second_worker_thread.agent_status().await;
+    let open_subtree_at_checkpoint = test
+        .thread_manager
+        .list_open_agent_subtree_thread_ids(test.codex.id())
+        .await?;
+    let premature_lead_requests = requests_before_policy_switch
+        .iter()
+        .filter(|request| {
             response_request_has_model(request, LEAD_MODEL)
                 && request.body_contains_text(POLICY_SWITCH_FIRST_RESULT)
-        }),
-        "ManagerOnly should keep the first Worker completion buffered while the second Worker is active"
+        })
+        .map(|request| {
+            let matching_inputs = request
+                .input()
+                .into_iter()
+                .filter(|item| item.to_string().contains(POLICY_SWITCH_FIRST_RESULT))
+                .collect::<Vec<_>>();
+            json!({
+                "thread_id": request.body_json()["client_metadata"]["thread_id"],
+                "model": request.body_json()["model"],
+                "matching_inputs": matching_inputs,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        premature_lead_requests.is_empty(),
+        "ManagerOnly should keep the first Worker completion buffered while the second Worker is active; second_worker_id={second_worker_id}, status_after_barrier={second_worker_status_after_barrier:?}, status_after_first_completion={second_worker_status_after_first_completion:?}, status_at_checkpoint={second_worker_status_at_checkpoint:?}, open_subtree_after_barrier={open_subtree_after_barrier:?}, open_subtree_at_checkpoint={open_subtree_at_checkpoint:?}, premature_lead_requests={premature_lead_requests:#?}"
     );
     let request_count_before_policy_switch = requests_before_policy_switch.len();
 
