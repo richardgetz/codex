@@ -1284,8 +1284,8 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         command: TeamCommand,
     },
-    /// Bound waiting for an app-server snapshot after a Lead work-policy update.
-    TeamWorkPolicyUpdateTimeout {
+    /// Bound waiting for an app-server snapshot after a Team settings update.
+    TeamSettingsUpdateTimeout {
         thread_id: ThreadId,
         request_id: Uuid,
     },

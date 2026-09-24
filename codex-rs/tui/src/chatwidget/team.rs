@@ -305,28 +305,57 @@ impl ChatWidget {
         self.pending_team_command_request_id = None;
     }
 
-    pub(crate) fn on_team_work_policy_update_timeout(&mut self, request_id: uuid::Uuid) {
+    pub(crate) fn on_team_settings_update_timeout(&mut self, request_id: uuid::Uuid) {
         if self.pending_team_command_request_id != Some(request_id) {
             return;
         }
-        let Some(TeamCommand::ConfigureWorkPolicy { policy }) = self.pending_team_command.clone()
-        else {
+        let Some(command) = self.pending_team_command.clone() else {
             return;
         };
-        if self.team_settings.as_ref().is_some_and(|team| {
-            team.lead_work_policy
-                .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
-                == policy
-        }) {
-            self.add_info_message(
-                format_team_status(self.team_settings.as_ref()),
-                None,
-            );
+
+        let confirmed = self.team_settings.as_ref().is_some_and(|team| match &command {
+            TeamCommand::On => team.mode == TeamMode::LeadWorker,
+            TeamCommand::Off => team.mode == TeamMode::Off,
+            TeamCommand::ConfigureProfile {
+                role,
+                model,
+                effort,
+            } => team_profile_matches(team, *role, model, effort),
+            TeamCommand::ConfigureBalance { balance } => {
+                team.lead_balance
+                    .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
+                    == *balance
+            }
+            TeamCommand::ConfigureWorkPolicy { policy } => {
+                team.lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                    == *policy
+            }
+            TeamCommand::Status
+            | TeamCommand::SelectProfile { .. }
+            | TeamCommand::SelectBalance
+            | TeamCommand::SelectWorkPolicy => false,
+        });
+
+        if confirmed {
+            self.add_info_message(format_team_status(self.team_settings.as_ref()), None);
         } else {
-            self.add_error_message(
-                "The app server did not confirm the Lead work policy update. Check /team status; if it is unchanged, update the server and try again."
-                    .to_string(),
-            );
+            let setting = match command {
+                TeamCommand::On | TeamCommand::Off => "team mode",
+                TeamCommand::ConfigureProfile { .. } => "team profile",
+                TeamCommand::ConfigureBalance { .. } => "Lead usage/confidence balance",
+                TeamCommand::ConfigureWorkPolicy { .. } => "Lead work policy",
+                TeamCommand::Status
+                | TeamCommand::SelectProfile { .. }
+                | TeamCommand::SelectBalance
+                | TeamCommand::SelectWorkPolicy => {
+                    self.clear_pending_team_command();
+                    return;
+                }
+            };
+            self.add_error_message(format!(
+                "The app server did not confirm the {setting} update. Check /team status; if it is unchanged, update the server and try again."
+            ));
         }
         self.clear_pending_team_command();
     }
