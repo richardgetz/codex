@@ -320,15 +320,15 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
     .await?;
     let manager_only_snapshot = test.codex.config_snapshot().await;
     let manager_only_team = manager_only_snapshot.team.as_ref().expect("team snapshot");
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         manager_only_team.mode,
         codex_protocol::protocol::TeamMode::LeadWorker
     );
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         manager_only_team.role,
         Some(codex_protocol::protocol::TeamRole::Lead)
     );
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         manager_only_team.lead_work_policy,
         Some(codex_protocol::protocol::TeamLeadWorkPolicy::ManagerOnly)
     );
@@ -419,7 +419,7 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
         .resume(&server, std::sync::Arc::clone(&test.home), rollout_path)
         .await?;
     let resumed_snapshot = resumed.codex.config_snapshot().await;
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         resumed_snapshot
             .team
             .as_ref()
