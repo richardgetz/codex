@@ -11,7 +11,6 @@ use crate::client_common::ResponseEvent;
 use crate::compact::InitialContextInjection;
 use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
-use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
@@ -1777,12 +1776,7 @@ async fn run_auto_compact(
     }
 
     match turn_context.provider.capabilities().remote_compaction {
-        RemoteCompactionSupport::V2
-            if turn_context
-                .config
-                .features
-                .enabled(Feature::RemoteCompactionV2) =>
-        {
+        RemoteCompactionSupport::V2 => {
             emit_compact_metric(
                 &sess.services.session_telemetry,
                 "remote_v2",
@@ -1793,23 +1787,6 @@ async fn run_auto_compact(
                 step_context,
                 fallback_step_context,
                 client_session,
-                initial_context_injection,
-                reason,
-                phase,
-            )
-            .await?;
-        }
-        RemoteCompactionSupport::V2 => {
-            emit_compact_metric(
-                &sess.services.session_telemetry,
-                "remote",
-                /*manual*/ false,
-            );
-            run_inline_remote_auto_compact_task(
-                Arc::clone(sess),
-                step_context,
-                fallback_step_context,
-                client_session.turn_state(),
                 initial_context_injection,
                 reason,
                 phase,
