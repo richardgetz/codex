@@ -642,7 +642,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
     wait_for_captured_request(
         &root_initial,
         |request| {
-            request_has_model(request, LEAD_MODEL)
+            response_request_has_model(request, LEAD_MODEL)
                 && request.body_contains_text(POLICY_SWITCH_ROOT_PROMPT)
         },
         "Lead Worker delegation",
@@ -651,7 +651,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
     wait_for_captured_request(
         &root_after_spawns,
         |request| {
-            request_has_model(request, LEAD_MODEL)
+            response_request_has_model(request, LEAD_MODEL)
                 && response_request_has_function_call_output(
                     request,
                     POLICY_SWITCH_FIRST_SPAWN_CALL_ID,
