@@ -1,11 +1,24 @@
 use super::*;
 use codex_protocol::openai_models::ToolMode;
+use core_test_support::responses::ev_custom_tool_call;
 
 const MANAGER_ONLY_PROMPT: &str = "delegate this implementation task";
 const MANAGER_ONLY_WORKER_TASK: &str = "implement the delegated feature";
 const LEAD_EXEC_CALL_ID: &str = "manager-only-lead-exec";
 const LEAD_SPAWN_CALL_ID: &str = "manager-only-lead-spawn";
 const WORKER_EXEC_CALL_ID: &str = "manager-only-worker-exec";
+const CODE_MODE_CALL_ID: &str = "manager-only-code-mode";
+
+fn request_has_custom_tool_call_output(request: &wiremock::Request, call_id: &str) -> bool {
+    request_body(request)
+        .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("custom_tool_call_output")
+                    && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+            })
+        })
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Result<()> {
@@ -218,6 +231,246 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
                 && response_request_has_function_call_output(request, LEAD_SPAWN_CALL_ID)
         },
         "manager-only Lead after Worker completion",
+    )
+    .await;
+    Ok(())
+}
+
+#[test_case("gpt-6-sol"; "GPT-6 Sol")]
+#[test_case("gpt-6-astra"; "GPT-6 Astra")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
+    lead_model: &'static str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let lead_spawn_args = serde_json::to_string(&json!({
+        "task_name": "manager_only_code_mode_worker",
+        "message": MANAGER_ONLY_WORKER_TASK,
+    }))?;
+    let lead_code = format!(
+        "const worker = await tools.collaboration__spawn_agent({lead_spawn_args});\ntext(JSON.stringify(worker));"
+    );
+    let lead_exec_args = serde_json::to_string(&json!({ "cmd": "echo lead_execution_marker" }))?;
+    let worker_exec_args =
+        serde_json::to_string(&json!({ "cmd": "echo worker_execution_marker" }))?;
+
+    let lead_code_mode = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            body_contains(request, MANAGER_ONLY_PROMPT)
+                && request_has_model(request, lead_model)
+                && !request_has_custom_tool_call_output(request, CODE_MODE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-only-code-mode-lead-1"),
+            ev_custom_tool_call(CODE_MODE_CALL_ID, "exec", &lead_code),
+            ev_completed("manager-only-code-mode-lead-1"),
+        ]),
+    )
+    .await;
+    // Simulate an out-of-contract direct shell call after the nested Code Mode delegation.
+    let lead_denial = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            request_has_model(request, lead_model)
+                && request_has_custom_tool_call_output(request, CODE_MODE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-only-code-mode-lead-2"),
+            ev_function_call(LEAD_EXEC_CALL_ID, "exec_command", &lead_exec_args),
+            ev_completed("manager-only-code-mode-lead-2"),
+        ]),
+    )
+    .await;
+    let lead_final = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            request_has_model(request, lead_model)
+                && request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-only-code-mode-lead-3"),
+            ev_assistant_message("manager-only-code-mode-lead-message", "delegated"),
+            ev_completed("manager-only-code-mode-lead-3"),
+        ]),
+    )
+    .await;
+    let worker_exec = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_ONLY_WORKER_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, WORKER_EXEC_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-only-code-mode-worker-1"),
+            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", &worker_exec_args),
+            ev_completed("manager-only-code-mode-worker-1"),
+        ]),
+    )
+    .await;
+    let worker_final = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, WORKER_EXEC_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-only-code-mode-worker-2"),
+            ev_assistant_message("manager-only-code-mode-worker-message", "complete"),
+            ev_completed("manager-only-code-mode-worker-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("UnifiedExec feature");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            let profiles = config.team.profiles.as_mut().expect("team profiles");
+            profiles.lead.model = lead_model.to_string();
+            profiles.lead_work_policy = codex_config::TeamLeadWorkPolicy::ManagerOnly;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    submit_turn(
+        &test.codex,
+        MANAGER_ONLY_PROMPT,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+
+    let lead_request = wait_for_captured_request(
+        &lead_code_mode,
+        |request| {
+            request.body_contains_text(MANAGER_ONLY_PROMPT)
+                && response_request_has_model(request, lead_model)
+        },
+        "manager-only Code Mode Lead",
+    )
+    .await;
+    let additional_tools = lead_request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("Lead Responses Lite tool definitions");
+    let tools = additional_tools["tools"]
+        .as_array()
+        .expect("additional_tools should contain an array");
+    let functions = tools
+        .iter()
+        .find(|tool| tool["type"] == "namespace" && tool["name"] == "functions")
+        .expect("Code Mode should remain in the functions namespace");
+    let function_tools = functions["tools"]
+        .as_array()
+        .expect("functions namespace should contain tools");
+    let exec = function_tools
+        .iter()
+        .find(|tool| tool["name"] == "exec")
+        .expect("manager-only Lead should retain functions.exec");
+    assert!(
+        exec["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("collaboration__spawn_agent")),
+        "functions.exec should retain nested Team coordination: {exec}"
+    );
+    assert!(
+        !function_tools
+            .iter()
+            .any(|tool| tool["name"] == "exec_command"),
+        "Code Mode Lead should not receive direct execution tools: {function_tools:?}"
+    );
+
+    let denial_request = wait_for_captured_request(
+        &lead_denial,
+        |request| {
+            response_request_has_model(request, lead_model)
+                && request
+                    .inputs_of_type("custom_tool_call_output")
+                    .iter()
+                    .any(|item| item["call_id"] == CODE_MODE_CALL_ID)
+        },
+        "manager-only Lead after nested Code Mode delegation",
+    )
+    .await;
+    let denied_tool_output = denial_request
+        .function_call_output_text(LEAD_EXEC_CALL_ID)
+        .expect("Lead execution call response");
+    assert!(
+        denied_tool_output.contains("manager_only Team Lead"),
+        "manager-only must reject an execution call emitted by the Lead: {denied_tool_output}"
+    );
+
+    let worker_request = wait_for_captured_request(
+        &worker_exec,
+        |request| {
+            request.body_contains_text(MANAGER_ONLY_WORKER_TASK)
+                && response_request_has_model(request, WORKER_MODEL)
+        },
+        "Worker spawned by the Code Mode Lead",
+    )
+    .await;
+    let worker_additional_tools = worker_request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("Worker Responses Lite tool definitions");
+    assert!(
+        worker_additional_tools["tools"]
+            .to_string()
+            .contains("exec_command"),
+        "Worker should retain normal execution tools: {}",
+        worker_additional_tools["tools"]
+    );
+    let worker_final_request = wait_for_captured_request(
+        &worker_final,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(request, WORKER_EXEC_CALL_ID)
+        },
+        "Worker after execution",
+    )
+    .await;
+    let worker_exec_output = worker_final_request
+        .function_call_output_text(WORKER_EXEC_CALL_ID)
+        .expect("Worker execution call response");
+    assert!(
+        worker_exec_output.contains("worker_execution_marker"),
+        "Worker execution should run successfully: {worker_exec_output}"
+    );
+    let child_thread_id = worker_request.body_json()["client_metadata"]["thread_id"]
+        .as_str()
+        .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
+        .expect("Worker thread ID");
+    let worker_thread = test.thread_manager.get_thread(child_thread_id).await?;
+    wait_for_event(worker_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let _lead_final_request = wait_for_captured_request(
+        &lead_final,
+        |request| {
+            response_request_has_model(request, lead_model)
+                && response_request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
+        },
+        "manager-only Lead after denied execution",
     )
     .await;
     Ok(())
