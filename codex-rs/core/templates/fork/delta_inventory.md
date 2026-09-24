@@ -49,7 +49,10 @@ release or merge rules.
   while legacy snapshots keep the default. An active Lead can also change its
   thread-owned policy independently through `/team work-policy` and
   `thread/settings/update`; the selection takes effect on the next turn without
-  changing Team mode, role, profile assignments, or global defaults. Successful
+  changing Team mode, role, profile assignments, or global defaults. TUI updates
+  wait for a matching settings snapshot or the bounded confirmation timeout;
+  stale notifications cannot reject a pending update, and old timeout callbacks
+  cannot clear a newer retry. Successful
   direct Worker completions
   are summarized in one bounded Lead wake after the direct Workers finish; user
   input, action messages, failures, escalation, oversight deadlines, and
@@ -1117,6 +1120,9 @@ release or merge rules.
   Verify switching from `manager_only` to `prompt_guided` releases buffered
   completions while other Workers remain active, and that queue-only completions
   arriving after the switch wake the Lead immediately.
+  Verify the TUI policy
+  picker ignores mismatched settings snapshots until a matching snapshot or
+  bounded timeout, and an earlier timeout cannot clear a retried policy update.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,

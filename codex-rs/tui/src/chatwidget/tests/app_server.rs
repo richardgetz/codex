@@ -760,7 +760,12 @@ async fn team_work_policy_update_timeout_clears_unconfirmed_request() {
     assert!(chat.pending_team_command.is_none());
     let failure = drain_insert_history(&mut rx);
     assert_eq!(failure.len(), 1);
-    assert!(lines_to_single_string(&failure[0]).contains("did not confirm"));
+    insta::assert_snapshot!(
+        lines_to_single_string(&failure[0]),
+        @r"
+■ The app server did not confirm the Lead work policy update. Check /team status; if it is unchanged, update the server and try again.
+"
+    );
 }
 
 #[tokio::test]
