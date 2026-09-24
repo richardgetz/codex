@@ -88,10 +88,7 @@ impl TeamPolicyState {
         self
     }
 
-    pub(crate) fn with_lead_work_policy(
-        mut self,
-        lead_work_policy: TeamLeadWorkPolicy,
-    ) -> Self {
+    pub(crate) fn with_lead_work_policy(mut self, lead_work_policy: TeamLeadWorkPolicy) -> Self {
         self.lead_work_policy = lead_work_policy;
         self
     }

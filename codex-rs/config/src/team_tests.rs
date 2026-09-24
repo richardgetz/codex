@@ -219,7 +219,10 @@ fn team_config_defaults_and_loads_lead_work_policy() {
     })
     .expect("valid team config");
     assert_eq!(
-        config.profiles.as_ref().map(|profiles| profiles.lead_work_policy),
+        config
+            .profiles
+            .as_ref()
+            .map(|profiles| profiles.lead_work_policy),
         Some(TeamLeadWorkPolicy::PromptGuided)
     );
 
@@ -233,7 +236,10 @@ fn team_config_defaults_and_loads_lead_work_policy() {
     })
     .expect("valid manager-only team config");
     assert_eq!(
-        config.profiles.as_ref().map(|profiles| profiles.lead_work_policy),
+        config
+            .profiles
+            .as_ref()
+            .map(|profiles| profiles.lead_work_policy),
         Some(TeamLeadWorkPolicy::ManagerOnly)
     );
 }

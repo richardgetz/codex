@@ -2,10 +2,10 @@ use super::team_profiles_from_snapshot;
 use super::team_profiles_from_snapshot_with_timeout;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
+use codex_config::TeamLeadWorkPolicy;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfileToml;
 use codex_config::TeamModelProfiles;
-use codex_config::TeamLeadWorkPolicy;
 use codex_config::TeamToml;
 use codex_config::TeamWorkerProfileToml;
 use codex_config::config_toml::ConfigToml;
@@ -166,6 +166,9 @@ async fn team_settings_snapshot_carries_lead_balance() -> std::io::Result<()> {
         .team_settings_snapshot(Some(TeamRole::Lead))
         .expect("configured team should have a snapshot");
     assert_eq!(snapshot.lead_balance, Some(4));
-    assert_eq!(snapshot.lead_work_policy, Some(TeamLeadWorkPolicy::ManagerOnly));
+    assert_eq!(
+        snapshot.lead_work_policy,
+        Some(TeamLeadWorkPolicy::ManagerOnly)
+    );
     Ok(())
 }
