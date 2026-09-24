@@ -15,6 +15,10 @@ merge rules all count.
 - In every pull request, explicitly confirm either that the inventory was
   updated or that the change is not fork-only and needs no entry.
 
+Before a nontrivial Rust validation loop, consult
+`.codex/skills/rust-iteration/SKILL.md` to choose the smallest proof and assess
+failures. The requirements below remain authoritative.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`

@@ -20,6 +20,12 @@ release or merge rules.
 
 ## Unreleased
 
+- The repo-local `rust-iteration` skill, triggered from `AGENTS.md`, selects
+  proof-matched scoped validation; requires source-proven test oracles, fixture
+  prerequisite/event-order checks, observable mock boundaries, and distinct
+  timer identification; and keeps Rust builds serial under one owner with
+  immediate exact-revision terminal reports and evidence-based retries.
+
 - Interactive TUI startup gives the dedicated `codex-main` thread a 32 MiB
   stack budget while keeping Tokio worker stacks at 16 MiB, preventing the
   fork's large merged async dispatch path from aborting during `just codex`
@@ -912,6 +918,13 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify upstream refreshes keep `.codex/skills/rust-iteration/SKILL.md` and
+  its `AGENTS.md` trigger. Preserve proof-matched target selection, source-proven
+  oracles, fixture prerequisites/event order, visible mock filters, distinct
+  timer events, one serial Rust build owner, immediate exact-SHA terminal
+  reports, evidence-based retries, conditional `just fix` for large changes,
+  and user approval before workspace-wide tests.
 
 - Verify upstream refreshes retain enough dedicated `codex-main` stack for the
   merged TUI startup futures (or reduce those frames before lowering the
