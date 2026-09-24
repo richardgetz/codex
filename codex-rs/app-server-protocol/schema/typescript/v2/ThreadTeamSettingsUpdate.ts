@@ -4,12 +4,14 @@
 import type { ReasoningEffort } from "../ReasoningEffort";
 import type { TeamMode } from "../TeamMode";
 import type { TeamRole } from "../TeamRole";
+import type { TeamLeadWorkPolicy } from "./TeamLeadWorkPolicy";
 
 /**
  * Team mode or profile patch accepted by `thread/settings/update`.
  *
  * When `role` and one or more profile fields are supplied, the selected
- * profile is changed for this thread only. `leadBalance` is Lead-only. The
+ * profile is changed for this thread only. `leadBalance` is Lead-only. A
+ * `leadWorkPolicy` update changes only the current Lead thread policy. The
  * server preserves the other profile and the role assignment captured by the
  * thread snapshot.
  */
@@ -17,4 +19,8 @@ export type ThreadTeamSettingsUpdate = { mode: TeamMode, role?: TeamRole | null,
 /**
  * Sparse Lead-only oversight balance update, from 1 (maximum savings) through 5 (maximum confidence).
  */
-leadBalance?: number | null, };
+leadBalance?: number | null,
+/**
+ * Sparse Lead-only work policy update.
+ */
+leadWorkPolicy?: TeamLeadWorkPolicy | null, };

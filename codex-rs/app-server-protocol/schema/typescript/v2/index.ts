@@ -474,6 +474,7 @@ export type { SubAgentActivityKind } from "./SubAgentActivityKind";
 export type { SubagentMigration } from "./SubagentMigration";
 export type { SwitchAccountParams } from "./SwitchAccountParams";
 export type { SwitchAccountResponse } from "./SwitchAccountResponse";
+export type { TeamLeadWorkPolicy } from "./TeamLeadWorkPolicy";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";
 export type { TextPosition } from "./TextPosition";

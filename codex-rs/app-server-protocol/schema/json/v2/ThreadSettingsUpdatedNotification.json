@@ -315,6 +315,13 @@
       ],
       "type": "object"
     },
+    "TeamLeadWorkPolicy": {
+      "enum": [
+        "promptGuided",
+        "managerOnly"
+      ],
+      "type": "string"
+    },
     "TeamMode": {
       "description": "Selects whether a thread uses its configured Lead/Worker model assignments.",
       "enum": [
@@ -508,6 +515,17 @@
               "type": "null"
             }
           ]
+        },
+        "leadWorkPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TeamLeadWorkPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Lead execution policy captured in this thread's team settings."
         },
         "mode": {
           "$ref": "#/definitions/TeamMode"
