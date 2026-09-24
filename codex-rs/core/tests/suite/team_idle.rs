@@ -1,4 +1,5 @@
 use super::*;
+use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::items::TurnItem;
 use pretty_assertions::assert_eq;
 
@@ -525,6 +526,274 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    Ok(())
+}
+
+const MANAGER_BATCH_ROOT_PROMPT: &str = "delegate two workers and batch their results";
+const MANAGER_BATCH_FIRST_TASK: &str = "manager batch first worker task";
+const MANAGER_BATCH_SECOND_TASK: &str = "manager batch second worker task";
+const MANAGER_BATCH_FIRST_SPAWN_CALL_ID: &str = "manager-batch-first-spawn";
+const MANAGER_BATCH_SECOND_SPAWN_CALL_ID: &str = "manager-batch-second-spawn";
+const MANAGER_BATCH_FIRST_GATE_CALL_ID: &str = "manager-batch-first-gate";
+const MANAGER_BATCH_SECOND_GATE_CALL_ID: &str = "manager-batch-second-gate";
+const MANAGER_BATCH_ACTION_CALL_ID: &str = "manager-batch-action";
+const MANAGER_BATCH_GATE_ID: &str = "manager-batch-gate";
+const MANAGER_BATCH_ACTION_MESSAGE: &str = "second worker asks for immediate review";
+const MANAGER_BATCH_FIRST_RESULT: &str = "first manager batch result marker";
+const MANAGER_BATCH_SECOND_RESULT: &str = "second manager batch result marker";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manager_only_batches_successful_worker_completions_and_wakes_for_action() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_spawn_args = serde_json::to_string(&json!({
+        "message": MANAGER_BATCH_FIRST_TASK,
+        "task_name": "manager_batch_first",
+        "fork_turns": "none",
+    }))?;
+    let second_spawn_args = serde_json::to_string(&json!({
+        "message": MANAGER_BATCH_SECOND_TASK,
+        "task_name": "manager_batch_second",
+        "fork_turns": "none",
+    }))?;
+    let gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": MANAGER_BATCH_GATE_ID,
+            "participants": 2,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let action_args = serde_json::to_string(&json!({
+        "target": "/root",
+        "message": MANAGER_BATCH_ACTION_MESSAGE,
+    }))?;
+
+    let root_initial = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_ROOT_PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+                && !request_has_function_call_output(request, MANAGER_BATCH_FIRST_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-initial"),
+            ev_function_call_with_namespace(
+                MANAGER_BATCH_FIRST_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &first_spawn_args,
+            ),
+            ev_function_call_with_namespace(
+                MANAGER_BATCH_SECOND_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &second_spawn_args,
+            ),
+            ev_completed("manager-batch-root-initial"),
+        ]),
+    )
+    .await;
+    let root_after_action = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-action"),
+            ev_assistant_message("manager-batch-root-action-message", "action wake observed"),
+            ev_completed("manager-batch-root-action"),
+        ]),
+    )
+    .await;
+    let root_after_batch = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-completion"),
+            ev_assistant_message(
+                "manager-batch-root-completion-message",
+                "both Worker results reviewed",
+            ),
+            ev_completed("manager-batch-root-completion"),
+        ]),
+    )
+    .await;
+
+    let _first_worker_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_FIRST_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, MANAGER_BATCH_FIRST_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-first-worker-gate"),
+            ev_function_call(
+                MANAGER_BATCH_FIRST_GATE_CALL_ID,
+                "test_sync_tool",
+                &gate_args,
+            ),
+            ev_completed("manager-batch-first-worker-gate"),
+        ]),
+    )
+    .await;
+    let _first_worker_result = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_FIRST_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-first-worker-result"),
+            ev_assistant_message("manager-batch-first-worker-message", MANAGER_BATCH_FIRST_RESULT),
+            ev_completed("manager-batch-first-worker-result"),
+        ]),
+    )
+    .await;
+    let _second_worker_action = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_SECOND_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, MANAGER_BATCH_ACTION_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-second-worker-action"),
+            ev_function_call(
+                MANAGER_BATCH_ACTION_CALL_ID,
+                "send_message_action",
+                &action_args,
+            ),
+            ev_completed("manager-batch-second-worker-action"),
+        ]),
+    )
+    .await;
+    let _second_worker_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ACTION_CALL_ID)
+                && !request_has_function_call_output(request, MANAGER_BATCH_SECOND_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-second-worker-gate"),
+            ev_function_call(
+                MANAGER_BATCH_SECOND_GATE_CALL_ID,
+                "test_sync_tool",
+                &gate_args,
+            ),
+            ev_completed("manager-batch-second-worker-gate"),
+        ]),
+    )
+    .await;
+    let _second_worker_result = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_SECOND_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-second-worker-result"),
+            ev_assistant_message(
+                "manager-batch-second-worker-message",
+                MANAGER_BATCH_SECOND_RESULT,
+            ),
+            ev_completed("manager-batch-second-worker-result"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("team profiles")
+                .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: MANAGER_BATCH_ROOT_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &root_initial,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_ROOT_PROMPT)
+        },
+        "manager-only Worker spawns",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    wait_for_captured_request(
+        &root_after_action,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
+        },
+        "immediate manager-only action wake",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    wait_for_captured_request(
+        &root_after_batch,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
+                && request.body_contains_text(MANAGER_BATCH_SECOND_RESULT)
+        },
+        "manager-only Worker completion batch",
+    )
+    .await;
+
+    let lead_requests = server
+        .received_requests()
+        .await
+        .expect("mock server should record requests")
+        .into_iter()
+        .filter(|request| {
+            request.url.path() == "/v1/responses" && request_has_model(request, LEAD_MODEL)
+        })
+        .count();
+    assert_eq!(
+        lead_requests, 3,
+        "the action and two Worker completions should wake the Lead only twice"
+    );
     Ok(())
 }
 

@@ -46,7 +46,12 @@ release or merge rules.
   In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
   tools, while nested dispatch still denies execution tools. The policy is
   captured in thread snapshots so resume and fork preserve the selected mode,
-  while legacy snapshots keep the default.
+  while legacy snapshots keep the default. Successful direct Worker completions
+  are summarized in one bounded Lead wake after the direct Workers finish; user
+  input, action messages, failures, escalation, oversight deadlines, and
+  dependency handoffs remain immediate. An undelivered completion batch blocks
+  daemon handoff, and its quiet-window wake retries after an aborted handoff
+  reopens admission.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -1090,7 +1095,12 @@ release or merge rules.
   Code Mode exposure. The manager-only runtime gate keeps coordination,
   planning, and selected read-only support tools available to the Lead while
   denying shell and execution tools; Worker tool access remains unchanged.
-  Routine completion and wake handling remain unchanged.
+  Successful direct Worker completions stay
+  quiet while another direct Worker remains active, and one bounded batch wake
+  follows the completion boundary. User input, action messages, failures,
+  escalation, dependency handoffs, and the configured oversight deadline remain
+  immediate. Verify a buffered completion blocks daemon handoff and its batch
+  wake retries after an aborted handoff reopens admission.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,

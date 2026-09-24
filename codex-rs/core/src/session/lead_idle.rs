@@ -362,10 +362,16 @@ impl Session {
     /// not reacquire the permit: a coordinator may seal the tree while that permit is in flight,
     /// and rejecting the nested acquisition would strand the one-shot wait claim.
     pub(crate) async fn enqueue_lead_wakeup_with_admission(&self, message: &str) {
+        let _team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
+        self.enqueue_lead_wakeup_under_team_lead_admission(message)
+            .await;
+    }
+
+    /// Enqueues a Lead wake while the caller already holds Team Lead turn admission.
+    pub(crate) async fn enqueue_lead_wakeup_under_team_lead_admission(&self, message: &str) {
         // Keep the summary and wake in the same admission boundary as Team Off cleanup. V1
         // completion notifications call this helper directly, so the marker cannot be inferred
         // by the outer inter-agent handler.
-        let _team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
         if !self.is_team_lead().await {
             return;
         }
