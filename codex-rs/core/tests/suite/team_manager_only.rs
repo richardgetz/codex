@@ -454,8 +454,10 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
 const POLICY_SWITCH_ROOT_PROMPT: &str = "delegate both workers before changing Lead policy";
 const POLICY_SWITCH_FIRST_TASK: &str = "policy switch first worker task";
 const POLICY_SWITCH_SECOND_TASK: &str = "policy switch second worker task";
+const POLICY_SWITCH_WORKERS_BARRIER_ID: &str = "policy-switch-workers-active";
 const POLICY_SWITCH_FIRST_SPAWN_CALL_ID: &str = "policy-switch-first-spawn";
 const POLICY_SWITCH_SECOND_SPAWN_CALL_ID: &str = "policy-switch-second-spawn";
+const POLICY_SWITCH_FIRST_GATE_CALL_ID: &str = "policy-switch-first-gate";
 const POLICY_SWITCH_SECOND_GATE_CALL_ID: &str = "policy-switch-second-gate";
 const POLICY_SWITCH_FIRST_RESULT: &str = "policy switch first completion marker";
 const POLICY_SWITCH_SECOND_RESULT: &str = "policy switch second completion marker";
@@ -475,7 +477,17 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "task_name": "policy_switch_second_worker",
         "fork_turns": "none",
     }))?;
-    let delay_args = serde_json::to_string(&json!({"sleep_before_ms": 5_000}))?;
+    let worker_barrier_args = json!({
+        "id": POLICY_SWITCH_WORKERS_BARRIER_ID,
+        "participants": 2,
+        "timeout_ms": 60_000,
+    });
+    let first_gate_args =
+        serde_json::to_string(&json!({"barrier": worker_barrier_args.clone()}))?;
+    let second_gate_args = serde_json::to_string(&json!({
+        "barrier": worker_barrier_args,
+        "sleep_after_ms": 5_000,
+    }))?;
 
     let root_initial = mount_sse_once_match(
         &server,
@@ -556,8 +568,28 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         },
         sse(vec![
             ev_response_created("policy-switch-first-worker"),
-            ev_assistant_message("policy-switch-first-worker-result", POLICY_SWITCH_FIRST_RESULT),
+            ev_function_call(
+                POLICY_SWITCH_FIRST_GATE_CALL_ID,
+                "test_sync_tool",
+                &first_gate_args,
+            ),
             ev_completed("policy-switch-first-worker"),
+        ]),
+    )
+    .await;
+    let first_worker_after_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, POLICY_SWITCH_FIRST_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("policy-switch-first-worker-result"),
+            ev_assistant_message(
+                "policy-switch-first-worker-result-message",
+                POLICY_SWITCH_FIRST_RESULT,
+            ),
+            ev_completed("policy-switch-first-worker-result"),
         ]),
     )
     .await;
@@ -573,7 +605,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
             ev_function_call(
                 POLICY_SWITCH_SECOND_GATE_CALL_ID,
                 "test_sync_tool",
-                &delay_args,
+                &second_gate_args,
             ),
             ev_completed("policy-switch-second-worker-gate"),
         ]),
@@ -680,10 +712,6 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
         .expect("first Worker thread ID");
     let first_worker_thread = test.thread_manager.get_thread(first_worker_id).await?;
-    wait_for_event(first_worker_thread.as_ref(), |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
 
     let second_worker_request = wait_for_captured_request(
         &second_worker_gate,
@@ -705,13 +733,47 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "Workers should retain normal execution tools after the Lead policy change: {second_worker_tools}"
     );
 
-    // Let the original quiet-window callback observe that the second Worker is still active.
+    let _first_worker_result_request = wait_for_captured_request(
+        &first_worker_after_gate,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    POLICY_SWITCH_FIRST_GATE_CALL_ID,
+                )
+        },
+        "first Worker completion after both Workers reach the barrier",
+    )
+    .await;
+    wait_for_event(first_worker_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    // Let the quiet-window callback observe the second Worker after both barrier participants
+    // have started. It remains active in sleep_after_ms while the first completion is buffered.
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let requests_before_policy_switch = root_after_policy_switch.requests();
+    assert!(
+        !requests_before_policy_switch.iter().any(|request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(POLICY_SWITCH_FIRST_RESULT)
+        }),
+        "ManagerOnly should keep the first Worker completion buffered while the second Worker is active"
+    );
+    let request_count_before_policy_switch = requests_before_policy_switch.len();
+
     submit_thread_settings(
         &test.codex,
         lead_work_policy_update(TeamLeadWorkPolicy::PromptGuided),
     )
     .await?;
+    let applied_snapshot = test.codex.config_snapshot().await;
+    let applied_team = applied_snapshot.team.as_ref().expect("team snapshot");
+    pretty_assertions::assert_eq!(
+        applied_team.lead_work_policy,
+        Some(codex_protocol::protocol::TeamLeadWorkPolicy::PromptGuided)
+    );
     let released_request = wait_for_captured_request(
         &root_after_policy_switch,
         |request| {
@@ -721,6 +783,17 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "buffered Worker completion released by the policy switch",
     )
     .await;
+    let requests_after_policy_switch = root_after_policy_switch.requests();
+    assert!(
+        requests_after_policy_switch
+            .iter()
+            .skip(request_count_before_policy_switch)
+            .any(|request| {
+                response_request_has_model(request, LEAD_MODEL)
+                    && request.body_contains_text(POLICY_SWITCH_FIRST_RESULT)
+            }),
+        "buffered completion request should be captured after the policy-switch baseline"
+    );
     let lead_tools = released_request
         .inputs_of_type("additional_tools")
         .into_iter()
