@@ -9,6 +9,7 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::JSONRPCError;
+use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
@@ -1084,7 +1085,8 @@ async fn thread_settings_update_preserves_session_profiles() -> Result<()> {
             .send_thread_start_request_with_auto_env(ThreadStartParams {
                 model: Some("mock-model".to_string()),
                 config: Some(config),
-                permissions: top_level_selection.then(|| "audit".to_string()),
+                permissions: top_level_selection
+                    .then(|| PermissionProfileSelectionParams::new("audit")),
                 ..Default::default()
             })
             .await?;
