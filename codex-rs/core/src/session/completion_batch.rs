@@ -22,12 +22,21 @@ impl Session {
             let Some(session) = session.upgrade() else {
                 return;
             };
-            let Ok(_handoff_admission) = session
-                .services
-                .agent_control
-                .begin_handoff_admission()
-            else {
-                return;
+            let _handoff_admission = loop {
+                match session
+                    .services
+                    .agent_control
+                    .begin_handoff_admission()
+                {
+                    Ok(admission) => break admission,
+                    Err(_) => {
+                        session
+                            .services
+                            .agent_control
+                            .wait_for_handoff_admission_open()
+                            .await;
+                    }
+                }
             };
             let team_lead_turn_admission = session.team_lead_turn_admission.lock().await;
             let config = session.get_config().await;

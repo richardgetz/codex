@@ -351,6 +351,19 @@ impl AgentControl {
         self.handoff_admission_sealed.load(Ordering::Acquire)
     }
 
+    /// Wait until an aborted handoff reopens admission so queued process-local work can retry.
+    pub(crate) async fn wait_for_handoff_admission_open(&self) {
+        loop {
+            let notified = self.handoff_admission_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if !self.handoff_admission_sealed() {
+                return;
+            }
+            notified.await;
+        }
+    }
+
     /// Returns true while the replacement manager is loading and admitting a recovered graph.
     pub(crate) fn recovery_pending(&self) -> bool {
         self.manager
@@ -402,6 +415,21 @@ mod tests {
         assert!(!waiter.is_finished());
         drop(admission);
         waiter.await.expect("waiter");
+    }
+
+    #[tokio::test]
+    async fn waits_until_aborted_handoff_reopens_admission() {
+        let control = AgentControl::default();
+        let guard = control.begin_handoff().expect("handoff");
+        let waiter_control = control.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_control.wait_for_handoff_admission_open().await;
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        drop(guard);
+        waiter.await.expect("waiter");
+        assert!(!control.handoff_admission_sealed());
     }
 
     #[tokio::test]
