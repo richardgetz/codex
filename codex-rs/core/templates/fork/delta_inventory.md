@@ -39,13 +39,12 @@ release or merge rules.
   selectable.
 
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
-  adds Lead-only prompt guidance for user alignment, planning, delegation,
-  coordination, and review, asking the Lead to leave routine execution to
-  Workers with their normal tool access. It also applies a runtime tool gate to
-  the Lead, retaining coordination, planning, and selected read-only support
-  tools while denying shell and execution tools. Workers keep normal tool
-  access. This initial gate does not expose manager coordination through Code
-  Mode; Code Mode compatibility is deferred to a follow-up. The policy is
+  keeps the Lead focused on user alignment, planning, delegation, coordination,
+  and review while Workers retain normal tool access and execute their assigned
+  work. The runtime gate keeps shell and execution tools from the Lead while
+  preserving coordination, planning, and selected read-only support tools.
+  In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
+  tools, while nested dispatch still denies execution tools. The policy is
   captured in thread snapshots so resume and fork preserve the selected mode,
   while legacy snapshots keep the default.
 
@@ -1081,13 +1080,17 @@ release or merge rules.
   `oversight_timeout_minutes` unchanged, and adds no polling loop.
 - Verify `[team.lead].work_policy` defaults to `prompt_guided`, accepts
   `manager_only`, and persists through thread resume and fork while legacy
-  snapshots retain the default. Verify `manager_only` adds Lead-only prompt
-  guidance for human alignment, planning, delegation, coordination, and review;
-  `prompt_guided` preserves the existing Lead guidance. Verify the manager-only
-  runtime gate keeps coordination, planning, and selected read-only support
-  tools available to the Lead while denying shell and execution tools, and
-  leaves Worker tool access unchanged. Code Mode coordination is deferred to a
-  follow-up. Verify routine completion and wake handling remain unchanged.
+  snapshots retain the default. Verify `manager_only` applies only to the Lead:
+  it preserves human alignment, planning, delegation, coordination, and review;
+  routine task execution stays with Workers, who keep normal tool access without
+  requiring Lead approval or check-ins for tool use. Verify Worker model context
+  and tool access remain unchanged, Code Mode exposes manager tools under the
+  configured/default namespaces while blocking shell and execution calls at the
+  nested runtime dispatch boundary, and `prompt_guided` retains its existing
+  Code Mode exposure. The manager-only runtime gate keeps coordination,
+  planning, and selected read-only support tools available to the Lead while
+  denying shell and execution tools; Worker tool access remains unchanged.
+  Routine completion and wake handling remain unchanged.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,
