@@ -320,11 +320,17 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
     .await?;
     let manager_only_snapshot = test.codex.config_snapshot().await;
     let manager_only_team = manager_only_snapshot.team.as_ref().expect("team snapshot");
-    assert_eq!(manager_only_team.mode, TeamMode::LeadWorker);
-    assert_eq!(manager_only_team.role, Some(TeamRole::Lead));
+    assert_eq!(
+        manager_only_team.mode,
+        codex_protocol::protocol::TeamMode::LeadWorker
+    );
+    assert_eq!(
+        manager_only_team.role,
+        Some(codex_protocol::protocol::TeamRole::Lead)
+    );
     assert_eq!(
         manager_only_team.lead_work_policy,
-        Some(TeamLeadWorkPolicy::ManagerOnly)
+        Some(codex_protocol::protocol::TeamLeadWorkPolicy::ManagerOnly)
     );
     submit_turn(
         &test.codex,
@@ -418,7 +424,7 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
             .team
             .as_ref()
             .and_then(|team| team.lead_work_policy),
-        Some(TeamLeadWorkPolicy::ManagerOnly)
+        Some(codex_protocol::protocol::TeamLeadWorkPolicy::ManagerOnly)
     );
     submit_turn(
         &resumed.codex,
