@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_custom_tool_call;
 
 const MANAGER_ONLY_PROMPT: &str = "delegate this implementation task";
@@ -344,6 +345,11 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
                 .enable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
+            // This fixture only runs harmless echo commands; avoid nesting Seatbelt under
+            // a Seatbelt test runner so the Worker can exercise its execution tool locally.
+            config
+                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
+                .expect("DangerFullAccess test policy");
             let profiles = config.team.profiles.as_mut().expect("team profiles");
             profiles.lead.model = lead_model.to_string();
             profiles.lead_work_policy = codex_config::TeamLeadWorkPolicy::ManagerOnly;
