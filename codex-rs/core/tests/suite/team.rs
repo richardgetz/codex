@@ -92,6 +92,7 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 model: worker_model.to_string(),
                 reasoning_effort: ReasoningEffort::Low,
             },
+            lead_work_policy: codex_config::TeamLeadWorkPolicy::PromptGuided,
             lead_dynamic_handoff: false,
             lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
             lead_oversight_timeout_minutes:

@@ -234,6 +234,7 @@ pub use team::MAX_TEAM_LEAD_BALANCE;
 pub use team::MAX_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES;
 pub use team::MIN_TEAM_LEAD_BALANCE;
 pub use team::TeamConfig;
+pub use team::TeamLeadWorkPolicy;
 pub use team::TeamModelProfile;
 pub use team::TeamModelProfileToml;
 pub use team::TeamModelProfiles;

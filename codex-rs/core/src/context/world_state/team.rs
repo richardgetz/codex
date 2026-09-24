@@ -5,6 +5,7 @@ use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::TeamInstructions;
 use codex_protocol::config_types::MultiAgentMode;
+use codex_protocol::protocol::TeamLeadWorkPolicy;
 use codex_protocol::protocol::TeamRole;
 use serde::Deserialize;
 use serde::Serialize;
@@ -16,6 +17,7 @@ pub(crate) struct TeamPolicyState {
     worker_max_concurrent: Option<usize>,
     dynamic_handoff: bool,
     lead_balance: u8,
+    lead_work_policy: TeamLeadWorkPolicy,
     multi_agent_mode: Option<MultiAgentMode>,
     multi_agent_usage_hint_hash: Option<WorldStateHash>,
 }
@@ -30,6 +32,8 @@ pub(crate) struct TeamPolicySnapshot {
     dynamic_handoff: bool,
     #[serde(default = "default_lead_balance")]
     lead_balance: u8,
+    #[serde(default)]
+    lead_work_policy: TeamLeadWorkPolicy,
     #[serde(default)]
     multi_agent_mode: Option<MultiAgentMode>,
     #[serde(default)]
@@ -49,6 +53,7 @@ impl TeamPolicyState {
                 .flatten(),
             dynamic_handoff: false,
             lead_balance: default_lead_balance(),
+            lead_work_policy: TeamLeadWorkPolicy::PromptGuided,
             multi_agent_mode: None,
             multi_agent_usage_hint_hash: None,
         }
@@ -60,6 +65,7 @@ impl TeamPolicyState {
             worker_max_concurrent: None,
             dynamic_handoff: false,
             lead_balance: default_lead_balance(),
+            lead_work_policy: TeamLeadWorkPolicy::PromptGuided,
             multi_agent_mode: None,
             multi_agent_usage_hint_hash: None,
         }
@@ -81,6 +87,14 @@ impl TeamPolicyState {
         self.lead_balance = lead_balance;
         self
     }
+
+    pub(crate) fn with_lead_work_policy(
+        mut self,
+        lead_work_policy: TeamLeadWorkPolicy,
+    ) -> Self {
+        self.lead_work_policy = lead_work_policy;
+        self
+    }
 }
 
 impl WorldStateSection for TeamPolicyState {
@@ -93,6 +107,7 @@ impl WorldStateSection for TeamPolicyState {
             worker_max_concurrent: self.worker_max_concurrent,
             dynamic_handoff: self.dynamic_handoff,
             lead_balance: self.lead_balance,
+            lead_work_policy: self.lead_work_policy,
             multi_agent_mode: self.multi_agent_mode.clone(),
             multi_agent_usage_hint_hash: self.multi_agent_usage_hint_hash.clone(),
         }
@@ -120,6 +135,8 @@ impl WorldStateSection for TeamPolicyState {
                 && previous.dynamic_handoff == self.dynamic_handoff
                 && (self.role != Some(TeamRole::Lead)
                     || previous.lead_balance == self.lead_balance)
+                && (self.role != Some(TeamRole::Lead)
+                    || previous.lead_work_policy == self.lead_work_policy)
                 && previous.multi_agent_mode == self.multi_agent_mode
                 && previous.multi_agent_usage_hint_hash == self.multi_agent_usage_hint_hash
         ) {
@@ -129,7 +146,8 @@ impl WorldStateSection for TeamPolicyState {
             Some(role) => Some(Box::new(
                 TeamInstructions::new(role, self.worker_max_concurrent)
                     .with_dynamic_handoff(self.dynamic_handoff)
-                    .with_lead_balance(self.lead_balance),
+                    .with_lead_balance(self.lead_balance)
+                    .with_lead_work_policy(self.lead_work_policy),
             )),
             None if matches!(
                 previous,

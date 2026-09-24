@@ -3,6 +3,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub use codex_protocol::protocol::TeamLeadWorkPolicy;
+
 /// Default maximum idle interval before a Lead receives an oversight wake.
 pub const DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES: u64 = 30;
 /// Whether Lead lookup work is delegated to Workers by default.
@@ -69,6 +71,8 @@ pub struct TeamToml {
 pub struct TeamModelProfileToml {
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Selects how much task execution remains with the Lead.
+    pub work_policy: Option<TeamLeadWorkPolicy>,
     /// Balance between discretionary Lead oversight usage and confidence.
     #[schemars(range(min = 1, max = 5))]
     pub balance: Option<u8>,
@@ -108,6 +112,10 @@ impl TryFrom<TeamToml> for TeamConfig {
             .as_ref()
             .and_then(|lead| lead.show_idle_notifications)
             .unwrap_or(DEFAULT_TEAM_LEAD_SHOW_IDLE_NOTIFICATIONS);
+        let lead_work_policy = lead
+            .as_ref()
+            .and_then(|lead| lead.work_policy)
+            .unwrap_or_default();
         if worker
             .as_ref()
             .and_then(|worker| worker.max_concurrent)
@@ -140,6 +148,7 @@ impl TryFrom<TeamToml> for TeamConfig {
                 Some(TeamModelProfiles {
                     lead: TeamModelProfile::try_from(("lead", lead))?,
                     worker: TeamModelProfile::try_from(("worker", worker))?,
+                    lead_work_policy,
                     lead_dynamic_handoff: dynamic_handoff,
                     lead_balance,
                     lead_oversight_timeout_minutes: oversight_timeout_minutes,
@@ -170,6 +179,8 @@ impl TryFrom<TeamToml> for TeamConfig {
 pub struct TeamModelProfiles {
     pub lead: TeamModelProfile,
     pub worker: TeamModelProfile,
+    /// Effective Lead execution policy.
+    pub lead_work_policy: TeamLeadWorkPolicy,
     /// Whether the Lead should preflight and delegate substantial lookup work to Workers.
     pub lead_dynamic_handoff: bool,
     /// Balance between discretionary Lead oversight usage and confidence.
@@ -211,6 +222,7 @@ impl TryFrom<(&str, TeamWorkerProfileToml)> for TeamModelProfile {
             TeamModelProfileToml {
                 model,
                 reasoning_effort,
+                work_policy: None,
                 balance: None,
                 dynamic_handoff: None,
                 show_idle_notifications: None,
