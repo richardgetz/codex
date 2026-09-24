@@ -91,7 +91,7 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
     )
     .await;
 
-    let builder = test_codex()
+    let mut builder = test_codex()
         .with_model_info_override(LEAD_MODEL, |model_info| {
             model_info.multi_agent_version = Some(MultiAgentVersion::V2);
         })
