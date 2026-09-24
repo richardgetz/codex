@@ -1415,6 +1415,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
                 model: Some(WORKER_MODEL.to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
                 lead_balance: Some(4),
+                lead_work_policy: None,
             }),
             ..Default::default()
         },

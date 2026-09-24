@@ -1,5 +1,7 @@
 use super::*;
+use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::ThreadTeamSettingsUpdate;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses::ev_custom_tool_call;
 
@@ -9,6 +11,17 @@ const LEAD_EXEC_CALL_ID: &str = "manager-only-lead-exec";
 const LEAD_SPAWN_CALL_ID: &str = "manager-only-lead-spawn";
 const WORKER_EXEC_CALL_ID: &str = "manager-only-worker-exec";
 const CODE_MODE_CALL_ID: &str = "manager-only-code-mode";
+
+fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverrides {
+    ThreadSettingsOverrides {
+        team: Some(ThreadTeamSettingsUpdate {
+            mode: TeamMode::LeadWorker,
+            lead_work_policy: Some(policy),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
 
 fn request_has_custom_tool_call_output(request: &wiremock::Request, call_id: &str) -> bool {
     request_body(request)
@@ -234,6 +247,201 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         "manager-only Lead after Worker completion",
     )
     .await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        (1..=4)
+            .map(|index| {
+                sse(vec![
+                    ev_response_created(&format!("lead-work-policy-{index}")),
+                    ev_completed(&format!("lead-work-policy-{index}")),
+                ])
+            })
+            .collect(),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("UnifiedExec feature");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+
+    submit_turn(
+        &test.codex,
+        "prompt guided before policy change",
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    let prompt_guided = wait_for_captured_request(
+        &responses,
+        |request| request.body_contains_text("prompt guided before policy change"),
+        "prompt-guided Lead",
+    )
+    .await;
+    let prompt_guided_tools = prompt_guided
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("prompt-guided Lead tool definitions")["tools"]
+        .to_string();
+    assert!(
+        prompt_guided_tools.contains("exec_command"),
+        "prompt_guided Lead should retain execution tools: {prompt_guided_tools}"
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::ManagerOnly),
+    )
+    .await?;
+    let manager_only_snapshot = test.codex.config_snapshot().await;
+    let manager_only_team = manager_only_snapshot.team.as_ref().expect("team snapshot");
+    assert_eq!(manager_only_team.mode, TeamMode::LeadWorker);
+    assert_eq!(manager_only_team.role, Some(TeamRole::Lead));
+    assert_eq!(
+        manager_only_team.lead_work_policy,
+        Some(TeamLeadWorkPolicy::ManagerOnly)
+    );
+    submit_turn(
+        &test.codex,
+        "manager only after policy change",
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    let manager_only = wait_for_captured_request(
+        &responses,
+        |request| request.body_contains_text("manager only after policy change"),
+        "manager-only Lead",
+    )
+    .await;
+    let manager_only_tools = manager_only
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("manager-only Lead tool definitions")["tools"]
+        .to_string();
+    assert!(
+        !manager_only_tools.contains("exec_command"),
+        "manager_only Lead should not receive execution tools: {manager_only_tools}"
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::PromptGuided),
+    )
+    .await?;
+    submit_turn(
+        &test.codex,
+        "prompt guided after reverting policy",
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    let prompt_guided_again = wait_for_captured_request(
+        &responses,
+        |request| request.body_contains_text("prompt guided after reverting policy"),
+        "reverted prompt-guided Lead",
+    )
+    .await;
+    let prompt_guided_again_tools = prompt_guided_again
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("reverted prompt-guided Lead tool definitions")["tools"]
+        .to_string();
+    assert!(
+        prompt_guided_again_tools.contains("exec_command"),
+        "prompt_guided Lead should regain execution tools on the next turn: {prompt_guided_again_tools}"
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::ManagerOnly),
+    )
+    .await?;
+    let rollout_path = test
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("thread rollout path");
+    test.codex.shutdown_and_wait().await?;
+    let mut resumed_builder = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("UnifiedExec feature");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+        });
+    let resumed = resumed_builder
+        .resume(&server, std::sync::Arc::clone(&test.home), rollout_path)
+        .await?;
+    let resumed_snapshot = resumed.codex.config_snapshot().await;
+    assert_eq!(
+        resumed_snapshot
+            .team
+            .as_ref()
+            .and_then(|team| team.lead_work_policy),
+        Some(TeamLeadWorkPolicy::ManagerOnly)
+    );
+    submit_turn(
+        &resumed.codex,
+        "manager only after resume",
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+    let resumed_manager_only = wait_for_captured_request(
+        &responses,
+        |request| request.body_contains_text("manager only after resume"),
+        "resumed manager-only Lead",
+    )
+    .await;
+    let resumed_tools = resumed_manager_only
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("resumed manager-only Lead tool definitions")["tools"]
+        .to_string();
+    assert!(
+        !resumed_tools.contains("exec_command"),
+        "resumed manager_only Lead should retain its restriction: {resumed_tools}"
+    );
     Ok(())
 }
 

@@ -652,6 +652,9 @@ pub struct ThreadTeamSettingsUpdate {
     #[schemars(range(min = 1, max = 5))]
     #[serde(default)]
     pub lead_balance: Option<u8>,
+    /// Sparse Lead-only execution policy update.
+    #[serde(default)]
+    pub lead_work_policy: Option<TeamLeadWorkPolicy>,
 }
 
 /// Thread-settings overrides that can be applied before user input or on their

@@ -46,7 +46,11 @@ release or merge rules.
   In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
   tools, while nested dispatch still denies execution tools. The policy is
   captured in thread snapshots so resume and fork preserve the selected mode,
-  while legacy snapshots keep the default. Successful direct Worker completions
+  while legacy snapshots keep the default. An active Lead can also change its
+  thread-owned policy independently through `/team work-policy` and
+  `thread/settings/update`; the selection takes effect on the next turn without
+  changing Team mode, role, profile assignments, or global defaults. Successful
+  direct Worker completions
   are summarized in one bounded Lead wake after the direct Workers finish; user
   input, action messages, failures, escalation, oversight deadlines, and
   dependency handoffs remain immediate. An undelivered completion batch blocks
@@ -1085,7 +1089,13 @@ release or merge rules.
   `oversight_timeout_minutes` unchanged, and adds no polling loop.
 - Verify `[team.lead].work_policy` defaults to `prompt_guided`, accepts
   `manager_only`, and persists through thread resume and fork while legacy
-  snapshots retain the default. Verify `manager_only` applies only to the Lead:
+  snapshots retain the default. Verify `thread/settings/update` changes only the
+  active Lead thread's `leadWorkPolicy`, preserves Team mode, role, model and
+  effort assignments, and balance, reports the selection in thread settings,
+  rejects non-Lead or inactive-Team updates, and takes effect on the next tool
+  plan in both directions. Verify the selection survives cold resume while
+  fresh threads retain configured defaults. Verify `manager_only` applies only
+  to the Lead:
   it preserves human alignment, planning, delegation, coordination, and review;
   routine task execution stays with Workers, who keep normal tool access without
   requiring Lead approval or check-ins for tool use. Verify Worker model context

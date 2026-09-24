@@ -1037,6 +1037,9 @@ impl TurnRequestProcessor {
             snapshot.as_ref().and_then(|snapshot| {
                 snapshot.team.clone().map(|mut team_snapshot| {
                     team_snapshot.mode = team_update.mode;
+                    if let Some(lead_work_policy) = team_update.lead_work_policy {
+                        team_snapshot.lead_work_policy = Some(lead_work_policy);
+                    }
                     if let Some(role) = team_update.role {
                         match role {
                             codex_protocol::protocol::TeamRole::Lead => {

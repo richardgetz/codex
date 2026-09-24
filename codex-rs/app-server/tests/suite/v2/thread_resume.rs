@@ -70,6 +70,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;
@@ -1378,6 +1379,7 @@ async fn thread_resume_explicit_model_and_effort_overrides_win_over_off_team_sna
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
         lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
+        lead_work_policy: Some(TeamLeadWorkPolicy::PromptGuided),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: None,

@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTeamSettingsUpdate;
@@ -508,6 +509,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
         lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
+        lead_work_policy: Some(TeamLeadWorkPolicy::PromptGuided),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: None,
@@ -536,6 +538,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
         lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
+        lead_work_policy: Some(TeamLeadWorkPolicy::PromptGuided),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: Some("mock-model".to_string()),
@@ -555,6 +558,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
                 model: Some("gpt-5.6-sol".to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
                 lead_balance: Some(4),
+                lead_work_policy: None,
             }),
             ..Default::default()
         },
@@ -567,6 +571,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
         lead_model: Some("gpt-5.6-sol".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::Low),
         lead_balance: Some(4),
+        lead_work_policy: Some(TeamLeadWorkPolicy::PromptGuided),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: Some("mock-model".to_string()),
@@ -597,6 +602,27 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
     assert_eq!(balanced.thread_settings.model, "gpt-5.6-sol");
     assert_eq!(balanced.thread_settings.effort, Some(ReasoningEffort::Low));
     assert_eq!(balanced.thread_settings.team, Some(profiled_team.clone()));
+
+    // Work policy is an independent thread setting: changing it preserves the
+    // Team mode, role, model assignments, effort, and oversight balance.
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread_id.clone(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+                lead_work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let manager_only = read_thread_settings_updated(&mut mcp).await?;
+    profiled_team.lead_work_policy = Some(TeamLeadWorkPolicy::ManagerOnly);
+    assert_eq!(manager_only.thread_settings.model, "gpt-5.6-sol");
+    assert_eq!(manager_only.thread_settings.effort, Some(ReasoningEffort::Low));
+    assert_eq!(manager_only.thread_settings.team, Some(profiled_team.clone()));
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
@@ -646,6 +672,7 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
             lead_model: Some("gpt-5.6-sol".to_string()),
             lead_reasoning_effort: Some(ReasoningEffort::Low),
             lead_balance: Some(5),
+            lead_work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
             worker_model: Some("gpt-5.6-luna".to_string()),
             worker_reasoning_effort: Some(ReasoningEffort::Max),
             previous_model: None,
