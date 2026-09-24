@@ -836,10 +836,32 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         .thread_manager
         .list_open_agent_subtree_thread_ids(test.codex.id())
         .await?;
-    wait_for_event(first_worker_thread.as_ref(), |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    let first_worker_terminal_status = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 10),
+        async {
+            loop {
+                let status = first_worker_thread.agent_status().await;
+                if !matches!(
+                    status,
+                    codex_protocol::protocol::AgentStatus::PendingInit
+                        | codex_protocol::protocol::AgentStatus::Running
+                        | codex_protocol::protocol::AgentStatus::Interrupted
+                ) {
+                    break status;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 10)).await;
+            }
+        },
+    )
+    .await
+    .expect("first Worker should finish with its expected completion marker");
+    pretty_assertions::assert_eq!(
+        first_worker_terminal_status,
+        codex_protocol::protocol::AgentStatus::Completed(Some(
+            POLICY_SWITCH_FIRST_RESULT.to_string(),
+        )),
+        "first Worker should deliver its expected terminal completion marker"
+    );
     let second_worker_status_after_first_completion = second_worker_thread.agent_status().await;
 
     // Let the quiet-window callback observe the second Worker while it waits at the test barrier.
