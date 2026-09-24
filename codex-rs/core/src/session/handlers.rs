@@ -567,7 +567,7 @@ pub async fn inter_agent_communication(
 async fn inter_agent_communication_inner(
     sess: &Arc<Session>,
     sub_id: String,
-    communication: InterAgentCommunication,
+    mut communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
     team_lead_trigger: bool,
     handoff_admission: Option<crate::agent::control::HandoffAdmissionGuard>,

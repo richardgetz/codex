@@ -33,7 +33,7 @@ impl Session {
     /// Prompt-guided policy retains the legacy per-completion wake behavior, so a batch buffered
     /// under manager-only policy can be presented immediately after a live switch.
     pub(crate) async fn flush_manager_completion_batch(
-        &self,
+        self: &Arc<Self>,
         generation: u64,
         handoff_admission: Option<&HandoffAdmissionGuard>,
     ) {
@@ -61,7 +61,7 @@ impl Session {
     }
 
     async fn flush_manager_completion_batch_under_admission(
-        &self,
+        self: &Arc<Self>,
         generation: u64,
         _handoff_admission: &HandoffAdmissionGuard,
     ) {
