@@ -167,7 +167,11 @@ async fn manager_only_does_not_trust_an_external_tool_by_its_allowed_name() {
     assert!(registry.register_external(Arc::new(UntrustedManagerNameTool)));
 
     assert!(allows_tool(&turn_context, &tool_name));
-    assert!(!allows_registered_tool(&turn_context, &registry, &tool_name));
+    assert!(!allows_registered_tool(
+        &turn_context,
+        &registry,
+        &tool_name
+    ));
     restrict_registry(&turn_context, turn_context.model_info(), &mut registry);
     assert!(registry.entries().next().is_none());
 }
@@ -236,10 +240,7 @@ impl ToolExecutor<ToolInvocation> for UntrustedManagerNameTool {
         })
     }
 
-    fn handle<'a>(
-        &'a self,
-        _invocation: ToolInvocation,
-    ) -> codex_tools::ToolExecutorFuture<'a>
+    fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
     where
         ToolInvocation: 'a,
     {
