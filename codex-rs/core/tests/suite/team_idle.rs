@@ -879,7 +879,6 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
 const MANAGER_HANDOFF_ROOT_PROMPT: &str = "delegate one worker before handoff";
 const MANAGER_HANDOFF_WORKER_TASK: &str = "manager handoff worker task";
 const MANAGER_HANDOFF_SPAWN_CALL_ID: &str = "manager-handoff-spawn";
-const MANAGER_HANDOFF_GATE_CALL_ID: &str = "manager-handoff-gate";
 const MANAGER_HANDOFF_RESULT: &str = "manager handoff retry result marker";
 
 #[tokio::test(flavor = "current_thread")]
@@ -892,7 +891,6 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         "task_name": "manager_handoff_worker",
         "fork_turns": "none",
     }))?;
-    let delay_args = serde_json::to_string(&json!({"sleep_before_ms": 2_000}))?;
     let root_initial = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -911,35 +909,18 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         ]),
     )
     .await;
-    let worker_gate = mount_sse_once_match(
+    let worker_terminal = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, MANAGER_HANDOFF_WORKER_TASK)
                 && request_has_model(request, WORKER_MODEL)
-                && !request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
         },
-        sse(vec![
-            ev_response_created("manager-handoff-worker-gate"),
-            ev_function_call(
-                MANAGER_HANDOFF_GATE_CALL_ID,
-                "test_sync_tool",
-                &delay_args,
-            ),
-            ev_completed("manager-handoff-worker-gate"),
-        ]),
-    )
-    .await;
-    let worker_completion = mount_sse_once_match(
-        &server,
-        |request: &wiremock::Request| {
-            request_has_model(request, WORKER_MODEL)
-                && request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
-        },
-        sse(vec![
-            ev_response_created("manager-handoff-worker-completion"),
+        sse_response(sse(vec![
+            ev_response_created("manager-handoff-worker-terminal"),
             ev_assistant_message("manager-handoff-worker-message", MANAGER_HANDOFF_RESULT),
-            ev_completed("manager-handoff-worker-completion"),
-        ]),
+            ev_completed("manager-handoff-worker-terminal"),
+        ]))
+        .set_delay(Duration::from_secs(/*secs*/ 2)),
     )
     .await;
     // Capture the first otherwise-unhandled /responses request, then validate its model and
@@ -968,9 +949,6 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         })
         .with_model_info_override(WORKER_MODEL, |model_info| {
             model_info.multi_agent_version = Some(MultiAgentVersion::V2);
-            model_info
-                .experimental_supported_tools
-                .push("test_sync_tool".to_string());
         })
         .with_model(INITIAL_MODEL)
         .with_config(|config| {
@@ -1010,30 +988,18 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     .await;
     wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     wait_for_captured_request(
-        &worker_gate,
+        &worker_terminal,
         |request| {
             response_request_has_model(request, WORKER_MODEL)
                 && request.body_contains_text(MANAGER_HANDOFF_WORKER_TASK)
         },
-        "Worker active before handoff",
+        "Worker terminal request admitted before handoff",
     )
     .await;
 
-    // Hold the tree while the real Worker is delayed before its terminal report.
+    // The Worker turn has started and its POST is captured; the delayed terminal SSE lets that
+    // turn finish under the seal without requiring another model or tool admission.
     let handoff = test.codex.begin_handoff()?;
-    // The gate tool sleeps for 2s, so allow continuation overhead here while keeping the
-    // post-release retry bound below at 2s.
-    wait_for_captured_request_with_timeout(
-        &worker_completion,
-        |request| {
-            response_request_has_model(request, WORKER_MODEL)
-                && response_request_has_function_call_output(request, MANAGER_HANDOFF_GATE_CALL_ID)
-        },
-        "Worker completion while handoff is sealed",
-        Duration::from_secs(/*secs*/ 5),
-    )
-    .await;
-
     let mailbox_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let preflight = test.codex.handoff_preflight().await;
