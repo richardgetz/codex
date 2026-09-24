@@ -8,6 +8,10 @@ use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 
+const DEFAULT_FUNCTION_NAMESPACE: &str = "functions";
+const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
+const CLOCK_NAMESPACE: &str = "clock";
+
 const TEAM_MANAGER_V1_TOOLS: &[&str] = &[
     "spawn_agent",
     "send_input",
@@ -25,7 +29,7 @@ const TEAM_MANAGER_V2_TOOLS: &[&str] = &[
     "list_agents",
 ];
 
-const MANAGER_TOOLS: &[&str] = &[
+const MANAGER_FUNCTION_TOOLS: &[&str] = &[
     "update_plan",
     "update_eta",
     TOOL_SEARCH_TOOL_NAME,
@@ -34,12 +38,14 @@ const MANAGER_TOOLS: &[&str] = &[
     "request_user_input_async",
     "send_user_message_async",
     "send_message_to_user_async",
-    "current_time",
     "get_context_remaining",
     "view_image",
     "list_mcp_resources",
     "list_mcp_resource_templates",
     "read_mcp_resource",
+];
+
+const MANAGER_SCRATCHPAD_TOOLS: &[&str] = &[
     "open_scratchpad",
     "resume_scratchpad",
     "get_scratchpad",
@@ -60,6 +66,8 @@ const MANAGER_TOOLS: &[&str] = &[
     "record_delegation",
 ];
 
+const MANAGER_CLOCK_TOOLS: &[&str] = &["curr_time"];
+
 pub(crate) fn is_manager_only_lead(turn_context: &TurnContext) -> bool {
     turn_context.config.team_mode == TeamMode::LeadWorker
         && effective_role_for_session_source(&turn_context.config, &turn_context.session_source)
@@ -79,8 +87,7 @@ pub(crate) fn allows_tool(turn_context: &TurnContext, tool_name: &ToolName) -> b
         return TEAM_MANAGER_V1_TOOLS.contains(&tool_name.name.as_str());
     }
 
-    let tool_name = tool_name.clone().with_default_namespace();
-    if tool_name.is_default_namespace() && MANAGER_TOOLS.contains(&tool_name.name.as_str()) {
+    if is_manager_tool_identity(tool_name) {
         return true;
     }
 
@@ -97,6 +104,17 @@ pub(crate) fn allows_tool(turn_context: &TurnContext, tool_name: &ToolName) -> b
         tool_name.is_default_namespace()
     };
     v2_namespace_matches && TEAM_MANAGER_V2_TOOLS.contains(&tool_name.name.as_str())
+}
+
+fn is_manager_tool_identity(tool_name: &ToolName) -> bool {
+    let tool_name = tool_name.clone().with_default_namespace();
+    let allowed_names = match tool_name.namespace.as_deref() {
+        Some(DEFAULT_FUNCTION_NAMESPACE) => MANAGER_FUNCTION_TOOLS,
+        Some(SCRATCHPAD_NAMESPACE) => MANAGER_SCRATCHPAD_TOOLS,
+        Some(CLOCK_NAMESPACE) => MANAGER_CLOCK_TOOLS,
+        _ => return false,
+    };
+    allowed_names.contains(&tool_name.name.as_str())
 }
 
 pub(crate) fn allows_registered_tool(
@@ -167,3 +185,7 @@ pub(crate) fn filter_tool_spec(turn_context: &TurnContext, spec: ToolSpec) -> Op
         ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => None,
     }
 }
+
+#[cfg(test)]
+#[path = "manager_only_tests.rs"]
+mod tests;
