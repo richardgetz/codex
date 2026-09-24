@@ -6,6 +6,7 @@ use codex_config::MAX_TEAM_LEAD_BALANCE;
 use codex_config::MIN_TEAM_LEAD_BALANCE;
 use codex_config::TeamModelProfile;
 use codex_config::TeamModelProfiles;
+use codex_config::TeamLeadWorkPolicy;
 use codex_config::TeamRole as ConfigTeamRole;
 use codex_protocol::protocol::TeamMode;
 use codex_protocol::protocol::TeamRole;
@@ -18,6 +19,14 @@ impl Config {
         self.team_runtime_profiles
             .as_ref()
             .or(self.team.profiles.as_ref())
+    }
+
+    /// Returns the effective Lead execution policy, including any saved thread assignment.
+    pub(crate) fn effective_team_lead_work_policy(&self) -> TeamLeadWorkPolicy {
+        self.effective_team_profiles()
+            .map_or(TeamLeadWorkPolicy::PromptGuided, |profiles| {
+                profiles.lead_work_policy
+            })
     }
 
     /// Returns the effective model assignment for a team role.
@@ -72,6 +81,7 @@ impl Config {
             worker_reasoning_effort: profiles
                 .map(|profiles| profiles.worker.reasoning_effort.clone()),
             dynamic_handoff: profiles.map(|profiles| profiles.lead_dynamic_handoff),
+            lead_work_policy: profiles.map(|profiles| profiles.lead_work_policy),
             previous_model: self.team_previous_model.clone(),
             previous_reasoning_effort: self.team_previous_reasoning_effort.clone(),
         })
@@ -92,6 +102,7 @@ fn team_profiles_from_snapshot_with_timeout(
     let lead_dynamic_handoff = settings
         .dynamic_handoff
         .unwrap_or(DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF);
+    let lead_work_policy = settings.lead_work_policy.unwrap_or_default();
     let lead_balance = settings.lead_balance.unwrap_or(DEFAULT_TEAM_LEAD_BALANCE);
     if !(MIN_TEAM_LEAD_BALANCE..=MAX_TEAM_LEAD_BALANCE).contains(&lead_balance) {
         return Err(format!(
@@ -103,6 +114,7 @@ fn team_profiles_from_snapshot_with_timeout(
         lead_oversight_timeout_minutes,
         lead_dynamic_handoff,
         lead_balance,
+        lead_work_policy,
     )
 }
 
@@ -111,6 +123,7 @@ fn team_profiles_from_snapshot_with_options(
     lead_oversight_timeout_minutes: u64,
     lead_dynamic_handoff: bool,
     lead_balance: u8,
+    lead_work_policy: TeamLeadWorkPolicy,
 ) -> Result<Option<TeamModelProfiles>, String> {
     let assignments = (
         settings.lead_model.as_ref(),
@@ -155,6 +168,7 @@ fn team_profiles_from_snapshot_with_options(
         },
         lead_dynamic_handoff,
         lead_balance,
+        lead_work_policy,
         lead_oversight_timeout_minutes,
     }))
 }
