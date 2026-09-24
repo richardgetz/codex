@@ -942,12 +942,10 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         ]),
     )
     .await;
-    let root_after_completion = mount_sse_once_match(
+    // Capture the first otherwise-unhandled /responses request, then validate its model and
+    // content below so the failure reports mismatches instead of treating them as no request.
+    let root_after_completion = mount_sse_once(
         &server,
-        |request: &wiremock::Request| {
-            request_has_model(request, LEAD_MODEL)
-                && body_contains(request, MANAGER_HANDOFF_RESULT)
-        },
         sse(vec![
             ev_response_created("manager-handoff-root-completion"),
             ev_assistant_message(
@@ -959,7 +957,12 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     )
     .await;
 
+    // This store exposes no StateDb, so a sealed completion deterministically uses the local
+    // fallback.
     let test = test_codex()
+        .with_thread_store(std::sync::Arc::new(
+            codex_thread_store::InMemoryThreadStore::default(),
+        ))
         .with_model_info_override(LEAD_MODEL, |model_info| {
             model_info.multi_agent_version = Some(MultiAgentVersion::V2);
         })
@@ -1060,25 +1063,19 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     assert!(preflight
         .blockers
         .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence));
+    let requests_before_release = root_after_completion.requests();
     assert!(
-        !root_after_completion.requests().iter().any(|request| {
-            response_request_has_model(request, LEAD_MODEL)
-                && request.body_contains_text(MANAGER_HANDOFF_RESULT)
-        }),
-        "the completion wake must remain queued while handoff admission is sealed"
+        requests_before_release.is_empty(),
+        "the catch-all /responses mock must not capture a request while handoff admission is sealed"
     );
 
-    let request_count_before_release = root_after_completion.requests().len();
+    let request_count_before_release = requests_before_release.len();
     drop(handoff);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let root_request = loop {
         let requests = root_after_completion.requests();
-        if let Some(request) = requests
-            .iter()
-            .skip(request_count_before_release)
-            .find(|request| response_request_has_model(request, LEAD_MODEL))
-        {
+        if let Some(request) = requests.get(request_count_before_release) {
             break request.clone();
         }
         if Instant::now() >= deadline {
@@ -1094,20 +1091,21 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
                     })
                 })
                 .collect::<Vec<_>>();
-            if post_release_requests.is_empty() {
-                panic!(
-                    "manager-only completion retry after handoff release produced no Responses request"
-                );
-            }
             panic!(
-                "manager-only completion retry after handoff release produced no request using \
-                 the expected Lead model {LEAD_MODEL}; captured post-release Responses requests \
-                 (model, user input, marker): {post_release_requests:#?}"
+                "manager-only completion retry after handoff release produced no post-release \
+                 Responses request; captured post-release requests (model, user input, marker): \
+                 {post_release_requests:#?}"
             );
         }
         sleep(Duration::from_millis(10)).await;
     };
     let root_user_input = root_request.message_input_text_groups("user");
+    assert_eq!(
+        root_request.body_json()["model"].as_str(),
+        Some(LEAD_MODEL),
+        "the first post-release Responses request must use the Lead model; user input: \
+         {root_user_input:#?}"
+    );
     assert!(
         root_request.body_contains_text(MANAGER_HANDOFF_RESULT),
         "the first post-release Lead request omitted the Worker result marker; user input: {root_user_input:#?}"
