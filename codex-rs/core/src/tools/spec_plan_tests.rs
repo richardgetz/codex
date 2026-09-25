@@ -3078,7 +3078,11 @@ async fn team_lead_worker_capacity_tool_is_registered_for_both_backends_and_poli
         } else {
             MULTI_AGENT_V1_NAMESPACE
         };
-        let name = ToolName::namespaced(namespace, "worker_capacity").to_string();
+        let name = if use_multi_agent_v2 {
+            ToolName::plain("worker_capacity").to_string()
+        } else {
+            ToolName::namespaced(namespace, "worker_capacity").to_string()
+        };
         plan.assert_registered_contains(&[&name]);
         assert!(
             plan.resolved_names
@@ -3086,6 +3090,16 @@ async fn team_lead_worker_capacity_tool_is_registered_for_both_backends_and_poli
                 .any(|registered| registered == &name),
             "worker_capacity should resolve for {namespace} with {work_policy:?}"
         );
+
+        if use_multi_agent_v2 {
+            assert!(
+                !plan
+                    .namespace_function_names(namespace)
+                    .iter()
+                    .any(|name| name == "worker_capacity"),
+                "V2 worker_capacity must stay outside the reserved namespace"
+            );
+        }
     }
 }
 
@@ -3459,7 +3473,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
 }
 
 #[tokio::test]
-async fn manager_only_keeps_normal_tools_and_code_mode_coordination() {
+async fn manager_only_keeps_normal_tools_and_exposes_worker_capacity_in_code_mode() {
     let manager_only = probe_with(
         |turn| {
             configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::ManagerOnly, None);
@@ -3487,13 +3501,7 @@ async fn manager_only_keeps_normal_tools_and_code_mode_coordination() {
     manager_only.assert_visible_lacks(&["agents", "exec_command", "write_stdin"]);
     manager_only.assert_registered_contains(&["exec_command", "apply_patch", "write_stdin"]);
     assert!(manager_only.can_manage_children);
-    for tool_name in [
-        "spawn_agent",
-        "worker_capacity",
-        "send_message",
-        "followup_task",
-        "wait_agent",
-    ] {
+    for tool_name in ["spawn_agent", "send_message", "followup_task", "wait_agent"] {
         let tool_name = ToolName::namespaced("agents", tool_name);
         assert_eq!(
             manager_only.exposure(&tool_name.to_string()),
@@ -3506,6 +3514,16 @@ async fn manager_only_keeps_normal_tools_and_code_mode_coordination() {
                 .any(|nested| nested == &tool_name)
         );
     }
+    assert_eq!(
+        manager_only.exposure("worker_capacity"),
+        ToolExposure::CodeModeOnly
+    );
+    assert!(
+        manager_only
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::plain("worker_capacity"))
+    );
     assert_eq!(
         manager_only.exposure("send_message_action"),
         ToolExposure::CodeModeOnly
@@ -3526,9 +3544,8 @@ async fn manager_only_keeps_normal_tools_and_code_mode_coordination() {
         exec.description
             .contains(&format!("{spawn_agent_code_mode_name}(args:"))
     );
-    let worker_capacity_code_mode_name = codex_tools::code_mode_name_for_tool_name(
-        &ToolName::namespaced("agents", "worker_capacity"),
-    );
+    let worker_capacity_code_mode_name =
+        codex_tools::code_mode_name_for_tool_name(&ToolName::plain("worker_capacity"));
     assert!(
         exec.description
             .contains(&format!("{worker_capacity_code_mode_name}(args:")),

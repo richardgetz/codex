@@ -19,7 +19,6 @@ const TEAM_MANAGER_V1_TOOLS: &[&str] = &[
 
 const TEAM_MANAGER_V2_TOOLS: &[&str] = &[
     "spawn_agent",
-    "worker_capacity",
     "send_message",
     "followup_task",
     "wait_agent",
@@ -79,7 +78,12 @@ fn is_manager_coordination_tool(turn_context: &TurnContext, tool_name: &ToolName
         return false;
     }
 
-    if tool_name.is_default_namespace() && tool_name.name == "send_message_action" {
+    if tool_name.is_default_namespace()
+        && matches!(
+            tool_name.name.as_str(),
+            "send_message_action" | "worker_capacity"
+        )
+    {
         return true;
     }
 

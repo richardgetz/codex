@@ -1044,7 +1044,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
 #[test_case::test_case("gpt-6-sol"; "GPT-6 Sol")]
 #[test_case::test_case("gpt-6-astra"; "GPT-6 Astra")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manager_only_code_mode_keeps_coordination_and_nested_execution(
+async fn manager_only_code_mode_keeps_worker_capacity_and_nested_execution(
     lead_model: &'static str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1199,6 +1199,12 @@ try {
             .as_str()
             .is_some_and(|description| description.contains("collaboration__spawn_agent")),
         "functions.exec should retain nested Team coordination: {exec}"
+    );
+    assert!(
+        exec["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("worker_capacity(args:")),
+        "ManagerOnly Code Mode should expose standalone worker_capacity: {exec}"
     );
     assert!(
         !function_tools

@@ -149,6 +149,22 @@ Search for breaking changes in external integration surfaces:
 - configuration loading
 - resuming sessions from existing rollouts
 
+### Outbound request wire compatibility
+
+Before changing serialized requests sent to a backend, verify the supported wire
+contract from authoritative schema/source or confirmed integration behavior.
+Inspect the serialized outgoing request or tool schema and any actual backend
+response/error evidence available for the affected path; internal types and
+handler tests alone do not establish wire compatibility. Treat reserved or
+provider-owned namespaces and their
+permitted members and schemas as fixed. Keep fork-specific helpers standalone
+when the contract reserves a namespace (for example, do not append helpers to
+V2 `collaboration`). Permissive mocks do not prove backend acceptance. Add
+focused regression coverage over the affected serialized request. If acceptance
+cannot be verified, record that uncertainty and do not claim compatibility or
+invent unsupported fields/options. Do not send every ordinary request to a live
+service as blanket validation.
+
 ### Test authoring guidance
 
 For agent changes prefer integration tests over unit tests. Integration tests are under `core/suite` and use `test_codex` to set up a test instance of codex.
