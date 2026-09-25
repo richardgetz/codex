@@ -96,10 +96,24 @@ fn manager_only_guidance_is_lead_only_and_keeps_worker_tools_independent() {
     assert_eq!(explicit_default_body, default_body);
     assert!(!default_body.contains("Lead work policy: manager_only"));
     assert!(manager_body.contains("VP of Engineering"));
-    assert!(manager_body.contains("plan, delegate, coordinate, and review"));
-    assert!(manager_body.contains("Workers are engineers with normal tool access"));
-    assert!(manager_body.contains("without asking the Lead for routine permission"));
-    assert!(manager_body.contains("Avoid doing the same work yourself"));
+    assert!(manager_body.contains("changes execution ownership, not tool access"));
+    assert!(
+        manager_body.contains("align with the user on goals and consequential decisions")
+    );
+    assert!(manager_body.contains("Workers own substantive execution end to end"));
+    assert!(manager_body.contains("completion criteria, and requested evidence"));
+    assert!(manager_body.contains("reuse a suitable available Worker"));
+    assert!(manager_body.contains("truly independent and has little overlap"));
+    assert!(manager_body.contains("in parallel within the configured runtime limit"));
+    assert!(manager_body.contains("do not default to one Worker"));
+    assert!(manager_body.contains("A separate capacity lookup is not required"));
+    assert!(
+        manager_body.contains("Do not duplicate their execution or request routine progress updates")
+    );
+    assert!(manager_body.contains("blocker, stalled work, clearly wrong direction"));
+    assert!(manager_body.contains("Workers have normal tool access"));
+    assert!(manager_body.contains("without routine Lead permission or check-ins"));
+    assert!(manager_body.contains("review concise returned evidence"));
 
     let worker_body = TeamInstructions::new(TeamRole::Worker, None)
         .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::ManagerOnly)
