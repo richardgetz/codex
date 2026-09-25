@@ -23,6 +23,41 @@ fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverride
     }
 }
 
+async fn wait_for_completed_agent_message(thread: &codex_core::CodexThread, expected: &str) {
+    let expected_status = codex_protocol::protocol::AgentStatus::Completed(Some(
+        expected.to_string(),
+    ));
+    let status = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 10),
+        async {
+            loop {
+                let status = thread.agent_status().await;
+                if status == expected_status {
+                    break status;
+                }
+                match &status {
+                    codex_protocol::protocol::AgentStatus::Errored(_)
+                    | codex_protocol::protocol::AgentStatus::Shutdown
+                    | codex_protocol::protocol::AgentStatus::NotFound
+                    | codex_protocol::protocol::AgentStatus::Completed(_) => break status,
+                    codex_protocol::protocol::AgentStatus::PendingInit
+                    | codex_protocol::protocol::AgentStatus::Running
+                    | codex_protocol::protocol::AgentStatus::Interrupted => {
+                        tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 10)).await;
+                    }
+                }
+            }
+        },
+    )
+    .await
+    .expect("agent should reach a terminal status");
+    pretty_assertions::assert_eq!(
+        status,
+        expected_status,
+        "agent should complete with its expected final assistant message"
+    );
+}
+
 fn request_has_custom_tool_call_output(request: &wiremock::Request, call_id: &str) -> bool {
     request_body(request)
         .and_then(|body| body.get("input").and_then(Value::as_array).cloned())
@@ -744,8 +779,6 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "Lead continuation after both Worker spawns",
     )
     .await;
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-
     let first_worker_request = wait_for_captured_request(
         &first_worker,
         |request| {
@@ -836,32 +869,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         .thread_manager
         .list_open_agent_subtree_thread_ids(test.codex.id())
         .await?;
-    let first_worker_terminal_status = tokio::time::timeout(
-        std::time::Duration::from_secs(/*secs*/ 10),
-        async {
-            loop {
-                let status = first_worker_thread.agent_status().await;
-                if !matches!(
-                    status,
-                    codex_protocol::protocol::AgentStatus::PendingInit
-                        | codex_protocol::protocol::AgentStatus::Running
-                        | codex_protocol::protocol::AgentStatus::Interrupted
-                ) {
-                    break status;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 10)).await;
-            }
-        },
-    )
-    .await
-    .expect("first Worker should finish with its expected completion marker");
-    pretty_assertions::assert_eq!(
-        first_worker_terminal_status,
-        codex_protocol::protocol::AgentStatus::Completed(Some(
-            POLICY_SWITCH_FIRST_RESULT.to_string(),
-        )),
-        "first Worker should deliver its expected terminal completion marker"
-    );
+    wait_for_completed_agent_message(&first_worker_thread, POLICY_SWITCH_FIRST_RESULT).await;
     let second_worker_status_after_first_completion = second_worker_thread.agent_status().await;
 
     // Let the quiet-window callback observe the second Worker while it waits at the test barrier.
@@ -961,10 +969,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "second Worker result after the policy-switch release barrier",
     )
     .await;
-    wait_for_event(second_worker_thread.as_ref(), |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    wait_for_completed_agent_message(&second_worker_thread, POLICY_SWITCH_SECOND_RESULT).await;
     let lead_tools = released_request
         .inputs_of_type("additional_tools")
         .into_iter()
@@ -979,8 +984,6 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         lead_tools.contains("test_sync_tool"),
         "prompt_guided Lead should have the test-only release tool needed by this fixture: {lead_tools}"
     );
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-
     let second_lead_wake = wait_for_captured_request_with_timeout(
         &root_after_second_completion,
         |request| {
