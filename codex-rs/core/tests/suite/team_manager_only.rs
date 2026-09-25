@@ -1099,7 +1099,7 @@ try {
     )
     .await;
 
-    let builder = test_codex()
+    let mut builder = test_codex()
         .with_model_info_override(WORKER_MODEL, |model_info| {
             model_info.tool_mode = Some(ToolMode::Direct);
         })
