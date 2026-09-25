@@ -1,5 +1,7 @@
 use super::*;
 
+use codex_protocol::openai_models::ToolMode;
+use core_test_support::responses::namespace_child_tool;
 use test_case::test_case;
 
 const SHELL_LIMIT_PROMPT: &str = "start a worker before shell coverage";
@@ -9,6 +11,127 @@ const SHELL_LIMIT_SECOND_PROMPT: &str = "try another worker while shell runs";
 const SHELL_LIMIT_SECOND_TASK: &str = "the second worker must stay rejected";
 const SHELL_LIMIT_SECOND_SPAWN_CALL_ID: &str = "worker-limit-shell-second";
 const SHELL_LIMIT_CAPACITY_CALL_ID: &str = "worker-limit-shell-capacity";
+const CAPACITY_SCHEMA_PROMPT: &str = "inspect worker capacity";
+const CAPACITY_SCHEMA_CALL_ID: &str = "worker-capacity-standalone";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_team_lead_worker_capacity_uses_standalone_wire_tool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let capacity_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, CAPACITY_SCHEMA_PROMPT) && request_has_model(request, LEAD_MODEL)
+        },
+        sse(vec![
+            ev_response_created("worker-capacity-standalone-1"),
+            ev_function_call(CAPACITY_SCHEMA_CALL_ID, "worker_capacity", "{}"),
+            ev_completed("worker-capacity-standalone-1"),
+        ]),
+    )
+    .await;
+    let capacity_followup = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, CAPACITY_SCHEMA_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("worker-capacity-standalone-2"),
+            ev_assistant_message("worker-capacity-standalone-result", "capacity checked"),
+            ev_completed("worker-capacity-standalone-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("Team profiles")
+                .lead_work_policy = codex_config::TeamLeadWorkPolicy::PromptGuided;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    submit_turn(
+        &test.codex,
+        CAPACITY_SCHEMA_PROMPT,
+        ThreadSettingsOverrides::default(),
+    )
+    .await?;
+
+    let request = wait_for_captured_request(
+        &capacity_response,
+        |request| {
+            request.body_contains_text(CAPACITY_SCHEMA_PROMPT)
+                && response_request_has_model(request, LEAD_MODEL)
+        },
+        "V2 Lead request with worker capacity tool schema",
+    )
+    .await;
+    let additional_tools = request
+        .inputs_of_type("additional_tools")
+        .into_iter()
+        .next()
+        .expect("Responses Lite tool definitions");
+    let capacity_tool = namespace_child_tool(&additional_tools, "functions", "worker_capacity")
+        .expect("Responses Lite should serialize the standalone tool in its default functions namespace");
+    pretty_assertions::assert_eq!(capacity_tool["type"], "function");
+    pretty_assertions::assert_eq!(capacity_tool["strict"], false);
+    pretty_assertions::assert_eq!(capacity_tool["parameters"]["properties"], json!({}));
+    assert!(
+        namespace_child_tool(
+            &additional_tools,
+            MULTI_AGENT_V2_NAMESPACE,
+            "worker_capacity"
+        )
+        .is_none(),
+        "worker_capacity must not be serialized as a collaboration namespace member: {additional_tools}"
+    );
+    assert!(
+        namespace_child_tool(&additional_tools, MULTI_AGENT_V2_NAMESPACE, "send_message").is_some(),
+        "the existing send_message collaboration member should keep its namespace: {additional_tools}"
+    );
+
+    let followup = wait_for_captured_request(
+        &capacity_followup,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, CAPACITY_SCHEMA_CALL_ID)
+        },
+        "V2 Lead request after standalone worker capacity call",
+    )
+    .await;
+    let output = followup
+        .function_call_output_text(CAPACITY_SCHEMA_CALL_ID)
+        .expect("worker capacity output");
+    let output: Value = serde_json::from_str(&output)?;
+    pretty_assertions::assert_eq!(
+        output,
+        json!({
+            "direct_worker_limit": null,
+            "active_direct_workers": 0,
+            "pending_direct_spawns": 0,
+            "remaining_direct_slots": null,
+        })
+    );
+    Ok(())
+}
 
 #[test_case(MultiAgentVersion::V1, MULTI_AGENT_V1_NAMESPACE; "legacy backend")]
 #[test_case(MultiAgentVersion::V2, MULTI_AGENT_V2_NAMESPACE; "v2 backend")]
@@ -178,6 +301,16 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
     })
     .await;
 
+    let capacity_call = if lead_multi_agent_version == MultiAgentVersion::V2 {
+        ev_function_call(SHELL_LIMIT_CAPACITY_CALL_ID, "worker_capacity", "{}")
+    } else {
+        ev_function_call_with_namespace(
+            SHELL_LIMIT_CAPACITY_CALL_ID,
+            tool_namespace,
+            "worker_capacity",
+            "{}",
+        )
+    };
     mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -187,12 +320,7 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         },
         sse(vec![
             ev_response_created("worker-limit-shell-root-3"),
-            ev_function_call_with_namespace(
-                SHELL_LIMIT_CAPACITY_CALL_ID,
-                tool_namespace,
-                "worker_capacity",
-                "{}",
-            ),
+            capacity_call,
             ev_completed("worker-limit-shell-root-3"),
         ]),
     )

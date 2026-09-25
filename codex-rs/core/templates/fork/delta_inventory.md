@@ -58,11 +58,13 @@ release or merge rules.
   context, Fast, and Flex status pricing. Explicit historical model IDs remain
   selectable.
 
-- Team Leads can query the read-only `worker_capacity` collaboration tool in
-  either multi-agent backend for a mutex-consistent snapshot of the configured
+- Team Leads can query the read-only `worker_capacity` tool in either
+  multi-agent backend for a mutex-consistent snapshot of the configured
   direct-Worker ceiling, active direct Workers, pending spawns, and remaining
-  slots. An unset ceiling and remaining capacity are reported as `null`.
-  The query does not reserve capacity; runtime admission and the existing
+  slots. V1 keeps the tool under `multi_agent_v1`; V2 exposes it as a standalone
+  function outside the reserved `collaboration` namespace and configured V2
+  tool namespace. An unset ceiling and remaining capacity are reported as
+  `null`. The query does not reserve capacity; runtime admission and the existing
   global agent-count, depth, and resource limits remain authoritative.
 
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
@@ -1249,10 +1251,14 @@ release or merge rules.
   replace those limits, and tells the Lead the value is a ceiling rather than a
   target.
 - Verify `worker_capacity` is registered for Team Leads using V1 and V2 under
-  either Lead work policy, returns the configured ceiling and one consistent
-  active/pending/remaining snapshot, reports an unset ceiling as unbounded,
-  excludes grandchildren, and does not reserve a slot or change runtime
-  admission.
+  either Lead work policy, retains its `multi_agent_v1` V1 name, and serializes
+  as a standalone V2 function outside `collaboration` and any configured V2
+  namespace. Inspect the outgoing tool array and the affected backend response or
+  error; a permissive mock alone does not establish wire acceptance. Verify
+  ManagerOnly Code Mode retains the standalone V2 entry, and its call returns
+  the configured ceiling and one consistent active/pending/remaining snapshot,
+  reports an unset ceiling as unbounded, excludes grandchildren, and does not
+  reserve a slot or change runtime admission.
 - Verify `[team.lead].oversight_timeout_minutes` defaults to 30 minutes,
   accepts only `1..15768000`, and rejects out-of-range values; Lead idle
   parking makes no inference or polling on routine progress, retains only the
