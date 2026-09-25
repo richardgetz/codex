@@ -2775,11 +2775,8 @@ impl ThreadManagerState {
         {
             log.push((thread_id, captured_op));
         }
-        let is_manager_completion = matches!(
-            &op,
-            Op::TeamLeadCompletion { communication, .. } if !communication.trigger_turn
-        );
-        if !is_manager_completion {
+        let is_team_lead_completion = matches!(&op, Op::TeamLeadCompletion { .. });
+        if !is_team_lead_completion {
             return thread
                 .io
                 .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)

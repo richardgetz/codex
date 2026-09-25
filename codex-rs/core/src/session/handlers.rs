@@ -1849,10 +1849,7 @@ pub(super) async fn submission_loop(
         } else {
             debug!(?sub, "Submission");
         }
-        let manager_completion_delivery_ack = matches!(
-            &sub.op,
-            Op::TeamLeadCompletion { communication, .. } if !communication.trigger_turn
-        );
+        let manager_completion_delivery_ack = matches!(&sub.op, Op::TeamLeadCompletion { .. });
         // Durable inbound submissions are the handoff boundary between the state database and
         // this session loop. Hold a manager recovery admission through dispatch so a recovery
         // coordinator either waits for the item to be consumed or rejects it while it can still
