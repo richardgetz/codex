@@ -3408,22 +3408,41 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
 }
 
 #[tokio::test]
-async fn manager_only_code_mode_exposes_v2_coordination_without_lead_execution() {
-    let manager_only = probe(|turn| {
-        configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::ManagerOnly, None);
-    })
+async fn manager_only_keeps_normal_tools_and_code_mode_coordination() {
+    let manager_only = probe_with(
+        |turn| {
+            configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::ManagerOnly, None);
+            use_chatgpt_auth(turn);
+            set_web_search_mode(turn, WebSearchMode::Live);
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "review_mcp",
+                "github",
+                "search",
+                ToolExposure::Direct,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
     .await;
 
     manager_only.assert_visible_contains(&[
         codex_code_mode::PUBLIC_TOOL_NAME,
         codex_code_mode::WAIT_TOOL_NAME,
         "request_user_input",
+        "web_search",
     ]);
     manager_only.assert_visible_lacks(&["agents", "exec_command", "write_stdin"]);
-    manager_only.assert_registered_lacks(&["exec_command", "write_stdin"]);
+    manager_only.assert_registered_contains(&["exec_command", "apply_patch", "write_stdin"]);
     assert!(manager_only.can_manage_children);
-    assert!(!manager_only.has_terminal_controls);
-    for tool_name in ["spawn_agent", "send_message", "followup_task", "wait_agent"] {
+    for tool_name in [
+        "spawn_agent",
+        "worker_capacity",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+    ] {
         let tool_name = ToolName::namespaced("agents", tool_name);
         assert_eq!(
             manager_only.exposure(&tool_name.to_string()),
@@ -3456,12 +3475,48 @@ async fn manager_only_code_mode_exposes_v2_coordination_without_lead_execution()
         exec.description
             .contains(&format!("{spawn_agent_code_mode_name}(args:"))
     );
-    assert!(!exec.description.contains("exec_command(args:"));
+    let worker_capacity_code_mode_name = codex_tools::code_mode_name_for_tool_name(
+        &ToolName::namespaced("agents", "worker_capacity"),
+    );
     assert!(
-        !manager_only
+        exec.description
+            .contains(&format!("{worker_capacity_code_mode_name}(args:")),
+        "Code Mode should expose the Worker capacity tool through its wrapper: {}",
+        exec.description
+    );
+    let github_search_code_mode_name =
+        codex_tools::code_mode_name_for_tool_name(&ToolName::namespaced("github", "search"));
+    assert!(
+        exec.description
+            .contains(&format!("{github_search_code_mode_name}(args:")),
+        "Code Mode should expose MCP tools through its wrapper: {}",
+        exec.description
+    );
+    assert!(
+        exec.description.contains("exec_command(args:"),
+        "Code Mode should expose the normal shell tool through its wrapper: {}",
+        exec.description
+    );
+    assert!(
+        manager_only
             .code_mode_tool_names
             .values()
-            .any(|nested| nested == &ToolName::plain("exec_command"))
+            .any(|nested| nested == &ToolName::plain("exec_command")),
+        "the shell tool should remain registered for Code Mode dispatch"
+    );
+    assert!(
+        manager_only
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::plain("apply_patch")),
+        "the edit tool should remain registered for Code Mode dispatch"
+    );
+    assert!(
+        manager_only
+            .code_mode_tool_names
+            .values()
+            .any(|nested| nested == &ToolName::namespaced("github", "search")),
+        "the MCP tool should remain registered for Code Mode dispatch"
     );
 
     let prompt_guided = probe(|turn| {

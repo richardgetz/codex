@@ -68,12 +68,12 @@ release or merge rules.
   only for a blocker, clear wrong direction, or stalled Worker; explicit
   delegation and authorization restrictions remain binding. This guides
   execution ownership without restricting tools: the Lead and Workers retain
-  their normal available tools under configured permissions and sandbox rules.
-  Reuse a suitable available Worker for related or sequential work, and
-  parallelize substantial independent work with little overlap within the
+  their normal tools under configured permissions, sandbox, and approval rules.
+  The Lead keeps ordinary registry, model-visible, direct-dispatch, and Code
+  Mode access. Reuse a suitable available Worker for related or sequential work,
+  and parallelize substantial independent work with little overlap within the
   configured runtime limit; that cap is a ceiling, not a target, and does not
-  require a capacity lookup before each spawn. Code Mode follows the same normal
-  tool access. The policy is
+  require a capacity lookup before each spawn. The policy is
   captured in thread snapshots so resume and fork preserve the selected mode,
   while legacy snapshots keep the default. An active Lead can also change its
   thread-owned policy independently through `/team work-policy` and
@@ -1166,17 +1166,19 @@ release or merge rules.
   Workers own substantive execution across repositories independent of local
   workflow instructions, including research, logs, code/docs, builds/tests,
   tool/skill use, Git/PR, CI, and debugging. Verify the Lead keeps normal tools
-  subject to the existing permissions and sandbox; manager-only does not filter
-  Lead tools in the registry, model-visible definitions, Code Mode, or dispatch.
-  The guidance requires clear Worker goals and completion evidence, reuse of a
-  suitable Worker for related/sequential work, practical parallelism for
-  independent low-overlap work within the configured runtime limit, and no
-  routine Lead execution or check-ins. It
-  treats concurrency caps as ceilings and does not require a capacity lookup
-  before each spawn. Redirection is reserved for blockers, stalled work, or
-  clearly wrong direction; final review remains with the Lead. Verify Worker
-  model context and tool access remain unchanged and `prompt_guided` retains its
-  existing behavior.
+  subject to existing permissions, sandbox, and approval controls: direct shell
+  and edit tools, enabled MCP tools, and hosted web search when enabled remain
+  visible and usable; Code Mode and Code Mode Only route eligible shell, edit,
+  MCP, and Team coordination calls through the wrapper. No manager-only
+  allowlist or dispatch denial remains. The guidance gives Workers clear goals
+  and completion evidence, reuses a suitable Worker for related or sequential
+  work, and allows practical parallelism for independent low-overlap work within
+  the configured runtime limit. Caps remain ceilings, not targets, and no
+  capacity lookup is required before each spawn. Routine Lead execution and
+  check-ins stay suppressed; redirection is reserved for blockers, stalled work,
+  or clearly wrong direction, and final review remains with the Lead. Verify
+  Worker model context and tool access remain unchanged and `prompt_guided`
+  retains its existing behavior.
   Successful direct Worker completions stay
   quiet while another direct Worker remains active, and one bounded batch wake
   follows the completion boundary. User input, action messages, failures,
