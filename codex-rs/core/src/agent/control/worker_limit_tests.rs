@@ -15,21 +15,27 @@ fn limiter(max_concurrent: Option<usize>) -> Arc<TeamWorkerLimiter> {
 }
 
 #[test]
-fn omitted_ceiling_preserves_unbounded_admission() {
+fn omitted_ceiling_preserves_unbounded_admission_and_tracks_capacity() {
     let limiter = limiter(None);
-
-    assert!(
-        limiter
-            .reserve_pending_spawn()
-            .expect("unbounded limiter should not reject a spawn")
-            .is_none()
+    let pending = limiter
+        .reserve_pending_spawn()
+        .expect("unbounded limiter should not reject a spawn")
+        .expect("capacity accounting should retain pending spawn state");
+    let active = limiter
+        .reserve_active(ThreadId::new())
+        .expect("unbounded limiter should not reject a turn")
+        .expect("capacity accounting should retain active Worker state");
+    assert_eq!(
+        limiter.capacity_snapshot(),
+        TeamWorkerCapacitySnapshot {
+            max_concurrent: None,
+            active_workers: 1,
+            pending_spawns: 1,
+            remaining_slots: None,
+        }
     );
-    assert!(
-        limiter
-            .reserve_active(ThreadId::new())
-            .expect("unbounded limiter should not reject a turn")
-            .is_none()
-    );
+    drop(pending);
+    drop(active);
 }
 
 #[tokio::test]
@@ -90,6 +96,60 @@ fn pending_spawns_and_active_workers_share_one_ceiling() {
             .reserve_pending_spawn()
             .expect("released leases should restore capacity")
             .is_some()
+    );
+}
+
+#[test]
+fn capacity_snapshot_counts_active_workers_and_pending_spawns_atomically() {
+    let limiter = limiter(Some(3));
+    let pending = limiter
+        .reserve_pending_spawn()
+        .expect("first pending spawn should fit")
+        .expect("configured limiter should return a lease");
+    let active_thread_id = ThreadId::new();
+    let active = limiter
+        .reserve_active(active_thread_id)
+        .expect("active Worker should fit")
+        .expect("configured limiter should return a lease");
+    let duplicate_active = limiter
+        .reserve_active(active_thread_id)
+        .expect("same Worker should share its admission")
+        .expect("configured limiter should return a lease");
+
+    assert_eq!(
+        limiter.capacity_snapshot(),
+        TeamWorkerCapacitySnapshot {
+            max_concurrent: Some(3),
+            active_workers: 1,
+            pending_spawns: 1,
+            remaining_slots: Some(1),
+        }
+    );
+
+    drop(pending);
+    drop(duplicate_active);
+    assert_eq!(
+        limiter.capacity_snapshot(),
+        TeamWorkerCapacitySnapshot {
+            max_concurrent: Some(3),
+            active_workers: 1,
+            pending_spawns: 0,
+            remaining_slots: Some(2),
+        }
+    );
+    drop(active);
+}
+
+#[test]
+fn unconfigured_worker_ceiling_reports_unbounded_capacity() {
+    assert_eq!(
+        limiter(None).capacity_snapshot(),
+        TeamWorkerCapacitySnapshot {
+            max_concurrent: None,
+            active_workers: 0,
+            pending_spawns: 0,
+            remaining_slots: None,
+        }
     );
 }
 

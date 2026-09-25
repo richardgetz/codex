@@ -6,17 +6,11 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TeamMode;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolName;
-use codex_tools::ToolSpec;
-
-const DEFAULT_FUNCTION_NAMESPACE: &str = "functions";
-const SCRATCHPAD_NAMESPACE: &str = "scratchpad";
-const CLOCK_NAMESPACE: &str = "clock";
 
 const TEAM_MANAGER_V1_TOOLS: &[&str] = &[
     "spawn_agent",
+    "worker_capacity",
     "send_input",
     "resume_agent",
     "close_agent",
@@ -25,51 +19,13 @@ const TEAM_MANAGER_V1_TOOLS: &[&str] = &[
 
 const TEAM_MANAGER_V2_TOOLS: &[&str] = &[
     "spawn_agent",
+    "worker_capacity",
     "send_message",
     "followup_task",
     "wait_agent",
     "interrupt_agent",
     "list_agents",
 ];
-
-const MANAGER_FUNCTION_TOOLS: &[&str] = &[
-    "update_plan",
-    "update_eta",
-    TOOL_SEARCH_TOOL_NAME,
-    "send_message_action",
-    "request_user_input",
-    "request_user_input_async",
-    "send_user_message_async",
-    "send_message_to_user_async",
-    "get_context_remaining",
-    "view_image",
-    "list_mcp_resources",
-    "list_mcp_resource_templates",
-    "read_mcp_resource",
-];
-
-const MANAGER_SCRATCHPAD_TOOLS: &[&str] = &[
-    "open_scratchpad",
-    "resume_scratchpad",
-    "get_scratchpad",
-    "get_scratchpad_summary",
-    "append_scratchpad_note",
-    "set_next_steps",
-    "set_pending_waits",
-    "set_action_policy",
-    "mark_wait_checked",
-    "update_scratchpad",
-    "archive_scratchpad",
-    "unarchive_scratchpad",
-    "lookup_scratchpads",
-    "get_scratchpad_schema",
-    "check_action_allowed",
-    "record_outcome",
-    "export_outcomes",
-    "record_delegation",
-];
-
-const MANAGER_CLOCK_TOOLS: &[&str] = &["curr_time"];
 
 pub(crate) fn is_manager_only_lead(turn_context: &TurnContext) -> bool {
     turn_context.config.team_mode == TeamMode::LeadWorker
@@ -79,72 +35,12 @@ pub(crate) fn is_manager_only_lead(turn_context: &TurnContext) -> bool {
             == codex_config::TeamLeadWorkPolicy::ManagerOnly
 }
 
-pub(crate) fn allows_tool(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
-    if !is_manager_only_lead(turn_context) {
-        return true;
-    }
-
-    // Code Mode's broker sends each nested call back through ToolRouter, where
-    // the normal manager allow-list below still applies.
-    if tool_name.is_default_namespace()
-        && matches!(
-            tool_name.name.as_str(),
-            crate::tools::code_mode::PUBLIC_TOOL_NAME | crate::tools::code_mode::WAIT_TOOL_NAME
-        )
-    {
-        return true;
-    }
-
-    if tool_name.namespace.as_deref()
-        == Some(crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE)
-    {
-        return TEAM_MANAGER_V1_TOOLS.contains(&tool_name.name.as_str());
-    }
-
-    if is_manager_tool_identity(tool_name) {
-        return true;
-    }
-
-    if turn_context.multi_agent_version != MultiAgentVersion::V2 {
-        return false;
-    }
-
-    if tool_name.is_default_namespace() && tool_name.name == "send_message_action" {
-        return true;
-    }
-
-    let v2_namespace_matches = if crate::tools::spec_plan::namespace_tools_enabled(turn_context) {
-        match turn_context.config.multi_agent_v2.tool_namespace.as_deref() {
-            Some(namespace) => tool_name.namespace.as_deref() == Some(namespace),
-            None => tool_name.is_default_namespace(),
-        }
-    } else {
-        tool_name.is_default_namespace()
-    };
-    v2_namespace_matches && TEAM_MANAGER_V2_TOOLS.contains(&tool_name.name.as_str())
-}
-
-fn is_manager_tool_identity(tool_name: &ToolName) -> bool {
-    let tool_name = tool_name.clone().with_default_namespace();
-    let allowed_names = match tool_name.namespace.as_deref() {
-        Some(DEFAULT_FUNCTION_NAMESPACE) => MANAGER_FUNCTION_TOOLS,
-        Some(SCRATCHPAD_NAMESPACE) => MANAGER_SCRATCHPAD_TOOLS,
-        Some(CLOCK_NAMESPACE) => MANAGER_CLOCK_TOOLS,
-        _ => return false,
-    };
-    allowed_names.contains(&tool_name.name.as_str())
-}
-
-pub(crate) fn allows_registered_tool(
-    turn_context: &TurnContext,
-    registry: &ToolRegistry,
-    tool_name: &ToolName,
-) -> bool {
-    !is_manager_only_lead(turn_context)
-        || (registry.is_trusted_tool(tool_name) && allows_tool(turn_context, tool_name))
-}
-
-pub(crate) fn restrict_registry(
+/// Makes Team coordination tools available inside Code Mode when the Lead's
+/// selected model exposes only the Code Mode entry points directly.
+///
+/// `manager_only` changes the Lead's work guidance and completion scheduling;
+/// it must not restrict the tools handled by the normal tool router.
+pub(crate) fn enable_code_mode_for_manager_coordination(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
@@ -153,23 +49,6 @@ pub(crate) fn restrict_registry(
         return;
     }
 
-    let disallowed_tools = registry
-        .entries()
-        .map(|tool| tool.runtime.tool_name())
-        .filter(|tool_name| !allows_registered_tool(turn_context, registry, tool_name))
-        .collect::<Vec<_>>();
-    for tool_name in disallowed_tools {
-        registry.remove(&tool_name);
-    }
-
-    enable_code_mode_for_manager_coordination(turn_context, model_info, registry);
-}
-
-fn enable_code_mode_for_manager_coordination(
-    turn_context: &TurnContext,
-    model_info: &ModelInfo,
-    registry: &mut ToolRegistry,
-) {
     let tool_mode = crate::tools::effective_tool_mode(turn_context, model_info);
     let code_mode_exposure = match tool_mode {
         ToolMode::CodeMode => ToolExposure::Direct,
@@ -183,8 +62,8 @@ fn enable_code_mode_for_manager_coordination(
         {
             continue;
         }
-        // V2 coordination is direct-only by default; ManagerOnly can still use it
-        // through Code Mode. The configured direct-only namespace override runs next.
+        // V2 coordination is direct-only by default. ManagerOnly can still
+        // reach it through Code Mode; the configured namespace override runs next.
         tool.exposure = code_mode_exposure;
     }
 }
@@ -212,58 +91,5 @@ fn is_manager_coordination_tool(turn_context: &TurnContext, tool_name: &ToolName
     } else {
         tool_name.is_default_namespace()
     };
-    if !v2_namespace_matches {
-        return false;
-    }
-
-    TEAM_MANAGER_V2_TOOLS.contains(&tool_name.name.as_str())
+    v2_namespace_matches && TEAM_MANAGER_V2_TOOLS.contains(&tool_name.name.as_str())
 }
-
-pub(crate) fn denial_message(tool_name: &ToolName) -> String {
-    format!(
-        "{} is unavailable to a manager_only Team Lead. Delegate execution work to a Worker; the Lead can use team coordination, planning, and review tools.",
-        tool_name
-    )
-}
-
-pub(crate) fn filter_tool_spec(turn_context: &TurnContext, spec: ToolSpec) -> Option<ToolSpec> {
-    if !is_manager_only_lead(turn_context) {
-        return Some(spec);
-    }
-
-    match spec {
-        ToolSpec::Function(tool) => allows_tool(
-            turn_context,
-            &ToolName::plain(tool.name.clone()).with_default_namespace(),
-        )
-        .then_some(ToolSpec::Function(tool)),
-        ToolSpec::Freeform(tool) => allows_tool(
-            turn_context,
-            &ToolName::plain(tool.name.clone()).with_default_namespace(),
-        )
-        .then_some(ToolSpec::Freeform(tool)),
-        ToolSpec::Namespace(mut namespace) => {
-            namespace.tools.retain(|tool| {
-                let name = match tool {
-                    ResponsesApiNamespaceTool::Function(tool) => &tool.name,
-                    ResponsesApiNamespaceTool::Custom(tool) => &tool.name,
-                };
-                allows_tool(
-                    turn_context,
-                    &ToolName::namespaced(namespace.name.clone(), name.clone()),
-                )
-            });
-            (!namespace.tools.is_empty()).then_some(ToolSpec::Namespace(namespace))
-        }
-        spec @ ToolSpec::ToolSearch { .. }
-            if allows_tool(turn_context, &ToolName::plain(TOOL_SEARCH_TOOL_NAME)) =>
-        {
-            Some(spec)
-        }
-        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => None,
-    }
-}
-
-#[cfg(test)]
-#[path = "manager_only_tests.rs"]
-mod tests;

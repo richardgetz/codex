@@ -58,20 +58,38 @@ release or merge rules.
   context, Fast, and Flex status pricing. Explicit historical model IDs remain
   selectable.
 
+- Team Leads can query the read-only `worker_capacity` collaboration tool in
+  either multi-agent backend for a mutex-consistent snapshot of the configured
+  direct-Worker ceiling, active direct Workers, pending spawns, and remaining
+  slots. An unset ceiling and remaining capacity are reported as `null`.
+  The query does not reserve capacity; runtime admission and the existing
+  global agent-count, depth, and resource limits remain authoritative.
+
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
-  and final review while Workers own substantive execution across repository and
-  web research, log gathering, code and docs, builds and tests, tool and skill
-  use, Git/PR work, CI follow-up, and debugging. Repository `AGENTS.md` or skill
+  and final review while Workers own substantive execution through completion
+  across repository and web research, log gathering, code and docs, builds and
+  tests, tool and skill use, Git/PR work, CI follow-up, validation, debugging,
+  and in-scope fixes. Worker guidance assigns one outcome through completion,
+  without routine permission/check-in or edit/test/fix phase handbacks, and asks
+  for concise results, selected evidence, blockers, decisions, material scope
+  changes, and requested status cadence. Repository `AGENTS.md` or skill
   instructions guide the assigned work without moving execution back to the
-  Lead; the Lead avoids duplicate work and routine progress checks, and redirects
-  only for a blocker, clear wrong direction, or stalled Worker; explicit
-  delegation and authorization restrictions remain binding. Workers retain
-  normal tool access. The runtime gate keeps shell and execution tools from the
-  Lead while preserving coordination, planning, and selected read-only support
-  tools.
-  In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
-  tools, while nested dispatch still denies execution tools. The policy is
+  Lead. ManagerOnly omits generic Lead dynamic-handoff checkpoint language;
+  Lead balance adjusts final-review depth and consequential decisions, not
+  routine progress checks. The Lead avoids duplicate work and routine progress
+  checks; responds to human guidance and actionable reports with scoped
+  unblocking, redirection, or reassignment; and intervenes for a blocker, stalled
+  Worker, clear wrong direction, or consequential decision while retaining final
+  acceptance. Explicit delegation and authorization restrictions remain binding.
+  This guides
+  execution ownership without restricting tools: the Lead and Workers retain
+  their normal tools under configured permissions, sandbox, and approval rules.
+  The Lead keeps ordinary registry, model-visible, direct-dispatch, and Code
+  Mode access. Reuse a suitable available Worker for related or sequential work,
+  and parallelize substantial independent work with little overlap within the
+  configured runtime limit; that cap is a ceiling, not a target, and does not
+  require a capacity lookup before each spawn. The policy is
   captured in thread snapshots so resume and fork preserve the selected mode,
   while legacy snapshots keep the default. An active Lead can also change its
   thread-owned policy independently through `/team work-policy` and
@@ -1163,16 +1181,31 @@ release or merge rules.
   it preserves human alignment, planning, delegation, coordination, and review;
   Workers own substantive execution across repositories independent of local
   workflow instructions, including research, logs, code/docs, builds/tests,
-  tool/skill use, Git/PR, CI, and debugging; routine checks and duplicate Lead
-  execution stay suppressed, with redirection reserved for clear blockers,
-  wrong direction, or stalled work. Workers keep normal tool access without
-  requiring Lead approval or check-ins for tool use. Verify Worker model context
-  and tool access remain unchanged, Code Mode exposes manager tools under the
-  configured/default namespaces while blocking shell and execution calls at the
-  nested runtime dispatch boundary, and `prompt_guided` retains its existing
-  Code Mode exposure. The manager-only runtime gate keeps coordination,
-  planning, and selected read-only support tools available to the Lead while
-  denying shell and execution tools; Worker tool access remains unchanged.
+  tool/skill use, Git/PR, CI, validation, debugging, and in-scope fixes through
+  completion. Worker guidance asks for one concise completion report, allows
+  normal tool use without routine Lead permission/check-ins, and avoids
+  command-by-command narration and raw dumps. Verify the Lead keeps normal tools
+  subject to existing permissions, sandbox, and approval controls: direct shell
+  and edit tools, enabled MCP tools, and hosted web search when enabled remain
+  visible and usable; Code Mode and Code Mode Only route eligible shell, edit,
+  MCP, and Team coordination calls through the wrapper. No manager-only
+  allowlist or dispatch denial remains. The guidance gives Workers clear goals
+  and completion evidence, reuses a suitable Worker for related or sequential
+  work, and allows practical parallelism for independent low-overlap work within
+  the configured runtime limit. Caps remain ceilings, not targets, and no
+  capacity lookup is required before each spawn. Routine Lead execution and
+  check-ins stay suppressed; human guidance and actionable reports can prompt
+  scoped unblocking, redirection, or reassignment. The Lead intervenes for
+  blockers, stalled work, clearly wrong direction, or consequential decisions;
+  otherwise execution stays with the Worker, and final review remains with the
+  Lead. Generic
+  dynamic-handoff text that invites higher-balance mid-work checkpoints is
+  omitted from assembled ManagerOnly Lead context; ManagerOnly balance changes
+  only final-review depth and consideration of material consequences. The
+  configured oversight deadline and actionable wake behavior remain intact.
+  Verify Worker model selection and tool access remain unchanged; the updated
+  Worker role guidance applies consistently, and `prompt_guided` Lead guidance
+  retains its existing behavior.
   Successful direct Worker completions stay
   quiet while another direct Worker remains active, and one bounded batch wake
   follows the completion boundary. User input, action messages, failures,
@@ -1215,6 +1248,11 @@ release or merge rules.
   agent-count, depth, and resource limits. Verify that it does not raise or
   replace those limits, and tells the Lead the value is a ceiling rather than a
   target.
+- Verify `worker_capacity` is registered for Team Leads using V1 and V2 under
+  either Lead work policy, returns the configured ceiling and one consistent
+  active/pending/remaining snapshot, reports an unset ceiling as unbounded,
+  excludes grandchildren, and does not reserve a slot or change runtime
+  admission.
 - Verify `[team.lead].oversight_timeout_minutes` defaults to 30 minutes,
   accepts only `1..15768000`, and rejects out-of-range values; Lead idle
   parking makes no inference or polling on routine progress, retains only the

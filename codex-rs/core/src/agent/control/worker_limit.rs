@@ -32,6 +32,15 @@ struct TeamWorkerLimiterState {
     next_generation: u64,
 }
 
+/// A consistent read-only view of the Lead's direct Worker admission budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TeamWorkerCapacitySnapshot {
+    pub(crate) max_concurrent: Option<usize>,
+    pub(crate) active_workers: usize,
+    pub(crate) pending_spawns: usize,
+    pub(crate) remaining_slots: Option<usize>,
+}
+
 /// One active-thread slot can have multiple callers racing to submit the same turn. Borrowers
 /// keep the admission alive until each submission reports its outcome. A task holder is retained
 /// by the actual running task, so a dropped submission cannot release a live Worker admission.
@@ -61,18 +70,17 @@ impl TeamWorkerLimiter {
     }
 
     pub(super) fn reserve_pending_spawn(self: &Arc<Self>) -> CodexResult<Option<TeamWorkerLease>> {
-        let Some(max_concurrent) = self.max_concurrent() else {
-            return Ok(None);
-        };
+        let max_concurrent = self.max_concurrent();
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state
-            .active_workers
-            .len()
-            .saturating_add(state.pending_spawns)
-            >= max_concurrent
+        if let Some(max_concurrent) = max_concurrent
+            && state
+                .active_workers
+                .len()
+                .saturating_add(state.pending_spawns)
+                >= max_concurrent
         {
             return Err(limit_reached(max_concurrent));
         }
@@ -87,9 +95,7 @@ impl TeamWorkerLimiter {
         self: &Arc<Self>,
         thread_id: ThreadId,
     ) -> CodexResult<Option<TeamWorkerLease>> {
-        let Some(max_concurrent) = self.max_concurrent() else {
-            return Ok(None);
-        };
+        let max_concurrent = self.max_concurrent();
         let mut state = self
             .state
             .lock()
@@ -105,11 +111,12 @@ impl TeamWorkerLimiter {
                 },
             }));
         }
-        if state
-            .active_workers
-            .len()
-            .saturating_add(state.pending_spawns)
-            >= max_concurrent
+        if let Some(max_concurrent) = max_concurrent
+            && state
+                .active_workers
+                .len()
+                .saturating_add(state.pending_spawns)
+                >= max_concurrent
         {
             return Err(limit_reached(max_concurrent));
         }
@@ -226,6 +233,25 @@ impl TeamWorkerLimiter {
         self.max_concurrent.get().copied().flatten()
     }
 
+    fn capacity_snapshot(&self) -> TeamWorkerCapacitySnapshot {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let max_concurrent = self.max_concurrent();
+        let active_workers = state.active_workers.len();
+        let pending_spawns = state.pending_spawns;
+        let remaining_slots = max_concurrent.map(|max_concurrent| {
+            max_concurrent.saturating_sub(active_workers.saturating_add(pending_spawns))
+        });
+        TeamWorkerCapacitySnapshot {
+            max_concurrent,
+            active_workers,
+            pending_spawns,
+            remaining_slots,
+        }
+    }
+
     async fn wait_for_capacity(&self) {
         loop {
             let notified = self.capacity_available.notified();
@@ -281,6 +307,10 @@ impl TeamWorkerLease {
 }
 
 impl AgentControl {
+    pub(crate) fn team_worker_capacity_snapshot(&self) -> TeamWorkerCapacitySnapshot {
+        self.team_worker_limiter.capacity_snapshot()
+    }
+
     pub(crate) fn reserve_team_worker_spawn(
         &self,
         config: &Config,

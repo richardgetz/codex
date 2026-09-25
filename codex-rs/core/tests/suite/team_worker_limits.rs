@@ -8,6 +8,7 @@ const SHELL_LIMIT_SPAWN_CALL_ID: &str = "worker-limit-shell-first";
 const SHELL_LIMIT_SECOND_PROMPT: &str = "try another worker while shell runs";
 const SHELL_LIMIT_SECOND_TASK: &str = "the second worker must stay rejected";
 const SHELL_LIMIT_SECOND_SPAWN_CALL_ID: &str = "worker-limit-shell-second";
+const SHELL_LIMIT_CAPACITY_CALL_ID: &str = "worker-limit-shell-capacity";
 
 #[test_case(MultiAgentVersion::V1, MULTI_AGENT_V1_NAMESPACE; "legacy backend")]
 #[test_case(MultiAgentVersion::V2, MULTI_AGENT_V2_NAMESPACE; "v2 backend")]
@@ -182,17 +183,36 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         |request: &wiremock::Request| {
             body_contains(request, SHELL_LIMIT_SECOND_PROMPT)
                 && request_has_model(request, LEAD_MODEL)
-                && !request_has_function_call_output(request, SHELL_LIMIT_SECOND_SPAWN_CALL_ID)
+                && !request_has_function_call_output(request, SHELL_LIMIT_CAPACITY_CALL_ID)
         },
         sse(vec![
             ev_response_created("worker-limit-shell-root-3"),
+            ev_function_call_with_namespace(
+                SHELL_LIMIT_CAPACITY_CALL_ID,
+                tool_namespace,
+                "worker_capacity",
+                "{}",
+            ),
+            ev_completed("worker-limit-shell-root-3"),
+        ]),
+    )
+    .await;
+    let capacity_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, SHELL_LIMIT_CAPACITY_CALL_ID)
+                && !request_has_function_call_output(request, SHELL_LIMIT_SECOND_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("worker-limit-shell-root-3-capacity-response"),
             ev_function_call_with_namespace(
                 SHELL_LIMIT_SECOND_SPAWN_CALL_ID,
                 tool_namespace,
                 "spawn_agent",
                 &second_spawn_args,
             ),
-            ev_completed("worker-limit-shell-root-3"),
+            ev_completed("worker-limit-shell-root-3-capacity-response"),
         ]),
     )
     .await;
@@ -215,6 +235,29 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         ThreadSettingsOverrides::default(),
     )
     .await?;
+    let capacity_request = wait_for_captured_request(
+        &capacity_response,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, SHELL_LIMIT_CAPACITY_CALL_ID)
+        },
+        "shell test worker capacity snapshot",
+    )
+    .await;
+    let capacity_output = capacity_request
+        .function_call_output_text(SHELL_LIMIT_CAPACITY_CALL_ID)
+        .expect("worker capacity output");
+    let capacity_value: Value = serde_json::from_str(&capacity_output)?;
+    pretty_assertions::assert_eq!(
+        capacity_value,
+        json!({
+            "direct_worker_limit": 1,
+            "active_direct_workers": 1,
+            "pending_direct_spawns": 0,
+            "remaining_direct_slots": 0,
+        })
+    );
+
     let second_request = wait_for_captured_request(
         &root_after_second,
         |request| {

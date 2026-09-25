@@ -1,7 +1,6 @@
 use super::*;
 use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::openai_models::ToolMode;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadTeamSettingsUpdate;
 use core_test_support::responses::ev_custom_tool_call;
 
@@ -11,6 +10,7 @@ const LEAD_EXEC_CALL_ID: &str = "manager-only-lead-exec";
 const LEAD_SPAWN_CALL_ID: &str = "manager-only-lead-spawn";
 const WORKER_EXEC_CALL_ID: &str = "manager-only-worker-exec";
 const CODE_MODE_CALL_ID: &str = "manager-only-code-mode";
+const CODE_MODE_EXEC_CALL_ID: &str = "manager-only-code-mode-exec";
 
 fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverrides {
     ThreadSettingsOverrides {
@@ -66,18 +66,19 @@ fn request_has_custom_tool_call_output(request: &wiremock::Request, call_id: &st
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Result<()> {
+async fn manager_only_lead_and_worker_keep_execution_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let lead_exec_args = serde_json::to_string(&json!({"cmd": "pwd"}))?;
+    // This reaches the exec handler's argument parser without launching a process, so the test
+    // does not depend on host shell or sandbox permissions.
+    let exec_args = "{}";
     let lead_spawn_args = serde_json::to_string(&json!({
         "task_name": "manager_only_worker",
         "message": MANAGER_ONLY_WORKER_TASK,
     }))?;
-    let worker_exec_args = serde_json::to_string(&json!({"cmd": "pwd"}))?;
 
-    let lead_denial = mount_sse_once_match(
+    let lead_exec = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, MANAGER_ONLY_PROMPT)
@@ -86,7 +87,7 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         },
         sse(vec![
             ev_response_created("manager-only-lead-1"),
-            ev_function_call(LEAD_EXEC_CALL_ID, "exec_command", &lead_exec_args),
+            ev_function_call(LEAD_EXEC_CALL_ID, "exec_command", exec_args),
             ev_completed("manager-only-lead-1"),
         ]),
     )
@@ -118,7 +119,7 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         },
         sse(vec![
             ev_response_created("manager-only-worker-1"),
-            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", &worker_exec_args),
+            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", exec_args),
             ev_completed("manager-only-worker-1"),
         ]),
     )
@@ -150,7 +151,7 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
     )
     .await;
 
-    // These model catalog entries default to CodeModeOnly; exercise the direct tool gate here.
+    // These model catalog entries default to CodeModeOnly; exercise direct Lead tool use here.
     let mut builder = test_codex()
         .with_model_info_override(LEAD_MODEL, |model_info| {
             model_info.tool_mode = Some(ToolMode::Direct);
@@ -191,7 +192,7 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
     .await?;
 
     let lead_request = wait_for_captured_request(
-        &lead_denial,
+        &lead_exec,
         |request| {
             request.body_contains_text(MANAGER_ONLY_PROMPT)
                 && response_request_has_model(request, LEAD_MODEL)
@@ -206,8 +207,8 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         .expect("Lead Responses Lite tool definitions")["tools"]
         .to_string();
     assert!(
-        !lead_tools.contains("exec_command"),
-        "manager_only Lead should not receive execution tools: {lead_tools}"
+        lead_tools.contains("exec_command"),
+        "manager_only Lead should retain its normal execution tools: {lead_tools}"
     );
     assert!(
         lead_tools.contains(MULTI_AGENT_V2_NAMESPACE),
@@ -220,15 +221,16 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
             response_request_has_model(request, LEAD_MODEL)
                 && response_request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
         },
-        "manager-only Lead after denied execution call",
+        "manager-only Lead after exec handler argument rejection",
     )
     .await;
-    let denied_tool_output = lead_spawn_request
+    let lead_tool_output = lead_spawn_request
         .function_call_output_text(LEAD_EXEC_CALL_ID)
-        .expect("Lead execution call response");
+        .expect("Lead exec_command call response");
     assert!(
-        denied_tool_output.contains("manager_only Team Lead"),
-        "the runtime should reject an execution call even when the model emits one: {denied_tool_output}"
+        lead_tool_output.contains("failed to parse function arguments:")
+            && lead_tool_output.contains("missing field `cmd`"),
+        "the manager_only Lead exec call should reach its handler without launching a process: {lead_tool_output}"
     );
 
     let worker_request = wait_for_captured_request(
@@ -250,15 +252,23 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         worker_tools.contains("exec_command"),
         "Worker should retain execution tools: {worker_tools}"
     );
-    let _worker_final_request = wait_for_captured_request(
+    let worker_final_request = wait_for_captured_request(
         &worker_final,
         |request| {
             response_request_has_model(request, WORKER_MODEL)
                 && response_request_has_function_call_output(request, WORKER_EXEC_CALL_ID)
         },
-        "Worker after execution",
+        "Worker after exec handler argument rejection",
     )
     .await;
+    let worker_execution_output = worker_final_request
+        .function_call_output_text(WORKER_EXEC_CALL_ID)
+        .expect("Worker exec_command call response");
+    assert!(
+        worker_execution_output.contains("failed to parse function arguments:")
+            && worker_execution_output.contains("missing field `cmd`"),
+        "the Worker exec call should reach its handler without launching a process: {worker_execution_output}"
+    );
     let child_thread_id = worker_request.body_json()["client_metadata"]["thread_id"]
         .as_str()
         .and_then(|thread_id| ThreadId::from_string(thread_id).ok())
@@ -278,6 +288,47 @@ async fn manager_only_lead_delegates_while_worker_keeps_execution_tools() -> Res
         "manager-only Lead after Worker completion",
     )
     .await;
+    assert!(lead_request.body_contains_text("changes execution ownership, not tool access"));
+    assert!(lead_request.body_contains_text("one coherent outcome"));
+    assert!(lead_request.body_contains_text("edit-return/test-return/fix-return handoffs"));
+    assert!(lead_request.body_contains_text(
+        "Include applicable repository and skill instructions with each Worker assignment"
+    ));
+    assert!(
+        lead_request.body_contains_text("reuse the suitable Worker already familiar with the work")
+    );
+    assert!(lead_request.body_contains_text("use parallel Workers within runtime limits"));
+    assert!(lead_request.body_contains_text("Do not check routine progress"));
+    assert!(lead_request.body_contains_text(
+        "After delegation, finish the assessment and park under existing wake/deadline behavior"
+    ));
+    assert!(lead_request.body_contains_text("on human guidance or actionable reports, unblock, redirect, or reassign the responsible Worker as needed"));
+    assert!(lead_request.body_contains_text(
+        "Intervene for blockers, stalled work, clearly wrong direction, or consequential decisions"
+    ));
+    assert!(lead_request.body_contains_text("otherwise leave execution with the Worker"));
+    assert!(lead_request.body_contains_text("configured oversight deadline"));
+    assert!(lead_request.body_contains_text("Lead balance changes final-review depth"));
+    assert!(
+        !lead_request.body_contains_text("Higher Lead balance adds targeted review/checkpoints")
+    );
+    assert!(worker_request.body_contains_text("Own your assigned outcome through completion"));
+    assert!(
+        worker_request
+            .body_contains_text("applicable validation, debugging, and in-scope corrections")
+    );
+    assert!(
+        worker_request.body_contains_text("Do not hand back separate edit, test, or fix phases")
+    );
+    assert!(
+        worker_request
+            .body_contains_text("without waiting for routine Lead permission or check-ins")
+    );
+    assert!(worker_request.body_contains_text("one concise completion report"));
+    assert!(
+        worker_request
+            .body_contains_text("Avoid command-by-command or build narration and raw dumps")
+    );
     Ok(())
 }
 
@@ -382,8 +433,8 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
         .expect("manager-only Lead tool definitions")["tools"]
         .to_string();
     assert!(
-        !manager_only_tools.contains("exec_command"),
-        "manager_only Lead should not receive execution tools: {manager_only_tools}"
+        manager_only_tools.contains("exec_command"),
+        "manager_only Lead should retain execution tools: {manager_only_tools}"
     );
 
     submit_thread_settings(
@@ -476,8 +527,8 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
         .expect("resumed manager-only Lead tool definitions")["tools"]
         .to_string();
     assert!(
-        !resumed_tools.contains("exec_command"),
-        "resumed manager_only Lead should retain its restriction: {resumed_tools}"
+        resumed_tools.contains("exec_command"),
+        "resumed manager_only Lead should retain normal execution tools: {resumed_tools}"
     );
     Ok(())
 }
@@ -993,7 +1044,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
 #[test_case::test_case("gpt-6-sol"; "GPT-6 Sol")]
 #[test_case::test_case("gpt-6-astra"; "GPT-6 Astra")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
+async fn manager_only_code_mode_keeps_coordination_and_nested_execution(
     lead_model: &'static str,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1006,9 +1057,15 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
     let lead_code = format!(
         "const worker = await tools.collaboration__spawn_agent({lead_spawn_args});\ntext(JSON.stringify(worker));"
     );
-    let lead_exec_args = serde_json::to_string(&json!({ "cmd": "echo lead_execution_marker" }))?;
-    let worker_exec_args =
-        serde_json::to_string(&json!({ "cmd": "echo worker_execution_marker" }))?;
+    let lead_exec_code = r#"
+try {
+  await tools.exec_command({});
+  text("manager_only_code_mode_exec_unexpected_success");
+} catch (error) {
+  text(`manager_only_code_mode_exec_error:${error?.message ?? String(error)}`);
+}
+"#;
+    let worker_exec_args = "{}";
 
     let lead_code_mode = mount_sse_once_match(
         &server,
@@ -1024,8 +1081,7 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         ]),
     )
     .await;
-    // Simulate an out-of-contract direct shell call after the nested Code Mode delegation.
-    let lead_denial = mount_sse_once_match(
+    let lead_code_mode_exec = mount_sse_once_match(
         &server,
         move |request: &wiremock::Request| {
             request_has_model(request, lead_model)
@@ -1033,7 +1089,7 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         },
         sse(vec![
             ev_response_created("manager-only-code-mode-lead-2"),
-            ev_function_call(LEAD_EXEC_CALL_ID, "exec_command", &lead_exec_args),
+            ev_custom_tool_call(CODE_MODE_EXEC_CALL_ID, "exec", lead_exec_code),
             ev_completed("manager-only-code-mode-lead-2"),
         ]),
     )
@@ -1042,7 +1098,7 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         &server,
         move |request: &wiremock::Request| {
             request_has_model(request, lead_model)
-                && request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
+                && request_has_custom_tool_call_output(request, CODE_MODE_EXEC_CALL_ID)
         },
         sse(vec![
             ev_response_created("manager-only-code-mode-lead-3"),
@@ -1060,7 +1116,7 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         },
         sse(vec![
             ev_response_created("manager-only-code-mode-worker-1"),
-            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", &worker_exec_args),
+            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", worker_exec_args),
             ev_completed("manager-only-code-mode-worker-1"),
         ]),
     )
@@ -1098,11 +1154,6 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
                 .enable(Feature::MultiAgentV2)
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
-            // This fixture only runs harmless echo commands; avoid nesting Seatbelt under
-            // a Seatbelt test runner so the Worker can exercise its execution tool locally.
-            config
-                .set_legacy_sandbox_policy(SandboxPolicy::DangerFullAccess)
-                .expect("DangerFullAccess test policy");
             let profiles = config.team.profiles.as_mut().expect("team profiles");
             profiles.lead.model = lead_model.to_string();
             profiles.lead_work_policy = codex_config::TeamLeadWorkPolicy::ManagerOnly;
@@ -1153,11 +1204,17 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         !function_tools
             .iter()
             .any(|tool| tool["name"] == "exec_command"),
-        "Code Mode Lead should not receive direct execution tools: {function_tools:?}"
+        "Code Mode Only should keep shell calls inside functions.exec: {function_tools:?}"
+    );
+    assert!(
+        exec["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("exec_command(args:")),
+        "Code Mode Only should expose the shell tool through functions.exec: {exec}"
     );
 
-    let _denial_request = wait_for_captured_request(
-        &lead_denial,
+    let _exec_request = wait_for_captured_request(
+        &lead_code_mode_exec,
         |request| {
             response_request_has_model(request, lead_model)
                 && request
@@ -1165,24 +1222,25 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
                     .iter()
                     .any(|item| item["call_id"] == CODE_MODE_CALL_ID)
         },
-        "manager-only Lead after nested Code Mode delegation",
+        "manager-only Code Mode Lead after nested exec call",
     )
     .await;
-    let denied_tool_response = wait_for_captured_request(
+    let code_mode_exec_response = wait_for_captured_request(
         &lead_final,
         |request| {
             response_request_has_model(request, lead_model)
-                && response_request_has_function_call_output(request, LEAD_EXEC_CALL_ID)
+                && request
+                    .inputs_of_type("custom_tool_call_output")
+                    .iter()
+                    .any(|item| item["call_id"] == CODE_MODE_EXEC_CALL_ID)
         },
-        "manager-only Lead after denied execution",
+        "manager-only Code Mode Lead after nested exec call",
     )
     .await;
-    let denied_tool_output = denied_tool_response
-        .function_call_output_text(LEAD_EXEC_CALL_ID)
-        .expect("Lead execution call response");
     assert!(
-        denied_tool_output.contains("manager_only Team Lead"),
-        "manager-only must reject an execution call emitted by the Lead: {denied_tool_output}"
+        code_mode_exec_response.body_contains_text("manager_only_code_mode_exec_error:")
+            && code_mode_exec_response.body_contains_text("missing field `cmd`"),
+        "the manager_only Lead's Code Mode exec call should reach its handler without launching a process: {code_mode_exec_response:?}"
     );
 
     let worker_request = wait_for_captured_request(
@@ -1219,8 +1277,9 @@ async fn manager_only_code_mode_keeps_coordination_and_rejects_lead_execution(
         .function_call_output_text(WORKER_EXEC_CALL_ID)
         .expect("Worker execution call response");
     assert!(
-        worker_exec_output.contains("worker_execution_marker"),
-        "Worker execution should run successfully: {worker_exec_output}"
+        worker_exec_output.contains("failed to parse function arguments:")
+            && worker_exec_output.contains("missing field `cmd`"),
+        "the Worker exec call should reach its handler without launching a process: {worker_exec_output}"
     );
     let child_thread_id = worker_request.body_json()["client_metadata"]["thread_id"]
         .as_str()

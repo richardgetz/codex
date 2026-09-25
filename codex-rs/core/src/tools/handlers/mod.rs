@@ -34,6 +34,7 @@ mod send_message_to_user_async;
 mod send_user_message_async;
 pub(crate) mod shell_spec;
 mod sleep;
+pub(crate) mod team_worker_capacity;
 mod test_sync;
 pub(crate) mod test_sync_spec;
 mod tool_search;
