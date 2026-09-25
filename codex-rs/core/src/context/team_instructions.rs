@@ -160,8 +160,7 @@ impl ContextualUserFragment for TeamInstructions {
             });
         }
         if self.role == Some(TeamRole::Lead)
-            && let Some(guidance) =
-                lead_balance_guidance(self.lead_balance, self.lead_work_policy)
+            && let Some(guidance) = lead_balance_guidance(self.lead_balance, self.lead_work_policy)
         {
             instructions.push_str(guidance);
         }
