@@ -291,11 +291,16 @@ async fn manager_only_lead_and_worker_keep_execution_tools() -> Result<()> {
     assert!(lead_request.body_contains_text("changes execution ownership, not tool access"));
     assert!(lead_request.body_contains_text("one coherent outcome"));
     assert!(lead_request.body_contains_text("edit-return/test-return/fix-return handoffs"));
+    assert!(lead_request.body_contains_text("Include applicable repository and skill instructions with each Worker assignment"));
     assert!(lead_request.body_contains_text("reuse the suitable Worker already familiar with the work"));
     assert!(
         lead_request.body_contains_text("use parallel Workers within runtime limits")
     );
     assert!(lead_request.body_contains_text("Do not check routine progress"));
+    assert!(lead_request.body_contains_text("After delegation, finish the assessment and park under existing wake/deadline behavior"));
+    assert!(lead_request.body_contains_text("on human guidance or actionable reports, unblock, redirect, or reassign the responsible Worker as needed"));
+    assert!(lead_request.body_contains_text("Intervene for blockers, stalled work, clearly wrong direction, or consequential decisions"));
+    assert!(lead_request.body_contains_text("otherwise leave execution with the Worker"));
     assert!(lead_request.body_contains_text("configured oversight deadline"));
     assert!(lead_request.body_contains_text("Lead balance changes final-review depth"));
     assert!(!lead_request.body_contains_text("Higher Lead balance adds targeted review/checkpoints"));

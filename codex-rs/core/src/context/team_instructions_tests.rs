@@ -102,6 +102,8 @@ fn manager_only_guidance_is_lead_only_and_keeps_worker_tools_independent() {
     assert!(manager_body.contains("through completion"));
     assert!(manager_body.contains("Do not duplicate that execution"));
     assert!(manager_body.contains("edit-return/test-return/fix-return handoffs"));
+    assert!(manager_body.contains("Include applicable repository and skill instructions with each Worker assignment"));
+    assert!(manager_body.contains("do not move execution back to the Lead"));
     assert!(manager_body.contains("reuse the suitable Worker already familiar with the work"));
     assert!(manager_body.contains("substantial independent work with little overlap"));
     assert!(manager_body.contains("use parallel Workers within runtime limits"));
@@ -109,6 +111,10 @@ fn manager_only_guidance_is_lead_only_and_keeps_worker_tools_independent() {
     assert!(manager_body.contains("a capacity lookup is not required"));
     assert!(manager_body.contains("ask the responsible Worker one scoped fact/status question"));
     assert!(manager_body.contains("Do not check routine progress"));
+    assert!(manager_body.contains("After delegation, finish the assessment and park under existing wake/deadline behavior"));
+    assert!(manager_body.contains("on human guidance or actionable reports, unblock, redirect, or reassign the responsible Worker as needed"));
+    assert!(manager_body.contains("Intervene for blockers, stalled work, clearly wrong direction, or consequential decisions"));
+    assert!(manager_body.contains("otherwise leave execution with the Worker"));
     assert!(manager_body.contains("configured oversight deadline"));
     assert!(manager_body.contains("Lead balance changes final-review depth"));
     assert!(!manager_body.contains("Higher Lead balance adds targeted review/checkpoints"));

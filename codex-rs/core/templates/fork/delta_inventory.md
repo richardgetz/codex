@@ -78,9 +78,11 @@ release or merge rules.
   Lead. ManagerOnly omits generic Lead dynamic-handoff checkpoint language;
   Lead balance adjusts final-review depth and consequential decisions, not
   routine progress checks. The Lead avoids duplicate work and routine progress
-  checks, and redirects only for a blocker, clear wrong direction, or stalled
-  Worker while the Lead retains consequential decisions and final acceptance;
-  explicit delegation and authorization restrictions remain binding. This guides
+  checks; responds to human guidance and actionable reports with scoped
+  unblocking, redirection, or reassignment; and intervenes for a blocker, stalled
+  Worker, clear wrong direction, or consequential decision while retaining final
+  acceptance. Explicit delegation and authorization restrictions remain binding.
+  This guides
   execution ownership without restricting tools: the Lead and Workers retain
   their normal tools under configured permissions, sandbox, and approval rules.
   The Lead keeps ordinary registry, model-visible, direct-dispatch, and Code
@@ -1192,8 +1194,11 @@ release or merge rules.
   work, and allows practical parallelism for independent low-overlap work within
   the configured runtime limit. Caps remain ceilings, not targets, and no
   capacity lookup is required before each spawn. Routine Lead execution and
-  check-ins stay suppressed; redirection is reserved for blockers, stalled work,
-  or clearly wrong direction, and final review remains with the Lead. Generic
+  check-ins stay suppressed; human guidance and actionable reports can prompt
+  scoped unblocking, redirection, or reassignment. The Lead intervenes for
+  blockers, stalled work, clearly wrong direction, or consequential decisions;
+  otherwise execution stays with the Worker, and final review remains with the
+  Lead. Generic
   dynamic-handoff text that invites higher-balance mid-work checkpoints is
   omitted from assembled ManagerOnly Lead context; ManagerOnly balance changes
   only final-review depth and consideration of material consequences. The
