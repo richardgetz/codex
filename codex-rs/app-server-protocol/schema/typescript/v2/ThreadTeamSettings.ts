@@ -4,8 +4,13 @@
 import type { ReasoningEffort } from "../ReasoningEffort";
 import type { TeamMode } from "../TeamMode";
 import type { TeamRole } from "../TeamRole";
+import type { TeamLeadWorkPolicy } from "./TeamLeadWorkPolicy";
 
 /**
  * Effective team state returned in thread settings.
  */
-export type ThreadTeamSettings = { mode: TeamMode, role: TeamRole | null, leadModel: string | null, leadReasoningEffort: ReasoningEffort | null, leadBalance: number | null, workerModel: string | null, workerReasoningEffort: ReasoningEffort | null, previousModel: string | null, previousReasoningEffort: ReasoningEffort | null, };
+export type ThreadTeamSettings = { mode: TeamMode, role: TeamRole | null, leadModel: string | null, leadReasoningEffort: ReasoningEffort | null, leadBalance: number | null,
+/**
+ * Lead execution policy captured in this thread's team settings.
+ */
+leadWorkPolicy: TeamLeadWorkPolicy | null, workerModel: string | null, workerReasoningEffort: ReasoningEffort | null, previousModel: string | null, previousReasoningEffort: ReasoningEffort | null, };

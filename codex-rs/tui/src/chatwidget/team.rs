@@ -1,16 +1,17 @@
 //! Slash-command parsing and authoritative status rendering for Lead/Worker teams.
 
 use super::ChatWidget;
+use super::team_work_policy::lead_work_policy_label;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadTeamSettings;
 
-pub(crate) const TEAM_USAGE: &str =
-    "Usage: /team [on|off|status|balance [1..5]|lead [<model> <effort>]|worker [<model> <effort>]]";
+pub(crate) const TEAM_USAGE: &str = "Usage: /team [on|off|status|balance [1..5]|work-policy [prompt_guided|manager_only]|lead [<model> <effort>]|worker [<model> <effort>]]";
 
 const LEAD_BALANCE_OPTIONS: [(u8, &str, &str); 5] = [
     (
@@ -57,6 +58,10 @@ pub(crate) enum TeamCommand {
     ConfigureBalance {
         balance: u8,
     },
+    SelectWorkPolicy,
+    ConfigureWorkPolicy {
+        policy: TeamLeadWorkPolicy,
+    },
 }
 
 pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str> {
@@ -74,6 +79,19 @@ pub(crate) fn parse_team_command(args: &str) -> Result<TeamCommand, &'static str
                 .filter(|balance| (1..=5).contains(balance))
                 .map(|balance| TeamCommand::ConfigureBalance { balance })
                 .ok_or(TEAM_USAGE),
+            Some(_) => Err(TEAM_USAGE),
+        },
+        "work-policy" => match parts.next() {
+            None => Ok(TeamCommand::SelectWorkPolicy),
+            Some(policy) if parts.next().is_none() => match policy.to_ascii_lowercase().as_str() {
+                "prompt_guided" => Ok(TeamCommand::ConfigureWorkPolicy {
+                    policy: TeamLeadWorkPolicy::PromptGuided,
+                }),
+                "manager_only" => Ok(TeamCommand::ConfigureWorkPolicy {
+                    policy: TeamLeadWorkPolicy::ManagerOnly,
+                }),
+                _ => Err(TEAM_USAGE),
+            },
             Some(_) => Err(TEAM_USAGE),
         },
         "lead" | "worker" => {
@@ -254,7 +272,8 @@ impl ChatWidget {
             TeamCommand::Off => team.mode == TeamMode::Off,
             TeamCommand::Status
             | TeamCommand::SelectProfile { .. }
-            | TeamCommand::SelectBalance => false,
+            | TeamCommand::SelectBalance
+            | TeamCommand::SelectWorkPolicy => false,
             TeamCommand::ConfigureProfile {
                 role,
                 model,
@@ -265,15 +284,82 @@ impl ChatWidget {
                     .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
                     == *balance
             }
+            TeamCommand::ConfigureWorkPolicy { policy } => {
+                team.lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                    == *policy
+            }
         }
     }
 
-    pub(crate) fn set_pending_team_command(&mut self, command: TeamCommand) {
+    pub(crate) fn set_pending_team_command(&mut self, command: TeamCommand) -> uuid::Uuid {
+        let request_id = uuid::Uuid::new_v4();
         self.pending_team_command = Some(command);
+        self.pending_team_command_request_id = Some(request_id);
+        request_id
     }
 
     pub(crate) fn clear_pending_team_command(&mut self) {
         self.pending_team_command = None;
+        self.pending_team_command_request_id = None;
+    }
+
+    pub(crate) fn on_team_settings_update_timeout(&mut self, request_id: uuid::Uuid) {
+        if self.pending_team_command_request_id != Some(request_id) {
+            return;
+        }
+        let Some(command) = self.pending_team_command.clone() else {
+            return;
+        };
+
+        let confirmed = self
+            .team_settings
+            .as_ref()
+            .is_some_and(|team| match &command {
+                TeamCommand::On => team.mode == TeamMode::LeadWorker,
+                TeamCommand::Off => team.mode == TeamMode::Off,
+                TeamCommand::ConfigureProfile {
+                    role,
+                    model,
+                    effort,
+                } => team_profile_matches(team, *role, model, effort),
+                TeamCommand::ConfigureBalance { balance } => {
+                    team.lead_balance
+                        .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
+                        == *balance
+                }
+                TeamCommand::ConfigureWorkPolicy { policy } => {
+                    team.lead_work_policy
+                        .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                        == *policy
+                }
+                TeamCommand::Status
+                | TeamCommand::SelectProfile { .. }
+                | TeamCommand::SelectBalance
+                | TeamCommand::SelectWorkPolicy => false,
+            });
+
+        if confirmed {
+            self.add_info_message(format_team_status(self.team_settings.as_ref()), None);
+        } else {
+            let setting = match command {
+                TeamCommand::On | TeamCommand::Off => "team mode",
+                TeamCommand::ConfigureProfile { .. } => "team profile",
+                TeamCommand::ConfigureBalance { .. } => "Lead usage/confidence balance",
+                TeamCommand::ConfigureWorkPolicy { .. } => "Lead work policy",
+                TeamCommand::Status
+                | TeamCommand::SelectProfile { .. }
+                | TeamCommand::SelectBalance
+                | TeamCommand::SelectWorkPolicy => {
+                    self.clear_pending_team_command();
+                    return;
+                }
+            };
+            self.add_error_message(format!(
+                "The app server did not confirm the {setting} update. Check /team status; if it is unchanged, update the server and try again."
+            ));
+        }
+        self.clear_pending_team_command();
     }
 
     /// Shows confirmation only when the server snapshot matches the requested mode.
@@ -292,8 +378,9 @@ impl ChatWidget {
             TeamCommand::Off => TeamMode::Off,
             TeamCommand::Status
             | TeamCommand::SelectProfile { .. }
-            | TeamCommand::SelectBalance => {
-                self.pending_team_command = None;
+            | TeamCommand::SelectBalance
+            | TeamCommand::SelectWorkPolicy => {
+                self.clear_pending_team_command();
                 return;
             }
             TeamCommand::ConfigureProfile {
@@ -303,7 +390,7 @@ impl ChatWidget {
             } => {
                 if team_profile_matches(team, role, &model, &effort) {
                     self.add_info_message(format_team_status(Some(team)), None);
-                    self.pending_team_command = None;
+                    self.clear_pending_team_command();
                 }
                 return;
             }
@@ -314,14 +401,31 @@ impl ChatWidget {
                     == balance
                 {
                     self.add_info_message(format_team_status(Some(team)), None);
-                    self.pending_team_command = None;
+                    self.clear_pending_team_command();
                 }
+                return;
+            }
+            TeamCommand::ConfigureWorkPolicy { policy } => {
+                if team
+                    .lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                    == policy
+                {
+                    self.add_info_message(format_team_status(Some(team)), None);
+                } else {
+                    // Settings notifications have no request identity and can
+                    // arrive out of order. A snapshot that does not match the
+                    // requested policy cannot reject this update; the bounded
+                    // timeout reports failure if no matching snapshot arrives.
+                    return;
+                }
+                self.clear_pending_team_command();
                 return;
             }
         };
         if team.mode == expected_mode {
             self.add_info_message(format_team_status(Some(team)), None);
-            self.pending_team_command = None;
+            self.clear_pending_team_command();
         }
     }
 }
@@ -356,6 +460,15 @@ pub(crate) fn format_team_status(team: Option<&ThreadTeamSettings>) -> String {
     let mut lines = vec![format!("Lead/Worker team: {mode}")];
     if let Some(role) = team.role {
         lines.push(format!("Role: {}", role_label(role)));
+    }
+    if team.role == Some(TeamRole::Lead) {
+        lines.push(format!(
+            "Lead work policy: {}",
+            lead_work_policy_label(
+                team.lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+            )
+        ));
     }
     if let Some(profile) = team_profile_line(
         "Lead",

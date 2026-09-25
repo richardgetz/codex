@@ -1,3 +1,4 @@
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTeamSettingsUpdate;
 use codex_protocol::protocol::ThreadTeamSettings as CoreThreadTeamSettings;
@@ -13,6 +14,7 @@ pub(crate) fn team_settings_from_core(
         lead_model: settings.lead_model,
         lead_reasoning_effort: settings.lead_reasoning_effort,
         lead_balance: settings.lead_balance,
+        lead_work_policy: settings.lead_work_policy.map(Into::into),
         worker_model: settings.worker_model,
         worker_reasoning_effort: settings.worker_reasoning_effort,
         previous_model: settings.previous_model,
@@ -33,6 +35,7 @@ pub(crate) fn team_settings_update_to_core(
         model: update.model,
         reasoning_effort: update.reasoning_effort,
         lead_balance: update.lead_balance,
+        lead_work_policy: update.lead_work_policy.map(TeamLeadWorkPolicy::to_core),
     }
 }
 
@@ -46,20 +49,22 @@ mod tests {
     #[test]
     fn preserves_sparse_profile_patch_fields() {
         let update = ThreadTeamSettingsUpdate {
-            mode: TeamMode::Off,
-            role: Some(TeamRole::Worker),
+            mode: TeamMode::LeadWorker,
+            role: Some(TeamRole::Lead),
             model: Some("gpt-5.6-sol".to_string()),
             reasoning_effort: Some(ReasoningEffort::High),
             lead_balance: None,
+            lead_work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
         };
         assert_eq!(
             team_settings_update_to_core(update),
             CoreThreadTeamSettingsUpdate {
-                mode: codex_protocol::protocol::TeamMode::Off,
-                role: Some(codex_protocol::protocol::TeamRole::Worker),
+                mode: codex_protocol::protocol::TeamMode::LeadWorker,
+                role: Some(codex_protocol::protocol::TeamRole::Lead),
                 model: Some("gpt-5.6-sol".to_string()),
                 reasoning_effort: Some(ReasoningEffort::High),
                 lead_balance: None,
+                lead_work_policy: Some(codex_protocol::protocol::TeamLeadWorkPolicy::ManagerOnly),
             }
         );
     }

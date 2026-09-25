@@ -190,9 +190,15 @@ pub(crate) fn world_state_policy(
             } else {
                 codex_config::DEFAULT_TEAM_LEAD_BALANCE
             };
+            let lead_work_policy = if role == TeamRole::Lead {
+                config.effective_team_lead_work_policy()
+            } else {
+                codex_config::TeamLeadWorkPolicy::PromptGuided
+            };
             TeamPolicyState::new(role, worker_max_concurrent)
                 .with_dynamic_handoff(dynamic_handoff)
                 .with_lead_balance(lead_balance)
+                .with_lead_work_policy(lead_work_policy)
         })
     } else if config.team_state_persisted {
         Some(TeamPolicyState::disabled())
@@ -236,6 +242,7 @@ pub(crate) fn team_update_changes_profile(update: &ThreadTeamSettingsUpdate) -> 
         || update.model.is_some()
         || update.reasoning_effort.is_some()
         || update.lead_balance.is_some()
+        || update.lead_work_policy.is_some()
 }
 
 /// Applies a sparse profile patch to a cloned config before it is validated or
@@ -248,13 +255,31 @@ pub(crate) fn apply_team_profile_update(
     if !team_update_changes_profile(update) {
         return Ok(());
     }
-    let role = update
-        .role
-        .ok_or_else(|| invalid_team("profile role is required when updating a team profile"))?;
-    if update.model.is_none() && update.reasoning_effort.is_none() && update.lead_balance.is_none()
-    {
+    let has_assignment_update = update.model.is_some()
+        || update.reasoning_effort.is_some()
+        || update.lead_balance.is_some();
+    let role = match update.role {
+        Some(role) => role,
+        None if update.lead_work_policy.is_some() && !has_assignment_update => TeamRole::Lead,
+        None => {
+            return Err(invalid_team(
+                "profile role is required when updating a team profile",
+            ));
+        }
+    };
+    if has_assignment_update && update.role.is_none() {
         return Err(invalid_team(
-            "a team profile update must include a model, reasoning effort, or Lead balance",
+            "profile role is required when updating a team profile",
+        ));
+    }
+    if !has_assignment_update && update.lead_work_policy.is_none() {
+        return Err(invalid_team(
+            "a team profile update must include a model, reasoning effort, Lead balance, or Lead work policy",
+        ));
+    }
+    if update.lead_work_policy.is_some() && role != TeamRole::Lead {
+        return Err(invalid_team(
+            "Lead work policy can only be updated for the Lead profile",
         ));
     }
     let mut profiles = config
@@ -292,6 +317,9 @@ pub(crate) fn apply_team_profile_update(
     if let Some(balance) = update.lead_balance {
         profiles.lead_balance = balance;
     }
+    if let Some(lead_work_policy) = update.lead_work_policy {
+        profiles.lead_work_policy = lead_work_policy;
+    }
     config.team_runtime_profiles = Some(profiles);
     Ok(())
 }
@@ -312,6 +340,19 @@ pub(crate) fn apply_team_update(
     team_update: ThreadTeamSettingsUpdate,
     step_settings_update: &mut StepSettingsUpdate,
 ) -> ConstraintResult<()> {
+    if team_update.lead_work_policy.is_some()
+        && (team_update.mode != codex_protocol::protocol::TeamMode::LeadWorker
+            || current_configuration.original_config_do_not_use.team_mode
+                != codex_protocol::protocol::TeamMode::LeadWorker
+            || effective_role_for_session_source(
+                current_configuration.original_config_do_not_use.as_ref(),
+                &current_configuration.session_source,
+            ) != Some(ConfigTeamRole::Lead))
+    {
+        return Err(invalid_team(
+            "Lead work policy can only be changed on an active Lead thread",
+        ));
+    }
     if team_update.mode == codex_protocol::protocol::TeamMode::Off
         && effective_role_for_session_source(
             next_configuration.original_config_do_not_use.as_ref(),

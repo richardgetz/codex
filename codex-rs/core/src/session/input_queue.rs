@@ -10,6 +10,7 @@ use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -115,11 +116,24 @@ struct PendingMailboxCommunication {
 struct TeamLeadProgressBuffer {
     entries: VecDeque<TeamLeadProgressEntry>,
     bytes: usize,
+    completion_generation: u64,
+    completion_pending: bool,
+    pending_completion_delivery_acks: HashSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum TeamLeadProgressKind {
+    Routine,
+    Completion,
 }
 
 struct TeamLeadProgressEntry {
     author: String,
     message: String,
+}
+
+pub(crate) struct ClaimedManagerCompletionBatch {
+    pub(crate) progress_summary: Option<String>,
 }
 
 impl InputQueue {
@@ -159,6 +173,26 @@ impl InputQueue {
     /// Retains routine Worker progress without publishing mailbox activity. The bounded buffer is
     /// summarized only when an actionable wake reaches the Lead.
     pub(crate) async fn enqueue_team_lead_progress(&self, communication: InterAgentCommunication) {
+        self.enqueue_team_lead_progress_entry(communication, TeamLeadProgressKind::Routine)
+            .await;
+    }
+
+    /// Retains a bounded terminal Worker result for the manager-only completion batch.
+    /// The generation lets a short quiet-window flush coalesce concurrent completions while
+    /// actionable input can drain the same buffer first.
+    pub(crate) async fn enqueue_team_lead_completion(
+        &self,
+        communication: InterAgentCommunication,
+    ) -> u64 {
+        self.enqueue_team_lead_progress_entry(communication, TeamLeadProgressKind::Completion)
+            .await
+    }
+
+    async fn enqueue_team_lead_progress_entry(
+        &self,
+        communication: InterAgentCommunication,
+        kind: TeamLeadProgressKind,
+    ) -> u64 {
         let message = if communication.encrypted_content.is_some() {
             "[encrypted routine progress]".to_string()
         } else {
@@ -170,6 +204,10 @@ impl InputQueue {
         };
         let entry_bytes = entry.author.len() + entry.message.len() + 4;
         let mut progress = self.team_lead_progress.lock().await;
+        if let TeamLeadProgressKind::Completion = kind {
+            progress.completion_generation = progress.completion_generation.wrapping_add(1);
+            progress.completion_pending = true;
+        }
         progress.bytes = progress.bytes.saturating_add(entry_bytes);
         progress.entries.push_back(entry);
         while progress.entries.len() > TEAM_LEAD_PROGRESS_MAX_ITEMS
@@ -183,43 +221,84 @@ impl InputQueue {
                 .bytes
                 .saturating_sub(removed.author.len() + removed.message.len() + 4);
         }
+        progress.completion_generation
+    }
+
+    /// Atomically claims a pending generation and drains its summary before an explicit user turn
+    /// can consume the same progress buffer.
+    pub(crate) async fn take_manager_completion_batch(
+        &self,
+        generation: u64,
+    ) -> Option<ClaimedManagerCompletionBatch> {
+        let mut progress = self.team_lead_progress.lock().await;
+        if !progress.completion_pending
+            || progress.completion_generation != generation
+            || !progress.pending_completion_delivery_acks.is_empty()
+        {
+            return None;
+        }
+        progress.completion_pending = false;
+        Some(ClaimedManagerCompletionBatch {
+            progress_summary: take_team_progress_summary_locked(&mut progress),
+        })
+    }
+
+    pub(crate) async fn has_pending_manager_completion(&self) -> bool {
+        self.team_lead_progress.lock().await.completion_pending
+    }
+
+    /// Returns the latest buffered completion generation so a Lead work-policy update can
+    /// release a batch whose original quiet-window callback already observed active Workers.
+    pub(crate) async fn pending_manager_completion_generation(&self) -> Option<u64> {
+        let progress = self.team_lead_progress.lock().await;
+        progress
+            .completion_pending
+            .then_some(progress.completion_generation)
+    }
+
+    /// Registers a queued completion before it enters the parent submission loop. Batch claims
+    /// share this lock so an older quiet timer cannot split the batch around this delivery.
+    pub(crate) async fn register_manager_completion_delivery_ack(&self, submission_id: String) {
+        self.team_lead_progress
+            .lock()
+            .await
+            .pending_completion_delivery_acks
+            .insert(submission_id);
+    }
+
+    /// Releases one queued completion after insertion, rejection, or enqueue failure.
+    pub(crate) async fn release_manager_completion_delivery_ack(
+        &self,
+        submission_id: &str,
+    ) -> bool {
+        self.team_lead_progress
+            .lock()
+            .await
+            .pending_completion_delivery_acks
+            .remove(submission_id)
+    }
+
+    pub(crate) async fn clear_manager_completion_delivery_acks(&self) {
+        self.team_lead_progress
+            .lock()
+            .await
+            .pending_completion_delivery_acks
+            .clear();
     }
 
     /// Drains routine progress into a fixed-size summary for an actionable Lead wake.
     pub(crate) async fn take_team_progress_summary(&self) -> Option<String> {
         let mut progress = self.team_lead_progress.lock().await;
-        if progress.entries.is_empty() {
-            return None;
-        }
-        let entries = progress.entries.drain(..).collect::<Vec<_>>();
-        progress.bytes = 0;
-        let mut lines = Vec::new();
-        let mut summary_bytes = "Routine Worker progress summary (".len()
-            + entries.len().to_string().len()
-            + " retained updates):".len();
-        for entry in entries.into_iter().rev() {
-            let line = format!("\n- {}: {}", entry.author, entry.message);
-            if summary_bytes + line.len() > TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES {
-                break;
-            }
-            summary_bytes += line.len();
-            lines.push(line);
-        }
-        lines.reverse();
-        let mut summary = format!(
-            "Routine Worker progress summary ({} retained updates):",
-            lines.len()
-        );
-        for line in lines {
-            summary.push_str(&line);
-        }
-        Some(summary)
+        progress.completion_pending = false;
+        take_team_progress_summary_locked(&mut progress)
     }
 
     pub(crate) async fn clear_team_lead_progress(&self) {
         let mut progress = self.team_lead_progress.lock().await;
         progress.entries.clear();
         progress.bytes = 0;
+        progress.completion_generation = progress.completion_generation.wrapping_add(1);
+        progress.completion_pending = false;
     }
 
     pub(crate) async fn subscribe_activity(
@@ -641,6 +720,36 @@ impl InputQueue {
     }
 }
 
+fn take_team_progress_summary_locked(progress: &mut TeamLeadProgressBuffer) -> Option<String> {
+    if progress.entries.is_empty() {
+        progress.bytes = 0;
+        return None;
+    }
+    let entries = progress.entries.drain(..).collect::<Vec<_>>();
+    progress.bytes = 0;
+    let mut lines = Vec::new();
+    let mut summary_bytes = "Routine Worker progress summary (".len()
+        + entries.len().to_string().len()
+        + " retained updates):".len();
+    for entry in entries.into_iter().rev() {
+        let line = format!("\n- {}: {}", entry.author, entry.message);
+        if summary_bytes + line.len() > TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES {
+            break;
+        }
+        summary_bytes += line.len();
+        lines.push(line);
+    }
+    lines.reverse();
+    let mut summary = format!(
+        "Routine Worker progress summary ({} retained updates):",
+        lines.len()
+    );
+    for line in lines {
+        summary.push_str(&line);
+    }
+    Some(summary)
+}
+
 fn truncate_progress_message(message: &str) -> String {
     if message.len() <= TEAM_LEAD_PROGRESS_ITEM_MAX_BYTES {
         return message.to_string();
@@ -1040,6 +1149,83 @@ mod tests {
             .enqueue_mailbox_communication(trigger_mail, Default::default())
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn manager_completion_batch_stays_bounded_and_drains_once() {
+        let input_queue = InputQueue::new();
+        let worker = AgentPath::try_from("/root/worker").expect("agent path");
+        let latest_generation = input_queue
+            .enqueue_team_lead_completion(make_mail(
+                worker,
+                AgentPath::root(),
+                "completion result",
+                /*trigger_turn*/ false,
+            ))
+            .await;
+
+        assert!(input_queue.has_pending_manager_completion().await);
+        assert_eq!(
+            input_queue.take_team_progress_summary().await,
+            Some(
+                "Routine Worker progress summary (1 retained updates):\n- /root/worker: completion result"
+                    .to_string()
+            )
+        );
+        assert!(!input_queue.has_pending_manager_completion().await);
+        assert!(
+            input_queue
+                .take_manager_completion_batch(latest_generation)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_progress_drain_races_atomically_with_completion_batch_claim() {
+        let input_queue = std::sync::Arc::new(InputQueue::new());
+        let generation = input_queue
+            .enqueue_team_lead_completion(make_mail(
+                AgentPath::try_from("/root/worker").expect("agent path"),
+                AgentPath::root(),
+                "completion result",
+                /*trigger_turn*/ false,
+            ))
+            .await;
+        let start = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+
+        let batch_queue = std::sync::Arc::clone(&input_queue);
+        let batch_start = std::sync::Arc::clone(&start);
+        let batch_claim = tokio::spawn(async move {
+            batch_start.wait().await;
+            batch_queue.take_manager_completion_batch(generation).await
+        });
+
+        let user_queue = std::sync::Arc::clone(&input_queue);
+        let user_start = std::sync::Arc::clone(&start);
+        let user_drain = tokio::spawn(async move {
+            user_start.wait().await;
+            user_queue.take_team_progress_summary().await
+        });
+
+        start.wait().await;
+        let batch = batch_claim.await.expect("batch claim task");
+        let user_summary = user_drain.await.expect("user drain task");
+
+        assert_ne!(
+            batch.is_some(),
+            user_summary.is_some(),
+            "the queue lock must give the completion summary to exactly one consumer"
+        );
+        if let Some(batch) = batch {
+            assert!(
+                batch
+                    .progress_summary
+                    .as_deref()
+                    .is_some_and(|summary| summary.contains("completion result"))
+            );
+        }
+        assert!(!input_queue.has_pending_manager_completion().await);
     }
 
     #[tokio::test]

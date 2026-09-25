@@ -1,4 +1,5 @@
 use super::*;
+use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::items::TurnItem;
 use pretty_assertions::assert_eq;
 
@@ -520,6 +521,633 @@ async fn team_lead_ignores_routine_progress_until_worker_completion() -> Result<
     assert_eq!(
         lead_requests, 4,
         "explicit action and Worker completion should each wake the Lead once"
+    );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(())
+}
+
+const MANAGER_BATCH_ROOT_PROMPT: &str = "delegate two workers and batch their results";
+const MANAGER_BATCH_FIRST_TASK: &str = "manager batch first worker task";
+const MANAGER_BATCH_SECOND_TASK: &str = "manager batch second worker task";
+const MANAGER_BATCH_FIRST_SPAWN_CALL_ID: &str = "manager-batch-first-spawn";
+const MANAGER_BATCH_SECOND_SPAWN_CALL_ID: &str = "manager-batch-second-spawn";
+const MANAGER_BATCH_FIRST_GATE_CALL_ID: &str = "manager-batch-first-gate";
+const MANAGER_BATCH_SECOND_GATE_CALL_ID: &str = "manager-batch-second-gate";
+const MANAGER_BATCH_ROOT_WAIT_CALL_ID: &str = "manager-batch-root-wait";
+const MANAGER_BATCH_ACTION_CALL_ID: &str = "manager-batch-action";
+const MANAGER_BATCH_GATE_ID: &str = "manager-batch-gate";
+const MANAGER_BATCH_ACTION_MESSAGE: &str = "second worker asks for immediate review";
+const MANAGER_BATCH_FIRST_RESULT: &str = "first manager batch result marker";
+const MANAGER_BATCH_SECOND_RESULT: &str = "second manager batch result marker";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manager_only_batches_successful_worker_completions_and_wakes_for_action() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let first_spawn_args = serde_json::to_string(&json!({
+        "message": MANAGER_BATCH_FIRST_TASK,
+        "task_name": "manager_batch_first",
+        "fork_turns": "none",
+    }))?;
+    let second_spawn_args = serde_json::to_string(&json!({
+        "message": MANAGER_BATCH_SECOND_TASK,
+        "task_name": "manager_batch_second",
+        "fork_turns": "none",
+    }))?;
+    let gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": MANAGER_BATCH_GATE_ID,
+            "participants": 2,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let action_args = serde_json::to_string(&json!({
+        "target": "/root",
+        "message": MANAGER_BATCH_ACTION_MESSAGE,
+    }))?;
+    let root_wait_args = serde_json::to_string(&json!({ "timeout_ms": 1 }))?;
+
+    let root_initial = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_ROOT_PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+                && !request_has_function_call_output(request, MANAGER_BATCH_FIRST_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-initial"),
+            ev_function_call_with_namespace(
+                MANAGER_BATCH_FIRST_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &first_spawn_args,
+            ),
+            ev_function_call_with_namespace(
+                MANAGER_BATCH_SECOND_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &second_spawn_args,
+            ),
+            ev_completed("manager-batch-root-initial"),
+        ]),
+    )
+    .await;
+    let root_after_spawns = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_FIRST_SPAWN_CALL_ID)
+                && request_has_function_call_output(request, MANAGER_BATCH_SECOND_SPAWN_CALL_ID)
+                && !request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-wait"),
+            ev_function_call_with_namespace(
+                MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                &root_wait_args,
+            ),
+            ev_completed("manager-batch-root-wait"),
+        ]),
+    )
+    .await;
+    let root_after_action = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-action"),
+            ev_assistant_message("manager-batch-root-action-message", "action wake observed"),
+            ev_completed("manager-batch-root-action"),
+        ]),
+    )
+    .await;
+    let root_after_batch = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-completion"),
+            ev_assistant_message(
+                "manager-batch-root-completion-message",
+                "both Worker results reviewed",
+            ),
+            ev_completed("manager-batch-root-completion"),
+        ]),
+    )
+    .await;
+
+    let _first_worker_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_FIRST_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, MANAGER_BATCH_FIRST_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-first-worker-gate"),
+            ev_function_call(
+                MANAGER_BATCH_FIRST_GATE_CALL_ID,
+                "test_sync_tool",
+                &gate_args,
+            ),
+            ev_completed("manager-batch-first-worker-gate"),
+        ]),
+    )
+    .await;
+    let _first_worker_result = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_FIRST_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-first-worker-result"),
+            ev_assistant_message(
+                "manager-batch-first-worker-message",
+                MANAGER_BATCH_FIRST_RESULT,
+            ),
+            ev_completed("manager-batch-first-worker-result"),
+        ]),
+    )
+    .await;
+    let _second_worker_action = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_SECOND_TASK)
+                && request_has_model(request, WORKER_MODEL)
+                && !request_has_function_call_output(request, MANAGER_BATCH_ACTION_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-second-worker-action"),
+            ev_function_call(
+                MANAGER_BATCH_ACTION_CALL_ID,
+                "send_message_action",
+                &action_args,
+            ),
+            ev_completed("manager-batch-second-worker-action"),
+        ]),
+    )
+    .await;
+    let _second_worker_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ACTION_CALL_ID)
+                && !request_has_function_call_output(request, MANAGER_BATCH_SECOND_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-second-worker-gate"),
+            ev_function_call(
+                MANAGER_BATCH_SECOND_GATE_CALL_ID,
+                "test_sync_tool",
+                &gate_args,
+            ),
+            ev_completed("manager-batch-second-worker-gate"),
+        ]),
+    )
+    .await;
+    let _second_worker_result = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_SECOND_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-second-worker-result"),
+            ev_assistant_message(
+                "manager-batch-second-worker-message",
+                MANAGER_BATCH_SECOND_RESULT,
+            ),
+            ev_completed("manager-batch-second-worker-result"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("team profiles")
+                .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: MANAGER_BATCH_ROOT_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &root_initial,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_ROOT_PROMPT)
+        },
+        "manager-only Worker spawns",
+    )
+    .await;
+
+    wait_for_captured_request(
+        &root_after_spawns,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_FIRST_SPAWN_CALL_ID,
+                )
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_SECOND_SPAWN_CALL_ID,
+                )
+                && !response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                )
+        },
+        "normal manager-only Lead continuation after Worker spawns",
+    )
+    .await;
+
+    wait_for_captured_request(
+        &root_after_action,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                )
+                && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
+        },
+        "immediate manager-only action wake",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    wait_for_captured_request(
+        &root_after_batch,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
+                && request.body_contains_text(MANAGER_BATCH_SECOND_RESULT)
+        },
+        "manager-only Worker completion batch",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let lead_requests = server
+        .received_requests()
+        .await
+        .expect("mock server should record requests")
+        .into_iter()
+        .filter(|request| {
+            request.url.path() == "/v1/responses" && request_has_model(request, LEAD_MODEL)
+        })
+        .collect::<Vec<_>>();
+    let action_wakes = lead_requests
+        .iter()
+        .filter(|request| {
+            request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        })
+        .count();
+    assert_eq!(
+        action_wakes, 1,
+        "the Worker action should wake the waiting Lead immediately"
+    );
+
+    let completion_wakes = lead_requests
+        .iter()
+        .filter(|request| {
+            body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                || body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completion_wakes.len(),
+        1,
+        "both successful Worker completions should share one Lead wake"
+    );
+    assert!(body_contains(
+        completion_wakes[0],
+        MANAGER_BATCH_FIRST_RESULT
+    ));
+    assert!(body_contains(
+        completion_wakes[0],
+        MANAGER_BATCH_SECOND_RESULT
+    ));
+    Ok(())
+}
+
+const MANAGER_HANDOFF_ROOT_PROMPT: &str = "delegate one worker before handoff";
+const MANAGER_HANDOFF_WORKER_TASK: &str = "manager handoff worker task";
+const MANAGER_HANDOFF_SPAWN_CALL_ID: &str = "manager-handoff-spawn";
+const MANAGER_HANDOFF_RESULT: &str = "manager handoff retry result marker";
+
+#[tokio::test(flavor = "current_thread")]
+async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": MANAGER_HANDOFF_WORKER_TASK,
+        "task_name": "manager_handoff_worker",
+        "fork_turns": "none",
+    }))?;
+    let root_initial = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_HANDOFF_ROOT_PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-root-initial"),
+            ev_function_call_with_namespace(
+                MANAGER_HANDOFF_SPAWN_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "spawn_agent",
+                &spawn_args,
+            ),
+            ev_completed("manager-handoff-root-initial"),
+        ]),
+    )
+    .await;
+    let root_after_spawn = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_HANDOFF_SPAWN_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-root-after-spawn"),
+            ev_assistant_message(
+                "manager-handoff-root-after-spawn-message",
+                "the Worker was spawned; I will review its completion",
+            ),
+            ev_completed("manager-handoff-root-after-spawn"),
+        ]),
+    )
+    .await;
+    let worker_terminal = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_HANDOFF_WORKER_TASK)
+                && request_has_model(request, WORKER_MODEL)
+        },
+        sse_response(sse(vec![
+            ev_response_created("manager-handoff-worker-terminal"),
+            ev_assistant_message("manager-handoff-worker-message", MANAGER_HANDOFF_RESULT),
+            ev_completed("manager-handoff-worker-terminal"),
+        ]))
+        .set_delay(Duration::from_secs(/*secs*/ 2)),
+    )
+    .await;
+    // Keep the normal post-spawn Lead continuation separate so this response is reserved for the
+    // completion wake. ResponseMock records requests before this route's predicate is evaluated.
+    let root_after_completion = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL) && body_contains(request, MANAGER_HANDOFF_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-handoff-root-completion"),
+            ev_assistant_message(
+                "manager-handoff-root-completion-message",
+                "the Worker completion was reviewed after handoff reopened",
+            ),
+            ev_completed("manager-handoff-root-completion"),
+        ]),
+    )
+    .await;
+
+    // This store exposes no StateDb, so a sealed completion deterministically uses the local
+    // fallback.
+    let test = test_codex()
+        .with_thread_store(std::sync::Arc::new(
+            codex_thread_store::InMemoryThreadStore::default(),
+        ))
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model_info_override(WORKER_MODEL, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+            config
+                .team
+                .profiles
+                .as_mut()
+                .expect("team profiles")
+                .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: MANAGER_HANDOFF_ROOT_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &root_initial,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && request.body_contains_text(MANAGER_HANDOFF_ROOT_PROMPT)
+        },
+        "manager-only Worker spawn before handoff",
+    )
+    .await;
+    wait_for_captured_request(
+        &root_after_spawn,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, MANAGER_HANDOFF_SPAWN_CALL_ID)
+        },
+        "normal manager-only Lead continuation after Worker spawn",
+    )
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_captured_request(
+        &worker_terminal,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && request.body_contains_text(MANAGER_HANDOFF_WORKER_TASK)
+        },
+        "Worker terminal request admitted before handoff",
+    )
+    .await;
+
+    let lead_request_count_before_handoff = root_after_completion
+        .requests()
+        .iter()
+        .filter(|request| response_request_has_model(request, LEAD_MODEL))
+        .count();
+    // The Worker turn has started and its POST is captured; the delayed terminal SSE lets that
+    // turn finish under the seal without requiring another model or tool admission.
+    let handoff = test.codex.begin_handoff()?;
+    let mailbox_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let preflight = test.codex.handoff_preflight().await;
+        if preflight
+            .blockers
+            .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox)
+        {
+            assert!(
+                preflight
+                    .blockers
+                    .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence),
+                "the test should exercise the process-local fallback after durable completion \
+                 persistence fails"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < mailbox_deadline,
+            "manager-only Worker completion should reach the Lead mailbox"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(151)).await;
+    assert!(test.codex.handoff_admission_sealed());
+    let preflight = test.codex.handoff_preflight().await;
+    assert!(
+        preflight
+            .blockers
+            .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox)
+    );
+    assert!(
+        preflight
+            .blockers
+            .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence)
+    );
+    let lead_requests_while_sealed = root_after_completion
+        .requests()
+        .into_iter()
+        .filter(|request| response_request_has_model(request, LEAD_MODEL))
+        .collect::<Vec<_>>();
+    let unexpected_sealed_requests = lead_requests_while_sealed
+        .iter()
+        .skip(lead_request_count_before_handoff)
+        .map(|request| {
+            json!({
+                "model": request.body_json()["model"],
+                "user_input": request.message_input_text_groups("user"),
+                "has_completion_marker": request.body_contains_text(MANAGER_HANDOFF_RESULT),
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        unexpected_sealed_requests.is_empty(),
+        "unexpected Lead request while handoff admission is sealed; captured (model, user input, marker): \
+         {unexpected_sealed_requests:#?}"
+    );
+
+    drop(handoff);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let root_request = loop {
+        let lead_requests = root_after_completion
+            .requests()
+            .into_iter()
+            .filter(|request| response_request_has_model(request, LEAD_MODEL))
+            .collect::<Vec<_>>();
+        if let Some(request) = lead_requests.get(lead_request_count_before_handoff) {
+            break request.clone();
+        }
+        if Instant::now() >= deadline {
+            let post_release_requests = root_after_completion
+                .requests()
+                .into_iter()
+                .filter(|request| response_request_has_model(request, LEAD_MODEL))
+                .skip(lead_request_count_before_handoff)
+                .map(|request| {
+                    json!({
+                        "model": request.body_json()["model"],
+                        "user_input": request.message_input_text_groups("user"),
+                        "has_completion_marker":
+                            request.body_contains_text(MANAGER_HANDOFF_RESULT),
+                    })
+                })
+                .collect::<Vec<_>>();
+            panic!(
+                "manager-only completion retry after handoff release produced no post-release \
+                 Responses request; captured post-release requests (model, user input, marker): \
+                 {post_release_requests:#?}"
+            );
+        }
+        sleep(Duration::from_millis(10)).await;
+    };
+    let root_user_input = root_request.message_input_text_groups("user");
+    assert_eq!(
+        root_request.body_json()["model"].as_str(),
+        Some(LEAD_MODEL),
+        "the first post-release Responses request must use the Lead model; user input: \
+         {root_user_input:#?}"
+    );
+    assert!(
+        root_request.body_contains_text(MANAGER_HANDOFF_RESULT),
+        "the first post-release Lead request omitted the Worker result marker; user input: {root_user_input:#?}"
     );
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

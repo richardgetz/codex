@@ -3011,6 +3011,7 @@ async fn login_survives_same_owner_token_refresh(
     assert_eq!(
         updated,
         AccountUpdatedNotification {
+            account: expected_account.account.clone(),
             auth_mode: Some(AuthMode::Chatgpt),
             plan_type: Some(AccountPlanType::Enterprise),
         }

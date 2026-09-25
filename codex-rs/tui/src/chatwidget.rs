@@ -389,6 +389,9 @@ mod team;
 pub(crate) use self::team::TeamCommand;
 pub(crate) use self::team::lead_balance_label;
 pub(crate) use self::team::role_label;
+mod team_work_policy;
+pub(crate) use self::team_work_policy::is_active_lead_work_policy_target;
+pub(crate) use self::team_work_policy::lead_work_policy_label;
 mod team_activity;
 pub(crate) use self::team_activity::TeamActivityStatus;
 pub(crate) use self::team_activity::TeamPauseState;
@@ -641,6 +644,9 @@ pub(crate) struct ChatWidget {
     /// Team mode requested by the user until the server confirms it in a
     /// thread settings snapshot.
     pending_team_command: Option<TeamCommand>,
+    /// Identifies the current pending team command so delayed timeout events
+    /// cannot clear a later retry of the same command.
+    pending_team_command_request_id: Option<uuid::Uuid>,
     /// Effective per-thread policy for reset-aware usage continuation.
     thread_usage_policy: ThreadUsagePolicy,
     /// Root-scoped Lead/Worker activity shown in status surfaces.

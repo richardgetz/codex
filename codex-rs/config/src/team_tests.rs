@@ -5,6 +5,7 @@ fn profile(model: &str, reasoning_effort: ReasoningEffort) -> TeamModelProfileTo
     TeamModelProfileToml {
         model: Some(model.to_string()),
         reasoning_effort: Some(reasoning_effort),
+        work_policy: None,
         balance: None,
         dynamic_handoff: None,
         show_idle_notifications: None,
@@ -207,6 +208,62 @@ fn team_config_defaults_and_loads_lead_dynamic_handoff() {
             .as_ref()
             .is_some_and(|profiles| !profiles.lead_dynamic_handoff)
     );
+}
+
+#[test]
+fn team_config_defaults_and_loads_lead_work_policy() {
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(profile("gpt-lead", ReasoningEffort::High)),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid team config");
+    assert_eq!(
+        config
+            .profiles
+            .as_ref()
+            .map(|profiles| profiles.lead_work_policy),
+        Some(TeamLeadWorkPolicy::PromptGuided)
+    );
+
+    let config = TeamConfig::try_from(TeamToml {
+        lead: Some(TeamModelProfileToml {
+            work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
+            ..profile("gpt-lead", ReasoningEffort::High)
+        }),
+        worker: Some(worker_profile("gpt-worker", ReasoningEffort::Max, None)),
+        ..Default::default()
+    })
+    .expect("valid manager-only team config");
+    assert_eq!(
+        config
+            .profiles
+            .as_ref()
+            .map(|profiles| profiles.lead_work_policy),
+        Some(TeamLeadWorkPolicy::ManagerOnly)
+    );
+}
+
+#[test]
+fn team_lead_work_policy_uses_snake_case_config_values() {
+    let config = toml::from_str::<TeamToml>(
+        "[lead]\nmodel = \"gpt-lead\"\nreasoning_effort = \"high\"\nwork_policy = \"manager_only\"\n",
+    )
+    .expect("manager_only config value should deserialize");
+    let profiles = TeamConfig::try_from(config)
+        .expect("valid manager-only config")
+        .profiles
+        .expect("configured profiles");
+    assert_eq!(profiles.lead_work_policy, TeamLeadWorkPolicy::ManagerOnly);
+}
+
+#[test]
+fn team_lead_work_policy_is_rejected_under_worker_profile() {
+    let error = toml::from_str::<TeamToml>(
+        "[worker]\nmodel = \"gpt-worker\"\nreasoning_effort = \"high\"\nwork_policy = \"manager_only\"\n",
+    )
+    .expect_err("Lead work policy must not be accepted under the Worker profile");
+    assert!(error.to_string().contains("unknown field"));
 }
 
 #[test]

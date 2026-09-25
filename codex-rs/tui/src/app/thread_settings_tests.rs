@@ -1,5 +1,6 @@
 use super::team_settings_update_params;
 use crate::chatwidget::TeamCommand;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
@@ -41,6 +42,10 @@ fn team_commands_build_sparse_thread_settings_updates() {
     );
     assert_eq!(
         team_settings_update_params(thread_id, TeamCommand::SelectBalance, TeamMode::Off),
+        None
+    );
+    assert_eq!(
+        team_settings_update_params(thread_id, TeamCommand::SelectWorkPolicy, TeamMode::Off),
         None
     );
 }
@@ -88,6 +93,30 @@ fn profile_commands_keep_the_current_mode_in_sparse_updates() {
                 model: Some("gpt-5.6-sol".to_string()),
                 reasoning_effort: Some(ReasoningEffort::High),
                 lead_balance: None,
+                lead_work_policy: None,
+            }),
+            ..ThreadSettingsUpdateParams::default()
+        })
+    );
+}
+
+#[test]
+fn work_policy_commands_keep_the_current_mode_and_target_only_the_lead() {
+    let thread_id = ThreadId::new();
+    assert_eq!(
+        team_settings_update_params(
+            thread_id,
+            TeamCommand::ConfigureWorkPolicy {
+                policy: TeamLeadWorkPolicy::ManagerOnly,
+            },
+            TeamMode::LeadWorker,
+        ),
+        Some(ThreadSettingsUpdateParams {
+            thread_id: thread_id.to_string(),
+            team: Some(ThreadTeamSettingsUpdate {
+                mode: TeamMode::LeadWorker,
+                lead_work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
+                ..Default::default()
             }),
             ..ThreadSettingsUpdateParams::default()
         })

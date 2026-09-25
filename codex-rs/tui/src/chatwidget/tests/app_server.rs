@@ -633,6 +633,7 @@ async fn team_status_reflects_thread_settings_notification() {
         lead_model: Some("gpt-lead".to_string()),
         lead_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Max),
         lead_balance: Some(3),
+        lead_work_policy: Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly),
         worker_model: Some("gpt-worker".to_string()),
         worker_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
         previous_model: Some("gpt-single".to_string()),
@@ -647,6 +648,7 @@ async fn team_status_reflects_thread_settings_notification() {
         lead_model: None,
         lead_reasoning_effort: None,
         lead_balance: None,
+        lead_work_policy: None,
         worker_model: None,
         worker_reasoning_effort: None,
         previous_model: None,
@@ -676,7 +678,245 @@ async fn team_status_reflects_thread_settings_notification() {
 }
 
 #[tokio::test]
-async fn team_toggle_pending_state_clears_on_terminal_error_but_survives_retry() {
+async fn team_work_policy_update_handles_matching_and_stale_server_notifications() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    let mut notification = thread_settings_for_test("gpt-5.4", thread_id);
+    notification.thread_settings.team = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::LeadWorker,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-lead".to_string()),
+        lead_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::Max),
+        lead_balance: Some(3),
+        lead_work_policy: Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly),
+        worker_model: Some("gpt-worker".to_string()),
+        worker_reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    });
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification.clone()),
+        /*replay_kind*/ None,
+    );
+    let confirmation = drain_insert_history(&mut rx);
+    assert!(chat.pending_team_command.is_none());
+    assert_eq!(confirmation.len(), 1);
+    assert!(lines_to_single_string(&confirmation[0]).contains("Lead work policy: manager only"));
+
+    notification
+        .thread_settings
+        .team
+        .as_mut()
+        .expect("test notification has team settings")
+        .lead_work_policy = None;
+    chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    });
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification.clone()),
+        /*replay_kind*/ None,
+    );
+    assert!(chat.pending_team_command.is_some());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    notification
+        .thread_settings
+        .team
+        .as_mut()
+        .expect("test notification has team settings")
+        .lead_work_policy = Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly);
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(notification),
+        /*replay_kind*/ None,
+    );
+    let confirmation = drain_insert_history(&mut rx);
+    assert!(chat.pending_team_command.is_none());
+    assert_eq!(confirmation.len(), 1);
+    assert!(lines_to_single_string(&confirmation[0]).contains("Lead work policy: manager only"));
+}
+
+#[tokio::test]
+async fn team_settings_update_timeout_clears_unconfirmed_requests() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    let commands = [
+        (crate::chatwidget::TeamCommand::On, "team mode"),
+        (crate::chatwidget::TeamCommand::Off, "team mode"),
+        (
+            crate::chatwidget::TeamCommand::ConfigureProfile {
+                role: codex_app_server_protocol::TeamRole::Lead,
+                model: "gpt-lead".to_string(),
+                effort: codex_protocol::openai_models::ReasoningEffort::Max,
+            },
+            "team profile",
+        ),
+        (
+            crate::chatwidget::TeamCommand::ConfigureBalance { balance: 1 },
+            "Lead usage/confidence balance",
+        ),
+        (
+            crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+                policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+            },
+            "Lead work policy",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (command, setting) in commands {
+        let request_id = chat.set_pending_team_command(command);
+        chat.on_team_settings_update_timeout(request_id);
+        assert!(chat.pending_team_command.is_none());
+        let failure = drain_insert_history(&mut rx);
+        assert_eq!(failure.len(), 1);
+        let failure_text = lines_to_single_string(&failure[0]).trim().to_string();
+        assert!(failure_text.contains(&format!("did not confirm the {setting} update")));
+        failures.push(failure_text);
+    }
+
+    insta::assert_snapshot!(
+        failures.join("\n"),
+        @r###"■ The app server did not confirm the team mode update. Check /team status; if it is unchanged, update the server and try again.
+■ The app server did not confirm the team mode update. Check /team status; if it is unchanged, update the server and try again.
+■ The app server did not confirm the team profile update. Check /team status; if it is unchanged, update the server and try again.
+■ The app server did not confirm the Lead usage/confidence balance update. Check /team status; if it is unchanged, update the server and try again.
+■ The app server did not confirm the Lead work policy update. Check /team status; if it is unchanged, update the server and try again."###
+    );
+}
+
+#[tokio::test]
+async fn stale_team_work_policy_timeout_does_not_clear_retried_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    let command = crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    };
+    let old_request_id = chat.set_pending_team_command(command.clone());
+    let current_request_id = chat.set_pending_team_command(command);
+
+    chat.on_team_settings_update_timeout(old_request_id);
+
+    assert!(chat.pending_team_command.is_some());
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.on_team_settings_update_timeout(current_request_id);
+    assert!(chat.pending_team_command.is_none());
+    let failure = drain_insert_history(&mut rx);
+    assert_eq!(failure.len(), 1);
+    assert!(lines_to_single_string(&failure[0]).contains("did not confirm"));
+}
+
+#[tokio::test]
+async fn stale_team_work_policy_error_does_not_clear_retried_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    let command = crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+        policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+    };
+    let old_request_id = chat.set_pending_team_command(command.clone());
+    let current_request_id = chat.set_pending_team_command(command.clone());
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                misalignment: None,
+                message: "invalid thread settings override: Lead work policy is not available"
+                    .to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: thread_id.to_string(),
+            turn_id: "settings-update-old".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+    assert_eq!(chat.pending_team_command, Some(command.clone()));
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.on_team_settings_update_timeout(old_request_id);
+
+    assert_eq!(chat.pending_team_command, Some(command));
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn stale_team_work_policy_error_does_not_clear_newer_toggle_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+    let old_request_id =
+        chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+            policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+        });
+    let current_request_id = chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                misalignment: None,
+                message: "invalid thread settings override: Lead work policy is not available"
+                    .to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                additional_details: None,
+            },
+            will_retry: false,
+            thread_id: thread_id.to_string(),
+            turn_id: "settings-update-old-policy".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(
+        chat.pending_team_command,
+        Some(crate::chatwidget::TeamCommand::Off)
+    );
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
+    let errors = drain_insert_history(&mut rx);
+    assert!(errors.iter().any(|cell| {
+        lines_to_single_string(cell)
+            .contains("invalid thread settings override: Lead work policy is not available")
+    }));
+
+    chat.on_team_settings_update_timeout(old_request_id);
+
+    assert_eq!(
+        chat.pending_team_command,
+        Some(crate::chatwidget::TeamCommand::Off)
+    );
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn team_toggle_pending_state_survives_uncorrelated_errors() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
@@ -703,7 +943,7 @@ async fn team_toggle_pending_state_clears_on_terminal_error_but_survives_retry()
     );
     let _ = drain_insert_history(&mut rx);
 
-    chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
+    let current_request_id = chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
     chat.handle_server_notification(
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
@@ -720,8 +960,28 @@ async fn team_toggle_pending_state_clears_on_terminal_error_but_survives_retry()
         }),
         /*replay_kind*/ None,
     );
+    assert_eq!(
+        chat.pending_team_command,
+        Some(crate::chatwidget::TeamCommand::Off)
+    );
+    assert!(
+        chat.last_non_retry_error
+            .as_ref()
+            .is_some_and(|(_, message)| {
+                message.contains("Worker sessions cannot disable team mode")
+            })
+    );
+    let errors = drain_insert_history(&mut rx);
+    assert!(errors.iter().any(|cell| {
+        lines_to_single_string(cell)
+            .contains("invalid thread settings override: Worker sessions cannot disable team mode")
+    }));
+
+    chat.on_team_settings_update_timeout(current_request_id);
     assert!(chat.pending_team_command.is_none());
-    let _ = drain_insert_history(&mut rx);
+    assert!(drain_insert_history(&mut rx).iter().any(|cell| {
+        lines_to_single_string(cell).contains("did not confirm the team mode update")
+    }));
 
     chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
     chat.handle_server_notification(

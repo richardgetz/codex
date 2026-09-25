@@ -18,6 +18,7 @@ use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
+use crate::session::session::Session;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
@@ -28,6 +29,7 @@ use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::turn_timing::now_unix_timestamp_ms;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
+use codex_config::TeamLeadWorkPolicy;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -74,6 +76,52 @@ use tokio::sync::Notify;
 use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
+
+pub(crate) struct TerminalResultDeliveryGuard {
+    session: Arc<Session>,
+    parent_thread_id: ThreadId,
+}
+
+impl TerminalResultDeliveryGuard {
+    pub(crate) fn for_thread_spawn(
+        session: Arc<Session>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<Self> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+        session
+            .terminal_result_delivery_in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Some(Self {
+            session,
+            parent_thread_id: *parent_thread_id,
+        })
+    }
+}
+
+impl Drop for TerminalResultDeliveryGuard {
+    fn drop(&mut self) {
+        let previous = self
+            .session
+            .terminal_result_delivery_in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if previous == 1
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let agent_control = self.session.services.agent_control.clone();
+            let parent_thread_id = self.parent_thread_id;
+            runtime.spawn(async move {
+                agent_control
+                    .schedule_pending_manager_completion_batch_flush(parent_thread_id)
+                    .await;
+            });
+        }
+    }
+}
 
 use self::execution::AgentExecutionLimiter;
 pub use self::handoff::HandoffAdmissionGuard;
@@ -353,10 +401,25 @@ impl LocalAgentControl {
     pub(crate) async fn send_team_lead_completion(
         &self,
         agent_id: ThreadId,
-        communication: InterAgentCommunication,
+        mut communication: InterAgentCommunication,
         agent_communication_context: AgentCommunicationContext,
         start_options: TurnStartOptions,
+        status: &AgentStatus,
     ) -> CodexResult<String> {
+        if matches!(status, AgentStatus::Completed(_))
+            && let Ok(state) = self.upgrade()
+            && let Ok(thread) = state.get_thread(agent_id).await
+        {
+            let config = thread.session.get_config().await;
+            if thread.session.is_team_lead().await
+                && config.effective_team_lead_work_policy() == TeamLeadWorkPolicy::ManagerOnly
+            {
+                // Successful Worker results wait at the batch boundary. Bound the envelope before
+                // it reaches persistence fallback or the Lead progress buffer.
+                communication.trigger_turn = false;
+                communication.content = crate::session::truncate_message(&communication.content);
+            }
+        }
         self.send_inter_agent_communication_with_delivery_kind(
             agent_id,
             communication,
@@ -433,14 +496,68 @@ impl LocalAgentControl {
                     );
                 }
                 if !persisted {
-                    // Retain the local mailbox only for a reversible abort. The failure bit makes
-                    // the coordinator keep the old owner and publish NeedsAttention instead of
-                    // treating this callback as transferable.
+                    // Retain this result on the old owner only for a reversible abort. The failure
+                    // bit makes the coordinator keep the old owner and publish NeedsAttention
+                    // instead of treating this callback as transferable.
                     self.mark_handoff_delivery_failed();
                     if let Some(state) = state
                         && let Ok(thread) = state.get_thread(agent_id).await
                     {
-                        if team_lead_completion {
+                        if team_lead_completion && !communication.trigger_turn {
+                            let session = Arc::clone(&thread.session);
+                            let _team_lead_turn_admission =
+                                session.team_lead_turn_admission.lock().await;
+                            if session.is_team_lead().await {
+                                let config = session.get_config().await;
+                                if config.effective_team_lead_work_policy()
+                                    == TeamLeadWorkPolicy::ManagerOnly
+                                {
+                                    // Preserve the completion in the same bounded batch as normal
+                                    // delivery. Its flush waits for a reversible handoff seal to
+                                    // reopen admission.
+                                    let generation = session
+                                        .input_queue
+                                        .enqueue_team_lead_completion(communication)
+                                        .await;
+                                    drop(_team_lead_turn_admission);
+                                    session
+                                        .schedule_manager_completion_batch_flush(generation)
+                                        .await;
+                                } else {
+                                    // A completion classified under manager-only may reach this
+                                    // fallback after the Lead switched back to prompt-guided.
+                                    let mut communication = communication;
+                                    communication.trigger_turn = true;
+                                    session
+                                        .input_queue
+                                        .enqueue_team_lead_mailbox_communication(
+                                            communication,
+                                            start_options,
+                                        )
+                                        .await;
+                                    drop(_team_lead_turn_admission);
+                                    let agent_control = self.clone();
+                                    tokio::spawn(async move {
+                                        let admission = loop {
+                                            match agent_control.begin_handoff_admission() {
+                                                Ok(admission) => break admission,
+                                                Err(_) => {
+                                                    agent_control
+                                                        .wait_for_handoff_admission_open()
+                                                        .await;
+                                                }
+                                            }
+                                        };
+                                        session
+                                            .maybe_start_turn_for_pending_work_with_admission(
+                                                uuid::Uuid::new_v4().to_string(),
+                                                admission,
+                                            )
+                                            .await;
+                                    });
+                                }
+                            }
+                        } else if team_lead_completion {
                             thread
                                 .session
                                 .input_queue
@@ -663,21 +780,58 @@ impl LocalAgentControl {
     }
 
     /// Counts direct Worker children that can still perform work for a parent session.
-    /// Interrupted and terminal children do not keep a Lead parked.
+    /// Terminal children remain active until their parent result callback has been delivered.
     pub(crate) async fn active_direct_worker_count(&self, parent_thread_id: ThreadId) -> usize {
+        let Ok(state) = self.upgrade() else {
+            return 0;
+        };
         let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
             return 0;
         };
         let mut active = 0;
         for (thread_id, _) in children {
-            if matches!(
-                self.get_status(thread_id).await,
-                AgentStatus::PendingInit | AgentStatus::Running
-            ) {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let status = thread.agent_status().await;
+            let terminal_delivery_in_flight = is_final(&status)
+                && thread
+                    .session
+                    .terminal_result_delivery_in_flight
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    > 0;
+            if matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+                || terminal_delivery_in_flight
+            {
                 active += 1;
             }
         }
         active
+    }
+
+    /// Rearms a pending manager-only completion batch after a child finishes delivering its
+    /// terminal result. A prior quiet-window flush may have observed that delivery in flight.
+    pub(crate) async fn schedule_pending_manager_completion_batch_flush(
+        &self,
+        parent_thread_id: ThreadId,
+    ) {
+        let Ok(state) = self.upgrade() else {
+            return;
+        };
+        let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
+            return;
+        };
+        if let Some(generation) = parent_thread
+            .session
+            .input_queue
+            .pending_manager_completion_generation()
+            .await
+        {
+            parent_thread
+                .session
+                .schedule_manager_completion_batch_flush(generation)
+                .await;
+        }
     }
 
     /// Subscribes to status changes for direct Workers that can still perform work. The boolean
@@ -1177,6 +1331,7 @@ impl LocalAgentControl {
         session_source: Option<SessionSource>,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
+        terminal_delivery_guard: Option<TerminalResultDeliveryGuard>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -1199,6 +1354,7 @@ impl LocalAgentControl {
         let control = self.clone();
         tokio::spawn(async move {
             let _watcher_registration = watcher_registration;
+            let _terminal_delivery_guard = terminal_delivery_guard;
             let status = match control.subscribe_status(child_thread_id).await {
                 Ok(mut status_rx) => {
                     let mut status = status_rx.borrow().clone();
@@ -1282,6 +1438,7 @@ impl LocalAgentControl {
                             communication,
                             context,
                             TurnStartOptions::default(),
+                            &status,
                         )
                         .await
                 } else {
@@ -1325,6 +1482,46 @@ impl LocalAgentControl {
                 }
             };
             if parent_thread.session.is_team_lead().await {
+                if matches!(status, AgentStatus::Completed(_))
+                    && parent_thread
+                        .session
+                        .get_config()
+                        .await
+                        .effective_team_lead_work_policy()
+                        == TeamLeadWorkPolicy::ManagerOnly
+                    && let Some(child_agent_path) = child_agent_path.clone()
+                    && let Some(parent_agent_path) = child_agent_path
+                        .as_str()
+                        .rsplit_once('/')
+                        .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+                    && let Some(message) = format_inter_agent_completion_message(
+                        parent_agent_path.clone(),
+                        child_agent_path.clone(),
+                        &status,
+                    )
+                {
+                    let communication = InterAgentCommunication::new(
+                        child_agent_path,
+                        parent_agent_path,
+                        Vec::new(),
+                        message,
+                        /*trigger_turn*/ true,
+                    );
+                    let context = AgentCommunicationContext::new(
+                        AgentCommunicationKind::Result,
+                        child_thread_id,
+                    );
+                    let _ = control
+                        .send_team_lead_completion(
+                            parent_thread_id,
+                            communication,
+                            context,
+                            TurnStartOptions::default(),
+                            &status,
+                        )
+                        .await;
+                    return;
+                }
                 // Legacy V1 workers report completion through a context fragment rather than an
                 // InterAgentCommunication. A parked Team Lead still needs an actionable wake for
                 // that terminal result, so route it through the same bounded wake path used by
@@ -1361,11 +1558,9 @@ impl LocalAgentControl {
                 parent_thread.session.cancel_lead_oversight().await;
                 parent_thread
                     .session
-                    .enqueue_lead_wakeup_with_admission(
-                        &format!(
-                            "Worker {child_reference} completed with status {status:?}; review the result."
-                        ),
-                    )
+                    .enqueue_lead_wakeup_with_admission(&format!(
+                        "Worker {child_reference} completed with status {status:?}; review the result."
+                    ))
                     .await;
                 drop(handoff_admission);
                 parent_thread

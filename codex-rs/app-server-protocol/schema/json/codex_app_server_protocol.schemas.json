@@ -21132,6 +21132,13 @@
         "title": "SwitchAccountResponse",
         "type": "object"
       },
+      "TeamLeadWorkPolicy": {
+        "enum": [
+          "promptGuided",
+          "managerOnly"
+        ],
+        "type": "string"
+      },
       "TeamMode": {
         "description": "Selects whether a thread uses its configured Lead/Worker model assignments.",
         "enum": [
@@ -26636,6 +26643,17 @@
               }
             ]
           },
+          "leadWorkPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TeamLeadWorkPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lead execution policy captured in this thread's team settings."
+          },
           "mode": {
             "$ref": "#/definitions/v2/TeamMode"
           },
@@ -26688,7 +26706,7 @@
         "type": "object"
       },
       "ThreadTeamSettingsUpdate": {
-        "description": "Team mode or profile patch accepted by `thread/settings/update`.\n\nWhen `role` and one or more profile fields are supplied, the selected profile is changed for this thread only. `leadBalance` is Lead-only. The server preserves the other profile and the role assignment captured by the thread snapshot.",
+        "description": "Team mode or profile patch accepted by `thread/settings/update`.\n\nWhen `role` and one or more profile fields are supplied, the selected profile is changed for this thread only. `leadBalance` is Lead-only. A `leadWorkPolicy` update changes only the current Lead thread policy. The server preserves the other profile and the role assignment captured by the thread snapshot.",
         "properties": {
           "leadBalance": {
             "description": "Sparse Lead-only oversight balance update, from 1 (maximum savings) through 5 (maximum confidence).",
@@ -26699,6 +26717,17 @@
               "integer",
               "null"
             ]
+          },
+          "leadWorkPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TeamLeadWorkPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sparse Lead-only work policy update."
           },
           "mode": {
             "$ref": "#/definitions/v2/TeamMode"

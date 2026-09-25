@@ -2300,6 +2300,15 @@ impl App {
             AppEvent::TeamCommand { thread_id, command } => {
                 self.handle_team_command(app_server, thread_id, command).await;
             }
+            AppEvent::TeamSettingsUpdateTimeout {
+                thread_id,
+                request_id,
+            } => {
+                if self.active_thread_id == Some(thread_id) {
+                    self.chat_widget
+                        .on_team_settings_update_timeout(request_id);
+                }
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)

@@ -71,6 +71,8 @@ const THIRD_DIRECT_CALL_ID: &str = "team-third-direct";
 const FIRST_DIRECT_GATE_CALL_ID: &str = "team-first-direct-gate";
 const ROOT_DIRECT_GATE_CALL_ID: &str = "team-root-direct-gate";
 
+#[path = "team_manager_only.rs"]
+mod manager_only;
 #[path = "team_activity.rs"]
 mod team_activity;
 #[path = "team_idle.rs"]
@@ -92,6 +94,7 @@ fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConf
                 model: worker_model.to_string(),
                 reasoning_effort: ReasoningEffort::Low,
             },
+            lead_work_policy: codex_config::TeamLeadWorkPolicy::PromptGuided,
             lead_dynamic_handoff: false,
             lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
             lead_oversight_timeout_minutes:
@@ -196,7 +199,22 @@ async fn wait_for_captured_request(
     predicate: impl Fn(&ResponsesRequest) -> bool,
     label: &str,
 ) -> ResponsesRequest {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    wait_for_captured_request_with_timeout(
+        response,
+        predicate,
+        label,
+        Duration::from_secs(/*secs*/ 2),
+    )
+    .await
+}
+
+async fn wait_for_captured_request_with_timeout(
+    response: &ResponseMock,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+    label: &str,
+    timeout: Duration,
+) -> ResponsesRequest {
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(request) = response
             .requests()
@@ -1412,6 +1430,7 @@ async fn team_snapshot_survives_cold_resume_and_profile_change() -> Result<()> {
                 model: Some(WORKER_MODEL.to_string()),
                 reasoning_effort: Some(ReasoningEffort::Low),
                 lead_balance: Some(4),
+                lead_work_policy: None,
             }),
             ..Default::default()
         },

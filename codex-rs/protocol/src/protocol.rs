@@ -587,6 +587,18 @@ pub enum TeamRole {
     Worker,
 }
 
+/// Selects how much task execution stays with the Lead in a Lead/Worker team.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum TeamLeadWorkPolicy {
+    /// Preserve the existing prompt-guided Lead behavior.
+    #[default]
+    PromptGuided,
+    /// Keep the Lead focused on management while Workers execute assigned work.
+    ManagerOnly,
+}
+
 /// Effective team state persisted in thread settings events.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ThreadTeamSettings {
@@ -611,6 +623,10 @@ pub struct ThreadTeamSettings {
     /// values retain the disabled default when older rollouts are resumed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic_handoff: Option<bool>,
+    /// Lead execution policy captured with this thread's team assignment.
+    /// Missing values retain the original prompt-guided behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead_work_policy: Option<TeamLeadWorkPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -636,6 +652,9 @@ pub struct ThreadTeamSettingsUpdate {
     #[schemars(range(min = 1, max = 5))]
     #[serde(default)]
     pub lead_balance: Option<u8>,
+    /// Sparse Lead-only execution policy update.
+    #[serde(default)]
+    pub lead_work_policy: Option<TeamLeadWorkPolicy>,
 }
 
 /// Thread-settings overrides that can be applied before user input or on their

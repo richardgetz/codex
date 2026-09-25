@@ -35,6 +35,7 @@ pub use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 pub use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::TeamLeadWorkPolicy as CoreTeamLeadWorkPolicy;
 pub use codex_protocol::protocol::TeamMode;
 pub use codex_protocol::protocol::TeamRole;
 use codex_protocol::protocol::ThreadGoalStatus as CoreThreadGoalStatus;
@@ -502,10 +503,19 @@ pub struct ThreadStartResponse {
     pub multi_agent_mode: MultiAgentMode,
 }
 
+/// Work policy selection accepted by `thread/settings/update`.
+v2_enum_from_core! {
+    pub enum TeamLeadWorkPolicy from CoreTeamLeadWorkPolicy {
+        PromptGuided,
+        ManagerOnly,
+    }
+}
+
 /// Team mode or profile patch accepted by `thread/settings/update`.
 ///
 /// When `role` and one or more profile fields are supplied, the selected
-/// profile is changed for this thread only. `leadBalance` is Lead-only. The
+/// profile is changed for this thread only. `leadBalance` is Lead-only. A
+/// `leadWorkPolicy` update changes only the current Lead thread policy. The
 /// server preserves the other profile and the role assignment captured by the
 /// thread snapshot.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
@@ -523,6 +533,9 @@ pub struct ThreadTeamSettingsUpdate {
     #[schemars(range(min = 1, max = 5))]
     #[ts(optional = nullable)]
     pub lead_balance: Option<u8>,
+    /// Sparse Lead-only work policy update.
+    #[ts(optional = nullable)]
+    pub lead_work_policy: Option<TeamLeadWorkPolicy>,
 }
 
 impl ThreadStartResponse {
@@ -598,7 +611,8 @@ pub struct ThreadSettingsUpdateParams {
     /// Configure usage-limit auto-resume and the remaining-usage floor for automatic continuation.
     #[ts(optional = nullable)]
     pub usage_policy: Option<ThreadUsagePolicyParams>,
-    /// Select or disable the configured Lead/Worker model assignments for this thread.
+    /// Select or disable the configured Lead/Worker model assignments or update the Lead
+    /// work policy for this thread.
     #[ts(optional = nullable)]
     pub team: Option<ThreadTeamSettingsUpdate>,
 }
@@ -655,6 +669,8 @@ pub struct ThreadTeamSettings {
     pub lead_reasoning_effort: Option<ReasoningEffort>,
     #[schemars(range(min = 1, max = 5))]
     pub lead_balance: Option<u8>,
+    /// Lead execution policy captured in this thread's team settings.
+    pub lead_work_policy: Option<TeamLeadWorkPolicy>,
     pub worker_model: Option<String>,
     pub worker_reasoning_effort: Option<ReasoningEffort>,
     pub previous_model: Option<String>,

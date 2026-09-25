@@ -123,6 +123,11 @@ pub(crate) struct Session {
     pub(crate) model_activity_in_flight: AtomicU32,
     /// Number of turn completions still flushing final history and lifecycle events.
     pub(crate) turn_finalization_in_flight: AtomicU32,
+    /// Number of terminal result callbacks not yet delivered to a parent thread.
+    pub(crate) terminal_result_delivery_in_flight: AtomicU32,
+    /// Private acknowledgments for manager-only completions accepted by the parent submission loop.
+    pub(crate) manager_completion_delivery_acks:
+        std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>,
     /// Number of non-wait tool dispatches that have been spawned but not yet admitted or dropped.
     /// This is used only to keep dependency-free Worker handoffs behind pending sibling work; it
     /// does not contribute to the user-visible activity operation count.
@@ -824,6 +829,84 @@ impl SessionConfiguration {
 }
 
 impl Session {
+    pub(crate) async fn register_manager_completion_delivery_ack(
+        &self,
+        submission_id: String,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.input_queue
+            .register_manager_completion_delivery_ack(submission_id.clone())
+            .await;
+        self.manager_completion_delivery_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(submission_id, sender);
+        receiver
+    }
+
+    pub(crate) async fn acknowledge_manager_completion_delivery(
+        self: &Arc<Self>,
+        submission_id: &str,
+    ) {
+        let released = self
+            .input_queue
+            .release_manager_completion_delivery_ack(submission_id)
+            .await;
+        let sender = self
+            .manager_completion_delivery_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(submission_id);
+        if released {
+            self.rearm_pending_manager_completion_batch().await;
+        }
+        if let Some(sender) = sender {
+            let _ = sender.send(());
+        }
+    }
+
+    pub(crate) async fn cancel_manager_completion_delivery_ack(
+        self: &Arc<Self>,
+        submission_id: &str,
+    ) {
+        let released = self
+            .input_queue
+            .release_manager_completion_delivery_ack(submission_id)
+            .await;
+        self.manager_completion_delivery_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(submission_id);
+        if released {
+            self.rearm_pending_manager_completion_batch().await;
+        }
+    }
+
+    pub(crate) fn clear_manager_completion_delivery_ack_receivers(&self) {
+        self.manager_completion_delivery_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
+    pub(crate) async fn clear_manager_completion_delivery_acks(&self) {
+        self.clear_manager_completion_delivery_ack_receivers();
+        self.input_queue
+            .clear_manager_completion_delivery_acks()
+            .await;
+    }
+
+    async fn rearm_pending_manager_completion_batch(self: &Arc<Self>) {
+        if let Some(generation) = self
+            .input_queue
+            .pending_manager_completion_generation()
+            .await
+        {
+            self.schedule_manager_completion_batch_flush(generation)
+                .await;
+        }
+    }
+
     /// Reserve an automatic scratchpad loopback using the current session config.
     ///
     /// Holding the session-state lock while reserving the limiter slot makes a
@@ -2258,6 +2341,8 @@ impl Session {
                 activity_in_flight: AtomicU32::new(0),
                 model_activity_in_flight: AtomicU32::new(0),
                 turn_finalization_in_flight: AtomicU32::new(0),
+                terminal_result_delivery_in_flight: AtomicU32::new(0),
+                manager_completion_delivery_acks: std::sync::Mutex::new(HashMap::new()),
                 handoff_dispatches_pending: AtomicU32::new(0),
                 activity_operation_notify: Notify::new(),
                 scratchpad_loopback_limiter: std::sync::Mutex::new(

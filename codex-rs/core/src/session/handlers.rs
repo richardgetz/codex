@@ -567,12 +567,12 @@ pub async fn inter_agent_communication(
 async fn inter_agent_communication_inner(
     sess: &Arc<Session>,
     sub_id: String,
-    communication: InterAgentCommunication,
+    mut communication: InterAgentCommunication,
     start_options: codex_protocol::turn_input::TurnStartOptions,
     team_lead_trigger: bool,
     handoff_admission: Option<crate::agent::control::HandoffAdmissionGuard>,
 ) {
-    let trigger_turn = communication.trigger_turn;
+    let mut trigger_turn = communication.trigger_turn;
     let is_team_lead = sess.is_team_lead().await;
     if trigger_turn && team_lead_trigger && !is_team_lead {
         // Completion was admitted while this parent was a Lead, but Team mode was disabled
@@ -586,11 +586,34 @@ async fn inter_agent_communication_inner(
         if !sess.is_team_lead().await {
             return;
         }
-        sess.input_queue
-            .enqueue_team_lead_progress(communication)
-            .await;
-        crate::agent_communication::emit_agent_communication_receive(&sub_id);
-        return;
+        if team_lead_trigger {
+            if sess.get_config().await.effective_team_lead_work_policy()
+                == codex_config::TeamLeadWorkPolicy::ManagerOnly
+            {
+                let generation = sess
+                    .input_queue
+                    .enqueue_team_lead_completion(communication)
+                    .await;
+                drop(_team_lead_turn_admission);
+                sess.schedule_manager_completion_batch_flush(generation)
+                    .await;
+                crate::agent_communication::emit_agent_communication_receive(&sub_id);
+                return;
+            }
+
+            // A completion can be admitted as queue-only under manager-only policy, then reach
+            // this handler after a live switch back to prompt-guided. Restore its legacy trigger
+            // semantics so it is delivered immediately instead of becoming buffered progress.
+            communication.trigger_turn = true;
+            trigger_turn = true;
+        } else {
+            sess.input_queue
+                .enqueue_team_lead_progress(communication)
+                .await;
+            crate::agent_communication::emit_agent_communication_receive(&sub_id);
+            return;
+        }
+        drop(_team_lead_turn_admission);
     }
     // Serialize every actionable mailbox insertion with `/team off`. The settings commit takes
     // the same guard through its trigger cleanup, so a stale Lead completion cannot race an
@@ -1718,6 +1741,8 @@ async fn persist_rejected_inter_agent_communication(
 }
 
 async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: CodexErr) {
+    let submission_id = sub.id.clone();
+    let manager_completion_delivery_ack = matches!(&sub.op, Op::TeamLeadCompletion { .. });
     let message = err.to_string();
     let inbound_message_id = matches!(
         &sub.op,
@@ -1795,6 +1820,18 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
             .await;
         }
     }
+    if manager_completion_delivery_ack {
+        sess.acknowledge_manager_completion_delivery(&submission_id)
+            .await;
+    }
+}
+
+struct ManagerCompletionDeliveryAckCleanup(Arc<Session>);
+
+impl Drop for ManagerCompletionDeliveryAckCleanup {
+    fn drop(&mut self) {
+        self.0.clear_manager_completion_delivery_ack_receivers();
+    }
 }
 
 pub(super) async fn submission_loop(
@@ -1802,6 +1839,8 @@ pub(super) async fn submission_loop(
     config: Arc<Config>,
     rx_sub: Receiver<Submission>,
 ) {
+    let _manager_completion_delivery_ack_cleanup =
+        ManagerCompletionDeliveryAckCleanup(Arc::clone(&sess));
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
@@ -1810,6 +1849,7 @@ pub(super) async fn submission_loop(
         } else {
             debug!(?sub, "Submission");
         }
+        let manager_completion_delivery_ack = matches!(&sub.op, Op::TeamLeadCompletion { .. });
         // Durable inbound submissions are the handoff boundary between the state database and
         // this session loop. Hold a manager recovery admission through dispatch so a recovery
         // coordinator either waits for the item to be consumed or rejects it while it can still
@@ -1937,6 +1977,7 @@ pub(super) async fn submission_loop(
                         sub.id.clone(),
                         thread_settings,
                         usage_policy_update,
+                        handoff_admission.as_ref(),
                     )
                     .await;
                     false
@@ -1957,7 +1998,14 @@ pub(super) async fn submission_loop(
                     mode,
                     reply,
                 } => {
-                    let result = turn_input::handle(&sess, *request, mode, sub.id.clone()).await;
+                    let result = turn_input::handle(
+                        &sess,
+                        *request,
+                        mode,
+                        sub.id.clone(),
+                        handoff_admission.as_ref(),
+                    )
+                    .await;
                     let _ = reply.send(result);
                     false
                 }
@@ -2163,11 +2211,15 @@ pub(super) async fn submission_loop(
         }
         .instrument(dispatch_span)
         .await;
+        if manager_completion_delivery_ack {
+            sess.acknowledge_manager_completion_delivery(&sub.id).await;
+        }
         if should_exit {
             shutdown_received = true;
             break;
         }
     }
+    sess.clear_manager_completion_delivery_acks().await;
     // If the submission loop exits because the channel closed without an
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {

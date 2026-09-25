@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3463
+expression: popup
+---
+  Lead work policy
+  Applies to this Lead thread, independent of its assigned model.
+
+
+  1. Prompt guided           Preserve the existing prompt-guided Lead behavior.
+› 2. Manager only (current)  Keep the Lead focused on coordination, planning, and review; Workers
+                             execute assigned work.
+
+  enter select · esc back

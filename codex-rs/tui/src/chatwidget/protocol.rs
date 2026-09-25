@@ -241,20 +241,10 @@ impl ChatWidget {
                         );
                     }
                 } else {
-                    // A queued thread-settings update can fail after its RPC acknowledgement.
-                    // Core identifies these failures with a BadRequest and the stable settings
-                    // error prefix. Keep unrelated terminal task errors from discarding the
-                    // user's pending team toggle, and leave retryable stream errors untouched.
-                    if matches!(
-                        notification.error.codex_error_info.as_ref(),
-                        Some(AppServerCodexErrorInfo::BadRequest)
-                    ) && notification
-                        .error
-                        .message
-                        .starts_with("invalid thread settings override:")
-                    {
-                        self.clear_pending_team_command();
-                    }
+                    // These errors have no TUI request ID. A delayed failure from an older
+                    // settings update cannot safely clear whichever Team command is pending now;
+                    // accepted Team updates are cleared by a matching snapshot or their
+                    // request-scoped timeout. Keep the error visible below.
                     self.last_non_retry_error = Some((
                         notification.turn_id.clone(),
                         notification.error.message.clone(),

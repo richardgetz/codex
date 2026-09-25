@@ -362,14 +362,31 @@ impl Session {
     /// not reacquire the permit: a coordinator may seal the tree while that permit is in flight,
     /// and rejecting the nested acquisition would strand the one-shot wait claim.
     pub(crate) async fn enqueue_lead_wakeup_with_admission(&self, message: &str) {
+        let _team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
+        self.enqueue_lead_wakeup_under_team_lead_admission(message)
+            .await;
+    }
+
+    /// Enqueues a Lead wake while the caller already holds Team Lead turn admission.
+    pub(crate) async fn enqueue_lead_wakeup_under_team_lead_admission(&self, message: &str) {
+        let progress_summary = self.input_queue.take_team_progress_summary().await;
+        self.enqueue_lead_wakeup_with_summary_under_team_lead_admission(progress_summary, message)
+            .await;
+    }
+
+    /// Enqueues a Lead wake with progress already claimed by the caller under the queue lock.
+    pub(crate) async fn enqueue_lead_wakeup_with_summary_under_team_lead_admission(
+        &self,
+        progress_summary: Option<String>,
+        message: &str,
+    ) {
         // Keep the summary and wake in the same admission boundary as Team Off cleanup. V1
         // completion notifications call this helper directly, so the marker cannot be inferred
         // by the outer inter-agent handler.
-        let _team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
         if !self.is_team_lead().await {
             return;
         }
-        if let Some(summary) = self.input_queue.take_team_progress_summary().await {
+        if let Some(summary) = progress_summary {
             self.input_queue
                 .enqueue_team_lead_mailbox_communication(
                     lead_progress_communication(summary),

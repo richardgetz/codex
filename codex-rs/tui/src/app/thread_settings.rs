@@ -8,7 +8,9 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::personality_opt_out_only;
 use crate::chatwidget::TeamCommand;
 use crate::chatwidget::cyber_model_approval_reviewer;
+use crate::chatwidget::is_active_lead_work_policy_target;
 use crate::chatwidget::lead_balance_label;
+use crate::chatwidget::lead_work_policy_label;
 use crate::chatwidget::role_label;
 use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
@@ -24,6 +26,9 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
+use std::time::Duration;
+
+const TEAM_SETTINGS_UPDATE_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl App {
     pub(super) async fn handle_team_command(
@@ -33,6 +38,17 @@ impl App {
         command: TeamCommand,
     ) {
         if self.active_thread_id != Some(thread_id) {
+            return;
+        }
+
+        if matches!(
+            &command,
+            TeamCommand::SelectWorkPolicy | TeamCommand::ConfigureWorkPolicy { .. }
+        ) && !is_active_lead_work_policy_target(self.chat_widget.team_settings())
+        {
+            self.chat_widget.add_error_message(
+                "Lead work policy can only be changed from an active Lead session.".to_string(),
+            );
             return;
         }
 
@@ -52,6 +68,10 @@ impl App {
                 return;
             }
             self.chat_widget.open_team_balance_popup();
+            return;
+        }
+        if matches!(&command, TeamCommand::SelectWorkPolicy) {
+            self.chat_widget.open_team_work_policy_popup();
             return;
         }
 
@@ -109,21 +129,41 @@ impl App {
                         "Updating this session's Lead usage/confidence balance to {balance} ({})…",
                         lead_balance_label(*balance)
                     ),
+                    TeamCommand::ConfigureWorkPolicy { policy } => format!(
+                        "Updating this session's Lead work policy to {}…",
+                        lead_work_policy_label(*policy)
+                    ),
                     _ => format!("Switching this session to Lead/Worker team mode {mode_label}…"),
                 };
-                self.chat_widget.set_pending_team_command(command);
+                let timeout_request_id = self.chat_widget.set_pending_team_command(command);
                 self.chat_widget.add_info_message(message, /*hint*/ None);
+                let app_event_tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(TEAM_SETTINGS_UPDATE_TIMEOUT).await;
+                    app_event_tx.send(AppEvent::TeamSettingsUpdateTimeout {
+                        thread_id,
+                        request_id: timeout_request_id,
+                    });
+                });
             }
             Ok(false) => {
                 self.chat_widget.clear_pending_team_command();
-                self.chat_widget.add_error_message(
-                    "Lead/Worker team mode is unavailable on this server.".to_string(),
-                );
+                let message = if matches!(&command, TeamCommand::ConfigureWorkPolicy { .. }) {
+                    "Lead work policy updates are unavailable on this server."
+                } else {
+                    "Lead/Worker team mode is unavailable on this server."
+                };
+                self.chat_widget.add_error_message(message.to_string());
             }
             Err(err) => {
                 self.chat_widget.clear_pending_team_command();
+                let setting = if matches!(&command, TeamCommand::ConfigureWorkPolicy { .. }) {
+                    "Lead work policy"
+                } else {
+                    "team mode"
+                };
                 self.chat_widget
-                    .add_error_message(format!("Failed to update team mode: {err}"));
+                    .add_error_message(format!("Failed to update {setting}: {err}"));
             }
         }
     }
@@ -391,6 +431,7 @@ fn team_settings_update_params(
         TeamCommand::Status | TeamCommand::SelectProfile { .. } | TeamCommand::SelectBalance => {
             return None;
         }
+        TeamCommand::SelectWorkPolicy => return None,
         TeamCommand::ConfigureProfile {
             role,
             model,
@@ -401,11 +442,17 @@ fn team_settings_update_params(
             model: Some(model),
             reasoning_effort: Some(effort),
             lead_balance: None,
+            lead_work_policy: None,
         },
         TeamCommand::ConfigureBalance { balance } => ThreadTeamSettingsUpdate {
             mode: current_mode,
             role: Some(codex_app_server_protocol::TeamRole::Lead),
             lead_balance: Some(balance),
+            ..Default::default()
+        },
+        TeamCommand::ConfigureWorkPolicy { policy } => ThreadTeamSettingsUpdate {
+            mode: current_mode,
+            lead_work_policy: Some(policy),
             ..Default::default()
         },
     };

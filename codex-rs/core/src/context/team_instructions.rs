@@ -15,6 +15,8 @@ const DISABLED_TEAM_INSTRUCTIONS: &str = "Lead/Worker team mode is disabled for 
 const TEAM_ACTION_WAKE_INSTRUCTIONS: &str = "For Multi-Agent V2, use send_message for routine progress and send_message_action when the Lead needs immediate attention; legacy V1 uses multi_agents.send_input.
 ";
 
+const LEAD_MANAGER_ONLY_INSTRUCTIONS: &str = "Lead work policy: manager_only. Act as the team's VP of Engineering: align with the user, plan, delegate, coordinate, and review final outcomes. Workers own substantive execution end to end: repository and web research, log gathering and diagnosis, code and documentation changes, builds and tests, CLI/MCP/browser/tool use, skills and artifact workflows, Git and PR work, CI follow-up, and debugging. Give each Worker a clear, bounded goal and completion evidence, then let them progress independently. Repository AGENTS.md and skill instructions defining required work or validation travel with the Worker assignment; they do not make the Lead execute that work. Explicit restrictions on delegation, user authorization, approvals, scope, concurrency, depth, and safety remain binding. Workers are engineers with normal tool access and can use their tools to finish scoped work without asking the Lead for routine permission or check-ins. Avoid doing the same work yourself, running duplicate execution, or requesting routine progress updates. Stay available for human questions and decisions, coordinate dependencies, and review the evidence returned for final acceptance. Redirect only when a Worker reports a blocker, is clearly off direction, or is stuck.\n";
+
 fn lead_balance_guidance(balance: u8) -> Option<&'static str> {
     match balance {
         1 => Some(
@@ -39,6 +41,7 @@ pub(crate) struct TeamInstructions {
     worker_max_concurrent: Option<usize>,
     dynamic_handoff: bool,
     lead_balance: u8,
+    lead_work_policy: codex_config::TeamLeadWorkPolicy,
 }
 
 impl TeamInstructions {
@@ -50,6 +53,7 @@ impl TeamInstructions {
                 .flatten(),
             dynamic_handoff: false,
             lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
+            lead_work_policy: codex_config::TeamLeadWorkPolicy::PromptGuided,
         }
     }
 
@@ -63,12 +67,21 @@ impl TeamInstructions {
         self
     }
 
+    pub(crate) fn with_lead_work_policy(
+        mut self,
+        lead_work_policy: codex_config::TeamLeadWorkPolicy,
+    ) -> Self {
+        self.lead_work_policy = lead_work_policy;
+        self
+    }
+
     pub(crate) fn disabled() -> Self {
         Self {
             role: None,
             worker_max_concurrent: None,
             dynamic_handoff: false,
             lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
+            lead_work_policy: codex_config::TeamLeadWorkPolicy::PromptGuided,
         }
     }
 }
@@ -116,6 +129,11 @@ impl ContextualUserFragment for TeamInstructions {
             && let Some(guidance) = lead_balance_guidance(self.lead_balance)
         {
             instructions.push_str(guidance);
+        }
+        if self.role == Some(TeamRole::Lead)
+            && self.lead_work_policy == codex_config::TeamLeadWorkPolicy::ManagerOnly
+        {
+            instructions.push_str(LEAD_MANAGER_ONLY_INSTRUCTIONS);
         }
         let Some(worker_max_concurrent) = self.worker_max_concurrent else {
             return instructions;

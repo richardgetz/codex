@@ -13,6 +13,7 @@ fn team_settings(
         lead_model: None,
         lead_reasoning_effort: None,
         lead_balance: None,
+        lead_work_policy: None,
         worker_model: None,
         worker_reasoning_effort: None,
         previous_model: None,

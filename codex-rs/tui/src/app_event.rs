@@ -1284,6 +1284,11 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         command: TeamCommand,
     },
+    /// Bound waiting for an app-server snapshot after a Team settings update.
+    TeamSettingsUpdateTimeout {
+        thread_id: ThreadId,
+        request_id: Uuid,
+    },
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),

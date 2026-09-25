@@ -841,6 +841,15 @@ impl LocalAgentControl {
                 .await;
         }
 
+        let terminal_delivery_guard = if multi_agent_version != MultiAgentVersion::V2 {
+            TerminalResultDeliveryGuard::for_thread_spawn(
+                Arc::clone(&new_thread.thread.session),
+                notification_source.as_ref(),
+            )
+        } else {
+            None
+        };
+
         let start_options = TurnStartOptions {
             parent_turn_id: options.parent_turn_id,
             turn_trigger: options.turn_trigger,
@@ -881,6 +890,7 @@ impl LocalAgentControl {
                 notification_source,
                 child_reference,
                 agent_metadata.agent_path.clone(),
+                terminal_delivery_guard,
             )
             .await;
         }
@@ -1422,6 +1432,14 @@ impl LocalAgentControl {
                 client_mcp_extensions: None,
             })
             .await?;
+        let terminal_delivery_guard = if multi_agent_version != MultiAgentVersion::V2 {
+            TerminalResultDeliveryGuard::for_thread_spawn(
+                Arc::clone(&resumed_thread.thread.session),
+                Some(&notification_source),
+            )
+        } else {
+            None
+        };
         let mut agent_metadata = agent_metadata;
         agent_metadata.agent_id = Some(resumed_thread.thread_id);
         reservation.commit(agent_metadata.clone());
@@ -1439,6 +1457,7 @@ impl LocalAgentControl {
                 Some(notification_source.clone()),
                 child_reference,
                 agent_metadata.agent_path.clone(),
+                terminal_delivery_guard,
             )
             .await;
         }

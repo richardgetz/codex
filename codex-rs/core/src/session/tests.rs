@@ -116,6 +116,7 @@ use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::turn_input::HandoffBlocker;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
@@ -7142,6 +7143,7 @@ async fn compaction_checkpoint_waits_for_accepted_settings_persistence() {
             permission_profile: Some(PermissionProfile::read_only()),
             ..Default::default()
         },
+        /*handoff_admission*/ None,
     )));
     // Pause after committing settings but before their accepted snapshot is persisted.
     assert!(futures::poll!(update.as_mut()).is_pending());
@@ -7234,6 +7236,7 @@ async fn usage_policy_reset_materializes_lazy_thread_settings() {
             usage_policy: Some(ThreadUsagePolicy::default()),
             ..Default::default()
         },
+        /*handoff_admission*/ None,
     )
     .await
     .expect("usage policy reset should succeed");
@@ -7962,6 +7965,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         activity_in_flight: AtomicU32::new(0),
         model_activity_in_flight: AtomicU32::new(0),
         turn_finalization_in_flight: AtomicU32::new(0),
+        terminal_result_delivery_in_flight: AtomicU32::new(0),
+        manager_completion_delivery_acks: std::sync::Mutex::new(HashMap::new()),
         handoff_dispatches_pending: AtomicU32::new(0),
         activity_operation_notify: Notify::new(),
         scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
@@ -10503,6 +10508,8 @@ where
         activity_in_flight: AtomicU32::new(0),
         model_activity_in_flight: AtomicU32::new(0),
         turn_finalization_in_flight: AtomicU32::new(0),
+        terminal_result_delivery_in_flight: AtomicU32::new(0),
+        manager_completion_delivery_acks: std::sync::Mutex::new(HashMap::new()),
         handoff_dispatches_pending: AtomicU32::new(0),
         activity_operation_notify: Notify::new(),
         scratchpad_loopback_limiter: std::sync::Mutex::new(Default::default()),
@@ -15258,6 +15265,110 @@ async fn turn_aborted_flushes_terminal_event_after_delivery() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replaced_v2_worker_stays_active_while_abort_result_delivery_is_blocked() {
+    let (mut session, mut turn_context, _original_rx) =
+        make_session_and_context_with_auth_and_config_and_rx(
+            CodexAuth::from_api_key("Test API Key"),
+            Vec::new(),
+            |config| {
+                config
+                    .features
+                    .enable(Feature::MultiAgentV2)
+                    .expect("MultiAgentV2 feature");
+            },
+        )
+        .await;
+    let (tx_event, rx_event) = async_channel::bounded(/*cap*/ 1);
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .tx_event = tx_event;
+
+    let parent_thread_id = ThreadId::new();
+    let worker_context =
+        Arc::get_mut(&mut turn_context).expect("turn context should be uniquely owned");
+    worker_context.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: Some(AgentPath::try_from("/root/worker").expect("worker agent path")),
+        agent_nickname: None,
+        agent_role: Some("worker".to_string()),
+    });
+    worker_context.parent_thread_id = Some(parent_thread_id);
+    worker_context.multi_agent_version = MultiAgentVersion::V2;
+
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+    while session
+        .tx_event
+        .try_send(Event {
+            id: "fill-terminal-event-channel".to_string(),
+            msg: EventMsg::ShutdownComplete,
+        })
+        .is_ok()
+    {}
+
+    let mut status_rx = session.agent_status.subscribe();
+    let abort_task = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move {
+            session
+                .abort_all_tasks(codex_protocol::protocol::TurnAbortReason::Replaced)
+                .await;
+        }
+    });
+
+    let terminal_status = tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
+        loop {
+            let status = status_rx.borrow().clone();
+            if matches!(status, codex_protocol::protocol::AgentStatus::Errored(_)) {
+                break status;
+            }
+            status_rx
+                .changed()
+                .await
+                .expect("session status sender should remain open");
+        }
+    })
+    .await
+    .expect("replaced Worker should publish its terminal status");
+    assert!(matches!(
+        terminal_status,
+        codex_protocol::protocol::AgentStatus::Errored(_)
+    ));
+    assert_eq!(
+        session
+            .terminal_result_delivery_in_flight
+            .load(std::sync::atomic::Ordering::Acquire),
+        1,
+        "a terminal V2 Worker remains active while the abort event is blocked before parent delivery"
+    );
+
+    rx_event
+        .recv()
+        .await
+        .expect("draining the event channel should release terminal delivery");
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 2), abort_task)
+        .await
+        .expect("abort callback should finish after delivery is unblocked")
+        .expect("abort task should not panic");
+    assert_eq!(
+        session
+            .terminal_result_delivery_in_flight
+            .load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "terminal delivery should release its active Worker count"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_log::test]
 async fn abort_regular_task_emits_marker_before_turn_aborted() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
@@ -15357,6 +15468,7 @@ async fn submit_steer_only(
             expected_turn_id: expected_turn_id.to_string(),
         },
         "test-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("steer-only submission should be valid")
@@ -15927,6 +16039,438 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
         (sess.input_queue.get_pending_input(&sess.active_turn).await).0,
         vec![TurnInput::InterAgentCommunication(communication)],
     );
+}
+
+#[tokio::test]
+async fn handoff_preflight_blocks_buffered_manager_completion() {
+    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
+    session
+        .input_queue
+        .enqueue_team_lead_completion(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("worker path should parse"),
+            AgentPath::root(),
+            Vec::new(),
+            "worker completion pending Lead review".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+
+    let preflight = session.handoff_preflight().await;
+
+    assert!(preflight.blockers.contains(&HandoffBlocker::PendingMailbox));
+}
+
+async fn manager_only_test_session() -> Arc<Session> {
+    let (session, _turn_context, _rx) = make_session_and_context_with_auth_and_config_and_rx(
+        CodexAuth::from_api_key("Test API Key"),
+        Vec::new(),
+        |config| {
+            let profile = codex_config::TeamModelProfile {
+                model: "gpt-5.5".to_string(),
+                reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+            };
+            config.team.profiles = Some(codex_config::TeamModelProfiles {
+                lead: profile.clone(),
+                worker: profile,
+                lead_work_policy: codex_config::TeamLeadWorkPolicy::ManagerOnly,
+                lead_dynamic_handoff: codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF,
+                lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
+                lead_oversight_timeout_minutes:
+                    codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
+            });
+            config.team_mode = codex_protocol::protocol::TeamMode::LeadWorker;
+        },
+    )
+    .await;
+    session
+}
+
+#[tokio::test]
+async fn manager_completion_flush_reuses_dispatch_admission_during_handoff() {
+    let session = manager_only_test_session().await;
+    session
+        .input_queue
+        .enqueue_team_lead_completion(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("agent path should parse"),
+            AgentPath::root(),
+            Vec::new(),
+            "worker completion pending Lead review".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
+
+    // Keep the scheduler at its final active-turn check after the flush has enqueued the wake.
+    let mut active_turn = session.active_turn.lock().await;
+    *active_turn = Some(crate::state::ActiveTurn::default());
+    // Hold settings persistence so the dispatch acquires its handoff admission, then let the test
+    // seal handoff before the PromptGuided switch reaches the completion flush.
+    let persistence_lock = session
+        .thread_settings_persistence
+        .acquire()
+        .await
+        .expect("settings persistence semaphore should remain open");
+
+    let (submission_tx, submission_rx) = async_channel::bounded(1);
+    let flush_session = Arc::clone(&session);
+    let config = session.get_config().await;
+    let submission_loop = tokio::spawn(async move {
+        handlers::submission_loop(flush_session, config, submission_rx).await;
+    });
+    submission_tx
+        .send(Submission {
+            id: "switch-to-prompt-guided".to_string(),
+            op: Op::ThreadSettings {
+                thread_settings: ThreadSettingsOverrides {
+                    team: Some(codex_protocol::protocol::ThreadTeamSettingsUpdate {
+                        mode: codex_protocol::protocol::TeamMode::LeadWorker,
+                        lead_work_policy: Some(codex_config::TeamLeadWorkPolicy::PromptGuided),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                usage_policy_update: None,
+            },
+            client_user_message_id: None,
+            parent_turn_id: None,
+            root_turn_id: None,
+            trace: None,
+        })
+        .await
+        .expect("settings dispatch should be queued");
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
+        while session
+            .services
+            .agent_control
+            .handoff_admission_in_flight
+            .load(std::sync::atomic::Ordering::Acquire)
+            == 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settings dispatch should acquire handoff admission before waiting to persist");
+    let handoff = session
+        .services
+        .agent_control
+        .begin_handoff()
+        .expect("seal handoff admission");
+    drop(persistence_lock);
+
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
+        while !session.input_queue.has_trigger_turn_mailbox_items().await {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("completion flush should enqueue its wake");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), handoff.wait_for_admissions())
+            .await
+            .is_err(),
+        "the flush must keep its admission while waiting at the scheduler boundary"
+    );
+
+    drop(active_turn);
+    tokio::time::timeout(Duration::from_secs(1), handoff.wait_for_admissions())
+        .await
+        .expect("settings dispatch should finish after the scheduler boundary opens");
+    drop(handoff);
+    assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
+    drop(submission_tx);
+    tokio::time::timeout(Duration::from_secs(1), submission_loop)
+        .await
+        .expect("submission loop should stop after the channel closes")
+        .expect("submission loop task should not panic");
+}
+
+#[tokio::test]
+async fn explicit_user_progress_drain_prevents_empty_manager_completion_wake() {
+    let session = manager_only_test_session().await;
+    let generation = session
+        .input_queue
+        .enqueue_team_lead_completion(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            Vec::new(),
+            "completion included in explicit input".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
+
+    let user_summary = session
+        .take_lead_progress_summary()
+        .await
+        .expect("explicit user input should claim the completion summary");
+    assert!(user_summary.contains("completion included in explicit input"));
+
+    session
+        .flush_manager_completion_batch(generation, /*handoff_admission*/ None)
+        .await;
+
+    assert!(!session.input_queue.has_pending_manager_completion().await);
+    assert!(!session.input_queue.has_pending_mailbox_items().await);
+    assert!(!session.input_queue.has_trigger_turn_mailbox_items().await);
+}
+
+#[tokio::test]
+async fn manager_completion_delivery_ack_waits_for_parent_buffer_insertion() {
+    let (_home, mut config) = test_config().await;
+    let profile = codex_config::TeamModelProfile {
+        model: "gpt-5.5".to_string(),
+        reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+    };
+    config.team.profiles = Some(codex_config::TeamModelProfiles {
+        lead: profile.clone(),
+        worker: profile,
+        lead_work_policy: codex_config::TeamLeadWorkPolicy::ManagerOnly,
+        lead_dynamic_handoff: codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF,
+        lead_balance: 2,
+        lead_oversight_timeout_minutes: codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
+    });
+    config.team_mode = codex_protocol::protocol::TeamMode::LeadWorker;
+    let manager = crate::thread_manager::ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let parent_started = manager
+        .start_thread(crate::thread_manager::StartThreadOptions::new(
+            config.clone(),
+        ))
+        .await
+        .expect("manager-only parent should start");
+    let parent_thread_id = parent_started.thread_id;
+    let parent = parent_started.thread;
+    let session = Arc::clone(&parent.session);
+    assert!(session.is_team_lead().await);
+    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let persistence_lock = session
+        .thread_settings_persistence
+        .acquire()
+        .await
+        .expect("settings persistence semaphore should remain open");
+    parent
+        .io
+        .submit(Op::ThreadSettings {
+            thread_settings: ThreadSettingsOverrides {
+                team: Some(codex_protocol::protocol::ThreadTeamSettingsUpdate {
+                    mode: codex_protocol::protocol::TeamMode::LeadWorker,
+                    lead_balance: Some(4),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            usage_policy_update: None,
+        })
+        .await
+        .expect("settings dispatch should be queued");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while session
+            .services
+            .agent_control
+            .handoff_admission_in_flight
+            .load(std::sync::atomic::Ordering::Acquire)
+            == 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settings dispatch should block on persistence after admission");
+
+    let control = session.services.agent_control.clone();
+    let status = codex_protocol::protocol::AgentStatus::Completed(Some("done".to_string()));
+    let send_completion = tokio::spawn(async move {
+        control
+            .send_team_lead_completion(
+                parent_thread_id,
+                InterAgentCommunication::new(
+                    AgentPath::try_from("/root/worker").expect("agent path should parse"),
+                    AgentPath::root(),
+                    Vec::new(),
+                    "buffer this Worker completion".to_string(),
+                    /*trigger_turn*/ true,
+                ),
+                crate::agent_communication::AgentCommunicationContext::new(
+                    crate::agent_communication::AgentCommunicationKind::Result,
+                    ThreadId::new(),
+                ),
+                Default::default(),
+                &status,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let pending_ack_count = session
+                .manager_completion_delivery_acks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len();
+            if pending_ack_count > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("completion sender should register its ack before enqueueing");
+    assert!(!send_completion.is_finished());
+    assert!(!session.input_queue.has_pending_manager_completion().await);
+
+    drop(persistence_lock);
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 1), send_completion)
+        .await
+        .expect("completion sender should resume after parent dispatch")
+        .expect("completion sender task should not panic")
+        .expect("completion should be submitted successfully");
+    assert!(session.input_queue.has_pending_manager_completion().await);
+    let pending_shutdown_ack = session
+        .register_manager_completion_delivery_ack("pending-shutdown".to_string())
+        .await;
+    parent
+        .shutdown_and_wait()
+        .await
+        .expect("parent session should shut down cleanly");
+    assert!(pending_shutdown_ack.await.is_err());
+}
+
+#[tokio::test]
+async fn triggered_team_lead_completion_ack_blocks_older_manager_batch() {
+    let (_home, mut config) = test_config().await;
+    let profile = codex_config::TeamModelProfile {
+        model: "gpt-5.5".to_string(),
+        reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+    };
+    config.team.profiles = Some(codex_config::TeamModelProfiles {
+        lead: profile.clone(),
+        worker: profile,
+        lead_work_policy: codex_config::TeamLeadWorkPolicy::ManagerOnly,
+        lead_dynamic_handoff: codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF,
+        lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
+        lead_oversight_timeout_minutes: codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
+    });
+    config.team_mode = codex_protocol::protocol::TeamMode::LeadWorker;
+    let manager = crate::thread_manager::ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("Test API Key"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let parent_started = manager
+        .start_thread(crate::thread_manager::StartThreadOptions::new(
+            config.clone(),
+        ))
+        .await
+        .expect("manager-only parent should start");
+    let parent_thread_id = parent_started.thread_id;
+    let parent = parent_started.thread;
+    let session = Arc::clone(&parent.session);
+    *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let generation = session
+        .input_queue
+        .enqueue_team_lead_completion(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            Vec::new(),
+            "earlier successful completion".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
+    let persistence_lock = session
+        .thread_settings_persistence
+        .acquire()
+        .await
+        .expect("settings persistence semaphore should remain open");
+    parent
+        .io
+        .submit(Op::ThreadSettings {
+            thread_settings: ThreadSettingsOverrides {
+                team: Some(codex_protocol::protocol::ThreadTeamSettingsUpdate {
+                    mode: codex_protocol::protocol::TeamMode::LeadWorker,
+                    lead_balance: Some(4),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            usage_policy_update: None,
+        })
+        .await
+        .expect("settings dispatch should be queued");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while session
+            .services
+            .agent_control
+            .handoff_admission_in_flight
+            .load(std::sync::atomic::Ordering::Acquire)
+            == 0
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("settings dispatch should block on persistence after admission");
+
+    let control = session.services.agent_control.clone();
+    let status = codex_protocol::protocol::AgentStatus::Errored("replaced".to_string());
+    let send_completion = tokio::spawn(async move {
+        control
+            .send_team_lead_completion(
+                parent_thread_id,
+                InterAgentCommunication::new(
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    AgentPath::root(),
+                    Vec::new(),
+                    "urgent replacement result".to_string(),
+                    /*trigger_turn*/ true,
+                ),
+                crate::agent_communication::AgentCommunicationContext::new(
+                    crate::agent_communication::AgentCommunicationKind::Result,
+                    ThreadId::new(),
+                ),
+                Default::default(),
+                &status,
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while session
+            .manager_completion_delivery_acks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("triggered completion should register its parent-delivery ack");
+    assert!(!send_completion.is_finished());
+    assert!(
+        session
+            .input_queue
+            .take_manager_completion_batch(generation)
+            .await
+            .is_none()
+    );
+
+    drop(persistence_lock);
+    tokio::time::timeout(Duration::from_secs(1), send_completion)
+        .await
+        .expect("triggered completion should resume after parent dispatch")
+        .expect("completion sender task should not panic")
+        .expect("completion should be submitted successfully");
+    assert!(session.input_queue.has_trigger_turn_mailbox_items().await);
+    assert!(!session.input_queue.has_pending_manager_completion().await);
+
+    parent
+        .shutdown_and_wait()
+        .await
+        .expect("parent session should shut down cleanly");
 }
 
 #[tokio::test]

@@ -3325,6 +3325,7 @@ async fn team_profile_model_selection_popup_snapshot() {
         lead_model: Some("gpt-5.2".to_string()),
         lead_reasoning_effort: Some(ReasoningEffortConfig::Medium),
         lead_balance: Some(3),
+        lead_work_policy: None,
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffortConfig::Low),
         previous_model: None,
@@ -3347,6 +3348,7 @@ async fn team_profile_model_picker_emits_session_update_only() {
         lead_model: Some("gpt-5.2".to_string()),
         lead_reasoning_effort: Some(ReasoningEffortConfig::Medium),
         lead_balance: Some(3),
+        lead_work_policy: None,
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffortConfig::Low),
         previous_model: None,
@@ -3398,6 +3400,7 @@ async fn team_balance_picker_snapshot() {
         lead_model: None,
         lead_reasoning_effort: None,
         lead_balance: Some(3),
+        lead_work_policy: None,
         worker_model: None,
         worker_reasoning_effort: None,
         previous_model: None,
@@ -3420,6 +3423,7 @@ async fn team_balance_picker_emits_session_update_only() {
         lead_model: None,
         lead_reasoning_effort: None,
         lead_balance: Some(3),
+        lead_work_policy: None,
         worker_model: None,
         worker_reasoning_effort: None,
         previous_model: None,
@@ -3435,6 +3439,66 @@ async fn team_balance_picker_emits_session_update_only() {
             command: TeamCommand::ConfigureBalance { balance: 3 },
         }) if event_thread_id == thread_id
     ));
+}
+
+#[tokio::test]
+async fn team_work_policy_picker_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.team_settings = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::LeadWorker,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-lead".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffortConfig::High),
+        lead_balance: Some(3),
+        lead_work_policy: Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly),
+        worker_model: Some("gpt-worker".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.open_team_work_policy_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("team_work_policy_picker", popup);
+}
+
+#[tokio::test]
+async fn team_work_policy_picker_selects_session_policy_only() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.team_settings = Some(codex_app_server_protocol::ThreadTeamSettings {
+        mode: codex_app_server_protocol::TeamMode::LeadWorker,
+        role: Some(codex_app_server_protocol::TeamRole::Lead),
+        lead_model: Some("gpt-lead".to_string()),
+        lead_reasoning_effort: Some(ReasoningEffortConfig::High),
+        lead_balance: Some(3),
+        lead_work_policy: Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly),
+        worker_model: Some("gpt-worker".to_string()),
+        worker_reasoning_effort: Some(ReasoningEffortConfig::Medium),
+        previous_model: None,
+        previous_reasoning_effort: None,
+    });
+    chat.open_team_work_policy_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::TeamCommand {
+            thread_id: event_thread_id,
+            command: TeamCommand::ConfigureWorkPolicy {
+                policy: codex_app_server_protocol::TeamLeadWorkPolicy::PromptGuided,
+            },
+        }) if event_thread_id == thread_id
+    ));
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).all(|event| !matches!(
+            event,
+            AppEvent::UpdateModel(_) | AppEvent::PersistModelSelection { .. }
+        ))
+    );
 }
 
 fn apply_model_list_response(chat: &mut ChatWidget, presets: Vec<ModelPreset>) {

@@ -42,7 +42,7 @@ async fn websocket_v3_reconciles_handoff_transcripts_without_changing_live_notif
             }),
         ]])]),
     ).await?;
-    harness
+    let started = harness
         .start_frameless_bidi_realtime(
             /*codex_response_handoff_mode*/ None,
             /*codex_response_handoff_channel_prefixes*/ None, /*initial_items*/ None,
@@ -62,6 +62,7 @@ async fn websocket_v3_reconciles_handoff_transcripts_without_changing_live_notif
                 .await?,
             ThreadRealtimeTranscriptDeltaNotification {
                 thread_id: harness.thread_id.clone(),
+                submission_id: started.submission_id.clone(),
                 role: role.into(),
                 delta: delta.into()
             },
@@ -76,6 +77,7 @@ async fn websocket_v3_reconciles_handoff_transcripts_without_changing_live_notif
                 .await?,
             ThreadRealtimeTranscriptDoneNotification {
                 thread_id: harness.thread_id.clone(),
+                submission_id: started.submission_id.clone(),
                 role: role.into(),
                 text: text.into()
             },
@@ -87,6 +89,7 @@ async fn websocket_v3_reconciles_handoff_transcripts_without_changing_live_notif
             .await?,
         ThreadRealtimeItemAddedNotification {
             thread_id: harness.thread_id.clone(),
+            submission_id: started.submission_id.clone(),
             item: json!({
                 "type": "handoff_request",
                 "handoff_id": "handoff",
@@ -96,6 +99,10 @@ async fn websocket_v3_reconciles_handoff_transcripts_without_changing_live_notif
                     {"role": "user", "text": "What can you do?"},
                     {"role": "assistant", "text": assistant_transcript},
                 ],
+                "routing": {
+                    "classifier": {"kind": "text"},
+                    "classification": "read_only",
+                },
             }),
         },
     );

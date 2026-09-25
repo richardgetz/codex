@@ -24,6 +24,7 @@ use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::ThreadAttachmentAddParams;
 use codex_app_server_protocol::ThreadAttachmentAddResponse;
 use codex_app_server_protocol::ThreadAttachmentListParams;
@@ -606,6 +607,7 @@ async fn assert_thread_fork_preserves_team_settings(
             lead_model: Some("gpt-6-astra".to_string()),
             lead_reasoning_effort: Some(ReasoningEffort::High),
             lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
+            lead_work_policy: Some(TeamLeadWorkPolicy::PromptGuided),
             worker_model: Some("gpt-5.6-luna".to_string()),
             worker_reasoning_effort: Some(ReasoningEffort::Max),
             previous_model: (source_mode == TeamMode::LeadWorker).then(|| "mock-model".to_string()),
@@ -728,6 +730,7 @@ async fn thread_fork_explicit_model_and_effort_overrides_win_over_off_team_snaps
         lead_model: Some("gpt-6-astra".to_string()),
         lead_reasoning_effort: Some(ReasoningEffort::High),
         lead_balance: Some(codex_config::DEFAULT_TEAM_LEAD_BALANCE),
+        lead_work_policy: Some(TeamLeadWorkPolicy::PromptGuided),
         worker_model: Some("gpt-5.6-luna".to_string()),
         worker_reasoning_effort: Some(ReasoningEffort::Max),
         previous_model: None,

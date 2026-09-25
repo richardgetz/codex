@@ -26,6 +26,7 @@ use tracing::trace;
 use tracing::trace_span;
 use tracing::warn;
 
+use crate::agent::control::HandoffAdmissionGuard;
 use crate::agent::control::TeamWorkerLease;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
@@ -51,6 +52,7 @@ use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -783,6 +785,32 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
+        self.maybe_start_turn_for_pending_work_inner(sub_id, /*pre_acquired_admission*/ None)
+            .await;
+    }
+
+    /// Starts a pending-work turn while retaining an admission permit acquired by the caller.
+    ///
+    /// This closes the gap between waiting for handoff admission to reopen and the scheduler's
+    /// final automatic-turn admission boundary.
+    pub(crate) fn maybe_start_turn_for_pending_work_with_admission(
+        self: &Arc<Self>,
+        sub_id: String,
+        admission: HandoffAdmissionGuard,
+    ) -> BoxFuture<'static, ()> {
+        let session = Arc::clone(self);
+        Box::pin(async move {
+            session
+                .maybe_start_turn_for_pending_work_inner(sub_id, Some(admission))
+                .await;
+        })
+    }
+
+    async fn maybe_start_turn_for_pending_work_inner(
+        self: &Arc<Self>,
+        sub_id: String,
+        mut pre_acquired_admission: Option<HandoffAdmissionGuard>,
+    ) {
         if self.is_activity_paused() {
             return;
         }
@@ -794,12 +822,16 @@ impl Session {
                 return;
             }
 
-            // Reserve the final automatic-turn admission only after confirming mailbox work.
-            // The permit is released before a capacity wait and reacquired on the next pass, so
-            // a sealed handoff is never held hostage by an unavailable Worker slot.
-            let admission = match self.services.agent_control.begin_handoff_admission() {
-                Ok(admission) => admission,
-                Err(_) => return,
+            // Use a caller-held permit when available. Otherwise reserve the final automatic-turn
+            // admission only after confirming mailbox work. The permit is released before a
+            // capacity wait and reacquired on the next pass, so a sealed handoff is never held
+            // hostage by an unavailable Worker slot.
+            let admission = match pre_acquired_admission.take() {
+                Some(admission) => admission,
+                None => match self.services.agent_control.begin_handoff_admission() {
+                    Ok(admission) => admission,
+                    Err(_) => return,
+                },
             };
             let turn_state = {
                 let mut active_turn = self.active_turn.lock().await;
@@ -1092,6 +1124,8 @@ impl Session {
             task.handle.detach();
             self.turn_finalization_in_flight
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.terminal_result_delivery_in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             Arc::clone(&active_turn.turn_state)
         };
         let (last_agent_message, abort_reason) = match task_result {
@@ -1330,6 +1364,8 @@ impl Session {
             })
         };
         self.send_event(turn_context.as_ref(), event).await;
+        self.finish_terminal_result_delivery(turn_context.parent_thread_id)
+            .await;
         self.services
             .guardian_rejection_circuit_breaker
             .lock()
@@ -1370,6 +1406,17 @@ impl Session {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+    }
+
+    async fn finish_terminal_result_delivery(&self, parent_thread_id: Option<ThreadId>) {
+        self.terminal_result_delivery_in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if let Some(parent_thread_id) = parent_thread_id {
+            self.services
+                .agent_control
+                .schedule_pending_manager_completion_batch_flush(parent_thread_id)
+                .await;
+        }
     }
 
     pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
@@ -1482,7 +1529,11 @@ impl Session {
             completed_at,
             duration_ms,
         });
+        self.terminal_result_delivery_in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.send_event(task.turn_context.as_ref(), event).await;
+        self.finish_terminal_result_delivery(task.turn_context.parent_thread_id)
+            .await;
         self.services
             .guardian_rejection_circuit_breaker
             .lock()

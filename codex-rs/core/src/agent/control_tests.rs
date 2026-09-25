@@ -646,6 +646,110 @@ async fn start_unregistered_thread_spawn_child_with_control(
 }
 
 #[tokio::test]
+async fn terminal_delivery_rearms_pending_manager_completion_batch() {
+    let (home, mut config) = test_config().await;
+    let profile = codex_config::TeamModelProfile {
+        model: "gpt-5.5".to_string(),
+        reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
+    };
+    config.team.profiles = Some(codex_config::TeamModelProfiles {
+        lead: profile.clone(),
+        worker: profile,
+        lead_work_policy: codex_config::TeamLeadWorkPolicy::ManagerOnly,
+        lead_dynamic_handoff: codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF,
+        lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
+        lead_oversight_timeout_minutes: codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
+    });
+    config.team_mode = codex_protocol::protocol::TeamMode::LeadWorker;
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    assert!(parent_thread.session.is_team_lead().await);
+    let (_child_thread_id, child) =
+        start_unregistered_thread_spawn_child(&harness, parent_thread_id, 1).await;
+    let terminal_delivery_guard = TerminalResultDeliveryGuard::for_thread_spawn(
+        Arc::clone(&child.session),
+        Some(&child.session_source),
+    )
+    .expect("ThreadSpawn child should retain its terminal callback until delivery");
+    child
+        .io
+        .agent_status
+        .send_replace(AgentStatus::Completed(Some("done".to_string())));
+    assert_eq!(
+        harness
+            .control
+            .active_direct_worker_count(parent_thread_id)
+            .await,
+        1,
+        "a terminal Worker remains active while its completion callback is in flight"
+    );
+    *parent_thread.session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let generation = parent_thread
+        .session
+        .input_queue
+        .enqueue_team_lead_completion(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            Vec::new(),
+            "completion awaiting terminal delivery".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
+    tokio::time::pause();
+    parent_thread
+        .session
+        .schedule_manager_completion_batch_flush(generation)
+        .await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(151)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(
+        parent_thread
+            .session
+            .input_queue
+            .pending_manager_completion_generation()
+            .await,
+        Some(generation),
+        "the initial quiet-window flush must wait for terminal result delivery"
+    );
+    assert!(
+        !parent_thread
+            .session
+            .input_queue
+            .has_trigger_turn_mailbox_items()
+            .await
+    );
+
+    drop(terminal_delivery_guard);
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(151)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+
+    timeout(Duration::from_secs(1), async {
+        while !parent_thread
+            .session
+            .input_queue
+            .has_trigger_turn_mailbox_items()
+            .await
+        {
+            sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("terminal delivery should rearm the pending completion batch");
+    assert_eq!(
+        parent_thread
+            .session
+            .input_queue
+            .pending_manager_completion_generation()
+            .await,
+        None
+    );
+}
+
+#[tokio::test]
 async fn root_service_tier_propagates_to_loaded_nested_subagents() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, root_thread) = harness.start_thread().await;
@@ -5544,6 +5648,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             })),
             tester_path.to_string(),
             Some(tester_path.clone()),
+            None,
         )
         .await;
     let tester_turn = tester_thread.session.new_default_turn().await;
@@ -5626,6 +5731,7 @@ async fn memory_subagent_completion_does_not_notify_parent() {
             Some(SessionSource::SubAgent(SubAgentSource::MemoryExtraction)),
             "memory".to_string(),
             Some(AgentPath::morpheus()),
+            None,
         )
         .await;
     let memory_turn = memory_thread.session.new_default_turn().await;
@@ -5669,6 +5775,7 @@ async fn completion_watcher_ignores_handoff_shutdown() {
             })),
             child_thread_id.to_string(),
             /*child_agent_path*/ None,
+            None,
         )
         .await;
     harness.control.mark_handoff_suspended(child_thread_id);
@@ -5701,6 +5808,7 @@ async fn completion_watcher_forwards_natural_shutdown() {
             })),
             child_thread_id.to_string(),
             /*child_agent_path*/ None,
+            None,
         )
         .await;
     send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
@@ -5727,6 +5835,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
             })),
             child_thread_id.to_string(),
             /*child_agent_path*/ None,
+            None,
         )
         .await;
 

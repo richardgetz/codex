@@ -83,3 +83,27 @@ fn lead_balance_guidance_is_lead_only_and_default_is_unchanged() {
         .body();
     assert!(!worker_body.contains("Lead usage/confidence balance"));
 }
+
+#[test]
+fn manager_only_guidance_is_lead_only_and_keeps_worker_tools_independent() {
+    let default_body = TeamInstructions::new(TeamRole::Lead, None).body();
+    let manager_body = TeamInstructions::new(TeamRole::Lead, None)
+        .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::ManagerOnly)
+        .body();
+    let explicit_default_body = TeamInstructions::new(TeamRole::Lead, None)
+        .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::PromptGuided)
+        .body();
+    assert_eq!(explicit_default_body, default_body);
+    assert!(!default_body.contains("Lead work policy: manager_only"));
+    assert!(manager_body.contains("VP of Engineering"));
+    assert!(manager_body.contains("plan, delegate, coordinate, and review"));
+    assert!(manager_body.contains("Workers are engineers with normal tool access"));
+    assert!(manager_body.contains("without asking the Lead for routine permission"));
+    assert!(manager_body.contains("Avoid doing the same work yourself"));
+
+    let worker_body = TeamInstructions::new(TeamRole::Worker, None)
+        .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::ManagerOnly)
+        .body();
+    assert!(!worker_body.contains("Lead work policy: manager_only"));
+    assert!(!worker_body.contains("VP of Engineering"));
+}

@@ -20,6 +20,14 @@ release or merge rules.
 
 ## Unreleased
 
+- The repo-local `rust-iteration` skill, triggered from `AGENTS.md`, selects
+  proof-matched scoped validation; requires a short source/async-fixture
+  preflight and one narrow test run that covers compilation and behavior when
+  possible; keeps Rust builds serial under one owner; and sequences required
+  mechanical checks before one independent review of the frozen changed diff.
+  Review fixes stay in changed scope, with only affected narrow validation and
+  focused review follow-up when required.
+
 - Interactive TUI startup gives the dedicated `codex-main` thread a 32 MiB
   stack budget while keeping Tokio worker stacks at 16 MiB, preventing the
   fork's large merged async dispatch path from aborting during `just codex`
@@ -37,6 +45,46 @@ release or merge rules.
   default Luna fallback to those targets, and reports their standard, long
   context, Fast, and Flex status pricing. Explicit historical model IDs remain
   selectable.
+
+- `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
+  keeps the Lead focused on user alignment, planning, delegation, coordination,
+  and final review while Workers own substantive execution across repository and
+  web research, log gathering, code and docs, builds and tests, tool and skill
+  use, Git/PR work, CI follow-up, and debugging. Repository `AGENTS.md` or skill
+  instructions guide the assigned work without moving execution back to the
+  Lead; the Lead avoids duplicate work and routine progress checks, and redirects
+  only for a blocker, clear wrong direction, or stalled Worker; explicit
+  delegation and authorization restrictions remain binding. Workers retain
+  normal tool access. The runtime gate keeps shell and execution tools from the
+  Lead while preserving coordination, planning, and selected read-only support
+  tools.
+  In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
+  tools, while nested dispatch still denies execution tools. The policy is
+  captured in thread snapshots so resume and fork preserve the selected mode,
+  while legacy snapshots keep the default. An active Lead can also change its
+  thread-owned policy independently through `/team work-policy` and
+  `thread/settings/update`; the selection takes effect on the next turn without
+  changing Team mode, role, profile assignments, or global defaults. TUI Team
+  settings updates wait for a matching settings snapshot or the bounded
+  confirmation timeout; stale snapshots cannot reject a pending update, and
+  uncorrelated terminal errors stay visible without clearing any pending Team
+  command. Old timeout callbacks cannot clear a superseding Team command.
+  Successful direct Worker completions are summarized in one bounded Lead wake
+  after the direct Workers finish; user
+  input, action messages, failures, escalation, oversight deadlines, and
+  dependency handoffs remain immediate. An undelivered completion batch blocks
+  daemon handoff, and its quiet-window wake retries after an aborted handoff
+  reopens admission. If durable handoff persistence fails, the process-local
+  manager-only completion fallback enters that same bounded batch and arms its
+  admission-aware flush, so reopening a failed handoff does not strand the wake.
+  Switching back to `prompt_guided` immediately releases
+  buffered Worker completions even while other Workers remain active, and a
+  queue-only completion admitted under the previous policy becomes an immediate
+  wake if it reaches the Lead after the switch. Completion flushes retain their
+  handoff admission through the final scheduler boundary, wait until terminal
+  result delivery reaches the parent, rearm a still-pending batch when that
+  delivery finishes, and atomically claim the buffered summary against explicit
+  user-input drains.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -884,6 +932,17 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify upstream refreshes keep `.codex/skills/rust-iteration/SKILL.md` and
+  its `AGENTS.md` trigger. Preserve proof-matched target selection, source-proven
+  oracles, fixture prerequisites/event order, visible mock filters, distinct
+  timer events, one serial Rust build owner, immediate exact-SHA terminal
+  reports, evidence-based retries, one behavior test that compiles its affected
+  consumer when possible (adding a separate check only for a concrete coverage
+  gap), conditional `just fix` for large changes, and `just fmt` before the
+  independent review of the frozen diff. Keep review fixes in the changed
+  scope, rerun only affected narrow validation, and avoid broad review cascades;
+  preserve user approval before workspace-wide tests.
+
 - Verify upstream refreshes retain enough dedicated `codex-main` stack for the
   merged TUI startup futures (or reduce those frames before lowering the
   budget), while Tokio worker stacks remain at their shared 16 MiB setting.
@@ -1068,6 +1127,48 @@ release or merge rules.
   Worker scope, required checks, approvals, and configured efforts remain
   unchanged. Verify balance remains independent of `dynamic_handoff`, leaves
   `oversight_timeout_minutes` unchanged, and adds no polling loop.
+- Verify `[team.lead].work_policy` defaults to `prompt_guided`, accepts
+  `manager_only`, and persists through thread resume and fork while legacy
+  snapshots retain the default. Verify `thread/settings/update` changes only the
+  active Lead thread's `leadWorkPolicy`, preserves Team mode, role, model and
+  effort assignments, and balance, reports the selection in thread settings,
+  rejects non-Lead or inactive-Team updates, and takes effect on the next tool
+  plan in both directions. Verify the selection survives cold resume while
+  fresh threads retain configured defaults. Verify `manager_only` applies only
+  to the Lead:
+  it preserves human alignment, planning, delegation, coordination, and review;
+  Workers own substantive execution across repositories independent of local
+  workflow instructions, including research, logs, code/docs, builds/tests,
+  tool/skill use, Git/PR, CI, and debugging; routine checks and duplicate Lead
+  execution stay suppressed, with redirection reserved for clear blockers,
+  wrong direction, or stalled work. Workers keep normal tool access without
+  requiring Lead approval or check-ins for tool use. Verify Worker model context
+  and tool access remain unchanged, Code Mode exposes manager tools under the
+  configured/default namespaces while blocking shell and execution calls at the
+  nested runtime dispatch boundary, and `prompt_guided` retains its existing
+  Code Mode exposure. The manager-only runtime gate keeps coordination,
+  planning, and selected read-only support tools available to the Lead while
+  denying shell and execution tools; Worker tool access remains unchanged.
+  Successful direct Worker completions stay
+  quiet while another direct Worker remains active, and one bounded batch wake
+  follows the completion boundary. User input, action messages, failures,
+  escalation, dependency handoffs, and the configured oversight deadline remain
+  immediate. Verify a buffered completion blocks daemon handoff and its batch
+  wake retries after an aborted handoff reopens admission.
+  Verify a durable-persistence failure retains a manager-only completion in the
+  bounded completion batch and schedules its flush to retry after the handoff
+  seal opens; no Lead request may start while the seal remains active.
+  Verify switching from `manager_only` to `prompt_guided` releases buffered
+  completions while other Workers remain active, and that queue-only completions
+  arriving after the switch wake the Lead immediately. Verify a flush keeps its
+  handoff admission through turn start, rearms a pending batch after terminal
+  result delivery, does not run before that delivery reaches the parent, and
+  atomically arbitrates the buffered summary against explicit user-input drains.
+  Verify the TUI policy picker ignores mismatched settings snapshots until a
+  matching snapshot or bounded timeout. Uncorrelated terminal settings errors
+  remain visible and cannot clear any pending Team command. Verify every
+  accepted Team update has a bounded timeout and earlier timeout callbacks
+  cannot clear a superseding command.
 - Verify `[team.lead].dynamic_handoff` defaults to `false`, is accepted under
   `[team.lead]`, and injects bounded role-specific Lead/Worker guidance when
   true. Verify dynamic guidance covers browser/UI automation, CLI wrappers,

@@ -79,7 +79,9 @@ impl Session {
             }
         }
 
-        if self.input_queue.has_pending_mailbox_items().await {
+        if self.input_queue.has_pending_mailbox_items().await
+            || self.input_queue.has_pending_manager_completion().await
+        {
             preflight.blockers.push(HandoffBlocker::PendingMailbox);
         }
         if self.services.agent_control.handoff_delivery_failed() {

@@ -126,3 +126,39 @@ fn dynamic_handoff_execution_routing_survives_lead_balance_changes() {
             .contains("neither reverses dynamic execution routing")
     );
 }
+
+#[test]
+fn manager_only_policy_updates_lead_context_without_changing_worker_context() {
+    let prompt_guided_lead = TeamPolicyState::new(TeamRole::Lead, None);
+    let prompt_guided_snapshot = prompt_guided_lead.snapshot();
+    let manager_only_lead = TeamPolicyState::new(TeamRole::Lead, None)
+        .with_lead_work_policy(TeamLeadWorkPolicy::ManagerOnly);
+    let fragment = manager_only_lead
+        .render_diff(PreviousSectionState::Known(&prompt_guided_snapshot))
+        .expect("manager-only change should update Lead context");
+    assert!(fragment.body().contains("Lead work policy: manager_only"));
+    assert!(fragment.body().contains("normal tool access"));
+
+    let prompt_guided_worker = TeamPolicyState::new(TeamRole::Worker, None);
+    let worker_snapshot = prompt_guided_worker.snapshot();
+    let worker = TeamPolicyState::new(TeamRole::Worker, None)
+        .with_lead_work_policy(TeamLeadWorkPolicy::ManagerOnly);
+    assert!(
+        worker
+            .render_diff(PreviousSectionState::Known(&worker_snapshot))
+            .is_none(),
+        "the Lead policy must not refresh Worker context"
+    );
+}
+
+#[test]
+fn legacy_team_policy_snapshot_defaults_to_prompt_guided() {
+    let mut value = serde_json::to_value(TeamPolicyState::new(TeamRole::Lead, None).snapshot())
+        .expect("serialize snapshot");
+    value
+        .as_object_mut()
+        .expect("snapshot object")
+        .remove("lead_work_policy");
+    let snapshot: TeamPolicySnapshot = serde_json::from_value(value).expect("legacy snapshot");
+    assert_eq!(snapshot.lead_work_policy, TeamLeadWorkPolicy::PromptGuided);
+}
