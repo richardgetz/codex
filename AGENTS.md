@@ -17,7 +17,12 @@ merge rules all count.
 
 Before a nontrivial Rust validation loop, consult
 `.codex/skills/rust-iteration/SKILL.md` to choose the smallest proof and assess
-failures. The requirements below remain authoritative.
+failures. Use this order: brief source/test-fixture feasibility preflight; one
+narrowest relevant test that compiles affected consumers and exercises behavior
+where possible; required mechanical checks (`fix` for large Rust changes, then
+`fmt` after code edits); then one independent review of the frozen diff. For
+review findings, fix only affected scope, rerun its narrow validation, and use a
+focused follow-up review. The requirements below remain authoritative.
 
 In the codex-rs folder where the rust code lives:
 
