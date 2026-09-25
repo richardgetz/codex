@@ -16058,6 +16058,16 @@ async fn handoff_preflight_blocks_buffered_manager_completion() {
     let preflight = session.handoff_preflight().await;
 
     assert!(preflight.blockers.contains(&HandoffBlocker::PendingMailbox));
+    let [diagnostic] = preflight.pending_mailbox_diagnostics.as_slice() else {
+        panic!("manager completion should produce one metadata-only diagnostic");
+    };
+    assert_eq!(diagnostic.thread_id, preflight.thread_id);
+    assert_eq!(
+        diagnostic.source,
+        crate::PendingMailboxBlockerSource::ManagerCompletionBatch
+    );
+    assert_eq!(diagnostic.count, 1);
+    assert!(diagnostic.oldest_age_ms.is_some());
 }
 
 async fn manager_only_test_session() -> Arc<Session> {

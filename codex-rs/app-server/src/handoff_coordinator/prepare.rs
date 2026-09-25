@@ -14,8 +14,10 @@ use codex_core::HandoffJournal;
 use codex_core::HandoffJournalState;
 use codex_core::HandoffNode;
 use codex_core::HandoffNodeState;
+use codex_core::PendingMailboxBlockerDetail;
 use codex_core::SuspendTurnOutcome;
 use codex_protocol::ThreadId;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -84,7 +86,7 @@ impl HandoffCoordinator {
             }
         }
 
-        let nodes = match self
+        let (nodes, pending_mailbox_diagnostics) = match self
             .snapshot_nodes(&roots, &loaded_thread_ids, requested_root)
             .await
         {
@@ -95,10 +97,11 @@ impl HandoffCoordinator {
                 return Err(error);
             }
         };
-        let mut journal = match HandoffJournal::begin(
+        let mut journal = match HandoffJournal::begin_with_pending_mailbox_diagnostics(
             &self.codex_home,
             self.runtime_version.clone(),
             nodes,
+            pending_mailbox_diagnostics,
         )
         .await
         {
@@ -111,6 +114,16 @@ impl HandoffCoordinator {
                 )));
             }
         };
+        if let Err(error) = self
+            .resolve_prior_pending_mailbox_diagnostics(&journal)
+            .await
+        {
+            tracing::warn!(
+                handoff_id = %journal.handoff_id,
+                error = %error,
+                "could not record resolution of prior pending-mailbox handoff diagnostics"
+            );
+        }
 
         let blocked_nodes = journal
             .nodes
@@ -359,7 +372,13 @@ impl HandoffCoordinator {
                 return Ok(response);
             }
 
-            let mut late_blockers = roots[root_index].handoff_preflight().await.blockers;
+            let preflight = roots[root_index].handoff_preflight().await;
+            let thread_id = roots[root_index].id().to_string();
+            journal.record_pending_mailbox_diagnostics(
+                &thread_id,
+                &preflight.pending_mailbox_diagnostics,
+            );
+            let mut late_blockers = preflight.blockers;
             late_blockers.retain(|blocker| !matches!(blocker, HandoffBlocker::LiveDescendants));
             if !late_blockers.is_empty() {
                 let root_id = roots[root_index].id().to_string();
@@ -450,8 +469,9 @@ impl HandoffCoordinator {
         roots: &[Arc<CodexThread>],
         loaded_ids: &HashSet<ThreadId>,
         requested_root: Option<ThreadId>,
-    ) -> Result<Vec<HandoffNode>, JSONRPCErrorError> {
+    ) -> Result<(Vec<HandoffNode>, Vec<PendingMailboxBlockerDetail>), JSONRPCErrorError> {
         let mut nodes = Vec::new();
+        let mut pending_mailbox_diagnostics = Vec::new();
         let mut seen = HashSet::new();
         for root in roots {
             let root_id = root.id();
@@ -472,6 +492,8 @@ impl HandoffCoordinator {
                 let source = thread.session_source();
                 let rollout_path = self.materialize_rollout_path(&thread).await?;
                 let preflight = thread.handoff_preflight().await;
+                pending_mailbox_diagnostics
+                    .extend(preflight.pending_mailbox_diagnostics.iter().cloned());
                 let mut blockers = preflight.blockers;
                 // A parent-linked node with no persisted version cannot be routed safely during
                 // replacement. Detect it while the old owner is still fenced, before suspension.
@@ -530,6 +552,8 @@ impl HandoffCoordinator {
             }
             let rollout_path = self.materialize_rollout_path(&thread).await?;
             let preflight = thread.handoff_preflight().await;
+            pending_mailbox_diagnostics
+                .extend(preflight.pending_mailbox_diagnostics.iter().cloned());
             let mut blockers = preflight.blockers;
             blockers.retain(|blocker| !matches!(blocker, HandoffBlocker::LiveDescendants));
             if !blockers
@@ -555,7 +579,60 @@ impl HandoffCoordinator {
             });
         }
         nodes.sort_by(|left, right| left.thread_id.cmp(&right.thread_id));
-        Ok(nodes)
+        Ok((nodes, pending_mailbox_diagnostics))
+    }
+
+    async fn resolve_prior_pending_mailbox_diagnostics(
+        &self,
+        current: &HandoffJournal,
+    ) -> std::io::Result<()> {
+        let observed_thread_ids = current
+            .nodes
+            .iter()
+            .map(|node| node.thread_id.clone())
+            .collect::<HashSet<_>>();
+        if observed_thread_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut active_sources_by_thread = HashMap::new();
+        for diagnostic in &current.blocker_diagnostics {
+            active_sources_by_thread
+                .entry(diagnostic.thread_id.as_str())
+                .or_insert_with(Vec::new)
+                .push(diagnostic.source);
+        }
+
+        let mut prior_journals = HandoffJournal::load_all(&self.codex_home).await?;
+        for prior in &mut prior_journals {
+            if prior.handoff_id == current.handoff_id
+                || prior.state != HandoffJournalState::NeedsAttention
+                || prior.transfer_started != Some(false)
+                || prior.quarantined
+                || prior.blocker_diagnostics.is_empty()
+                || prior.requires_recovery()
+            {
+                continue;
+            }
+
+            let mut changed = false;
+            for thread_id in &observed_thread_ids {
+                let active_sources = active_sources_by_thread
+                    .get(thread_id.as_str())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                changed |= prior.resolve_pending_mailbox_diagnostics(
+                    thread_id,
+                    active_sources,
+                    current.created_at_ms,
+                    &current.handoff_id,
+                );
+            }
+            if changed {
+                prior.persist(&self.codex_home).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn materialize_rollout_path(

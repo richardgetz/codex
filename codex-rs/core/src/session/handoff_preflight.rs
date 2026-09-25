@@ -7,6 +7,7 @@
 
 use super::session::Session;
 use crate::HandoffBlocker;
+use crate::PendingMailboxBlockerDetail;
 use crate::state::TaskKind;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,6 +24,8 @@ pub struct HandoffPreflight {
     pub was_running: bool,
     pub was_paused: bool,
     pub blockers: Vec<HandoffBlocker>,
+    /// Metadata-only summary of queue entries behind a pending-mailbox blocker.
+    pub pending_mailbox_diagnostics: Vec<PendingMailboxBlockerDetail>,
 }
 
 impl Session {
@@ -49,6 +52,7 @@ impl Session {
             was_running: false,
             was_paused,
             blockers: Vec::new(),
+            pending_mailbox_diagnostics: Vec::new(),
         };
 
         {
@@ -79,9 +83,11 @@ impl Session {
             }
         }
 
-        if self.input_queue.has_pending_mailbox_items().await
-            || self.input_queue.has_pending_manager_completion().await
-        {
+        preflight.pending_mailbox_diagnostics = self
+            .input_queue
+            .pending_handoff_blocker_diagnostics(&preflight.thread_id)
+            .await;
+        if !preflight.pending_mailbox_diagnostics.is_empty() {
             preflight.blockers.push(HandoffBlocker::PendingMailbox);
         }
         if self.services.agent_control.handoff_delivery_failed() {

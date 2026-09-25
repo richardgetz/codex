@@ -20,6 +20,15 @@ release or merge rules.
 
 ## Unreleased
 
+- Cross-process handoff journals retain metadata-only `pendingMailbox`
+  observations per affected thread, including source, count, oldest age, and
+  later resolution time where a preflight can confirm the queue has drained.
+  Scheduler deadline wakes and manager-generated progress summaries are
+  distinguished from inter-agent mailbox entries, and quarantine persists new
+  observations before returning a blocker.
+  Mail contents and sender details are never copied, and the safety blocker,
+  transfer boundary, and recovery decisions remain unchanged.
+
 - The repo-local `rust-iteration` skill, triggered from `AGENTS.md`, selects
   proof-matched scoped validation; requires a short source/async-fixture
   preflight and one narrow test run that covers compilation and behavior when
@@ -931,6 +940,15 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify upstream handoff journal refreshes preserve metadata-only
+  `pendingMailbox` observations with affected thread ID, source, count, oldest
+  age, observation/resolution timestamps, and backward-compatible loading of
+  older journals. Confirm synthetic Lead oversight wakes and manager-generated
+  progress summaries remain distinct from inter-agent mail, failed quarantine
+  preflights persist metadata updates before returning, and no mailbox payload
+  or sender data is serialized. Blocker admission, transfer-started gating,
+  recovery, and quarantine safety behavior must remain unchanged.
 
 - Verify upstream refreshes keep `.codex/skills/rust-iteration/SKILL.md` and
   its `AGENTS.md` trigger. Preserve proof-matched target selection, source-proven

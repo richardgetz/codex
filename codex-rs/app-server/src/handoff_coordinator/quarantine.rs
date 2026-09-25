@@ -4,16 +4,34 @@ use super::core_error;
 use super::parse_thread_id;
 use super::receipt_from_journal;
 use super::recovery::LoadedRecoveryNode;
+use crate::error_code::internal_error;
 use crate::error_code::invalid_params;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_core::HandoffBlocker;
 use codex_core::HandoffJournal;
 use codex_core::HandoffJournalState;
+use codex_core::PendingMailboxBlockerDetail;
 use codex_protocol::ThreadId;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use tokio::time::timeout;
+
+async fn persist_preflight_mailbox_diagnostics(
+    codex_home: &std::path::Path,
+    journal: &mut HandoffJournal,
+    thread_id: &str,
+    current: &[PendingMailboxBlockerDetail],
+) -> Result<(), JSONRPCErrorError> {
+    if journal.record_pending_mailbox_diagnostics(thread_id, current) {
+        journal.persist(codex_home).await.map_err(|error| {
+            internal_error(format!(
+                "could not persist handoff preflight diagnostics: {error}"
+            ))
+        })?;
+    }
+    Ok(())
+}
 
 /// A parsed journal node used by graph validation and quarantine admission.
 #[derive(Clone, Debug)]
@@ -324,8 +342,15 @@ impl HandoffCoordinator {
         }
 
         for loaded in &loaded_nodes {
-            let node = &journal.nodes[loaded.index];
+            let thread_id = journal.nodes[loaded.index].thread_id.clone();
             let mut preflight = loaded.thread.handoff_preflight().await;
+            persist_preflight_mailbox_diagnostics(
+                &self.codex_home,
+                journal,
+                &thread_id,
+                &preflight.pending_mailbox_diagnostics,
+            )
+            .await?;
             if preflight
                 .blockers
                 .iter()
@@ -338,7 +363,7 @@ impl HandoffCoordinator {
                     .map_err(|error| {
                         invalid_params(format!(
                             "cannot quarantine handoff {}: could not inspect node {} descendants: {error}",
-                            journal.handoff_id, node.thread_id
+                            journal.handoff_id, thread_id
                         ))
                     })?;
                 if live_subtree
@@ -346,6 +371,13 @@ impl HandoffCoordinator {
                     .all(|thread_id| node_ids.contains(thread_id))
                 {
                     preflight = loaded.thread.handoff_preflight_after_descendants().await;
+                    persist_preflight_mailbox_diagnostics(
+                        &self.codex_home,
+                        journal,
+                        &thread_id,
+                        &preflight.pending_mailbox_diagnostics,
+                    )
+                    .await?;
                 }
             }
             let blockers = preflight.blockers;
@@ -353,7 +385,7 @@ impl HandoffCoordinator {
                 return Err(invalid_params(format!(
                     "cannot quarantine handoff {}: node {} still has active work ({})",
                     journal.handoff_id,
-                    node.thread_id,
+                    thread_id,
                     format_handoff_blockers(&blockers)
                 )));
             }
@@ -408,3 +440,7 @@ impl HandoffCoordinator {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "quarantine_tests.rs"]
+mod tests;

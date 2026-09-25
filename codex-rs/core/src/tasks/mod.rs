@@ -486,10 +486,13 @@ impl Session {
                 }
             },
         };
-        let (pending_items, start_options, pending_team_lead_trigger) = self
+        let drained_mailbox = self
             .input_queue
             .drain_mailbox_input_items_with_team_lead_marker()
             .await;
+        let pending_items = drained_mailbox.items.clone();
+        let start_options = drained_mailbox.start_options.clone();
+        let pending_team_lead_trigger = drained_mailbox.team_lead_trigger;
         let require_team_lead_admission =
             require_team_lead_admission || (automatic_pending_work && pending_team_lead_trigger);
         if let MailboxParentProvenance::Attribute = mailbox_parent_provenance {
@@ -532,13 +535,14 @@ impl Session {
                     .input_queue
                     .take_pending_input_for_turn_state(turn_state.as_ref())
                     .await;
-                stale_input.extend(std::mem::take(&mut pending_items));
                 stale_input.extend(std::mem::take(&mut initial_pending_input));
                 stale_input.extend(std::mem::take(&mut input));
                 // Keep the admission guard through cleanup. Team On/completion paths use the
                 // same guard before enqueuing a fresh trigger, so they cannot race this stale
                 // wake's queue-only requeue and mailbox clear and leave a valid wake stranded.
-                self.input_queue.requeue_queue_only_mail(stale_input).await;
+                self.input_queue
+                    .requeue_queue_only_mail(stale_input, drained_mailbox)
+                    .await;
                 self.input_queue.clear_team_lead_trigger_mailbox().await;
                 self.clear_reserved_idle_turn(&turn_state).await;
                 return Ok(());
@@ -869,28 +873,39 @@ impl Session {
         // drain but before the idle sentinel is cleared and become stranded with no scheduler
         // wake.
         let team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
-        let (input, mut start_options, team_lead_trigger) = self
+        let (mut input, drained_mailbox) = self
             .input_queue
             .get_pending_input_with_team_lead_marker(&self.active_turn)
             .await;
+        let start_options = drained_mailbox.start_options.clone();
+        let team_lead_trigger = drained_mailbox.team_lead_trigger;
         let has_trigger_turn = input.iter().any(
             |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
+        ) || drained_mailbox.items.iter().any(
+            |item| matches!(item, TurnInput::InterAgentCommunication(mail) if mail.trigger_turn),
         );
-        let only_queue_only_mail = input.iter().all(|item| {
-            matches!(
-                item,
-                TurnInput::InterAgentCommunication(communication) if !communication.trigger_turn
-            )
-        });
+        let only_queue_only_mail = input
+            .iter()
+            .chain(drained_mailbox.items.iter())
+            .all(|item| {
+                matches!(
+                    item,
+                    TurnInput::InterAgentCommunication(communication) if !communication.trigger_turn
+                )
+            });
         if !has_trigger_turn && !self.has_outstanding_durable_sleep() && only_queue_only_mail {
             // A trigger can be cleared by Team Off after the initial mailbox
             // admission check but before this drain. Do not create an automatic
             // turn from that stale reservation; restore any queue-only mail for
             // a later explicit turn.
-            self.input_queue.requeue_queue_only_mail(input).await;
+            self.input_queue
+                .requeue_queue_only_mail(input, drained_mailbox)
+                .await;
             self.clear_reserved_idle_turn(&turn_state).await;
             return;
         }
+        input.extend(drained_mailbox.items);
+        let mut start_options = start_options;
         drop(team_lead_turn_admission);
         if !has_trigger_turn {
             // Queue-only mail wakes durable sleep without selecting a new task's settings.

@@ -355,7 +355,7 @@ async fn start_or_steer(
             {
                 session
                     .input_queue
-                    .enqueue_mailbox_communication(
+                    .enqueue_team_lead_progress_summary(
                         lead_progress_communication(summary),
                         TurnStartOptions::default(),
                     )
@@ -647,7 +647,7 @@ async fn steer(
             {
                 session
                     .input_queue
-                    .enqueue_mailbox_communication(
+                    .enqueue_team_lead_progress_summary(
                         lead_progress_communication(summary),
                         TurnStartOptions::default(),
                     )

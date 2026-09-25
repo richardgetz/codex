@@ -1,3 +1,5 @@
+use crate::PendingMailboxBlockerDetail;
+use crate::PendingMailboxBlockerSource;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
@@ -13,6 +15,8 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
@@ -102,14 +106,38 @@ pub(crate) struct InputQueue {
 struct PendingMailboxCommunication {
     communication: InterAgentCommunication,
     start_options: TurnStartOptions,
+    enqueued_at: Instant,
     /// Marks synthetic deadline wakeups so cancellation can remove a wake that
     /// raced with user input or another actionable event.
     lead_oversight: bool,
+    /// Marks manager-generated progress summaries so diagnostics do not attribute them to mail.
+    lead_progress_summary: bool,
     /// Marks trigger mail admitted while this session was assigned to Team Lead. The marker lets
     /// final automatic-turn admission reject a stale trigger after `/team off` while ordinary
     /// non-team trigger mail keeps its existing behavior.
     team_lead_trigger: bool,
     _diagnostics_guard: GaugeGuard,
+}
+
+/// Mailbox contents consumed for a turn, retaining queue-only metadata until scheduler admission
+/// is final. `TurnInput` stays wire-compatible; this sidecar is used only if a stale reservation
+/// needs to put queue-only mail back.
+pub(crate) struct DrainedMailboxInput {
+    pub(crate) items: Vec<TurnInput>,
+    pub(crate) start_options: TurnStartOptions,
+    pub(crate) team_lead_trigger: bool,
+    pending_mails: Vec<PendingMailboxCommunication>,
+}
+
+impl DrainedMailboxInput {
+    fn empty() -> Self {
+        Self {
+            items: Vec::new(),
+            start_options: TurnStartOptions::default(),
+            team_lead_trigger: false,
+            pending_mails: Vec::new(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -118,6 +146,7 @@ struct TeamLeadProgressBuffer {
     bytes: usize,
     completion_generation: u64,
     completion_pending: bool,
+    completion_pending_since: Option<Instant>,
     pending_completion_delivery_acks: HashSet<String>,
 }
 
@@ -205,6 +234,9 @@ impl InputQueue {
         let entry_bytes = entry.author.len() + entry.message.len() + 4;
         let mut progress = self.team_lead_progress.lock().await;
         if let TeamLeadProgressKind::Completion = kind {
+            if !progress.completion_pending {
+                progress.completion_pending_since = Some(Instant::now());
+            }
             progress.completion_generation = progress.completion_generation.wrapping_add(1);
             progress.completion_pending = true;
         }
@@ -238,6 +270,7 @@ impl InputQueue {
             return None;
         }
         progress.completion_pending = false;
+        progress.completion_pending_since = None;
         Some(ClaimedManagerCompletionBatch {
             progress_summary: take_team_progress_summary_locked(&mut progress),
         })
@@ -245,6 +278,84 @@ impl InputQueue {
 
     pub(crate) async fn has_pending_manager_completion(&self) -> bool {
         self.team_lead_progress.lock().await.completion_pending
+    }
+
+    /// Captures queue counts and oldest ages without copying mailbox payload or identity fields.
+    pub(crate) async fn pending_handoff_blocker_diagnostics(
+        &self,
+        thread_id: &str,
+    ) -> Vec<PendingMailboxBlockerDetail> {
+        let mut diagnostics = Vec::new();
+        {
+            let mailbox = self.mailbox_pending_mails.lock().await;
+            let count = mailbox
+                .iter()
+                .filter(|mail| !mail.lead_oversight && !mail.lead_progress_summary)
+                .count();
+            if count > 0 {
+                let oldest_age = mailbox
+                    .iter()
+                    .filter(|mail| !mail.lead_oversight && !mail.lead_progress_summary)
+                    .map(|mail| mail.enqueued_at.elapsed())
+                    .max()
+                    .unwrap_or_default();
+                diagnostics.push(PendingMailboxBlockerDetail {
+                    thread_id: thread_id.to_string(),
+                    source: PendingMailboxBlockerSource::InterAgentMailbox,
+                    count: u64::try_from(count).unwrap_or(u64::MAX),
+                    oldest_age_ms: Some(duration_millis(oldest_age)),
+                });
+            }
+            let count = mailbox
+                .iter()
+                .filter(|mail| mail.lead_progress_summary)
+                .count();
+            if count > 0 {
+                let oldest_age = mailbox
+                    .iter()
+                    .filter(|mail| mail.lead_progress_summary)
+                    .map(|mail| mail.enqueued_at.elapsed())
+                    .max()
+                    .unwrap_or_default();
+                diagnostics.push(PendingMailboxBlockerDetail {
+                    thread_id: thread_id.to_string(),
+                    source: PendingMailboxBlockerSource::LeadProgressSummary,
+                    count: u64::try_from(count).unwrap_or(u64::MAX),
+                    oldest_age_ms: Some(duration_millis(oldest_age)),
+                });
+            }
+            let count = mailbox.iter().filter(|mail| mail.lead_oversight).count();
+            if count > 0 {
+                let oldest_age = mailbox
+                    .iter()
+                    .filter(|mail| mail.lead_oversight)
+                    .map(|mail| mail.enqueued_at.elapsed())
+                    .max()
+                    .unwrap_or_default();
+                diagnostics.push(PendingMailboxBlockerDetail {
+                    thread_id: thread_id.to_string(),
+                    source: PendingMailboxBlockerSource::LeadOversightWake,
+                    count: u64::try_from(count).unwrap_or(u64::MAX),
+                    oldest_age_ms: Some(duration_millis(oldest_age)),
+                });
+            }
+        }
+        {
+            let progress = self.team_lead_progress.lock().await;
+            if progress.completion_pending {
+                let oldest_age = progress
+                    .completion_pending_since
+                    .map(|since| since.elapsed())
+                    .unwrap_or_default();
+                diagnostics.push(PendingMailboxBlockerDetail {
+                    thread_id: thread_id.to_string(),
+                    source: PendingMailboxBlockerSource::ManagerCompletionBatch,
+                    count: 1,
+                    oldest_age_ms: Some(duration_millis(oldest_age)),
+                });
+            }
+        }
+        diagnostics
     }
 
     /// Returns the latest buffered completion generation so a Lead work-policy update can
@@ -290,6 +401,7 @@ impl InputQueue {
     pub(crate) async fn take_team_progress_summary(&self) -> Option<String> {
         let mut progress = self.team_lead_progress.lock().await;
         progress.completion_pending = false;
+        progress.completion_pending_since = None;
         take_team_progress_summary_locked(&mut progress)
     }
 
@@ -299,6 +411,7 @@ impl InputQueue {
         progress.bytes = 0;
         progress.completion_generation = progress.completion_generation.wrapping_add(1);
         progress.completion_pending = false;
+        progress.completion_pending_since = None;
     }
 
     pub(crate) async fn subscribe_activity(
@@ -333,6 +446,7 @@ impl InputQueue {
             communication,
             start_options,
             /*team_lead_trigger*/ false,
+            /*lead_progress_summary*/ false,
         )
         .await;
     }
@@ -349,6 +463,22 @@ impl InputQueue {
             communication,
             start_options,
             /*team_lead_trigger*/ true,
+            /*lead_progress_summary*/ false,
+        )
+        .await;
+    }
+
+    /// Enqueues a manager-generated progress summary as Lead input without classifying it as mail.
+    pub(crate) async fn enqueue_team_lead_progress_summary(
+        &self,
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+    ) {
+        self.enqueue_mailbox_communication_with_team_lead_marker(
+            communication,
+            start_options,
+            /*team_lead_trigger*/ true,
+            /*lead_progress_summary*/ true,
         )
         .await;
     }
@@ -358,6 +488,7 @@ impl InputQueue {
         communication: InterAgentCommunication,
         start_options: TurnStartOptions,
         team_lead_trigger: bool,
+        lead_progress_summary: bool,
     ) {
         if communication.trigger_turn {
             self.reset_dependency_free_wait_handoff().await;
@@ -368,7 +499,9 @@ impl InputQueue {
             .push_back(PendingMailboxCommunication {
                 communication,
                 start_options,
+                enqueued_at: Instant::now(),
                 lead_oversight: false,
+                lead_progress_summary,
                 team_lead_trigger,
                 _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
             });
@@ -389,7 +522,9 @@ impl InputQueue {
             .push_back(PendingMailboxCommunication {
                 communication,
                 start_options,
+                enqueued_at: Instant::now(),
                 lead_oversight: true,
+                lead_progress_summary: false,
                 team_lead_trigger: true,
                 _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
             });
@@ -440,9 +575,8 @@ impl InputQueue {
     }
 
     pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {
-        let (items, start_options, _) =
-            self.drain_mailbox_input_items_with_team_lead_marker().await;
-        (items, start_options)
+        let drained = self.drain_mailbox_input_items_with_team_lead_marker().await;
+        (drained.items, drained.start_options)
     }
 
     /// Drains mailbox input and reports whether any trigger was admitted while this session was
@@ -450,7 +584,7 @@ impl InputQueue {
     /// the assignment at its final admission boundary even if Team Off races the drain.
     pub(crate) async fn drain_mailbox_input_items_with_team_lead_marker(
         &self,
-    ) -> (Vec<TurnInput>, TurnStartOptions, bool) {
+    ) -> DrainedMailboxInput {
         let pending_mails = self
             .mailbox_pending_mails
             .lock()
@@ -486,17 +620,31 @@ impl InputQueue {
             })
             .map(str::to_string);
         let items = pending_mails
-            .into_iter()
-            .map(|mail| TurnInput::InterAgentCommunication(mail.communication))
+            .iter()
+            .map(|mail| TurnInput::InterAgentCommunication(mail.communication.clone()))
             .collect();
-        (items, start_options, team_lead_trigger)
+        DrainedMailboxInput {
+            items,
+            start_options,
+            team_lead_trigger,
+            pending_mails,
+        }
     }
 
     /// Restores queue-only mailbox mail after a stale automatic-trigger reservation is
     /// invalidated. No activity notification is sent because queue-only mail is not itself a
     /// reason to start a turn.
-    pub(crate) async fn requeue_queue_only_mail(&self, input: Vec<TurnInput>) {
+    pub(crate) async fn requeue_queue_only_mail(
+        &self,
+        input: Vec<TurnInput>,
+        drained_mailbox: DrainedMailboxInput,
+    ) {
         let mut mailbox = self.mailbox_pending_mails.lock().await;
+        for mail in drained_mailbox.pending_mails.into_iter().rev() {
+            if !mail.communication.trigger_turn {
+                mailbox.push_front(mail);
+            }
+        }
         for item in input.into_iter().rev() {
             let TurnInput::InterAgentCommunication(communication) = item else {
                 continue;
@@ -507,7 +655,9 @@ impl InputQueue {
             mailbox.push_front(PendingMailboxCommunication {
                 communication,
                 start_options: TurnStartOptions::default(),
+                enqueued_at: Instant::now(),
                 lead_oversight: false,
+                lead_progress_summary: false,
                 team_lead_trigger: false,
                 _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
             });
@@ -623,10 +773,11 @@ impl InputQueue {
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
     ) -> (Vec<TurnInput>, TurnStartOptions) {
-        let (pending_input, start_options, _) = self
+        let (mut pending_input, drained_mailbox) = self
             .get_pending_input_with_team_lead_marker(active_turn)
             .await;
-        (pending_input, start_options)
+        pending_input.extend(drained_mailbox.items);
+        (pending_input, drained_mailbox.start_options)
     }
 
     /// Like [`Self::get_pending_input`], but preserves the internal Team Lead trigger marker for
@@ -634,7 +785,7 @@ impl InputQueue {
     pub(crate) async fn get_pending_input_with_team_lead_marker(
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
-    ) -> (Vec<TurnInput>, TurnStartOptions, bool) {
+    ) -> (Vec<TurnInput>, DrainedMailboxInput) {
         let (pending_input, accepts_mailbox_delivery, active_turn_metadata) = {
             let mut active = active_turn.lock().await;
             match active.as_mut() {
@@ -661,23 +812,16 @@ impl InputQueue {
             }
         };
         if !accepts_mailbox_delivery {
-            return (pending_input, TurnStartOptions::default(), false);
+            return (pending_input, DrainedMailboxInput::empty());
         }
-        let (mailbox_items, start_options, team_lead_trigger) =
-            self.drain_mailbox_input_items_with_team_lead_marker().await;
+        let drained_mailbox = self.drain_mailbox_input_items_with_team_lead_marker().await;
         if let Some(active_turn_metadata) = active_turn_metadata
             && active_turn_metadata.root_turn_id().is_none()
-            && let Some(root_turn_id) = start_options.root_turn_id.as_ref()
+            && let Some(root_turn_id) = drained_mailbox.start_options.root_turn_id.as_ref()
         {
             active_turn_metadata.set_root_turn_id(root_turn_id.clone());
         }
-        if pending_input.is_empty() {
-            (mailbox_items, start_options, team_lead_trigger)
-        } else {
-            let mut pending_input = pending_input;
-            pending_input.extend(mailbox_items);
-            (pending_input, start_options, team_lead_trigger)
-        }
+        (pending_input, drained_mailbox)
     }
 
     pub(crate) async fn has_pending_input(&self, active_turn: &Mutex<Option<ActiveTurn>>) -> bool {
@@ -748,6 +892,10 @@ fn take_team_progress_summary_locked(progress: &mut TeamLeadProgressBuffer) -> O
         summary.push_str(&line);
     }
     Some(summary)
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn truncate_progress_message(message: &str) -> String {
@@ -865,6 +1013,175 @@ mod tests {
             content.to_string(),
             trigger_turn,
         )
+    }
+
+    #[tokio::test]
+    async fn handoff_mailbox_diagnostics_include_counts_and_age_without_payloads() {
+        let input_queue = InputQueue::new();
+        input_queue
+            .enqueue_mailbox_communication(
+                make_mail(
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    AgentPath::root(),
+                    "private inter-agent content",
+                    /*trigger_turn*/ false,
+                ),
+                Default::default(),
+            )
+            .await;
+        input_queue
+            .enqueue_mailbox_communication(
+                make_mail(
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    AgentPath::root(),
+                    "another private message",
+                    /*trigger_turn*/ false,
+                ),
+                Default::default(),
+            )
+            .await;
+        input_queue
+            .enqueue_lead_oversight_communication(
+                make_mail(
+                    AgentPath::try_from("/root/lead").expect("agent path"),
+                    AgentPath::root(),
+                    "private scheduler wake content",
+                    /*trigger_turn*/ true,
+                ),
+                Default::default(),
+            )
+            .await;
+        input_queue
+            .enqueue_team_lead_progress_summary(
+                make_mail(
+                    AgentPath::root(),
+                    AgentPath::root(),
+                    "private manager progress summary",
+                    /*trigger_turn*/ false,
+                ),
+                Default::default(),
+            )
+            .await;
+        input_queue
+            .enqueue_team_lead_completion(make_mail(
+                AgentPath::try_from("/root/worker").expect("agent path"),
+                AgentPath::root(),
+                "private completion content",
+                /*trigger_turn*/ false,
+            ))
+            .await;
+
+        let diagnostics = input_queue
+            .pending_handoff_blocker_diagnostics("thread-id")
+            .await;
+
+        assert_eq!(diagnostics.len(), 4);
+        let mailbox = diagnostics
+            .iter()
+            .find(|entry| entry.source == PendingMailboxBlockerSource::InterAgentMailbox)
+            .expect("queued mail diagnostic");
+        assert_eq!(mailbox.thread_id, "thread-id");
+        assert_eq!(mailbox.count, 2);
+        assert!(mailbox.oldest_age_ms.is_some());
+        let lead_oversight = diagnostics
+            .iter()
+            .find(|entry| entry.source == PendingMailboxBlockerSource::LeadOversightWake)
+            .expect("scheduler wake diagnostic");
+        assert_eq!(lead_oversight.count, 1);
+        assert!(lead_oversight.oldest_age_ms.is_some());
+        let progress_summary = diagnostics
+            .iter()
+            .find(|entry| entry.source == PendingMailboxBlockerSource::LeadProgressSummary)
+            .expect("manager progress summary diagnostic");
+        assert_eq!(progress_summary.count, 1);
+        assert!(progress_summary.oldest_age_ms.is_some());
+        let completion = diagnostics
+            .iter()
+            .find(|entry| entry.source == PendingMailboxBlockerSource::ManagerCompletionBatch)
+            .expect("completion diagnostic");
+        assert_eq!(completion.count, 1);
+        assert!(completion.oldest_age_ms.is_some());
+
+        let serialized = serde_json::to_string(&diagnostics).expect("serialize diagnostics");
+        assert!(!serialized.contains("private inter-agent content"));
+        assert!(!serialized.contains("another private message"));
+        assert!(!serialized.contains("private scheduler wake content"));
+        assert!(!serialized.contains("private manager progress summary"));
+        assert!(!serialized.contains("private completion content"));
+    }
+
+    #[tokio::test]
+    async fn requeue_preserves_mailbox_source_and_enqueue_age() {
+        let input_queue = InputQueue::new();
+        let older_pending_input = make_mail(
+            AgentPath::try_from("/root/worker").expect("agent path"),
+            AgentPath::root(),
+            "older pending input",
+            /*trigger_turn*/ false,
+        );
+        input_queue
+            .enqueue_team_lead_progress_summary(
+                make_mail(
+                    AgentPath::root(),
+                    AgentPath::root(),
+                    "private manager progress summary",
+                    /*trigger_turn*/ false,
+                ),
+                Default::default(),
+            )
+            .await;
+        let original_enqueued_at = {
+            let mut mailbox = input_queue.mailbox_pending_mails.lock().await;
+            let mail = mailbox.front_mut().expect("queued progress summary");
+            mail.enqueued_at = Instant::now() - Duration::from_secs(9);
+            mail.enqueued_at
+        };
+
+        let drained = input_queue
+            .drain_mailbox_input_items_with_team_lead_marker()
+            .await;
+        input_queue
+            .requeue_queue_only_mail(
+                vec![TurnInput::InterAgentCommunication(
+                    older_pending_input.clone(),
+                )],
+                drained,
+            )
+            .await;
+
+        let mailbox = input_queue.mailbox_pending_mails.lock().await;
+        assert_eq!(mailbox.len(), 2);
+        let requeued_contents = mailbox
+            .iter()
+            .map(|mail| mail.communication.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requeued_contents,
+            ["older pending input", "private manager progress summary"]
+        );
+        let mail = mailbox.back().expect("requeued progress summary");
+        assert!(mail.lead_progress_summary);
+        assert_eq!(mail.enqueued_at, original_enqueued_at);
+        drop(mailbox);
+
+        let diagnostics = input_queue
+            .pending_handoff_blocker_diagnostics("thread-id")
+            .await;
+        assert_eq!(diagnostics.len(), 2);
+        let progress_summary = diagnostics
+            .iter()
+            .find(|entry| entry.source == PendingMailboxBlockerSource::LeadProgressSummary)
+            .expect("manager progress summary diagnostic");
+        assert_eq!(
+            progress_summary.source,
+            PendingMailboxBlockerSource::LeadProgressSummary
+        );
+        assert_eq!(progress_summary.count, 1);
+        assert!(
+            progress_summary
+                .oldest_age_ms
+                .is_some_and(|age| age >= 9_000)
+        );
     }
 
     #[tokio::test]
