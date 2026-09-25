@@ -9912,6 +9912,62 @@ reasoning_effort = "max"
                     &mut app_server,
                     AppEvent::TeamCommand {
                         thread_id,
+                        command: crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+                            policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
+                        },
+                    },
+                ))
+                .await?;
+                assert!(matches!(control, AppRunControl::Continue));
+
+                let manager_only =
+                    Box::pin(next_thread_settings_updated(&mut app_server, thread_id)).await;
+                assert_eq!(manager_only.thread_id, thread_id.to_string());
+                assert_eq!(
+                    manager_only
+                        .thread_settings
+                        .team
+                        .as_ref()
+                        .and_then(|team| team.lead_work_policy),
+                    Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly)
+                );
+                assert_eq!(app.config.model, initial_global_model);
+                assert_eq!(app.config.model_reasoning_effort, initial_global_effort);
+
+                while app_event_rx.try_recv().is_ok() {}
+                Box::pin(app.handle_app_server_event(
+                    &app_server,
+                    codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                        ServerNotification::ThreadSettingsUpdated(manager_only),
+                    )),
+                ))
+                .await;
+                app.drain_active_thread_events(&mut tui).await?;
+                assert_eq!(
+                    app.chat_widget
+                        .team_settings()
+                        .and_then(|team| team.lead_work_policy),
+                    Some(codex_config::TeamLeadWorkPolicy::ManagerOnly)
+                );
+                let confirmation = loop {
+                    match app_event_rx.try_recv() {
+                        Ok(AppEvent::InsertHistoryCell(cell)) => {
+                            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+                            if rendered.contains("Lead work policy: manager only") {
+                                break rendered;
+                            }
+                        }
+                        Ok(_) => continue,
+                        Err(err) => panic!("expected confirmed work policy status: {err}"),
+                    }
+                };
+                assert!(confirmation.contains("Lead/Worker team: on"));
+
+                let control = Box::pin(app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::TeamCommand {
+                        thread_id,
                         command: crate::chatwidget::TeamCommand::On,
                     },
                 ))

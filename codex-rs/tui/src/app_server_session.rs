@@ -217,6 +217,9 @@ use uuid::Uuid;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
+// Bounds the request/response acknowledgment wait. The TUI separately allows
+// acknowledged settings updates ten seconds for their authoritative snapshot.
+const THREAD_SETTINGS_UPDATE_ACK_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const EXTERNAL_AGENT_CONFIG_IMPORT_IN_PROGRESS_MESSAGE: &str = "A previous external agent import is still running. Wait for it to finish before importing again.";
 const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 
@@ -1354,14 +1357,19 @@ impl AppServerSession {
             return Ok(false);
         }
         let request_id = self.next_request_id();
-        match self
-            .client
-            .request_typed::<ThreadSettingsUpdateResponse>(ClientRequest::ThreadSettingsUpdate {
-                request_id,
-                params,
-            })
-            .await
-        {
+        let response = tokio::time::timeout(
+            THREAD_SETTINGS_UPDATE_ACK_TIMEOUT,
+            self.client
+                .request_typed::<ThreadSettingsUpdateResponse>(
+                    ClientRequest::ThreadSettingsUpdate { request_id, params },
+                ),
+        )
+        .await
+        .map_err(|_| {
+            color_eyre::eyre::eyre!("timed out waiting for thread/settings/update acknowledgment")
+                .wrap_err("thread/settings/update failed in TUI")
+        })?;
+        match response {
             Ok(_) => Ok(true),
             Err(TypedRequestError::Server { source, .. })
                 if is_thread_settings_update_unsupported(&source) =>
@@ -3205,6 +3213,10 @@ mod workspace_roots_tests;
 #[cfg(test)]
 #[path = "app_server_session/prompt_history_tests.rs"]
 mod prompt_history_tests;
+
+#[cfg(test)]
+#[path = "app_server_session/thread_settings_update_tests.rs"]
+mod thread_settings_update_tests;
 
 #[cfg(test)]
 mod tests {
