@@ -9947,7 +9947,7 @@ reasoning_effort = "max"
                     app.chat_widget
                         .team_settings()
                         .and_then(|team| team.lead_work_policy),
-                    Some(codex_config::TeamLeadWorkPolicy::ManagerOnly)
+                    Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly)
                 );
                 let confirmation = loop {
                     match app_event_rx.try_recv() {
