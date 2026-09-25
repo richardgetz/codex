@@ -22,6 +22,51 @@ const HANDOFF_DIRECTORY: &str = "handoffs";
 const HANDOFF_FILE_SUFFIX: &str = ".json";
 const HANDOFF_SCHEMA_VERSION: u32 = 1;
 
+/// Which metadata-only queue caused a `pendingMailbox` handoff blocker.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PendingMailboxBlockerSource {
+    /// Inter-agent messages waiting outside the rollout.
+    InterAgentMailbox,
+    /// A synthetic scheduler deadline wake waiting outside the rollout.
+    LeadOversightWake,
+    /// A manager-generated summary of buffered Lead progress waiting for delivery.
+    LeadProgressSummary,
+    /// A bounded batch of manager-only Worker completions awaiting delivery.
+    ManagerCompletionBatch,
+}
+
+/// Current, in-memory pending-mailbox measurements captured during handoff preflight.
+///
+/// This intentionally contains no message body, author, recipient, or message ID.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingMailboxBlockerDetail {
+    pub thread_id: String,
+    pub source: PendingMailboxBlockerSource,
+    /// Number of queued entries, or one pending completion batch.
+    pub count: u64,
+    /// Age of the oldest queued message or the oldest item in the pending batch.
+    pub oldest_age_ms: Option<u64>,
+}
+
+/// Durable metadata-only observation of a pending-mailbox handoff blocker.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffBlockerDiagnostic {
+    pub thread_id: String,
+    pub blocker: HandoffBlocker,
+    pub source: PendingMailboxBlockerSource,
+    pub count: u64,
+    pub oldest_age_ms: Option<u64>,
+    pub first_observed_at_ms: i64,
+    pub last_observed_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by_handoff_id: Option<String>,
+}
+
 /// Lifecycle of one durable handoff attempt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,6 +139,10 @@ pub struct HandoffJournal {
     #[serde(default)]
     pub quarantined: bool,
     pub nodes: Vec<HandoffNode>,
+    /// Pending-mailbox blocker metadata, kept separate from the node's safety blockers so later
+    /// observations can record resolution without changing transfer or recovery admission.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocker_diagnostics: Vec<HandoffBlockerDiagnostic>,
 }
 
 impl HandoffJournal {
@@ -103,15 +152,42 @@ impl HandoffJournal {
         runtime_version: impl Into<String>,
         nodes: Vec<HandoffNode>,
     ) -> io::Result<Self> {
+        Self::begin_with_pending_mailbox_diagnostics(codex_home, runtime_version, nodes, Vec::new())
+            .await
+    }
+
+    /// Create a prepared handoff while durably attaching its initial pending-mailbox evidence.
+    pub async fn begin_with_pending_mailbox_diagnostics(
+        codex_home: &Path,
+        runtime_version: impl Into<String>,
+        nodes: Vec<HandoffNode>,
+        pending_mailbox_diagnostics: Vec<PendingMailboxBlockerDetail>,
+    ) -> io::Result<Self> {
+        let created_at_ms = current_time_ms();
         let journal = Self {
             schema_version: HANDOFF_SCHEMA_VERSION,
             handoff_id: Uuid::now_v7().to_string(),
-            created_at_ms: current_time_ms(),
+            created_at_ms,
             runtime_version: runtime_version.into(),
             state: HandoffJournalState::Prepared,
             transfer_started: Some(false),
             quarantined: false,
             nodes,
+            blocker_diagnostics: pending_mailbox_diagnostics
+                .into_iter()
+                .filter(|diagnostic| diagnostic.count > 0)
+                .map(|diagnostic| HandoffBlockerDiagnostic {
+                    thread_id: diagnostic.thread_id,
+                    blocker: HandoffBlocker::PendingMailbox,
+                    source: diagnostic.source,
+                    count: diagnostic.count,
+                    oldest_age_ms: diagnostic.oldest_age_ms,
+                    first_observed_at_ms: created_at_ms,
+                    last_observed_at_ms: created_at_ms,
+                    resolved_at_ms: None,
+                    resolved_by_handoff_id: None,
+                })
+                .collect(),
         };
         journal.persist(codex_home).await?;
         Ok(journal)
@@ -253,6 +329,95 @@ impl HandoffJournal {
             node.turn_id = turn_id;
         }
         true
+    }
+
+    /// Reconcile metadata-only pending-mailbox observations for a thread.
+    ///
+    /// A missing source closes its current observation, while a still-pending source refreshes
+    /// its count and oldest age. This does not modify the node's blocker list or recovery state.
+    pub fn record_pending_mailbox_diagnostics(
+        &mut self,
+        thread_id: &str,
+        current: &[PendingMailboxBlockerDetail],
+    ) -> bool {
+        let current = current
+            .iter()
+            .filter(|diagnostic| diagnostic.thread_id == thread_id && diagnostic.count > 0)
+            .collect::<Vec<_>>();
+        let observed_at_ms = current_time_ms();
+        let handoff_id = self.handoff_id.clone();
+        let active_sources = current
+            .iter()
+            .map(|detail| detail.source)
+            .collect::<Vec<_>>();
+        let mut changed = self.resolve_pending_mailbox_diagnostics(
+            thread_id,
+            &active_sources,
+            observed_at_ms,
+            &handoff_id,
+        );
+
+        for detail in current {
+            if let Some(diagnostic) = self
+                .blocker_diagnostics
+                .iter_mut()
+                .rev()
+                .find(|diagnostic| {
+                    diagnostic.thread_id == thread_id
+                        && diagnostic.source == detail.source
+                        && diagnostic.resolved_at_ms.is_none()
+                })
+            {
+                if diagnostic.count != detail.count
+                    || diagnostic.oldest_age_ms != detail.oldest_age_ms
+                    || diagnostic.last_observed_at_ms != observed_at_ms
+                {
+                    diagnostic.count = detail.count;
+                    diagnostic.oldest_age_ms = detail.oldest_age_ms;
+                    diagnostic.last_observed_at_ms = observed_at_ms;
+                    changed = true;
+                }
+            } else {
+                self.blocker_diagnostics.push(HandoffBlockerDiagnostic {
+                    thread_id: thread_id.to_string(),
+                    blocker: HandoffBlocker::PendingMailbox,
+                    source: detail.source,
+                    count: detail.count,
+                    oldest_age_ms: detail.oldest_age_ms,
+                    first_observed_at_ms: observed_at_ms,
+                    last_observed_at_ms: observed_at_ms,
+                    resolved_at_ms: None,
+                    resolved_by_handoff_id: None,
+                });
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    /// Mark old observations resolved when a later handoff preflight sees those sources drained.
+    ///
+    /// This updates diagnostics only. It deliberately leaves the historical blocker list and
+    /// handoff state untouched.
+    pub fn resolve_pending_mailbox_diagnostics(
+        &mut self,
+        thread_id: &str,
+        active_sources: &[PendingMailboxBlockerSource],
+        resolved_at_ms: i64,
+        resolved_by_handoff_id: &str,
+    ) -> bool {
+        let mut changed = false;
+        for diagnostic in self.blocker_diagnostics.iter_mut().filter(|diagnostic| {
+            diagnostic.thread_id == thread_id && diagnostic.resolved_at_ms.is_none()
+        }) {
+            if !active_sources.contains(&diagnostic.source) {
+                diagnostic.resolved_at_ms = Some(resolved_at_ms);
+                diagnostic.resolved_by_handoff_id = Some(resolved_by_handoff_id.to_string());
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Clear a stale unfinished-turn identity when a node became idle before suspension.
@@ -436,6 +601,8 @@ mod tests {
     use super::HandoffJournalState;
     use super::HandoffNode;
     use super::HandoffNodeState;
+    use super::PendingMailboxBlockerDetail;
+    use super::PendingMailboxBlockerSource;
     use crate::HandoffBlocker;
     use tempfile::tempdir;
 
@@ -486,6 +653,113 @@ mod tests {
                 .expect("load pending")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn pending_mailbox_diagnostics_are_durable_and_record_resolution() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin_with_pending_mailbox_diagnostics(
+            home.path(),
+            "test",
+            vec![node("thread")],
+            vec![PendingMailboxBlockerDetail {
+                thread_id: "thread".to_string(),
+                source: PendingMailboxBlockerSource::InterAgentMailbox,
+                count: 2,
+                oldest_age_ms: Some(750),
+            }],
+        )
+        .await
+        .expect("begin handoff with metadata-only diagnostics");
+
+        assert_eq!(journal.blocker_diagnostics.len(), 1);
+        let observation = &journal.blocker_diagnostics[0];
+        assert_eq!(observation.blocker, HandoffBlocker::PendingMailbox);
+        assert_eq!(
+            observation.source,
+            PendingMailboxBlockerSource::InterAgentMailbox
+        );
+        assert_eq!(observation.count, 2);
+        assert_eq!(observation.oldest_age_ms, Some(750));
+        assert_eq!(observation.first_observed_at_ms, journal.created_at_ms);
+        assert_eq!(observation.last_observed_at_ms, journal.created_at_ms);
+        assert!(observation.resolved_at_ms.is_none());
+
+        assert!(journal.record_pending_mailbox_diagnostics("thread", &[]));
+        let observation = &journal.blocker_diagnostics[0];
+        assert!(observation.resolved_at_ms.is_some());
+        assert_eq!(
+            observation.resolved_by_handoff_id.as_deref(),
+            Some(journal.handoff_id.as_str())
+        );
+
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist resolution");
+        let restored = HandoffJournal::load_all(home.path())
+            .await
+            .expect("load handoff diagnostics");
+        assert_eq!(restored, vec![journal]);
+    }
+
+    #[tokio::test]
+    async fn later_preflight_resolution_keeps_prior_handoff_blockers_unchanged() {
+        let home = tempdir().expect("temporary home");
+        let mut journal = HandoffJournal::begin_with_pending_mailbox_diagnostics(
+            home.path(),
+            "test",
+            vec![node("thread")],
+            vec![PendingMailboxBlockerDetail {
+                thread_id: "thread".to_string(),
+                source: PendingMailboxBlockerSource::ManagerCompletionBatch,
+                count: 1,
+                oldest_age_ms: Some(20),
+            }],
+        )
+        .await
+        .expect("begin blocked handoff");
+        journal.update_node(
+            "thread",
+            HandoffNodeState::NeedsAttention,
+            vec![HandoffBlocker::PendingMailbox],
+            None,
+        );
+        journal.set_state(HandoffJournalState::NeedsAttention);
+        let requires_recovery = journal.requires_recovery();
+        assert!(!requires_recovery);
+
+        assert!(journal.resolve_pending_mailbox_diagnostics(
+            "thread",
+            &[],
+            journal.created_at_ms + 1,
+            "later-handoff-id",
+        ));
+
+        assert_eq!(journal.state, HandoffJournalState::NeedsAttention);
+        assert_eq!(journal.requires_recovery(), requires_recovery);
+        assert_eq!(
+            journal.nodes[0].blockers,
+            vec![HandoffBlocker::PendingMailbox]
+        );
+        assert_eq!(
+            journal.blocker_diagnostics[0]
+                .resolved_by_handoff_id
+                .as_deref(),
+            Some("later-handoff-id")
+        );
+        assert_eq!(
+            journal.blocker_diagnostics[0].resolved_at_ms,
+            Some(journal.created_at_ms + 1)
+        );
+        journal
+            .persist(home.path())
+            .await
+            .expect("persist resolution");
+        let restored = HandoffJournal::load_all(home.path())
+            .await
+            .expect("load resolved prior handoff");
+        assert_eq!(restored, vec![journal]);
     }
 
     #[tokio::test]

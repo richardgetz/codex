@@ -368,6 +368,17 @@ impl HandoffCoordinator {
                 continue;
             };
             if !node.blockers.is_empty() || node.state == HandoffNodeState::NeedsAttention {
+                if journal.blocker_diagnostics.iter().any(|diagnostic| {
+                    diagnostic.thread_id == node.thread_id && diagnostic.resolved_at_ms.is_none()
+                }) {
+                    let preflight = loaded.thread.handoff_preflight().await;
+                    if journal.record_pending_mailbox_diagnostics(
+                        &node.thread_id,
+                        &preflight.pending_mailbox_diagnostics,
+                    ) {
+                        self.persist_journal(journal).await?;
+                    }
+                }
                 continue;
             }
 
@@ -381,6 +392,10 @@ impl HandoffCoordinator {
                 // replacement restarted while that turn was idle, the rollout alone cannot prove
                 // whether it completed before the crash, so never submit the exact turn again.
                 let preflight = loaded.thread.handoff_preflight().await;
+                journal.record_pending_mailbox_diagnostics(
+                    &node.thread_id,
+                    &preflight.pending_mailbox_diagnostics,
+                );
                 let mut blockers = preflight.blockers;
                 blockers.retain(|blocker| !matches!(blocker, HandoffBlocker::LiveDescendants));
                 if blockers.is_empty() && preflight.was_running {

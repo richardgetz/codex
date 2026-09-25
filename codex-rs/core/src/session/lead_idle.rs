@@ -388,7 +388,7 @@ impl Session {
         }
         if let Some(summary) = progress_summary {
             self.input_queue
-                .enqueue_team_lead_mailbox_communication(
+                .enqueue_team_lead_progress_summary(
                     lead_progress_communication(summary),
                     Default::default(),
                 )
@@ -437,7 +437,7 @@ impl Session {
         }
         if let Some(summary) = self.input_queue.take_team_progress_summary().await {
             self.input_queue
-                .enqueue_team_lead_mailbox_communication(
+                .enqueue_team_lead_progress_summary(
                     InterAgentCommunication::new(
                         AgentPath::root(),
                         AgentPath::root(),

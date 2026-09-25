@@ -60,6 +60,7 @@ fn graph_journal(nodes: Vec<HandoffNode>) -> HandoffJournal {
         transfer_started: Some(true),
         quarantined: false,
         nodes,
+        blocker_diagnostics: Vec::new(),
     }
 }
 
@@ -150,6 +151,7 @@ fn graph_validation_accepts_empty_post_transfer_receipt_for_recovery() {
         transfer_started: Some(true),
         quarantined: false,
         nodes: Vec::new(),
+        blocker_diagnostics: Vec::new(),
     };
 
     assert!(validate_graph(&journal, true).is_ok());
@@ -166,6 +168,7 @@ fn graph_validation_rejects_empty_receipt_without_transfer_marker() {
         transfer_started: None,
         quarantined: false,
         nodes: Vec::new(),
+        blocker_diagnostics: Vec::new(),
     };
 
     assert!(validate_graph(&journal, true).is_err());
@@ -213,6 +216,7 @@ fn receipt_converts_milliseconds_to_unix_seconds() {
             HandoffNodeState::Suspended,
             Some("turn"),
         )],
+        blocker_diagnostics: Vec::new(),
     };
 
     let receipt = receipt_from_journal(&journal);

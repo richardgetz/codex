@@ -444,7 +444,7 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
             };
             if let Some(summary) = lead_progress {
                 sess.input_queue
-                    .enqueue_mailbox_communication(
+                    .enqueue_team_lead_progress_summary(
                         lead_progress_communication(summary),
                         Default::default(),
                     )
@@ -627,7 +627,7 @@ async fn inter_agent_communication_inner(
         sess.cancel_lead_oversight().await;
         if let Some(summary) = sess.input_queue.take_team_progress_summary().await {
             sess.input_queue
-                .enqueue_team_lead_mailbox_communication(
+                .enqueue_team_lead_progress_summary(
                     InterAgentCommunication::new(
                         AgentPath::root(),
                         AgentPath::root(),
