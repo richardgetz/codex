@@ -248,7 +248,7 @@ async fn team_worker_limit_admits_shell_task_while_worker_idle(
         .function_call_output_text(SHELL_LIMIT_CAPACITY_CALL_ID)
         .expect("worker capacity output");
     let capacity_value: Value = serde_json::from_str(&capacity_output)?;
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         capacity_value,
         json!({
             "direct_worker_limit": 1,
