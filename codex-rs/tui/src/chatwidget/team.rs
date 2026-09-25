@@ -11,8 +11,7 @@ use codex_app_server_protocol::TeamMode;
 use codex_app_server_protocol::TeamRole;
 use codex_app_server_protocol::ThreadTeamSettings;
 
-pub(crate) const TEAM_USAGE: &str =
-    "Usage: /team [on|off|status|balance [1..5]|work-policy [prompt_guided|manager_only]|lead [<model> <effort>]|worker [<model> <effort>]]";
+pub(crate) const TEAM_USAGE: &str = "Usage: /team [on|off|status|balance [1..5]|work-policy [prompt_guided|manager_only]|lead [<model> <effort>]|worker [<model> <effort>]]";
 
 const LEAD_BALANCE_OPTIONS: [(u8, &str, &str); 5] = [
     (
@@ -313,29 +312,32 @@ impl ChatWidget {
             return;
         };
 
-        let confirmed = self.team_settings.as_ref().is_some_and(|team| match &command {
-            TeamCommand::On => team.mode == TeamMode::LeadWorker,
-            TeamCommand::Off => team.mode == TeamMode::Off,
-            TeamCommand::ConfigureProfile {
-                role,
-                model,
-                effort,
-            } => team_profile_matches(team, *role, model, effort),
-            TeamCommand::ConfigureBalance { balance } => {
-                team.lead_balance
-                    .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
-                    == *balance
-            }
-            TeamCommand::ConfigureWorkPolicy { policy } => {
-                team.lead_work_policy
-                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
-                    == *policy
-            }
-            TeamCommand::Status
-            | TeamCommand::SelectProfile { .. }
-            | TeamCommand::SelectBalance
-            | TeamCommand::SelectWorkPolicy => false,
-        });
+        let confirmed = self
+            .team_settings
+            .as_ref()
+            .is_some_and(|team| match &command {
+                TeamCommand::On => team.mode == TeamMode::LeadWorker,
+                TeamCommand::Off => team.mode == TeamMode::Off,
+                TeamCommand::ConfigureProfile {
+                    role,
+                    model,
+                    effort,
+                } => team_profile_matches(team, *role, model, effort),
+                TeamCommand::ConfigureBalance { balance } => {
+                    team.lead_balance
+                        .unwrap_or(codex_config::DEFAULT_TEAM_LEAD_BALANCE)
+                        == *balance
+                }
+                TeamCommand::ConfigureWorkPolicy { policy } => {
+                    team.lead_work_policy
+                        .unwrap_or(TeamLeadWorkPolicy::PromptGuided)
+                        == *policy
+                }
+                TeamCommand::Status
+                | TeamCommand::SelectProfile { .. }
+                | TeamCommand::SelectBalance
+                | TeamCommand::SelectWorkPolicy => false,
+            });
 
         if confirmed {
             self.add_info_message(format_team_status(self.team_settings.as_ref()), None);

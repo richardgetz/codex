@@ -3493,10 +3493,12 @@ async fn team_work_policy_picker_selects_session_policy_only() {
             },
         }) if event_thread_id == thread_id
     ));
-    assert!(std::iter::from_fn(|| rx.try_recv().ok()).all(|event| !matches!(
-        event,
-        AppEvent::UpdateModel(_) | AppEvent::PersistModelSelection { .. }
-    )));
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).all(|event| !matches!(
+            event,
+            AppEvent::UpdateModel(_) | AppEvent::PersistModelSelection { .. }
+        ))
+    );
 }
 
 fn apply_model_list_response(chat: &mut ChatWidget, presets: Vec<ModelPreset>) {

@@ -600,18 +600,9 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(
-                    request,
-                    MANAGER_BATCH_FIRST_SPAWN_CALL_ID,
-                )
-                && request_has_function_call_output(
-                    request,
-                    MANAGER_BATCH_SECOND_SPAWN_CALL_ID,
-                )
-                && !request_has_function_call_output(
-                    request,
-                    MANAGER_BATCH_ROOT_WAIT_CALL_ID,
-                )
+                && request_has_function_call_output(request, MANAGER_BATCH_FIRST_SPAWN_CALL_ID)
+                && request_has_function_call_output(request, MANAGER_BATCH_SECOND_SPAWN_CALL_ID)
+                && !request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
         },
         sse(vec![
             ev_response_created("manager-batch-root-wait"),
@@ -686,7 +677,10 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         },
         sse(vec![
             ev_response_created("manager-batch-first-worker-result"),
-            ev_assistant_message("manager-batch-first-worker-message", MANAGER_BATCH_FIRST_RESULT),
+            ev_assistant_message(
+                "manager-batch-first-worker-message",
+                MANAGER_BATCH_FIRST_RESULT,
+            ),
             ev_completed("manager-batch-first-worker-result"),
         ]),
     )
@@ -816,13 +810,19 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         &root_after_action,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
-                && response_request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                )
                 && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
         },
         "immediate manager-only action wake",
     )
     .await;
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     wait_for_captured_request(
         &root_after_batch,
@@ -834,7 +834,10 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "manager-only Worker completion batch",
     )
     .await;
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     let lead_requests = server
         .received_requests()
@@ -871,8 +874,14 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         1,
         "both successful Worker completions should share one Lead wake"
     );
-    assert!(body_contains(completion_wakes[0], MANAGER_BATCH_FIRST_RESULT));
-    assert!(body_contains(completion_wakes[0], MANAGER_BATCH_SECOND_RESULT));
+    assert!(body_contains(
+        completion_wakes[0],
+        MANAGER_BATCH_FIRST_RESULT
+    ));
+    assert!(body_contains(
+        completion_wakes[0],
+        MANAGER_BATCH_SECOND_RESULT
+    ));
     Ok(())
 }
 
@@ -944,8 +953,7 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     let root_after_completion = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
-            request_has_model(request, LEAD_MODEL)
-                && body_contains(request, MANAGER_HANDOFF_RESULT)
+            request_has_model(request, LEAD_MODEL) && body_contains(request, MANAGER_HANDOFF_RESULT)
         },
         sse(vec![
             ev_response_created("manager-handoff-root-completion"),
@@ -1010,15 +1018,15 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         &root_after_spawn,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
-                && response_request_has_function_call_output(
-                    request,
-                    MANAGER_HANDOFF_SPAWN_CALL_ID,
-                )
+                && response_request_has_function_call_output(request, MANAGER_HANDOFF_SPAWN_CALL_ID)
         },
         "normal manager-only Lead continuation after Worker spawn",
     )
     .await;
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     wait_for_captured_request(
         &worker_terminal,
         |request| {
@@ -1063,12 +1071,16 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     tokio::time::sleep(Duration::from_millis(151)).await;
     assert!(test.codex.handoff_admission_sealed());
     let preflight = test.codex.handoff_preflight().await;
-    assert!(preflight
-        .blockers
-        .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox));
-    assert!(preflight
-        .blockers
-        .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence));
+    assert!(
+        preflight
+            .blockers
+            .contains(&codex_protocol::turn_input::HandoffBlocker::PendingMailbox)
+    );
+    assert!(
+        preflight
+            .blockers
+            .contains(&codex_protocol::turn_input::HandoffBlocker::Persistence)
+    );
     let lead_requests_while_sealed = root_after_completion
         .requests()
         .into_iter()
@@ -1137,7 +1149,10 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
         root_request.body_contains_text(MANAGER_HANDOFF_RESULT),
         "the first post-release Lead request omitted the Worker result marker; user input: {root_user_input:#?}"
     );
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     Ok(())
 }
 

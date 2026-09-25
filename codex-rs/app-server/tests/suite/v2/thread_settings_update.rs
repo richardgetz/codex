@@ -13,6 +13,7 @@ use codex_app_server_protocol::PermissionProfileSelectionParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::SandboxPolicy;
+use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
@@ -25,7 +26,6 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadSettingsUpdateResponse;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
-use codex_app_server_protocol::TeamLeadWorkPolicy;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadTeamSettings;
 use codex_app_server_protocol::ThreadTeamSettingsUpdate;
@@ -622,8 +622,14 @@ async fn thread_settings_update_team_mode_is_sparse_and_fresh_threads_keep_defau
     let manager_only = read_thread_settings_updated(&mut mcp).await?;
     profiled_team.lead_work_policy = Some(TeamLeadWorkPolicy::ManagerOnly);
     assert_eq!(manager_only.thread_settings.model, "gpt-5.6-sol");
-    assert_eq!(manager_only.thread_settings.effort, Some(ReasoningEffort::Low));
-    assert_eq!(manager_only.thread_settings.team, Some(profiled_team.clone()));
+    assert_eq!(
+        manager_only.thread_settings.effort,
+        Some(ReasoningEffort::Low)
+    );
+    assert_eq!(
+        manager_only.thread_settings.team,
+        Some(profiled_team.clone())
+    );
 
     let unsubscribe_id = mcp
         .send_thread_unsubscribe_request(ThreadUnsubscribeParams {

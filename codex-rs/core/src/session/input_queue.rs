@@ -1109,7 +1109,11 @@ mod tests {
             ))
             .await;
 
-        assert!(input_queue.manager_completion_batch_is_pending(latest_generation).await);
+        assert!(
+            input_queue
+                .manager_completion_batch_is_pending(latest_generation)
+                .await
+        );
         assert_eq!(
             input_queue.take_team_progress_summary().await,
             Some(
@@ -1117,9 +1121,11 @@ mod tests {
                     .to_string()
             )
         );
-        assert!(!input_queue
-            .manager_completion_batch_is_pending(latest_generation)
-            .await);
+        assert!(
+            !input_queue
+                .manager_completion_batch_is_pending(latest_generation)
+                .await
+        );
     }
 
     #[tokio::test]

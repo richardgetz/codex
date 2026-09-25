@@ -784,10 +784,7 @@ impl Session {
         self: &Arc<Self>,
         sub_id: String,
     ) {
-        self.maybe_start_turn_for_pending_work_inner(
-            sub_id,
-            /*pre_acquired_admission*/ None,
-        )
+        self.maybe_start_turn_for_pending_work_inner(sub_id, /*pre_acquired_admission*/ None)
             .await;
     }
 

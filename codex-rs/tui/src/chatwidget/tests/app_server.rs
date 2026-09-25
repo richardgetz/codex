@@ -707,9 +707,7 @@ async fn team_work_policy_update_handles_matching_and_stale_server_notifications
     let confirmation = drain_insert_history(&mut rx);
     assert!(chat.pending_team_command.is_none());
     assert_eq!(confirmation.len(), 1);
-    assert!(
-        lines_to_single_string(&confirmation[0]).contains("Lead work policy: manager only")
-    );
+    assert!(lines_to_single_string(&confirmation[0]).contains("Lead work policy: manager only"));
 
     notification
         .thread_settings
@@ -834,9 +832,8 @@ async fn stale_team_work_policy_error_does_not_clear_retried_request() {
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 misalignment: None,
-                message:
-                    "invalid thread settings override: Lead work policy is not available"
-                        .to_string(),
+                message: "invalid thread settings override: Lead work policy is not available"
+                    .to_string(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
                 additional_details: None,
             },
@@ -847,13 +844,19 @@ async fn stale_team_work_policy_error_does_not_clear_retried_request() {
         /*replay_kind*/ None,
     );
     assert_eq!(chat.pending_team_command, Some(command.clone()));
-    assert_eq!(chat.pending_team_command_request_id, Some(current_request_id));
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
     let _ = drain_insert_history(&mut rx);
 
     chat.on_team_settings_update_timeout(old_request_id);
 
     assert_eq!(chat.pending_team_command, Some(command));
-    assert_eq!(chat.pending_team_command_request_id, Some(current_request_id));
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -863,20 +866,18 @@ async fn stale_team_work_policy_error_does_not_clear_newer_toggle_request() {
     let thread_id = ThreadId::new();
     chat.handle_thread_session(configured_thread_session(thread_id));
     let _ = drain_insert_history(&mut rx);
-    let old_request_id = chat.set_pending_team_command(
-        crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
+    let old_request_id =
+        chat.set_pending_team_command(crate::chatwidget::TeamCommand::ConfigureWorkPolicy {
             policy: codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly,
-        },
-    );
+        });
     let current_request_id = chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
 
     chat.handle_server_notification(
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 misalignment: None,
-                message:
-                    "invalid thread settings override: Lead work policy is not available"
-                        .to_string(),
+                message: "invalid thread settings override: Lead work policy is not available"
+                    .to_string(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
                 additional_details: None,
             },
@@ -891,7 +892,10 @@ async fn stale_team_work_policy_error_does_not_clear_newer_toggle_request() {
         chat.pending_team_command,
         Some(crate::chatwidget::TeamCommand::Off)
     );
-    assert_eq!(chat.pending_team_command_request_id, Some(current_request_id));
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
     let errors = drain_insert_history(&mut rx);
     assert!(errors.iter().any(|cell| {
         lines_to_single_string(cell)
@@ -904,7 +908,10 @@ async fn stale_team_work_policy_error_does_not_clear_newer_toggle_request() {
         chat.pending_team_command,
         Some(crate::chatwidget::TeamCommand::Off)
     );
-    assert_eq!(chat.pending_team_command_request_id, Some(current_request_id));
+    assert_eq!(
+        chat.pending_team_command_request_id,
+        Some(current_request_id)
+    );
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -936,8 +943,7 @@ async fn team_toggle_pending_state_survives_uncorrelated_errors() {
     );
     let _ = drain_insert_history(&mut rx);
 
-    let current_request_id =
-        chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
+    let current_request_id = chat.set_pending_team_command(crate::chatwidget::TeamCommand::Off);
     chat.handle_server_notification(
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
@@ -958,9 +964,13 @@ async fn team_toggle_pending_state_survives_uncorrelated_errors() {
         chat.pending_team_command,
         Some(crate::chatwidget::TeamCommand::Off)
     );
-    assert!(chat.last_non_retry_error.as_ref().is_some_and(|(_, message)| {
-        message.contains("Worker sessions cannot disable team mode")
-    }));
+    assert!(
+        chat.last_non_retry_error
+            .as_ref()
+            .is_some_and(|(_, message)| {
+                message.contains("Worker sessions cannot disable team mode")
+            })
+    );
     let errors = drain_insert_history(&mut rx);
     assert!(errors.iter().any(|cell| {
         lines_to_single_string(cell)

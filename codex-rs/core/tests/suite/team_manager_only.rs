@@ -1,8 +1,8 @@
 use super::*;
 use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::openai_models::ToolMode;
-use codex_protocol::protocol::ThreadTeamSettingsUpdate;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::ThreadTeamSettingsUpdate;
 use core_test_support::responses::ev_custom_tool_call;
 
 const MANAGER_ONLY_PROMPT: &str = "delegate this implementation task";
@@ -24,31 +24,27 @@ fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverride
 }
 
 async fn wait_for_completed_agent_message(thread: &codex_core::CodexThread, expected: &str) {
-    let expected_status = codex_protocol::protocol::AgentStatus::Completed(Some(
-        expected.to_string(),
-    ));
-    let status = tokio::time::timeout(
-        std::time::Duration::from_secs(/*secs*/ 10),
-        async {
-            loop {
-                let status = thread.agent_status().await;
-                if status == expected_status {
-                    break status;
-                }
-                match &status {
-                    codex_protocol::protocol::AgentStatus::Errored(_)
-                    | codex_protocol::protocol::AgentStatus::Shutdown
-                    | codex_protocol::protocol::AgentStatus::NotFound
-                    | codex_protocol::protocol::AgentStatus::Completed(_) => break status,
-                    codex_protocol::protocol::AgentStatus::PendingInit
-                    | codex_protocol::protocol::AgentStatus::Running
-                    | codex_protocol::protocol::AgentStatus::Interrupted => {
-                        tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 10)).await;
-                    }
+    let expected_status =
+        codex_protocol::protocol::AgentStatus::Completed(Some(expected.to_string()));
+    let status = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), async {
+        loop {
+            let status = thread.agent_status().await;
+            if status == expected_status {
+                break status;
+            }
+            match &status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::Shutdown
+                | codex_protocol::protocol::AgentStatus::NotFound
+                | codex_protocol::protocol::AgentStatus::Completed(_) => break status,
+                codex_protocol::protocol::AgentStatus::PendingInit
+                | codex_protocol::protocol::AgentStatus::Running
+                | codex_protocol::protocol::AgentStatus::Interrupted => {
+                    tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 10)).await;
                 }
             }
-        },
-    )
+        }
+    })
     .await
     .expect("agent should reach a terminal status");
     pretty_assertions::assert_eq!(
@@ -519,8 +515,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         "participants": 2,
         "timeout_ms": 60_000,
     });
-    let first_gate_args =
-        serde_json::to_string(&json!({"barrier": worker_barrier_args.clone()}))?;
+    let first_gate_args = serde_json::to_string(&json!({"barrier": worker_barrier_args.clone()}))?;
     let second_gate_args = serde_json::to_string(&json!({"barrier": worker_barrier_args}))?;
     let second_worker_hold_barrier = json!({
         "id": "policy-switch-second-worker-hold",
@@ -592,10 +587,7 @@ async fn switching_to_prompt_guided_releases_buffered_worker_completion() -> Res
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(
-                    request,
-                    POLICY_SWITCH_RELEASE_SECOND_CALL_ID,
-                )
+                && request_has_function_call_output(request, POLICY_SWITCH_RELEASE_SECOND_CALL_ID)
         },
         sse(vec![
             ev_response_created("policy-switch-root-after-worker-release"),

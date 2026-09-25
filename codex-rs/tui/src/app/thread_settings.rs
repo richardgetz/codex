@@ -162,9 +162,8 @@ impl App {
                 } else {
                     "team mode"
                 };
-                self.chat_widget.add_error_message(format!(
-                    "Failed to update {setting}: {err}"
-                ));
+                self.chat_widget
+                    .add_error_message(format!("Failed to update {setting}: {err}"));
             }
         }
     }

@@ -587,10 +587,7 @@ async fn inter_agent_communication_inner(
             return;
         }
         if team_lead_trigger {
-            if sess
-                .get_config()
-                .await
-                .effective_team_lead_work_policy()
+            if sess.get_config().await.effective_team_lead_work_policy()
                 == codex_config::TeamLeadWorkPolicy::ManagerOnly
             {
                 let generation = sess

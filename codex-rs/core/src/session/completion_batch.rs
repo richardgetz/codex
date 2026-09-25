@@ -13,10 +13,7 @@ const MANAGER_COMPLETION_WAKE: &str =
 impl Session {
     /// Schedules one short quiet-window wake after the direct Worker completion batch is idle.
     /// Actionable input drains the shared progress buffer first and makes this callback a no-op.
-    pub(crate) async fn schedule_manager_completion_batch_flush(
-        self: &Arc<Self>,
-        generation: u64,
-    ) {
+    pub(crate) async fn schedule_manager_completion_batch_flush(self: &Arc<Self>, generation: u64) {
         let session = Arc::downgrade(self);
         tokio::spawn(async move {
             tokio::time::sleep(MANAGER_COMPLETION_QUIET_WINDOW).await;

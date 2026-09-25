@@ -62,7 +62,10 @@ fn parses_lead_work_policy_commands() {
         })
     );
     assert_eq!(parse_team_command("work-policy unknown"), Err(TEAM_USAGE));
-    assert_eq!(parse_team_command("work-policy manager_only now"), Err(TEAM_USAGE));
+    assert_eq!(
+        parse_team_command("work-policy manager_only now"),
+        Err(TEAM_USAGE)
+    );
 }
 
 #[test]
