@@ -7,6 +7,9 @@
 mod prepare;
 mod quarantine;
 mod recovery;
+#[cfg(test)]
+#[path = "handoff_coordinator/retention_tests.rs"]
+mod retention_tests;
 mod startup;
 
 use crate::error_code::internal_error;
@@ -35,9 +38,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::time::Duration;
 
 pub(super) const RECOVERY_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
+const HANDOFF_DIAGNOSTIC_RETENTION_SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 struct ActiveHandoff {
     manager_guard: ThreadManagerHandoffGuard,
@@ -52,10 +58,12 @@ pub(crate) struct HandoffCoordinator {
     codex_home: PathBuf,
     runtime_version: String,
     thread_processor: ThreadRequestProcessor,
-    operation: Mutex<()>,
+    operation: Arc<Mutex<()>>,
     active: Mutex<HashMap<String, ActiveHandoff>>,
     startup_recovery_state: Mutex<startup::StartupRecoveryState>,
     pending_handoff_ids: Mutex<Vec<String>>,
+    diagnostic_retention_shutdown: Option<oneshot::Sender<()>>,
+    _diagnostic_retention_task: JoinHandle<()>,
 }
 
 impl HandoffCoordinator {
@@ -67,6 +75,13 @@ impl HandoffCoordinator {
         runtime_version: String,
         thread_processor: ThreadRequestProcessor,
     ) -> Self {
+        let operation = Arc::new(Mutex::new(()));
+        let (diagnostic_retention_shutdown, diagnostic_retention_task) =
+            spawn_handoff_diagnostic_retention_task(
+                codex_home.clone(),
+                Arc::clone(&operation),
+                HANDOFF_DIAGNOSTIC_RETENTION_SWEEP_INTERVAL,
+            );
         Self {
             thread_manager,
             state_db,
@@ -74,10 +89,12 @@ impl HandoffCoordinator {
             codex_home,
             runtime_version,
             thread_processor,
-            operation: Mutex::new(()),
+            operation,
             active: Mutex::new(HashMap::new()),
             startup_recovery_state: Mutex::new(startup::StartupRecoveryState::Unknown),
             pending_handoff_ids: Mutex::new(Vec::new()),
+            diagnostic_retention_shutdown: Some(diagnostic_retention_shutdown),
+            _diagnostic_retention_task: diagnostic_retention_task,
         }
     }
 
@@ -112,6 +129,50 @@ impl HandoffCoordinator {
             receipt: receipt_from_journal(journal),
         }
     }
+}
+
+impl Drop for HandoffCoordinator {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.diagnostic_retention_shutdown.take() {
+            let _ = shutdown.send(());
+        }
+    }
+}
+
+fn spawn_handoff_diagnostic_retention_task(
+    codex_home: PathBuf,
+    operation: Arc<Mutex<()>>,
+    sweep_interval: Duration,
+) -> (oneshot::Sender<()>, JoinHandle<()>) {
+    let (shutdown, mut shutdown_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        loop {
+            let _operation = tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => break,
+                guard = operation.lock() => guard,
+            };
+            match HandoffJournal::prune_expired_blocker_diagnostics(&codex_home).await {
+                Ok(removed) if removed > 0 => {
+                    tracing::debug!(
+                        removed_diagnostic_rows = removed,
+                        "pruned expired handoff blocker diagnostics"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "failed to prune expired handoff blocker diagnostics");
+                }
+            }
+            drop(_operation);
+            tokio::select! {
+                biased;
+                _ = &mut shutdown_rx => break,
+                _ = tokio::time::sleep(sweep_interval) => {}
+            }
+        }
+    });
+    (shutdown, task)
 }
 
 fn parse_thread_id(value: &str) -> Result<ThreadId, JSONRPCErrorError> {

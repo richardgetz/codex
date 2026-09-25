@@ -25,7 +25,10 @@ release or merge rules.
   later resolution time where a preflight can confirm the queue has drained.
   Scheduler deadline wakes and manager-generated progress summaries are
   distinguished from inter-agent mailbox entries, and quarantine persists new
-  observations before returning a blocker.
+  observations before returning a blocker. Diagnostic rows are omitted from
+  reads after 30 days from their last observation or resolution, then physically
+  pruned at app-server startup and every 24 hours during normal operation.
+  Cleanup retains the complete handoff journal and all recovery-critical fields.
   Mail contents and sender details are never copied, and the safety blocker,
   transfer boundary, and recovery decisions remain unchanged.
 
@@ -947,8 +950,11 @@ release or merge rules.
   older journals. Confirm synthetic Lead oversight wakes and manager-generated
   progress summaries remain distinct from inter-agent mail, failed quarantine
   preflights persist metadata updates before returning, and no mailbox payload
-  or sender data is serialized. Blocker admission, transfer-started gating,
-  recovery, and quarantine safety behavior must remain unchanged.
+  or sender data is serialized. Confirm rows expire after 30 days, stale rows
+  are omitted from reads, and app-server startup plus periodic maintenance
+  physically prune diagnostics without deleting or changing recovery receipts.
+  Blocker admission, transfer-started gating, recovery, and quarantine safety
+  behavior must remain unchanged.
 
 - Verify upstream refreshes keep `.codex/skills/rust-iteration/SKILL.md` and
   its `AGENTS.md` trigger. Preserve proof-matched target selection, source-proven
