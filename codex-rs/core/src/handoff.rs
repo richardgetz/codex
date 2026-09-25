@@ -21,6 +21,7 @@ use uuid::Uuid;
 const HANDOFF_DIRECTORY: &str = "handoffs";
 const HANDOFF_FILE_SUFFIX: &str = ".json";
 const HANDOFF_SCHEMA_VERSION: u32 = 1;
+const BLOCKER_DIAGNOSTIC_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
 
 /// Which metadata-only queue caused a `pendingMailbox` handoff blocker.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -65,6 +66,19 @@ pub struct HandoffBlockerDiagnostic {
     pub resolved_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by_handoff_id: Option<String>,
+}
+
+impl HandoffBlockerDiagnostic {
+    fn is_expired(&self, now_ms: i64) -> bool {
+        let retention_anchor_ms = self
+            .resolved_at_ms
+            .map_or(self.last_observed_at_ms, |resolved_at_ms| {
+                resolved_at_ms.max(self.last_observed_at_ms)
+            });
+        now_ms
+            .checked_sub(retention_anchor_ms)
+            .is_some_and(|age_ms| age_ms >= BLOCKER_DIAGNOSTIC_RETENTION_MS)
+    }
 }
 
 /// Lifecycle of one durable handoff attempt.
@@ -438,7 +452,46 @@ impl HandoffJournal {
     }
 
     /// Read all journals, including completed epochs, in deterministic order.
+    ///
+    /// Expired blocker diagnostics are omitted from this view. The durable journal is not changed
+    /// by this read; callers that perform maintenance should use
+    /// `prune_expired_blocker_diagnostics` to remove those rows from disk.
     pub async fn load_all(codex_home: &Path) -> io::Result<Vec<Self>> {
+        let mut journals = Self::load_all_from_disk(codex_home).await?;
+        let now_ms = current_time_ms();
+        for journal in &mut journals {
+            journal.remove_expired_blocker_diagnostics(now_ms);
+        }
+        Ok(journals)
+    }
+
+    /// Remove blocker diagnostic rows older than 30 days from every journal.
+    ///
+    /// Only the diagnostic rows are pruned. Journal files and all recovery-critical receipt state
+    /// remain in place. Each changed journal uses the normal atomic persistence path, so an
+    /// interrupted sweep leaves either the old or the pruned receipt for each file.
+    pub async fn prune_expired_blocker_diagnostics(codex_home: &Path) -> io::Result<usize> {
+        let mut journals = Self::load_all_from_disk(codex_home).await?;
+        let now_ms = current_time_ms();
+        let mut removed = 0;
+        for journal in &mut journals {
+            let removed_from_journal = journal.remove_expired_blocker_diagnostics(now_ms);
+            if removed_from_journal > 0 {
+                journal.persist(codex_home).await?;
+                removed += removed_from_journal;
+            }
+        }
+        Ok(removed)
+    }
+
+    fn remove_expired_blocker_diagnostics(&mut self, now_ms: i64) -> usize {
+        let previous_len = self.blocker_diagnostics.len();
+        self.blocker_diagnostics
+            .retain(|diagnostic| !diagnostic.is_expired(now_ms));
+        previous_len - self.blocker_diagnostics.len()
+    }
+
+    async fn load_all_from_disk(codex_home: &Path) -> io::Result<Vec<Self>> {
         let mut entries = match fs::read_dir(codex_home.join(HANDOFF_DIRECTORY)).await {
             Ok(entries) => entries,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
