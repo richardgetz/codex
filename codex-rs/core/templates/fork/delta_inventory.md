@@ -67,13 +67,20 @@ release or merge rules.
 
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
-  and final review while Workers own substantive execution across repository and
-  web research, log gathering, code and docs, builds and tests, tool and skill
-  use, Git/PR work, CI follow-up, and debugging. Repository `AGENTS.md` or skill
+  and final review while Workers own substantive execution through completion
+  across repository and web research, log gathering, code and docs, builds and
+  tests, tool and skill use, Git/PR work, CI follow-up, validation, debugging,
+  and in-scope fixes. Worker guidance assigns one outcome through completion,
+  without routine permission/check-in or edit/test/fix phase handbacks, and asks
+  for concise results, selected evidence, blockers, decisions, material scope
+  changes, and requested status cadence. Repository `AGENTS.md` or skill
   instructions guide the assigned work without moving execution back to the
-  Lead; the Lead avoids duplicate work and routine progress checks, and redirects
-  only for a blocker, clear wrong direction, or stalled Worker; explicit
-  delegation and authorization restrictions remain binding. This guides
+  Lead. ManagerOnly omits generic Lead dynamic-handoff checkpoint language;
+  Lead balance adjusts final-review depth and consequential decisions, not
+  routine progress checks. The Lead avoids duplicate work and routine progress
+  checks, and redirects only for a blocker, clear wrong direction, or stalled
+  Worker while the Lead retains consequential decisions and final acceptance;
+  explicit delegation and authorization restrictions remain binding. This guides
   execution ownership without restricting tools: the Lead and Workers retain
   their normal tools under configured permissions, sandbox, and approval rules.
   The Lead keeps ordinary registry, model-visible, direct-dispatch, and Code
@@ -1172,7 +1179,10 @@ release or merge rules.
   it preserves human alignment, planning, delegation, coordination, and review;
   Workers own substantive execution across repositories independent of local
   workflow instructions, including research, logs, code/docs, builds/tests,
-  tool/skill use, Git/PR, CI, and debugging. Verify the Lead keeps normal tools
+  tool/skill use, Git/PR, CI, validation, debugging, and in-scope fixes through
+  completion. Worker guidance asks for one concise completion report, allows
+  normal tool use without routine Lead permission/check-ins, and avoids
+  command-by-command narration and raw dumps. Verify the Lead keeps normal tools
   subject to existing permissions, sandbox, and approval controls: direct shell
   and edit tools, enabled MCP tools, and hosted web search when enabled remain
   visible and usable; Code Mode and Code Mode Only route eligible shell, edit,
@@ -1183,8 +1193,13 @@ release or merge rules.
   the configured runtime limit. Caps remain ceilings, not targets, and no
   capacity lookup is required before each spawn. Routine Lead execution and
   check-ins stay suppressed; redirection is reserved for blockers, stalled work,
-  or clearly wrong direction, and final review remains with the Lead. Verify
-  Worker model context and tool access remain unchanged and `prompt_guided`
+  or clearly wrong direction, and final review remains with the Lead. Generic
+  dynamic-handoff text that invites higher-balance mid-work checkpoints is
+  omitted from assembled ManagerOnly Lead context; ManagerOnly balance changes
+  only final-review depth and consideration of material consequences. The
+  configured oversight deadline and actionable wake behavior remain intact.
+  Verify Worker model selection and tool access remain unchanged; the updated
+  Worker role guidance applies consistently, and `prompt_guided` Lead guidance
   retains its existing behavior.
   Successful direct Worker completions stay
   quiet while another direct Worker remains active, and one bounded batch wake

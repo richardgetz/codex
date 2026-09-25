@@ -95,28 +95,71 @@ fn manager_only_guidance_is_lead_only_and_keeps_worker_tools_independent() {
         .body();
     assert_eq!(explicit_default_body, default_body);
     assert!(!default_body.contains("Lead work policy: manager_only"));
-    assert!(manager_body.contains("VP of Engineering"));
     assert!(manager_body.contains("changes execution ownership, not tool access"));
-    assert!(manager_body.contains("align with the user on goals and consequential decisions"));
-    assert!(manager_body.contains("Workers own substantive execution end to end"));
-    assert!(manager_body.contains("completion criteria, and requested evidence"));
-    assert!(manager_body.contains("reuse a suitable available Worker"));
-    assert!(manager_body.contains("truly independent and has little overlap"));
-    assert!(manager_body.contains("in parallel within the configured runtime limit"));
+    assert!(manager_body.contains("Keep the user conversation, align goals"));
+    assert!(manager_body.contains("one coherent outcome"));
+    assert!(manager_body.contains("Workers own substantive research, logs, code and documentation"));
+    assert!(manager_body.contains("through completion"));
+    assert!(manager_body.contains("Do not duplicate that execution"));
+    assert!(manager_body.contains("edit-return/test-return/fix-return handoffs"));
+    assert!(manager_body.contains("reuse the suitable Worker already familiar with the work"));
+    assert!(manager_body.contains("substantial independent work with little overlap"));
+    assert!(manager_body.contains("use parallel Workers within runtime limits"));
     assert!(manager_body.contains("do not default to one Worker"));
-    assert!(manager_body.contains("A separate capacity lookup is not required"));
-    assert!(
-        manager_body
-            .contains("Do not duplicate their execution or request routine progress updates")
-    );
-    assert!(manager_body.contains("blocker, stalled work, clearly wrong direction"));
-    assert!(manager_body.contains("Workers have normal tool access"));
-    assert!(manager_body.contains("without routine Lead permission or check-ins"));
-    assert!(manager_body.contains("review concise returned evidence"));
+    assert!(manager_body.contains("a capacity lookup is not required"));
+    assert!(manager_body.contains("ask the responsible Worker one scoped fact/status question"));
+    assert!(manager_body.contains("Do not check routine progress"));
+    assert!(manager_body.contains("configured oversight deadline"));
+    assert!(manager_body.contains("Lead balance changes final-review depth"));
+    assert!(!manager_body.contains("Higher Lead balance adds targeted review/checkpoints"));
+    assert!(!manager_body.contains("quick preflight judgment"));
 
     let worker_body = TeamInstructions::new(TeamRole::Worker, None)
         .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::ManagerOnly)
         .body();
     assert!(!worker_body.contains("Lead work policy: manager_only"));
-    assert!(!worker_body.contains("VP of Engineering"));
+    assert!(worker_body.contains("Own your assigned outcome through completion"));
+    assert!(worker_body.contains("applicable validation, debugging, and in-scope corrections"));
+    assert!(worker_body.contains("Do not hand back separate edit, test, or fix phases"));
+    assert!(worker_body.contains("without waiting for routine Lead permission or check-ins"));
+    assert!(worker_body.contains("one concise completion report"));
+    assert!(worker_body.contains("requested scope and cadence"));
+    assert!(worker_body.contains("Avoid command-by-command or build narration and raw dumps"));
+}
+
+#[test]
+fn manager_only_dynamic_handoff_and_balance_do_not_add_progress_checkpoints() {
+    for dynamic_handoff in [false, true] {
+        for balance in [1, 2, 3, 4, 5] {
+            let body = TeamInstructions::new(TeamRole::Lead, None)
+                .with_dynamic_handoff(dynamic_handoff)
+                .with_lead_balance(balance)
+                .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::ManagerOnly)
+                .body();
+
+            assert!(body.contains("Lead work policy: manager_only"));
+            assert!(body.contains("Lead balance changes final-review depth"));
+            assert!(body.contains("configured oversight deadline"));
+            assert!(!body.contains("Higher Lead balance adds targeted review/checkpoints"));
+            assert!(!body.contains("optional Lead oversight checkpoints"));
+            assert!(!body.contains("Dynamic handoff is enabled"));
+            assert!(!body.contains("quick preflight judgment"));
+            assert!(!body.contains("progress checkpoint"));
+        }
+    }
+
+    let prompt_guided = TeamInstructions::new(TeamRole::Lead, None)
+        .with_dynamic_handoff(true)
+        .with_lead_balance(1)
+        .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::PromptGuided)
+        .body();
+    assert!(prompt_guided.contains("Higher Lead balance adds targeted review/checkpoints"));
+    assert!(prompt_guided.contains("quick preflight judgment"));
+
+    let worker_dynamic = TeamInstructions::new(TeamRole::Worker, None)
+        .with_dynamic_handoff(true)
+        .with_lead_work_policy(codex_config::TeamLeadWorkPolicy::ManagerOnly)
+        .body();
+    assert!(worker_dynamic.contains("Dynamic handoff is enabled for this team"));
+    assert!(worker_dynamic.contains("complete the scoped work"));
 }
