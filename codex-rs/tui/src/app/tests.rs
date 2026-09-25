@@ -9952,7 +9952,8 @@ reasoning_effort = "max"
                 let confirmation = loop {
                     match app_event_rx.try_recv() {
                         Ok(AppEvent::InsertHistoryCell(cell)) => {
-                            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 120));
+                            let rendered =
+                                lines_to_single_string(&cell.display_lines(/*width*/ 120));
                             if rendered.contains("Lead work policy: manager only") {
                                 break rendered;
                             }

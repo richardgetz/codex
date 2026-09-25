@@ -1359,10 +1359,9 @@ impl AppServerSession {
         let request_id = self.next_request_id();
         let response = tokio::time::timeout(
             THREAD_SETTINGS_UPDATE_ACK_TIMEOUT,
-            self.client
-                .request_typed::<ThreadSettingsUpdateResponse>(
-                    ClientRequest::ThreadSettingsUpdate { request_id, params },
-                ),
+            self.client.request_typed::<ThreadSettingsUpdateResponse>(
+                ClientRequest::ThreadSettingsUpdate { request_id, params },
+            ),
         )
         .await
         .map_err(|_| {

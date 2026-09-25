@@ -369,13 +369,24 @@ impl Session {
 
     /// Enqueues a Lead wake while the caller already holds Team Lead turn admission.
     pub(crate) async fn enqueue_lead_wakeup_under_team_lead_admission(&self, message: &str) {
+        let progress_summary = self.input_queue.take_team_progress_summary().await;
+        self.enqueue_lead_wakeup_with_summary_under_team_lead_admission(progress_summary, message)
+            .await;
+    }
+
+    /// Enqueues a Lead wake with progress already claimed by the caller under the queue lock.
+    pub(crate) async fn enqueue_lead_wakeup_with_summary_under_team_lead_admission(
+        &self,
+        progress_summary: Option<String>,
+        message: &str,
+    ) {
         // Keep the summary and wake in the same admission boundary as Team Off cleanup. V1
         // completion notifications call this helper directly, so the marker cannot be inferred
         // by the outer inter-agent handler.
         if !self.is_team_lead().await {
             return;
         }
-        if let Some(summary) = self.input_queue.take_team_progress_summary().await {
+        if let Some(summary) = progress_summary {
             self.input_queue
                 .enqueue_team_lead_mailbox_communication(
                     lead_progress_communication(summary),

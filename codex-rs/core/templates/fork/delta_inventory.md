@@ -80,7 +80,11 @@ release or merge rules.
   Switching back to `prompt_guided` immediately releases
   buffered Worker completions even while other Workers remain active, and a
   queue-only completion admitted under the previous policy becomes an immediate
-  wake if it reaches the Lead after the switch.
+  wake if it reaches the Lead after the switch. Completion flushes retain their
+  handoff admission through the final scheduler boundary, wait until terminal
+  result delivery reaches the parent, rearm a still-pending batch when that
+  delivery finishes, and atomically claim the buffered summary against explicit
+  user-input drains.
 
 - App-server slash-command output is bounded at 200,000 characters so Inbound clients receive complete status and spend payloads while retaining a hard transport cap and truncation marker for larger results.
 - App-server slash-command execution exposes `/pause` and `/continue` for Inbound clients, routing both through the existing durable `thread/activity` pause and continue operations and returning correlated text results after Core acknowledges the gate transition.
@@ -1156,7 +1160,10 @@ release or merge rules.
   seal opens; no Lead request may start while the seal remains active.
   Verify switching from `manager_only` to `prompt_guided` releases buffered
   completions while other Workers remain active, and that queue-only completions
-  arriving after the switch wake the Lead immediately.
+  arriving after the switch wake the Lead immediately. Verify a flush keeps its
+  handoff admission through turn start, rearms a pending batch after terminal
+  result delivery, does not run before that delivery reaches the parent, and
+  atomically arbitrates the buffered summary against explicit user-input drains.
   Verify the TUI policy picker ignores mismatched settings snapshots until a
   matching snapshot or bounded timeout. Uncorrelated terminal settings errors
   remain visible and cannot clear any pending Team command. Verify every

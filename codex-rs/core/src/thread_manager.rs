@@ -85,6 +85,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
@@ -2774,10 +2775,40 @@ impl ThreadManagerState {
         {
             log.push((thread_id, captured_op));
         }
-        thread
-            .io
-            .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+        let is_manager_completion = matches!(
+            &op,
+            Op::TeamLeadCompletion { communication, .. } if !communication.trigger_turn
+        );
+        if !is_manager_completion {
+            return thread
+                .io
+                .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+                .await;
+        }
+        let submission_id = crate::session::new_submission_id();
+        let completion_delivery_ack = thread
+            .session
+            .register_manager_completion_delivery_ack(submission_id.clone())
+            .await;
+        let submission = Submission {
+            id: submission_id.clone(),
+            op,
+            client_user_message_id: None,
+            trace: None,
+            parent_turn_id,
+            root_turn_id,
+        };
+        if let Err(err) = thread.io.submit_with_id(submission).await {
+            thread
+                .session
+                .cancel_manager_completion_delivery_ack(&submission_id)
+                .await;
+            return Err(err);
+        }
+        completion_delivery_ack
             .await
+            .map_err(|_| CodexErr::InternalAgentDied)?;
+        Ok(submission_id)
     }
 
     /// Remove a thread from the manager by ID, returning it when present.

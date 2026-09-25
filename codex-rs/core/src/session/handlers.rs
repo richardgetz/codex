@@ -1741,6 +1741,8 @@ async fn persist_rejected_inter_agent_communication(
 }
 
 async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: CodexErr) {
+    let submission_id = sub.id.clone();
+    let manager_completion_delivery_ack = matches!(&sub.op, Op::TeamLeadCompletion { .. });
     let message = err.to_string();
     let inbound_message_id = matches!(
         &sub.op,
@@ -1818,6 +1820,18 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
             .await;
         }
     }
+    if manager_completion_delivery_ack {
+        sess.acknowledge_manager_completion_delivery(&submission_id)
+            .await;
+    }
+}
+
+struct ManagerCompletionDeliveryAckCleanup(Arc<Session>);
+
+impl Drop for ManagerCompletionDeliveryAckCleanup {
+    fn drop(&mut self) {
+        self.0.clear_manager_completion_delivery_ack_receivers();
+    }
 }
 
 pub(super) async fn submission_loop(
@@ -1825,6 +1839,8 @@ pub(super) async fn submission_loop(
     config: Arc<Config>,
     rx_sub: Receiver<Submission>,
 ) {
+    let _manager_completion_delivery_ack_cleanup =
+        ManagerCompletionDeliveryAckCleanup(Arc::clone(&sess));
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
@@ -1833,6 +1849,10 @@ pub(super) async fn submission_loop(
         } else {
             debug!(?sub, "Submission");
         }
+        let manager_completion_delivery_ack = matches!(
+            &sub.op,
+            Op::TeamLeadCompletion { communication, .. } if !communication.trigger_turn
+        );
         // Durable inbound submissions are the handoff boundary between the state database and
         // this session loop. Hold a manager recovery admission through dispatch so a recovery
         // coordinator either waits for the item to be consumed or rejects it while it can still
@@ -2194,11 +2214,15 @@ pub(super) async fn submission_loop(
         }
         .instrument(dispatch_span)
         .await;
+        if manager_completion_delivery_ack {
+            sess.acknowledge_manager_completion_delivery(&sub.id).await;
+        }
         if should_exit {
             shutdown_received = true;
             break;
         }
     }
+    sess.clear_manager_completion_delivery_acks().await;
     // If the submission loop exits because the channel closed without an
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {

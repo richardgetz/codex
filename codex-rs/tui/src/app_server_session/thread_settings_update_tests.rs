@@ -63,8 +63,10 @@ async fn thread_settings_update_times_out_when_server_does_not_acknowledge() -> 
             .await
             .expect_err("missing acknowledgment should time out")
     };
-    assert!(format!("{error:#}")
-        .contains("timed out waiting for thread/settings/update acknowledgment"));
+    assert!(
+        format!("{error:#}")
+            .contains("timed out waiting for thread/settings/update acknowledgment")
+    );
 
     session.shutdown().await?;
     assert_eq!(server.await??, 1);

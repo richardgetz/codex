@@ -34,12 +34,16 @@ impl Session {
         generation: u64,
         handoff_admission: Option<&HandoffAdmissionGuard>,
     ) {
-        // A settings dispatch already holds admission through its caller. Reacquiring here can
-        // deadlock if a handoff seals after dispatch began: the flush waits for admission to open
-        // while the handoff waits for this dispatch to finish.
+        // A settings dispatch already holds admission. Fork a permit for the final scheduler
+        // boundary while leaving the dispatch's permit alive through its remaining work; trying
+        // to reacquire after dispatch began can deadlock with a handoff waiting for it to finish.
+        // Timer flushes acquire admission below.
         if let Some(handoff_admission) = handoff_admission {
-            self.flush_manager_completion_batch_under_admission(generation, handoff_admission)
-                .await;
+            self.flush_manager_completion_batch_under_admission(
+                generation,
+                handoff_admission.fork(),
+            )
+            .await;
         } else {
             let _handoff_admission = loop {
                 match self.services.agent_control.begin_handoff_admission() {
@@ -52,7 +56,7 @@ impl Session {
                     }
                 }
             };
-            self.flush_manager_completion_batch_under_admission(generation, &_handoff_admission)
+            self.flush_manager_completion_batch_under_admission(generation, _handoff_admission)
                 .await;
         }
     }
@@ -60,7 +64,7 @@ impl Session {
     async fn flush_manager_completion_batch_under_admission(
         self: &Arc<Self>,
         generation: u64,
-        _handoff_admission: &HandoffAdmissionGuard,
+        handoff_admission: HandoffAdmissionGuard,
     ) {
         let team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
         let config = self.get_config().await;
@@ -76,20 +80,33 @@ impl Session {
                     .active_direct_worker_count(self.thread_id)
                     .await
                     != 0)
-            || !self
-                .input_queue
-                .manager_completion_batch_is_pending(generation)
-                .await
         {
             return;
         }
 
+        // Claim the generation and take its summary under the same queue lock. Explicit user input
+        // drains this buffer too, so a separate pending check can enqueue an empty synthetic wake
+        // after the user has already incorporated the completion summary.
+        let Some(batch) = self
+            .input_queue
+            .take_manager_completion_batch(generation)
+            .await
+        else {
+            return;
+        };
+
         // Retain the trigger through an activity pause; the ordinary scheduler holds it until
         // `/continue` releases the root tree.
-        self.enqueue_lead_wakeup_under_team_lead_admission(MANAGER_COMPLETION_WAKE)
-            .await;
+        self.enqueue_lead_wakeup_with_summary_under_team_lead_admission(
+            batch.progress_summary,
+            MANAGER_COMPLETION_WAKE,
+        )
+        .await;
         drop(team_lead_turn_admission);
-        drop(_handoff_admission);
-        self.maybe_start_turn_for_pending_work().await;
+        self.maybe_start_turn_for_pending_work_with_admission(
+            uuid::Uuid::new_v4().to_string(),
+            handoff_admission,
+        )
+        .await;
     }
 }

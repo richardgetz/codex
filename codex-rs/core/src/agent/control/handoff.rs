@@ -209,6 +209,18 @@ impl Drop for HandoffAdmissionGuard {
     }
 }
 
+impl HandoffAdmissionGuard {
+    /// Creates a separately owned permit for a nested scheduler boundary of this admitted
+    /// operation. The new permit inherits the existing admission even if a handoff has sealed.
+    pub(crate) fn fork(&self) -> Self {
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        Self {
+            in_flight: Arc::clone(&self.in_flight),
+            notify: Arc::clone(&self.notify),
+        }
+    }
+}
+
 impl AgentControl {
     /// Seal this root tree against new turn and spawn admission.
     pub(crate) fn begin_handoff(&self) -> CodexResult<HandoffGuard> {

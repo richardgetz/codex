@@ -18,6 +18,7 @@ use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
+use crate::session::session::Session;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
@@ -75,6 +76,52 @@ use tokio::sync::Notify;
 use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
+
+pub(crate) struct TerminalResultDeliveryGuard {
+    session: Arc<Session>,
+    parent_thread_id: ThreadId,
+}
+
+impl TerminalResultDeliveryGuard {
+    pub(crate) fn for_thread_spawn(
+        session: Arc<Session>,
+        session_source: Option<&SessionSource>,
+    ) -> Option<Self> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+        session
+            .terminal_result_delivery_in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Some(Self {
+            session,
+            parent_thread_id: *parent_thread_id,
+        })
+    }
+}
+
+impl Drop for TerminalResultDeliveryGuard {
+    fn drop(&mut self) {
+        let previous = self
+            .session
+            .terminal_result_delivery_in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if previous == 1
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let agent_control = self.session.services.agent_control.clone();
+            let parent_thread_id = self.parent_thread_id;
+            runtime.spawn(async move {
+                agent_control
+                    .schedule_pending_manager_completion_batch_flush(parent_thread_id)
+                    .await;
+            });
+        }
+    }
+}
 
 use self::execution::AgentExecutionLimiter;
 pub use self::handoff::HandoffAdmissionGuard;
@@ -733,21 +780,58 @@ impl LocalAgentControl {
     }
 
     /// Counts direct Worker children that can still perform work for a parent session.
-    /// Interrupted and terminal children do not keep a Lead parked.
+    /// Terminal children remain active until their parent result callback has been delivered.
     pub(crate) async fn active_direct_worker_count(&self, parent_thread_id: ThreadId) -> usize {
+        let Ok(state) = self.upgrade() else {
+            return 0;
+        };
         let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
             return 0;
         };
         let mut active = 0;
         for (thread_id, _) in children {
-            if matches!(
-                self.get_status(thread_id).await,
-                AgentStatus::PendingInit | AgentStatus::Running
-            ) {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let status = thread.agent_status().await;
+            let terminal_delivery_in_flight = is_final(&status)
+                && thread
+                    .session
+                    .terminal_result_delivery_in_flight
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    > 0;
+            if matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
+                || terminal_delivery_in_flight
+            {
                 active += 1;
             }
         }
         active
+    }
+
+    /// Rearms a pending manager-only completion batch after a child finishes delivering its
+    /// terminal result. A prior quiet-window flush may have observed that delivery in flight.
+    pub(crate) async fn schedule_pending_manager_completion_batch_flush(
+        &self,
+        parent_thread_id: ThreadId,
+    ) {
+        let Ok(state) = self.upgrade() else {
+            return;
+        };
+        let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
+            return;
+        };
+        if let Some(generation) = parent_thread
+            .session
+            .input_queue
+            .pending_manager_completion_generation()
+            .await
+        {
+            parent_thread
+                .session
+                .schedule_manager_completion_batch_flush(generation)
+                .await;
+        }
     }
 
     /// Subscribes to status changes for direct Workers that can still perform work. The boolean
@@ -1247,6 +1331,7 @@ impl LocalAgentControl {
         session_source: Option<SessionSource>,
         child_reference: String,
         child_agent_path: Option<AgentPath>,
+        terminal_delivery_guard: Option<TerminalResultDeliveryGuard>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -1269,6 +1354,7 @@ impl LocalAgentControl {
         let control = self.clone();
         tokio::spawn(async move {
             let _watcher_registration = watcher_registration;
+            let _terminal_delivery_guard = terminal_delivery_guard;
             let status = match control.subscribe_status(child_thread_id).await {
                 Ok(mut status_rx) => {
                     let mut status = status_rx.borrow().clone();

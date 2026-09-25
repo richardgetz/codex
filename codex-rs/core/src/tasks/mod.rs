@@ -1123,6 +1123,8 @@ impl Session {
             task.handle.detach();
             self.turn_finalization_in_flight
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.terminal_result_delivery_in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             Arc::clone(&active_turn.turn_state)
         };
         let (last_agent_message, abort_reason) = match task_result {
@@ -1361,6 +1363,14 @@ impl Session {
             })
         };
         self.send_event(turn_context.as_ref(), event).await;
+        self.terminal_result_delivery_in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if let Some(parent_thread_id) = turn_context.parent_thread_id {
+            self.services
+                .agent_control
+                .schedule_pending_manager_completion_batch_flush(parent_thread_id)
+                .await;
+        }
         self.services
             .guardian_rejection_circuit_breaker
             .lock()
