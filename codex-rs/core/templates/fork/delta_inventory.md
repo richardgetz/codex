@@ -46,9 +46,16 @@ release or merge rules.
 
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
-  and review while Workers retain normal tool access and execute their assigned
-  work. The runtime gate keeps shell and execution tools from the Lead while
-  preserving coordination, planning, and selected read-only support tools.
+  and final review while Workers own substantive execution across repository and
+  web research, log gathering, code and docs, builds and tests, tool and skill
+  use, Git/PR work, CI follow-up, and debugging. Repository `AGENTS.md` or skill
+  instructions guide the assigned work without moving execution back to the
+  Lead; the Lead avoids duplicate work and routine progress checks, and redirects
+  only for a blocker, clear wrong direction, or stalled Worker; explicit
+  delegation and authorization restrictions remain binding. Workers retain
+  normal tool access. The runtime gate keeps shell and execution tools from the
+  Lead while preserving coordination, planning, and selected read-only support
+  tools.
   In Code Mode and Code Mode Only, the Lead can use the wrapper with its manager
   tools, while nested dispatch still denies execution tools. The policy is
   captured in thread snapshots so resume and fork preserve the selected mode,
@@ -1120,7 +1127,11 @@ release or merge rules.
   fresh threads retain configured defaults. Verify `manager_only` applies only
   to the Lead:
   it preserves human alignment, planning, delegation, coordination, and review;
-  routine task execution stays with Workers, who keep normal tool access without
+  Workers own substantive execution across repositories independent of local
+  workflow instructions, including research, logs, code/docs, builds/tests,
+  tool/skill use, Git/PR, CI, and debugging; routine checks and duplicate Lead
+  execution stay suppressed, with redirection reserved for clear blockers,
+  wrong direction, or stalled work. Workers keep normal tool access without
   requiring Lead approval or check-ins for tool use. Verify Worker model context
   and tool access remain unchanged, Code Mode exposes manager tools under the
   configured/default namespaces while blocking shell and execution calls at the
