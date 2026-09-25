@@ -290,12 +290,11 @@ async fn manager_only_lead_and_worker_keep_execution_tools() -> Result<()> {
         "manager-only Lead after Worker completion",
     )
     .await;
-    assert!(
-        lead_request.body_contains_text("changes execution ownership, not tool access")
-    );
+    assert!(lead_request.body_contains_text("changes execution ownership, not tool access"));
     assert!(lead_request.body_contains_text("reuse a suitable available Worker"));
-    assert!(lead_request
-        .body_contains_text("delegate in parallel within the configured runtime limit"));
+    assert!(
+        lead_request.body_contains_text("delegate in parallel within the configured runtime limit")
+    );
     Ok(())
 }
 

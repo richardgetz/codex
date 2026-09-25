@@ -5,10 +5,10 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::multi_agents_common::function_arguments;
-use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::multi_agents_common::tool_output_code_mode_result;
 use crate::tools::handlers::multi_agents_common::tool_output_json_text;
 use crate::tools::handlers::multi_agents_common::tool_output_response_item;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_config::TeamRole;
@@ -55,11 +55,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
             description: TOOL_DESCRIPTION.to_string(),
             strict: false,
             defer_loading: None,
-            parameters: JsonSchema::object(
-                BTreeMap::new(),
-                Some(Vec::new()),
-                Some(false.into()),
-            ),
+            parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
             output_schema: Some(
                 json!({
                     "type": "object",
@@ -115,10 +111,8 @@ impl ToolExecutor<ToolInvocation> for Handler {
             let arguments = function_arguments(payload)?;
             let _: EmptyArguments = parse_arguments(&arguments)?;
             if turn.config.team_mode != TeamMode::LeadWorker
-                || effective_role_for_session_source(
-                    &turn.config,
-                    &turn.session_source,
-                ) != Some(TeamRole::Lead)
+                || effective_role_for_session_source(&turn.config, &turn.session_source)
+                    != Some(TeamRole::Lead)
             {
                 return Err(FunctionCallError::RespondToModel(
                     "worker_capacity is available only to a Team Lead".to_string(),

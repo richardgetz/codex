@@ -1505,10 +1505,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             );
             if is_team_lead_turn(turn_context) {
                 registry.register_trusted_with_exposure(
-                    multi_agent_v2_handler(
-                        TeamWorkerCapacityHandler::new(None),
-                        tool_namespace,
-                    ),
+                    multi_agent_v2_handler(TeamWorkerCapacityHandler::new(None), tool_namespace),
                     exposure,
                 );
             }

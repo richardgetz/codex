@@ -3081,7 +3081,9 @@ async fn team_lead_worker_capacity_tool_is_registered_for_both_backends_and_poli
         let name = ToolName::namespaced(namespace, "worker_capacity").to_string();
         plan.assert_registered_contains(&[&name]);
         assert!(
-            plan.resolved_names.iter().any(|registered| registered == &name),
+            plan.resolved_names
+                .iter()
+                .any(|registered| registered == &name),
             "worker_capacity should resolve for {namespace} with {work_policy:?}"
         );
     }
