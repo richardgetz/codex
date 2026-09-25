@@ -30,6 +30,7 @@ pub(crate) mod request_plugin_install_spec;
 mod request_user_input;
 mod request_user_input_async;
 pub(crate) mod request_user_input_spec;
+pub(crate) mod team_worker_capacity;
 mod send_message_to_user_async;
 mod send_user_message_async;
 pub(crate) mod shell_spec;

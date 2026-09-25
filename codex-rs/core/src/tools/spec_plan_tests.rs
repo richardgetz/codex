@@ -3039,6 +3039,55 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
+async fn team_lead_worker_capacity_tool_is_registered_for_both_backends_and_policies() {
+    for (use_multi_agent_v2, work_policy) in [
+        (false, TeamLeadWorkPolicy::PromptGuided),
+        (false, TeamLeadWorkPolicy::ManagerOnly),
+        (true, TeamLeadWorkPolicy::PromptGuided),
+        (true, TeamLeadWorkPolicy::ManagerOnly),
+    ] {
+        let plan = probe(|turn| {
+            set_feature(turn, Feature::Collab, /*enabled*/ true);
+            set_feature(
+                turn,
+                Feature::MultiAgentV2,
+                /*enabled*/ use_multi_agent_v2,
+            );
+            update_config(turn, |config| {
+                config.team_mode = TeamMode::LeadWorker;
+                config.team_runtime_profiles = Some(TeamModelProfiles {
+                    lead: TeamModelProfile {
+                        model: "lead-model".to_string(),
+                        reasoning_effort: ReasoningEffort::Medium,
+                    },
+                    worker: TeamModelProfile {
+                        model: "worker-model".to_string(),
+                        reasoning_effort: ReasoningEffort::Medium,
+                    },
+                    lead_work_policy: work_policy,
+                    lead_dynamic_handoff: false,
+                    lead_balance: 3,
+                    lead_oversight_timeout_minutes: 30,
+                });
+            });
+        })
+        .await;
+
+        let namespace = if use_multi_agent_v2 {
+            MULTI_AGENT_V2_NAMESPACE
+        } else {
+            MULTI_AGENT_V1_NAMESPACE
+        };
+        let name = ToolName::namespaced(namespace, "worker_capacity").to_string();
+        plan.assert_registered_contains(&[&name]);
+        assert!(
+            plan.resolved_names.iter().any(|registered| registered == &name),
+            "worker_capacity should resolve for {namespace} with {work_policy:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn team_multi_agent_v2_exposes_standalone_action_message_tool() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);

@@ -61,6 +61,7 @@ use crate::tools::handlers::multi_agents_v2::SendMessageActionHandler;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+use crate::tools::handlers::team_worker_capacity::Handler as TeamWorkerCapacityHandler;
 use crate::tools::handlers::tool_search_spec::ToolSearchSourceListing;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
@@ -773,6 +774,14 @@ fn collab_tools_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> b
                     && model_info.multi_agent_version != Some(MultiAgentVersion::Disabled))
         }
     }
+}
+
+fn is_team_lead_turn(turn_context: &TurnContext) -> bool {
+    turn_context.config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker
+        && crate::session::team::effective_role_for_session_source(
+            &turn_context.config,
+            &turn_context.session_source,
+        ) == Some(codex_config::TeamRole::Lead)
 }
 
 fn required_child_management_tool_names(
@@ -1494,6 +1503,15 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace),
                 exposure,
             );
+            if is_team_lead_turn(turn_context) {
+                registry.register_trusted_with_exposure(
+                    multi_agent_v2_handler(
+                        TeamWorkerCapacityHandler::new(None),
+                        tool_namespace,
+                    ),
+                    exposure,
+                );
+            }
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
@@ -1514,6 +1532,12 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 }),
                 exposure,
             );
+            if is_team_lead_turn(turn_context) {
+                registry.add_with_exposure(
+                    TeamWorkerCapacityHandler::new(Some(MULTI_AGENT_V1_NAMESPACE)),
+                    exposure,
+                );
+            }
             registry.add_with_exposure(SendInputHandler, exposure);
             registry.add_with_exposure(ResumeAgentHandler, exposure);
             registry

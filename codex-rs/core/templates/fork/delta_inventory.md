@@ -58,6 +58,13 @@ release or merge rules.
   context, Fast, and Flex status pricing. Explicit historical model IDs remain
   selectable.
 
+- Team Leads can query the read-only `worker_capacity` collaboration tool in
+  either multi-agent backend for a mutex-consistent snapshot of the configured
+  direct-Worker ceiling, active direct Workers, pending spawns, and remaining
+  slots. An unset ceiling and remaining capacity are reported as `null`.
+  The query does not reserve capacity; runtime admission and the existing
+  global agent-count, depth, and resource limits remain authoritative.
+
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
   and final review while Workers own substantive execution across repository and
@@ -1221,6 +1228,11 @@ release or merge rules.
   agent-count, depth, and resource limits. Verify that it does not raise or
   replace those limits, and tells the Lead the value is a ceiling rather than a
   target.
+- Verify `worker_capacity` is registered for Team Leads using V1 and V2 under
+  either Lead work policy, returns the configured ceiling and one consistent
+  active/pending/remaining snapshot, reports an unset ceiling as unbounded,
+  excludes grandchildren, and does not reserve a slot or change runtime
+  admission.
 - Verify `[team.lead].oversight_timeout_minutes` defaults to 30 minutes,
   accepts only `1..15768000`, and rejects out-of-range values; Lead idle
   parking makes no inference or polling on routine progress, retains only the
