@@ -32,7 +32,11 @@ model?: string | null, modelProvider?: string | null, serviceTier?: string | nul
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, /**
+ * @deprecated `friendly` and `pragmatic` no longer select a style.
+ * Changing this does not rewrite the thread's existing instructions.
+ */
+personality?: Personality | null, /**
  * Session-local memory bucket policy for this thread. Omitted uses the
  * server's `[user_preferences_memory]` config defaults.
  */

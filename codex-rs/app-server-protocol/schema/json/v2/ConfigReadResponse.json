@@ -1089,7 +1089,7 @@
           ],
           "type": "string"
         }
-        ]
+      ]
     },
     "ToolsV2": {
       "properties": {

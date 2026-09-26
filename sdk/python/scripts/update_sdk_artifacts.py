@@ -554,7 +554,7 @@ def generate_v2_all(schema_dir: Path) -> None:
                 "--output-model-type",
                 "pydantic_v2.BaseModel",
                 "--target-python-version",
-                "3.11",
+                "3.10",
                 "--use-standard-collections",
                 "--enum-field-as-literal",
                 "one",
@@ -607,7 +607,7 @@ def _preserve_inline_image_class_names(out_path: Path) -> None:
 
 
 def _require_nullable_field(out_path: Path, class_name: str, field_pattern: str) -> None:
-    """Preserve required-but-nullable fields that codegen gives a None default."""
+    """Preserve required-but-nullable fields across codegen output changes."""
     source = out_path.read_text()
     class_start = source.find(f"class {class_name}(BaseModel):")
     if class_start == -1:
@@ -622,7 +622,10 @@ def _require_nullable_field(out_path: Path, class_name: str, field_pattern: str)
         source[class_start:class_end],
         flags=re.MULTILINE,
     )
-    if count != 1:
+    if count > 1 or (
+        count == 0
+        and re.search(rf"^    {field_pattern}$", class_source, flags=re.MULTILINE) is None
+    ):
         raise RuntimeError(f"Generated {class_name} field did not have the expected nullable shape")
     out_path.write_text(source[:class_start] + class_source + source[class_end:])
 
@@ -692,9 +695,13 @@ def _preserve_thread_source_enum(out_path: Path) -> None:
 def _preserve_plan_type_enum(out_path: Path) -> None:
     """Keep the public plan constants while accepting values from newer runtimes."""
     source = out_path.read_text()
-    class_start = source.find("class PlanType(Enum):")
-    if class_start == -1:
+    declaration = re.search(r"^class PlanType\(([^)]+)\):$", source, flags=re.MULTILINE)
+    if declaration is None:
         raise RuntimeError("Generated SDK is missing PlanType")
+    if declaration.group(1) not in {"Enum", "str, Enum"}:
+        raise RuntimeError("Generated SDK uses an unsupported PlanType base class")
+
+    class_start = declaration.start()
     class_end = source.find("\n\nclass ", class_start)
     if class_end == -1:
         class_end = len(source)
