@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-26/stable-refresh-validation-repairs"
+  change_type: "fix"
+  scope: "stable refresh validation"
+  summary: "Repair the merged checkpoint-tail reference and close a malformed thread-store test."
+  decision: "Use the fork's history_checkpoint segment field for checkpoint-tail recovery and close the existing compressed-rollout retry test before the following test declaration."
+  constraints:
+    - "Preserve previous_turn_settings_from_checkpoint_tail and upstream resume_metadata fallback."
+    - "The thread-store change closes only the existing test function."
+    - "No conditional-interrupt handoff behavior is changed; review found no confirmed lost-delivery path."
+    - "Workspace formatting changes are mechanical output from required just fmt."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/rollout_reconstruction.rs::finalize_active_segment"
+    - "codex-rs/thread-store/src/local/model_context_tests.rs::retries_lineage_scan_after_rollout_compression_replaces_plain_file"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-6"
