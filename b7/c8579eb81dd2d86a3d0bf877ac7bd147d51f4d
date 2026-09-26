@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-26/reqwest-custom-roots#b7c8579eb8"
+  change_type: "fix"
+  scope: "http-client"
+  summary: "Keep explicit custom-root TLS clients compiling on Reqwest 0.13."
+  decision: "Use Reqwest 0.13 tls_certs_only with the configured certificate, preserving the prior behavior that disables built-in roots and trusts only the explicit root."
+  constraints:
+    - "Preserve outbound network policy and explicit-root trust semantics."
+    - "Do not change dependency versions or feature selection."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/http-client/src/client_builder.rs::HttpClientBuilder::base_reqwest_builder"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
