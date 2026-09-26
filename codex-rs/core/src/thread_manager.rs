@@ -11,6 +11,7 @@ use crate::config::ThreadStoreConfig;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::default_thread_environment_selections;
+use crate::environment_selection::validate_environment_ids_and_cwds;
 use crate::exec_policy::ExecPolicyManager;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
@@ -146,9 +147,6 @@ pub struct TeamActivityRecoveryPlan {
     pub blockers: Vec<String>,
     pub unfinished_turn_ids: HashMap<ThreadId, String>,
 }
-// Reject pathological selected cwd values at the environment-selection boundary.
-const MAX_TURN_ENVIRONMENT_CWD_BYTES: usize = 8 * 1024;
-
 /// Test-only override for enabling thread-manager behaviors used by integration
 /// tests.
 ///
@@ -1395,7 +1393,10 @@ impl ThreadManager {
                 &options.config.workspace_roots,
             )
         });
-        self.validate_environment_selections(&environments)?;
+        validate_environment_ids_and_cwds(
+            self.state.environment_manager.as_ref(),
+            &environments,
+        )?;
         options.environments = Some(environments);
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history

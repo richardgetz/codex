@@ -1249,7 +1249,7 @@ impl Session {
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
             active_host_plugin_identities: None,
-            next_step_settings: ArcSwap::from(step_settings),
+            next_step_settings: ArcSwap::from(Arc::clone(&step_settings)),
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             session_source,

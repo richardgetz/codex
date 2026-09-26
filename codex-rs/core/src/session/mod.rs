@@ -5069,22 +5069,26 @@ impl Session {
         let mcp_revision = self
             .services
             .executed_tool_calls
-            .mcp_attribution_checkpoint(force_mcp_checkpoint)
-            .and_then(|(attribution, revision)| {
-                let first_persisted = items
-                    .iter()
-                    .position(|envelope| should_persist_response_item(&envelope.item))?;
-                for (index, envelope) in items.iter_mut().enumerate() {
-                    // Rollout batches may be partially written. Checkpoint the first persisted
-                    // item, and repeat the checkpoint at turn boundaries retained by forks.
-                    if index == first_persisted
-                        || crate::context_manager::is_user_turn_boundary(&envelope.item)
-                    {
-                        envelope.metadata.get_or_insert_default().mcp_attribution =
-                            Some(attribution.clone());
-                    }
-                }
-                Some(revision)
+            .as_ref()
+            .and_then(|executed_tool_calls| {
+                executed_tool_calls
+                    .mcp_attribution_checkpoint(force_mcp_checkpoint)
+                    .and_then(|(attribution, revision)| {
+                        let first_persisted = items
+                            .iter()
+                            .position(|envelope| should_persist_response_item(&envelope.item))?;
+                        for (index, envelope) in items.iter_mut().enumerate() {
+                            // Rollout batches may be partially written. Checkpoint the first persisted
+                            // item, and repeat the checkpoint at turn boundaries retained by forks.
+                            if index == first_persisted
+                                || crate::context_manager::is_user_turn_boundary(&envelope.item)
+                            {
+                                envelope.metadata.get_or_insert_default().mcp_attribution =
+                                    Some(attribution.clone());
+                            }
+                        }
+                        Some((Arc::clone(executed_tool_calls), revision))
+                    })
             });
         let response_items = items
             .iter()
@@ -5126,11 +5130,9 @@ impl Session {
         let rollout_items: Vec<RolloutItem> =
             items.into_iter().map(RolloutItem::ResponseItem).collect();
         if self.persist_rollout_items(&rollout_items).await
-            && let Some(revision) = mcp_revision
+            && let Some((executed_tool_calls, revision)) = mcp_revision
         {
-            self.services
-                .executed_tool_calls
-                .mark_mcp_attribution_persisted(revision);
+            executed_tool_calls.mark_mcp_attribution_persisted(revision);
         }
         if turn_context.config.memories.disable_on_external_context
             && let Some(item) = response_items
@@ -5523,12 +5525,17 @@ impl Session {
         let mcp_revision = self
             .services
             .executed_tool_calls
-            .mcp_attribution_checkpoint(/*force*/ true)
-            .and_then(|(attribution, revision)| {
-                items.last_mut().map(|envelope| {
-                    envelope.metadata.get_or_insert_default().mcp_attribution = Some(attribution);
-                    revision
-                })
+            .as_ref()
+            .and_then(|executed_tool_calls| {
+                executed_tool_calls
+                    .mcp_attribution_checkpoint(/*force*/ true)
+                    .and_then(|(attribution, revision)| {
+                        items.last_mut().map(|envelope| {
+                            envelope.metadata.get_or_insert_default().mcp_attribution =
+                                Some(attribution);
+                            (Arc::clone(executed_tool_calls), revision)
+                        })
+                    })
             });
         if let Some(checkpoint) = items.iter_mut().rev().find(|envelope| {
             matches!(
@@ -5598,11 +5605,9 @@ impl Session {
             thread_settings::applied_event(self).await,
         ));
         if self.persist_rollout_items(&rollout_items).await
-            && let Some(revision) = mcp_revision
+            && let Some((executed_tool_calls, revision)) = mcp_revision
         {
-            self.services
-                .executed_tool_calls
-                .mark_mcp_attribution_persisted(revision);
+            executed_tool_calls.mark_mcp_attribution_persisted(revision);
         }
         {
             let mut state = self.state.lock().await;

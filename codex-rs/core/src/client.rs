@@ -715,6 +715,7 @@ impl ModelClient {
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
             self.state.auth_env_telemetry.clone(),
         );
+        let include_internal = is_internal_metadata_destination(&client_setup.api_provider);
         let request = self.build_responses_request(
             prompt,
             model_info,
@@ -722,6 +723,7 @@ impl ModelClient {
             settings.summary,
             settings.service_tier,
             responses_metadata,
+            include_internal,
         )?;
         let ResponsesApiRequest {
             model,
@@ -735,7 +737,6 @@ impl ModelClient {
             text,
             ..
         } = request;
-        ModelClient::filter_tool_result_metadata(&mut input, &client_setup.api_provider);
         self.prepare_response_items_for_request(&mut input);
         let payload = ApiCompactionInput {
             model: &model,

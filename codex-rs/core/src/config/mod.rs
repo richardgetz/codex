@@ -3854,6 +3854,7 @@ impl Config {
             additional_developer_instructions: _,
             guardian_policy_config_source: _,
             guardian_extra_policy_source: _,
+            allow_browser: _,
         } = config_layer_stack.requirements().clone();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.

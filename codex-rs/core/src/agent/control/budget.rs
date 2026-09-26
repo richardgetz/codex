@@ -9,6 +9,10 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::TokenUsage;
 
 impl LocalAgentControl {
+    pub(crate) fn rearm_budget_reminder(&self, thread_id: ThreadId) {
+        self.runtime.rollout_budget.rearm_reminder(thread_id);
+    }
+
     pub(crate) fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
         if self.runtime.rollout_budget.record_usage(usage)? {
             return Err(CodexErr::SessionBudgetExceeded);
