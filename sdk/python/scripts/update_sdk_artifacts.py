@@ -587,7 +587,7 @@ def generate_v2_all(schema_dir: Path) -> None:
 
 
 def _preserve_inline_image_class_names(out_path: Path) -> None:
-    """Keep the public class names used before ImageReference was introduced."""
+    """Keep stable class names unless the schema now defines them as union wrappers."""
     source = out_path.read_text()
     stable_names = {
         "UrlUserInput": "ImageUserInput",
@@ -597,6 +597,8 @@ def _preserve_inline_image_class_names(out_path: Path) -> None:
     for generated_name, stable_name in stable_names.items():
         if source.count(f"class {generated_name}(") != 1:
             raise RuntimeError(f"Generated SDK is missing a unique {generated_name} class")
+        if re.search(rf"^class {re.escape(stable_name)}\(", source, flags=re.MULTILINE):
+            continue
         if re.search(rf"\b{re.escape(stable_name)}\b", source):
             raise RuntimeError(f"Generated SDK already defines {stable_name}")
         source = re.sub(rf"\b{re.escape(generated_name)}\b", stable_name, source)
