@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-26/checkpoint-tail-settings#4aff286810c4"
+  change_type: "fix"
+  scope: "rollout reconstruction"
+  summary: "Restore turn settings from surviving replacement-history checkpoint tails."
+  decision: "Treat the fork's history_checkpoint segment field as the upstream base_compaction field when deciding whether checkpoint-tail turn settings can restore."
+  constraints:
+    - "Keep the selected replacement-history checkpoint and replay tail in the same surviving segment."
+    - "Preserve the previous_turn_settings_from_checkpoint_tail guard and upstream resume-metadata fallback."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/rollout_reconstruction.rs::finalize_active_segment"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-6"
