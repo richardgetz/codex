@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-26/sdk-image-union-names#c37eb9455e"
+  change_type: "fix"
+  scope: "python-sdk"
+  summary: "Allow protocol schemas to define stable image input names as discriminated unions."
+  decision: "When code generation already emits a stable public class as a union wrapper, preserve that wrapper and leave the concrete wire variant under its schema-derived name."
+  constraints:
+    - "Keep image URL and file-id alternatives represented by the generated union."
+    - "Preserve stable generated class names when no union wrapper occupies them."
+  intent_priority: "should"
+  code_locations:
+    - "sdk/python/scripts/update_sdk_artifacts.py::_preserve_inline_image_class_names"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
