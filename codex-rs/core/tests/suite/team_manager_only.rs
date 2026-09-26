@@ -1296,10 +1296,10 @@ try {
         "ManagerOnly Code Mode should expose standalone worker_capacity: {exec}"
     );
     assert!(
-        function_tools
-            .iter()
-            .any(|tool| tool["name"] == "send_message_action"),
-        "ManagerOnly Code Mode should expose send_message_action as a standalone function: {function_tools:?}"
+        exec["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("send_message_action(args:")),
+        "ManagerOnly Code Mode should expose nested send_message_action: {exec}"
     );
     assert!(
         !function_tools
