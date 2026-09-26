@@ -142,6 +142,47 @@ fn team_status_settings(
     }
 }
 
+fn status_command_rows(
+    chat: &mut ChatWidget,
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> String {
+    chat.dispatch_command(SlashCommand::Status);
+    let status_cell = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .last()
+        .expect("status command inserts a history cell");
+    let rendered = lines_to_single_string(&status_cell.display_lines(/*width*/ 120));
+    let rows = rendered
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_matches('│').trim();
+            ["Model:", "Team:", "Collaboration mode:"]
+                .iter()
+                .any(|label| line.starts_with(label))
+                .then_some(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rows.contains("Model:"),
+        "status card has no model row:\n{rendered}"
+    );
+    rows
+}
+
+fn status_field<'a>(rows: &'a str, label: &str) -> &'a str {
+    rows.lines()
+        .find_map(|line| {
+            line.strip_prefix(label)
+                .and_then(|value| value.strip_prefix(':'))
+                .map(str::trim)
+        })
+        .unwrap_or_else(|| panic!("status card has no {label} row:\n{rows}"))
+}
+
 fn render_status_snapshot(chat: &mut ChatWidget, width: u16) -> String {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -328,4 +369,158 @@ async fn status_line_setup_team_profiles_remain_authoritative_after_settings_cha
     chat.set_model("gpt-6-luna");
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
     assert_eq!(chat.status_line_text(), Some("GPT-6 Luna high".to_string()));
+    chat.set_team_settings(Some(team_status_settings(
+        codex_app_server_protocol::TeamMode::LeadWorker,
+        Some(codex_app_server_protocol::TeamRole::Lead),
+        "gpt-6-astra",
+        ReasoningEffortConfig::XHigh,
+        "gpt-6-sol",
+        ReasoningEffortConfig::High,
+    )));
+    assert_eq!(
+        chat.status_line_text(),
+        Some("Lead: GPT-6 Astra xhigh · Worker default: GPT-6 Sol high".to_string())
+    );
+}
+
+#[tokio::test]
+async fn status_command_uses_team_profiles_and_returns_to_session_model_when_team_is_off() {
+    let (mut chat, mut events, _ops) = make_chatwidget_manual(Some("gpt-6-sol")).await;
+    install_team_model_catalog(&mut chat);
+    chat.set_model("gpt-6-sol");
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut lead_settings = team_status_settings(
+        codex_app_server_protocol::TeamMode::LeadWorker,
+        Some(codex_app_server_protocol::TeamRole::Lead),
+        "gpt-6-astra",
+        ReasoningEffortConfig::XHigh,
+        "gpt-6-sol",
+        ReasoningEffortConfig::High,
+    );
+    lead_settings.lead_work_policy =
+        Some(codex_app_server_protocol::TeamLeadWorkPolicy::ManagerOnly);
+    chat.set_team_settings(Some(lead_settings));
+    let mut states = vec![status_command_rows(&mut chat, &mut events)];
+    pretty_assertions::assert_eq!(status_field(&states[0], "Team"), "On · Manager only");
+    pretty_assertions::assert_eq!(status_field(&states[0], "Collaboration mode"), "Default");
+
+    let mut updated_lead_settings = team_status_settings(
+        codex_app_server_protocol::TeamMode::LeadWorker,
+        Some(codex_app_server_protocol::TeamRole::Lead),
+        "gpt-6-luna",
+        ReasoningEffortConfig::High,
+        "gpt-6-astra",
+        ReasoningEffortConfig::Medium,
+    );
+    updated_lead_settings.lead_work_policy =
+        Some(codex_app_server_protocol::TeamLeadWorkPolicy::PromptGuided);
+    chat.set_team_settings(Some(updated_lead_settings));
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[1], "Team"), "On · Prompt guided");
+    pretty_assertions::assert_eq!(status_field(&states[1], "Collaboration mode"), "Default");
+
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-6-astra".to_string(),
+        model_provider_id: "openai".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: chat.config.cwd.clone(),
+        runtime_workspace_roots: chat.config.workspace_roots.clone(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: Some(ReasoningEffortConfig::High),
+        collaboration_mode: None,
+        team: Some(team_status_settings(
+            codex_app_server_protocol::TeamMode::LeadWorker,
+            Some(codex_app_server_protocol::TeamRole::Worker),
+            "gpt-6-luna",
+            ReasoningEffortConfig::High,
+            "gpt-6-sol",
+            ReasoningEffortConfig::XHigh,
+        )),
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    });
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[2], "Team"), "On");
+    pretty_assertions::assert_eq!(status_field(&states[2], "Collaboration mode"), "Default");
+
+    chat.set_team_settings(Some(team_status_settings(
+        codex_app_server_protocol::TeamMode::Off,
+        None,
+        "gpt-6-luna",
+        ReasoningEffortConfig::High,
+        "gpt-6-sol",
+        ReasoningEffortConfig::XHigh,
+    )));
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[3], "Team"), "Off");
+    pretty_assertions::assert_eq!(status_field(&states[3], "Collaboration mode"), "Default");
+
+    chat.set_team_settings(Some(team_status_settings(
+        codex_app_server_protocol::TeamMode::LeadWorker,
+        Some(codex_app_server_protocol::TeamRole::Lead),
+        "gpt-6-luna",
+        ReasoningEffortConfig::High,
+        "gpt-6-astra",
+        ReasoningEffortConfig::Medium,
+    )));
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[4], "Team"), "On · Prompt guided");
+    pretty_assertions::assert_eq!(status_field(&states[4], "Collaboration mode"), "Default");
+
+    chat.set_effective_collaboration_mode(CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: "gpt-6-astra".to_string(),
+            reasoning_effort: Some(ReasoningEffortConfig::High),
+            developer_instructions: None,
+        },
+    });
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[5], "Team"), "On · Prompt guided");
+    pretty_assertions::assert_eq!(status_field(&states[5], "Collaboration mode"), "Plan");
+
+    chat.set_team_settings(Some(team_status_settings(
+        codex_app_server_protocol::TeamMode::Off,
+        None,
+        "gpt-6-luna",
+        ReasoningEffortConfig::High,
+        "gpt-6-sol",
+        ReasoningEffortConfig::XHigh,
+    )));
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[6], "Team"), "Off");
+    pretty_assertions::assert_eq!(status_field(&states[6], "Collaboration mode"), "Plan");
+    let off_model = status_field(&states[6], "Model");
+    assert!(off_model.starts_with("GPT-6 Astra"));
+    assert!(off_model.contains("reasoning high"));
+    assert!(!off_model.contains("Lead:") && !off_model.contains("Worker"));
+
+    chat.set_team_settings(Some(team_status_settings(
+        codex_app_server_protocol::TeamMode::LeadWorker,
+        Some(codex_app_server_protocol::TeamRole::Lead),
+        "gpt-6-astra",
+        ReasoningEffortConfig::XHigh,
+        "gpt-6-sol",
+        ReasoningEffortConfig::High,
+    )));
+    states.push(status_command_rows(&mut chat, &mut events));
+    pretty_assertions::assert_eq!(status_field(&states[7], "Team"), "On · Prompt guided");
+    pretty_assertions::assert_eq!(status_field(&states[7], "Collaboration mode"), "Plan");
+
+    assert_chatwidget_snapshot!(
+        "status_command_team_profiles_and_off_transitions",
+        states.join("\n\n")
+    );
 }

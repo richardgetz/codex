@@ -1,0 +1,35 @@
+---
+source: tui/src/chatwidget/tests/model_display_name_tests.rs
+expression: "states.join(\"\\n\\n\")"
+---
+Model:                Lead: GPT-6 Astra xhigh · Worker default: GPT-6 Sol high (summaries auto)
+Team:                 On · Manager only
+Collaboration mode:   Default
+
+Model:                Lead: GPT-6 Luna high · Worker default: GPT-6 Astra medium (summaries auto)
+Team:                 On · Prompt guided
+Collaboration mode:   Default
+
+Model:                Lead default: GPT-6 Luna high · Worker: GPT-6 Sol xhigh (summaries auto)
+Team:                 On
+Collaboration mode:   Default
+
+Model:                GPT-6 Astra (reasoning high, summaries auto)
+Team:                 Off
+Collaboration mode:   Default
+
+Model:                Lead: GPT-6 Luna high · Worker default: GPT-6 Astra medium (summaries auto)
+Team:                 On · Prompt guided
+Collaboration mode:   Default
+
+Model:                Lead: GPT-6 Luna high · Worker default: GPT-6 Astra medium (summaries auto)
+Team:                 On · Prompt guided
+Collaboration mode:   Plan
+
+Model:                GPT-6 Astra (reasoning high, summaries auto)
+Team:                 Off
+Collaboration mode:   Plan
+
+Model:                Lead: GPT-6 Astra xhigh · Worker default: GPT-6 Sol high (summaries auto)
+Team:                 On · Prompt guided
+Collaboration mode:   Plan
