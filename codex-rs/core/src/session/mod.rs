@@ -431,19 +431,6 @@ fn reconstructed_environment_context_matches_current(
 
     latest_environment_context.trim() == expected_environment_context.trim()
 }
-/// Notes from the previous real user turn.
-///
-/// Conceptually this is the same role that `previous_model` used to fill, but
-/// it can carry other prior-turn settings that matter when constructing
-/// sensible state-change diffs or full-context reinjection, such as model
-/// switches, compaction compatibility, or detecting a prior
-/// `realtime_active -> false` transition.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PreviousTurnSettings {
-    pub(crate) model: String,
-    pub(crate) comp_hash: Option<String>,
-    pub(crate) realtime_active: Option<bool>,
-}
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::mcp::McpEnvironmentScope;

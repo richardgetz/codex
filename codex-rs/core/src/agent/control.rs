@@ -58,6 +58,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 pub(crate) use self::LocalAgentControl as AgentControl;
+pub use self::handoff::HandoffAdmissionGuard;
+pub use self::handoff::HandoffGuard;
 pub(crate) use self::runtime::LocalAgentRuntime;
 pub(crate) use self::team::PruneIdleAgentsReport;
 pub(crate) use self::team::TerminalResultDeliveryGuard;

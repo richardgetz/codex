@@ -28,6 +28,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
@@ -1327,6 +1328,22 @@ impl LocalAgentControl {
         }
 
         Ok(resumed_thread_id)
+    }
+
+    /// Resume one recorded agent without reopening its descendants.
+    ///
+    /// Callers that recover a recorded child graph own which descendants may be restored and
+    /// must not load additional children as a side effect of resuming one node.
+    pub(crate) async fn resume_agent_from_rollout_without_descendants(
+        &self,
+        config: Config,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+    ) -> CodexResult<ThreadId> {
+        let _admission = self.begin_handoff_admission()?;
+        self.resume_single_agent_from_rollout(config, thread_id, session_source)
+            .await
+            .map(|(resumed_thread_id, _)| resumed_thread_id)
     }
 
     async fn resume_single_agent_from_rollout(

@@ -91,7 +91,9 @@ pub fn mcp_attribution_snapshot(
         .session
         .services
         .executed_tool_calls
-        .mcp_attribution_snapshot()
+        .as_ref()
+        .map(|executed_tool_calls| executed_tool_calls.mcp_attribution_snapshot())
+        .unwrap_or_default()
 }
 
 /// Test-only provider that supplies no user instructions.

@@ -1135,7 +1135,11 @@ impl Session {
         CodexResponsesMetadata {
             window_number: Some(window_number),
             context_window_id: Some(context_window_id),
-            mcp_attribution: Some(self.services.executed_tool_calls.mcp_attribution_snapshot()),
+            mcp_attribution: self
+                .services
+                .executed_tool_calls
+                .as_ref()
+                .map(|executed_tool_calls| executed_tool_calls.mcp_attribution_snapshot()),
             analytics_enabled: Some(self.services.analytics_events_client.is_enabled()),
             history_ingest_requested: turn_context
                 .config

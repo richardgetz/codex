@@ -1,7 +1,7 @@
 use super::LocalAgentControl;
 use crate::agent::status::is_final;
 use crate::agent::types::AgentMetadata;
-use crate::session::Session;
+use crate::session::session::Session;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tokio::sync::watch;
 
 /// Agents closed by a session-scoped idle prune, plus roots that failed to close.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -69,6 +70,36 @@ impl Drop for TerminalResultDeliveryGuard {
 }
 
 impl LocalAgentControl {
+    /// Subscribes to status changes for direct Workers that can still perform work. The boolean
+    /// reports a child that was already terminal or disappeared while the watchers were built.
+    pub(crate) async fn direct_worker_status_watchers(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> (Vec<watch::Receiver<AgentStatus>>, bool) {
+        let Ok(state) = self.upgrade() else {
+            return (Vec::new(), true);
+        };
+        let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
+            return (Vec::new(), true);
+        };
+        let mut watchers = Vec::new();
+        let mut status_changed = false;
+        for (thread_id, _) in children {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                status_changed = true;
+                continue;
+            };
+            let mut receiver = thread.subscribe_status();
+            let status = receiver.borrow_and_update().clone();
+            if is_final(&status) || matches!(status, AgentStatus::Interrupted) {
+                status_changed = true;
+            } else {
+                watchers.push(receiver);
+            }
+        }
+        (watchers, status_changed)
+    }
+
     /// Counts direct Worker children that can still perform work for a parent session.
     /// Terminal children remain active until their parent result callback has been delivered.
     pub(crate) async fn active_direct_worker_count(&self, parent_thread_id: ThreadId) -> usize {
