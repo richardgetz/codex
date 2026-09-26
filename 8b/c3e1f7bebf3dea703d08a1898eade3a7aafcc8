@@ -1,0 +1,19 @@
+intent:
+  id: stable-refresh-rust-v0.157.1-agent-control
+change_type: fix
+scope: codex-rs/core agent control and multi-agent delivery
+summary: Preserve fork Team, manager completion, handoff, usage, capacity, action messaging, and plaintext delivery behavior while adopting upstream LocalAgentControl and SpawnRequest APIs.
+decision: Keep upstream runtime, snapshot, residency, cleanup, and AgentControl semantics; carry the full parent ThreadSettingsSnapshot into spawned Worker persistence and retain fork completion/admission behavior at adapted boundaries.
+constraints:
+  - Do not run Rust or Cargo commands in the worker worktree.
+  - Do not export changes outside the assigned agent-control cluster.
+intent_priority: high
+code_locations:
+  - codex-rs/core/src/agent/control.rs
+  - codex-rs/core/src/agent/control
+  - codex-rs/core/src/codex_thread.rs
+  - codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs
+requested_by: fork-stable-release
+recorded_by: Codex
+agent: Codex
+model: gpt-6
