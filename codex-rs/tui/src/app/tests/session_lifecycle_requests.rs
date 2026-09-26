@@ -966,7 +966,8 @@ async fn archive_current_thread_reports_success_only_after_archiving() -> Result
 
     app.active_thread_id = Some(ThreadId::new());
     assert_matches!(
-        app.archive_current_thread(&mut tui, &mut app_server).await?,
+        app.archive_current_thread(&mut tui, &mut app_server)
+            .await?,
         AppRunControl::Continue
     );
 

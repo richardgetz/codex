@@ -738,18 +738,17 @@ impl LocalAgentControl {
                 } else {
                     None
                 };
-                let parent_thread_settings = if let Some(parent_thread_id) =
-                    session_source.parent_thread_id()
-                {
-                    match state.get_thread(parent_thread_id).await {
-                        Ok(parent_thread) => {
-                            Some(parent_thread.session.thread_settings_snapshot().await)
+                let parent_thread_settings =
+                    if let Some(parent_thread_id) = session_source.parent_thread_id() {
+                        match state.get_thread(parent_thread_id).await {
+                            Ok(parent_thread) => {
+                                Some(parent_thread.session.thread_settings_snapshot().await)
+                            }
+                            Err(_) => None,
                         }
-                        Err(_) => None,
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
                 let inherited_usage_policy = parent_thread_settings
                     .as_ref()
                     .map(|settings| settings.usage_policy.clone());

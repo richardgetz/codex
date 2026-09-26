@@ -235,13 +235,12 @@ pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmu
     }
 
     let running_in_tmux_session = running_in_tmux_session();
-    let tmux_extended_keys_format = if running_in_tmux_session
-        && tmux_options.extended_keys_enabled == Some(true)
-    {
-        tmux_options.extended_keys_format.as_deref()
-    } else {
-        None
-    };
+    let tmux_extended_keys_format =
+        if running_in_tmux_session && tmux_options.extended_keys_enabled == Some(true) {
+            tmux_options.extended_keys_format.as_deref()
+        } else {
+            None
+        };
     let realtime_voice_enabled = REALTIME_VOICE_ENABLED.load(Ordering::Relaxed);
     let terminal = terminal_info();
     let kitty_terminal_protocol_supported = matches!(terminal.name, TerminalName::Kitty)
@@ -371,7 +370,6 @@ fn tmux_should_enable_modify_other_keys_for(
     // which crossterm does not parse consistently for modified keys.
     running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
 }
-
 
 pub(super) fn restore_keyboard_enhancement_stack(writer: &mut impl Write) {
     let _ = execute!(writer, PopKeyboardEnhancementFlags, DisableModifyOtherKeys);

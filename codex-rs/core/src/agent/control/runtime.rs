@@ -15,7 +15,9 @@ use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadUsagePolicy;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -23,8 +25,6 @@ use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
-use std::collections::HashSet;
-use codex_protocol::ThreadId;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 

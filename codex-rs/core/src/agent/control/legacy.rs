@@ -1,6 +1,6 @@
 use super::*;
-use crate::agent::status::is_final;
 use crate::agent::api::AgentInfo;
+use crate::agent::status::is_final;
 use crate::context::SubagentNotification;
 use crate::session_prefix::format_inter_agent_completion_message;
 use codex_protocol::error::CodexErrorDetails;
@@ -114,10 +114,8 @@ impl LocalAgentControl {
                     message,
                     trigger_turn,
                 );
-                let context = AgentCommunicationContext::new(
-                    AgentCommunicationKind::Result,
-                    child_thread_id,
-                );
+                let context =
+                    AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
                 let _ = if trigger_turn {
                     control
                         .send_team_lead_completion(
@@ -195,8 +193,10 @@ impl LocalAgentControl {
                         message,
                         /*trigger_turn*/ true,
                     );
-                    let context =
-                        AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
+                    let context = AgentCommunicationContext::new(
+                        AgentCommunicationKind::Result,
+                        child_thread_id,
+                    );
                     let _ = control
                         .send_team_lead_completion(
                             parent_thread_id,

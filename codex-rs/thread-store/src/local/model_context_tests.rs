@@ -216,6 +216,7 @@ async fn retries_lineage_scan_after_rollout_compression_replaces_plain_file() {
         serde_json::to_value(context).expect("serialize context"),
         serde_json::to_value(expected).expect("serialize expected context")
     );
+}
 
 #[tokio::test]
 async fn fork_version_stops_before_older_segments_once_resolved() {

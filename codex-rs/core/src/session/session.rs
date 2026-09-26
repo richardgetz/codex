@@ -1227,25 +1227,29 @@ impl Session {
             ForkPersistence::Referenced { history_base, .. } => {
                 history_base.map(|position| position.end_ordinal_exclusive)
             }
-            ForkPersistence::Copied { .. } | ForkPersistence::CopiedDeferred { .. } => match &initial_history {
-                InitialHistory::Resumed(resumed) => {
-                    // Both local and CCA thread stores place the resumed thread's
-                    // canonical SessionMeta first. Never inspect inherited metadata:
-                    // an ancestor's history_base describes a different fork boundary.
-                    resumed.history.first().and_then(|item| match item {
-                        RolloutItem::SessionMeta(meta)
-                            if meta.meta.id == resumed.conversation_id =>
-                        {
-                            codex_rollout::forked_from_ordinal_exclusive(
-                                &meta.meta,
-                                resumed.rollout_path.as_deref(),
-                            )
-                        }
-                        _ => None,
-                    })
+            ForkPersistence::Copied { .. } | ForkPersistence::CopiedDeferred { .. } => {
+                match &initial_history {
+                    InitialHistory::Resumed(resumed) => {
+                        // Both local and CCA thread stores place the resumed thread's
+                        // canonical SessionMeta first. Never inspect inherited metadata:
+                        // an ancestor's history_base describes a different fork boundary.
+                        resumed.history.first().and_then(|item| match item {
+                            RolloutItem::SessionMeta(meta)
+                                if meta.meta.id == resumed.conversation_id =>
+                            {
+                                codex_rollout::forked_from_ordinal_exclusive(
+                                    &meta.meta,
+                                    resumed.rollout_path.as_deref(),
+                                )
+                            }
+                            _ => None,
+                        })
+                    }
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        None
+                    }
                 }
-                InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
-            },
+            }
         }
         .filter(|_| forked_from_id.is_some());
         let parent_thread_id = session_configuration

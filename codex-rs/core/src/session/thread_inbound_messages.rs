@@ -263,11 +263,11 @@ mod tests {
     use super::persist_handoff_inter_agent_communication;
     use super::start_thread_inbound_message_poller;
     use crate::agent::control::AgentControl;
+    use crate::session::Submission;
     use codex_protocol::AgentPath;
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::protocol::Op;
-    use crate::session::Submission;
     use codex_protocol::turn_input::TurnStartOptions;
     use codex_protocol::user_input::UserInput;
     use codex_utils_absolute_path::test_support::PathExt;

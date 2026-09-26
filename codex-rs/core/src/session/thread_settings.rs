@@ -165,7 +165,10 @@ async fn apply_update_with_policy(
         && session.get_config().await.effective_team_lead_work_policy()
             == TeamLeadWorkPolicy::ManagerOnly;
     let commit = session.update_settings(updates).await?;
-    if matches!(pending_continuation_update, PendingContinuationUpdate::Supersede) {
+    if matches!(
+        pending_continuation_update,
+        PendingContinuationUpdate::Supersede
+    ) {
         // Invalidate the continuation before its accepted settings snapshot can be delivered.
         session.state.lock().await.last_started_turn_id = None;
     }

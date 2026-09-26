@@ -3,8 +3,8 @@ use crate::agent::status::is_final;
 use crate::agent::types::AgentMetadata;
 use crate::session::Session;
 use codex_protocol::ThreadId;
-use codex_protocol::error::Result as CodexResult;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -310,7 +310,12 @@ fn collect_descendants(
         }
         descendants.push(thread_id);
         if let Some(children) = children_by_parent.get(&thread_id) {
-            stack.extend(children.iter().rev().map(|(child_thread_id, _)| *child_thread_id));
+            stack.extend(
+                children
+                    .iter()
+                    .rev()
+                    .map(|(child_thread_id, _)| *child_thread_id),
+            );
         }
     }
     descendants
