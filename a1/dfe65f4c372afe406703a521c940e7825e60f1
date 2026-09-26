@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-26/otel-032-adaptation#a1dfe65f4c"
+  change_type: "fix"
+  scope: "otel"
+  summary: "Adapt the fork telemetry policy wrappers to the merged OpenTelemetry 0.32 APIs."
+  decision: "Use opentelemetry-http 0.32 with the workspace exporter stack, match the SpanExporter shared-reference methods, and use Reqwest 0.13 tls_certs_only for explicit CA roots."
+  constraints:
+    - "Preserve network-policy admission and cancellation around telemetry exports."
+    - "Preserve custom-root-only TLS behavior when an explicit OTLP CA is configured."
+    - "Keep telemetry on the current workspace OpenTelemetry versions."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/otel/Cargo.toml"
+    - "codex-rs/otel/src/network_policy.rs::PolicyExporter"
+    - "codex-rs/otel/src/otlp.rs::build_http_client_inner"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
