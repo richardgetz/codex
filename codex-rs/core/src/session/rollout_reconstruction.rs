@@ -154,7 +154,7 @@ fn finalize_active_segment<'a>(
     // checkpoint turn's context when the older user turn context was intentionally not loaded.
     if previous_turn_settings.is_none()
         && (has_context_baseline
-            || (active_segment.base_compaction.is_some()
+            || (active_segment.history_checkpoint.is_some()
                 && active_segment.previous_turn_settings_from_checkpoint_tail))
     {
         *previous_turn_settings = active_segment.previous_turn_settings;
