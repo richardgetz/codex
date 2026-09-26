@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-26/stable-refresh-rust-v0.157.1-catalog#a1b40ba88f"
+  change_type: "chore"
+  scope: "stable model catalog and dependency locks"
+  summary: "Merge rust-v0.157.1 model prompts while preserving the fork GPT-6 Sol/Luna catalog and workspace dependencies."
+  decision: "Use the incoming model catalog prompts and workspace release version, retain the stable GPT-6 Sol/Luna support contract, and union fork/upstream dependency records in both lockfiles."
+  constraints:
+    - "Keep GPT-6 Sol and Luna selectable with the 0.155.0 client minimum, medium reasoning default, Fast tier, and standard/long-context support."
+    - "Preserve fork workspace members and dependency declarations while setting the workspace release version to 0.157.1."
+    - "Normalize source-less workspace package IDs and their lock references to 0.157.1, consistent with the fork stable lock convention."
+    - "Other conflict resolutions in this temporary merge are upstream defaults for commitability and are not designated for export."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/models-manager/models.json"
+    - "codex-rs/Cargo.toml"
+    - "codex-rs/Cargo.lock"
+    - "MODULE.bazel.lock"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
