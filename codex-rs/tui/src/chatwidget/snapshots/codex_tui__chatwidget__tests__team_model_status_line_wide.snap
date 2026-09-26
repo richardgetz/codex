@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/model_display_name_tests.rs
+expression: "render_status_snapshot(&mut chat, 80)"
+---
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"  Lead: GPT-6 Astra xhigh · Worker default: GPT-6 Sol xhigh                     "

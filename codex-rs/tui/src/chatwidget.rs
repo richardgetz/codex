@@ -476,6 +476,7 @@ use self::status_state::TerminalTitleStatusKind;
 mod status_controls;
 mod status_surfaces;
 mod streaming;
+mod team_model_status;
 use self::status_surfaces::CachedProjectRootName;
 mod thread_title_status;
 mod thread_usage;

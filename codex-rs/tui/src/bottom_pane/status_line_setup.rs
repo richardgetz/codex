@@ -161,9 +161,13 @@ impl StatusLineItem {
     /// User-visible description shown in the popup.
     pub(crate) fn description(self) -> &'static str {
         match self {
-            StatusLineItem::ModelName => "Current model name",
-            StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
-            StatusLineItem::Reasoning => "Current reasoning level",
+            StatusLineItem::ModelName => "Current model, or Lead/Worker profiles in Team mode",
+            StatusLineItem::ModelWithReasoning => {
+                "Current model with reasoning, or Lead/Worker profiles in Team mode"
+            }
+            StatusLineItem::Reasoning => {
+                "Current reasoning level, or Lead/Worker levels in Team mode"
+            }
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::Hostname => "Current machine hostname (omitted when unavailable)",

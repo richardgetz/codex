@@ -12,9 +12,9 @@ expression: status_line_popup_snapshot(&mut chat)
   [x] project-name          Project name (omitted when unavailable)
   [x] git-branch            Current Git branch (omitted when unavailable)
   [x] thread-title          Current thread title, or thread identifier when unnamed
-  [ ] model                 Current model name
-  [ ] model-with-reasoning  Current model name with reasoning level
-  [ ] reasoning             Current reasoning level
+  [ ] model                 Current model, or Lead/Worker profiles in Team mode
+  [ ] model-with-reasoning  Current model with reasoning, or Lead/Worker profiles in Team mode
+  [ ] reasoning             Current reasoning level, or Lead/Worker levels in Team mode
 ↓
   preview-live-root · feature/live-preview-branch · Live preview thread
   space toggle · ←/→ reorder · enter save · esc cancel

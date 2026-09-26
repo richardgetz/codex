@@ -12,9 +12,9 @@ expression: "render_lines(&view,\n100).lines().map(str::trim_end).collect::<Vec<
   ───────────────────────
   [x] hostname              Current machine hostname (omitted when unavailable)
   [x] current-dir           Current working directory
-  [ ] model                 Current model name
-  [ ] model-with-reasoning  Current model name with reasoning level
-  [ ] reasoning             Current reasoning level
+  [ ] model                 Current model, or Lead/Worker profiles in Team mode
+  [ ] model-with-reasoning  Current model with reasoning, or Lead/Worker profiles in Team mode
+  [ ] reasoning             Current reasoning level, or Lead/Worker levels in Team mode
   [ ] project-name          Project name (omitted when unavailable)
 ↓
   ssh-build-01.example.com · ~/codex-rs

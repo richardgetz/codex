@@ -253,6 +253,7 @@ impl ChatWidget {
             self.last_team_usage_limit_error = None;
         }
         self.team_settings = team_settings;
+        self.refresh_status_line();
         self.request_redraw();
     }
 

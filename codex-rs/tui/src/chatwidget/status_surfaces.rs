@@ -3,6 +3,7 @@
 //! Keeping this logic in a focused submodule makes the additive title/status
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
+use super::team_model_status::TeamModelStatusItem;
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
@@ -708,9 +709,15 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
-            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
-            StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
-            StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
+            StatusLineItem::ModelName => self
+                .team_status_line_value(TeamModelStatusItem::ModelName)
+                .or_else(|| Some(self.model_display_name().to_string())),
+            StatusLineItem::ModelWithReasoning => self
+                .team_status_line_value(TeamModelStatusItem::ModelWithReasoning)
+                .or_else(|| Some(self.model_with_reasoning_display_name())),
+            StatusLineItem::Reasoning => self
+                .team_status_line_value(TeamModelStatusItem::Reasoning)
+                .or_else(|| Some(self.reasoning_display_name())),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
