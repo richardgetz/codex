@@ -76,6 +76,19 @@ pub(crate) enum UsageRollupStatus<'a> {
     Complete(&'a [UsageRollupSource]),
 }
 
+/// Model labels and metadata sources used by `/status`.
+#[derive(Debug, Clone)]
+pub(crate) enum StatusModelDisplay {
+    Single {
+        model_name: String,
+        reasoning_effort_override: Option<Option<ReasoningEffort>>,
+    },
+    TeamRoles {
+        role_summary: String,
+        usage_model_name: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
     percent_remaining: i64,
@@ -154,6 +167,7 @@ struct StatusHistoryCell {
     permissions: String,
     agents_summary: Arc<RwLock<String>>,
     collaboration_mode: Option<String>,
+    team_status: Option<String>,
     model_provider: Option<String>,
     remote_connection: Option<RemoteConnectionStatus>,
     show_chatgpt_usage_link: bool,
@@ -247,6 +261,7 @@ pub(crate) fn new_status_output_with_rate_limits(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn new_status_output_with_rate_limits_handle(
     config: &Config,
     requires_openai_auth: bool,
@@ -291,6 +306,7 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn new_status_output_with_rate_limits_handle_with_sources(
     config: &Config,
     requires_openai_auth: bool,
@@ -312,6 +328,54 @@ pub(crate) fn new_status_output_with_rate_limits_handle_with_sources(
     agents_summary: String,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
+    new_status_output_with_status_model(
+        config,
+        requires_openai_auth,
+        model_provider_id,
+        remote_connection,
+        account_display,
+        token_info,
+        total_usage,
+        session_id,
+        thread_name,
+        forked_from,
+        rate_limits,
+        _plan_type,
+        now,
+        StatusModelDisplay::Single {
+            model_name: model_name.to_string(),
+            reasoning_effort_override,
+        },
+        collaboration_mode,
+        None,
+        usage_rollup_status,
+        agents_summary,
+        refreshing_rate_limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_status_output_with_status_model(
+    config: &Config,
+    requires_openai_auth: bool,
+    model_provider_id: Option<&str>,
+    remote_connection: Option<&RemoteConnectionStatus>,
+    account_display: Option<&StatusAccountDisplay>,
+    token_info: Option<&TokenUsageInfo>,
+    total_usage: &TokenUsage,
+    session_id: &Option<ThreadId>,
+    thread_name: Option<String>,
+    forked_from: Option<ThreadId>,
+    rate_limits: &[RateLimitSnapshotDisplay],
+    _plan_type: Option<PlanType>,
+    now: DateTime<Local>,
+    status_model: StatusModelDisplay,
+    collaboration_mode: Option<&str>,
+    team_status: Option<String>,
+    usage_rollup_status: UsageRollupStatus<'_>,
+    agents_summary: String,
+    refreshing_rate_limits: bool,
+) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = Arc::new(StatusHistoryCell::new(
         config,
@@ -327,9 +391,9 @@ pub(crate) fn new_status_output_with_rate_limits_handle_with_sources(
         rate_limits,
         _plan_type,
         now,
-        model_name,
+        status_model,
         collaboration_mode,
-        reasoning_effort_override,
+        team_status,
         usage_rollup_status,
         agents_summary,
         refreshing_rate_limits,
@@ -360,9 +424,9 @@ impl StatusHistoryCell {
         rate_limits: &[RateLimitSnapshotDisplay],
         _plan_type: Option<PlanType>,
         now: DateTime<Local>,
-        model_name: &str,
+        status_model: StatusModelDisplay,
         collaboration_mode: Option<&str>,
-        reasoning_effort_override: Option<Option<ReasoningEffort>>,
+        team_status: Option<String>,
         usage_rollup_status: UsageRollupStatus<'_>,
         agents_summary: String,
         refreshing_rate_limits: bool,
@@ -374,9 +438,28 @@ impl StatusHistoryCell {
         let model_provider = model_provider_id
             .filter(|id| !id.trim().is_empty())
             .map(str::to_string);
+        let (usage_model_name, status_model_name, reasoning_effort) = match status_model {
+            StatusModelDisplay::Single {
+                model_name,
+                reasoning_effort_override,
+            } => (
+                model_name.clone(),
+                model_name,
+                Some(
+                    reasoning_effort_override
+                        .unwrap_or_else(|| config.model_reasoning_effort.clone())
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
+            ),
+            StatusModelDisplay::TeamRoles {
+                role_summary,
+                usage_model_name,
+            } => (usage_model_name, role_summary, None),
+        };
         let mut config_entries = vec![
             ("workdir", config.cwd.display().to_string()),
-            ("model", model_name.to_string()),
+            ("model", usage_model_name.clone()),
             (
                 "approval",
                 config.permissions.approval_policy.value().to_string(),
@@ -390,11 +473,9 @@ impl StatusHistoryCell {
             config_entries.insert(2, ("provider", provider_id.clone()));
         }
         if config.model_provider.wire_api == WireApi::Responses {
-            let effort_value = reasoning_effort_override
-                .unwrap_or_else(|| config.model_reasoning_effort.clone())
-                .map(|effort| effort.to_string())
-                .unwrap_or_else(|| "none".to_string());
-            config_entries.push(("reasoning effort", effort_value));
+            if let Some(effort) = reasoning_effort {
+                config_entries.push(("reasoning effort", effort));
+            }
             config_entries.push((
                 "reasoning summaries",
                 config
@@ -403,7 +484,8 @@ impl StatusHistoryCell {
                     .unwrap_or_else(|| "auto".to_string()),
             ));
         }
-        let (model_name, model_details) = compose_model_display(model_name, &config_entries);
+        let (model_name, model_details) =
+            compose_model_display(&status_model_name, &config_entries);
         let approval = config_entries
             .iter()
             .find(|(k, _)| *k == "approval")
@@ -463,7 +545,7 @@ impl StatusHistoryCell {
             UsageRollupStatus::Legacy => compose_status_token_usage_cost_with_models(
                 &config.tui_status_token_usage,
                 &config.model_provider_id,
-                &model_name,
+                &usage_model_name,
                 total_usage,
                 usage_by_service_tier,
                 usage_by_service_tier_and_context_length,
@@ -499,6 +581,7 @@ impl StatusHistoryCell {
             directory: config.cwd.to_path_buf(),
             permissions,
             collaboration_mode: collaboration_mode.map(ToString::to_string),
+            team_status,
             model_provider,
             remote_connection: remote_connection.cloned(),
             show_chatgpt_usage_link,
@@ -874,10 +957,15 @@ impl StatusHistoryCell {
             }
         });
 
-        let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut labels = vec!["Model".to_string()];
+        if self.team_status.is_some() {
+            labels.push("Team".to_string());
+        }
+        labels.extend(
+            ["Directory", "Permissions", "Agents.md"]
+                .into_iter()
+                .map(str::to_string),
+        );
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
         let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
         #[expect(clippy::expect_used)]
@@ -983,6 +1071,9 @@ impl StatusHistoryCell {
         let directory_value = format_directory_display(&self.directory, Some(value_width));
 
         lines.push(formatter.line("Model", model_spans));
+        if let Some(team_status) = self.team_status.as_ref() {
+            lines.push(formatter.line("Team", vec![Span::from(team_status.clone())]));
+        }
         if let Some(model_provider) = self.model_provider.as_ref() {
             lines.push(formatter.line("Model provider", vec![Span::from(model_provider.clone())]));
         }

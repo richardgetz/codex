@@ -4,6 +4,10 @@
 //! widget entrypoints that apply status state, open setup views, and update the
 //! history-facing `/status` surface.
 
+use codex_app_server_protocol::TeamLeadWorkPolicy;
+use codex_app_server_protocol::TeamMode;
+use codex_app_server_protocol::TeamRole;
+
 use super::*;
 
 impl ChatWidget {
@@ -263,6 +267,36 @@ impl ChatWidget {
                 .or_else(|| self.config.model_reasoning_effort.clone())
                 .or(model_default_reasoning_effort),
         );
+        let model_name = self.model_display_name().to_string();
+        let team_model_summary = self.team_status_line_value(
+            super::team_model_status::TeamModelStatusItem::ModelWithReasoning,
+        );
+        let status_model = match team_model_summary {
+            Some(role_summary) => crate::status::StatusModelDisplay::TeamRoles {
+                role_summary,
+                usage_model_name: model_name,
+            },
+            None => crate::status::StatusModelDisplay::Single {
+                model_name,
+                reasoning_effort_override,
+            },
+        };
+        let team_status = Some(match self.team_settings.as_ref() {
+            Some(team)
+                if team.mode == TeamMode::LeadWorker && team.role == Some(TeamRole::Lead) =>
+            {
+                let policy = team
+                    .lead_work_policy
+                    .unwrap_or(TeamLeadWorkPolicy::PromptGuided);
+                let policy_label = match policy {
+                    TeamLeadWorkPolicy::PromptGuided => "Prompt guided",
+                    TeamLeadWorkPolicy::ManagerOnly => "Manager only",
+                };
+                format!("On · {policy_label}")
+            }
+            Some(team) if team.mode == TeamMode::LeadWorker => "On".to_string(),
+            Some(_) | None => "Off".to_string(),
+        });
         let rate_limit_snapshots: Vec<RateLimitSnapshotDisplay> = self
             .rate_limit_snapshots_by_limit_id
             .values()
@@ -270,7 +304,7 @@ impl ChatWidget {
             .collect();
         let agents_summary =
             crate::status::compose_agents_summary(&self.config, &self.instruction_source_paths);
-        let (cell, handle) = crate::status::new_status_output_with_rate_limits_handle_with_sources(
+        let (cell, handle) = crate::status::new_status_output_with_status_model(
             &self.config,
             self.requires_openai_auth,
             self.thread_id
@@ -285,9 +319,9 @@ impl ChatWidget {
             rate_limit_snapshots.as_slice(),
             self.plan_type,
             Local::now(),
-            self.model_display_name(),
+            status_model,
             collaboration_mode,
-            reasoning_effort_override,
+            team_status,
             usage_rollup_status,
             agents_summary,
             refreshing_rate_limits,
