@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-26/sdk-generator-python310#929e9edc57"
+  change_type: "fix"
+  scope: "Python SDK and generated schemas"
+  summary: "Keep generated stable-refresh schemas and SDK artifacts compatible with Python 3.10."
+  decision: "Target datamodel-code-generator at Python 3.10, preserve required-nullable fields across generator output versions, accept supported PlanType enum bases while retaining open values, and regenerate protocol fixtures, config schema, and SDK API/model artifacts from integrated source."
+  constraints:
+    - "Preserve the SDK's declared Python 3.10 minimum."
+    - "Generate checked-in protocol and config artifacts from source."
+    - "Keep upstream wire shapes and fork-owned API behavior intact."
+  intent_priority: "normal"
+  code_locations:
+    - "sdk/python/scripts/update_sdk_artifacts.py"
+    - "sdk/python/src/openai_codex/api.py"
+    - "sdk/python/src/openai_codex/generated"
+    - "codex-rs/app-server-protocol/schema"
+    - "codex-rs/core/config.schema.json"
+  requested_by: "stable refresh validation assignment"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-6"
