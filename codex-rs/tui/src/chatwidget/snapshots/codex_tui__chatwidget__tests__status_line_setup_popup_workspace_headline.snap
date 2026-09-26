@@ -10,9 +10,9 @@ expression: status_line_popup_snapshot(&mut chat)
 › [x] Use theme colors      Apply colors from the active /theme
   ───────────────────────
   [x] workspace-headline    Workspace notification headline (Enterprise workspaces only; omitted wh…
-  [ ] model                 Current model name
-  [ ] model-with-reasoning  Current model name with reasoning level
-  [ ] reasoning             Current reasoning level
+  [ ] model                 Current model, or Lead/Worker profiles in Team mode
+  [ ] model-with-reasoning  Current model with reasoning, or Lead/Worker profiles in Team mode
+  [ ] reasoning             Current reasoning level, or Lead/Worker levels in Team mode
   [ ] current-dir           Current working directory
   [ ] project-name          Project name (omitted when unavailable)
 ↓

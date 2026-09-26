@@ -165,6 +165,9 @@ impl ChatWidget {
                 mask.reasoning_effort = plan_mask.reasoning_effort;
             }
         }
+        if self.active_mode_kind() == ModeKind::Plan {
+            self.prefer_current_settings_for_team_status();
+        }
         self.refresh_model_dependent_surfaces();
     }
 
@@ -186,6 +189,7 @@ impl ChatWidget {
             // Plan reasoning is controlled by the Plan preset and Plan-only override updates.
             mask.reasoning_effort = Some(effort);
         }
+        self.prefer_current_settings_for_team_status();
         self.refresh_model_dependent_surfaces();
     }
 
@@ -281,6 +285,7 @@ impl ChatWidget {
             /*effort*/ None,
             /*developer_instructions*/ None,
         );
+        self.prefer_current_settings_for_team_status();
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
         {

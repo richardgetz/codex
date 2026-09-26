@@ -476,6 +476,7 @@ use self::status_state::TerminalTitleStatusKind;
 mod status_controls;
 mod status_surfaces;
 mod streaming;
+mod team_model_status;
 use self::status_surfaces::CachedProjectRootName;
 mod thread_title_status;
 mod thread_usage;
@@ -641,6 +642,8 @@ pub(crate) struct ChatWidget {
     active_collaboration_mask: Option<CollaborationModeMask>,
     /// The authoritative Lead/Worker team snapshot for the active thread.
     team_settings: Option<ThreadTeamSettings>,
+    /// Use the active thread's effective model and effort after an in-thread change.
+    team_status_uses_current_settings: bool,
     /// Team mode requested by the user until the server confirms it in a
     /// thread settings snapshot.
     pending_team_command: Option<TeamCommand>,

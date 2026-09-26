@@ -135,6 +135,7 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             team_settings: None,
+            team_status_uses_current_settings: false,
             pending_team_command: None,
             pending_team_command_request_id: None,
             thread_usage_policy: codex_app_server_protocol::ThreadUsagePolicy {

@@ -67,6 +67,14 @@ release or merge rules.
   `null`. The query does not reserve capacity; runtime admission and the existing
   global agent-count, depth, and resource limits remain authoritative.
 
+- Team status-line model items show the active thread's Lead or Worker model and
+  reasoning level beside the other role's configured default. Worker defaults
+  are labeled explicitly so a Lead footer does not imply that every active
+  Worker uses the same model. In-thread model/reasoning changes take precedence
+  for the active role until a Team assignment changes or the thread changes.
+  Team settings and resumed-thread changes refresh the values; Team Off keeps
+  the existing single-model display.
+
 - `[team.lead].work_policy` defaults to `prompt_guided`; opt-in `manager_only`
   keeps the Lead focused on user alignment, planning, delegation, coordination,
   and final review while Workers own substantive execution through completion
@@ -1259,6 +1267,13 @@ release or merge rules.
   the configured ceiling and one consistent active/pending/remaining snapshot,
   reports an unset ceiling as unbounded, excludes grandchildren, and does not
   reserve a slot or change runtime admission.
+- Verify Team model status-line items display the active thread role's effective
+  model and reasoning level plus the other role's configured default; changes
+  from team profile updates, in-thread model/reasoning selection, and resume
+  refresh the footer. The Worker label must identify a configured default so
+  heterogeneous active Worker models are not represented as uniform. Team Off
+  retains the existing single-model display, and narrow terminals clip the row
+  cleanly.
 - Verify `[team.lead].oversight_timeout_minutes` defaults to 30 minutes,
   accepts only `1..15768000`, and rejects out-of-range values; Lead idle
   parking makes no inference or polling on routine progress, retains only the

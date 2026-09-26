@@ -244,6 +244,22 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_team_settings(&mut self, team_settings: Option<ThreadTeamSettings>) {
+        let team_assignment_changed = match (self.team_settings.as_ref(), team_settings.as_ref()) {
+            (Some(previous), Some(next))
+                if previous.mode == TeamMode::LeadWorker
+                    && next.mode == TeamMode::LeadWorker
+                    && previous.role == next.role =>
+            {
+                previous.lead_model != next.lead_model
+                    || previous.lead_reasoning_effort != next.lead_reasoning_effort
+                    || previous.worker_model != next.worker_model
+                    || previous.worker_reasoning_effort != next.worker_reasoning_effort
+            }
+            _ => true,
+        };
+        if team_assignment_changed {
+            self.team_status_uses_current_settings = false;
+        }
         let previous_assignment = self
             .team_settings
             .as_ref()
@@ -253,6 +269,7 @@ impl ChatWidget {
             self.last_team_usage_limit_error = None;
         }
         self.team_settings = team_settings;
+        self.refresh_status_line();
         self.request_redraw();
     }
 
