@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-26/stable-rust-v0.157.1-core-refresh"
+  change_type: chore
+  scope: stable-release
+  summary: "Merge upstream rust-v0.157.1 into stable while preserving fork contracts."
+  decision: "Resolve the upstream stable refresh through a temporary stable-based merge, adopting upstream runtime and API changes while retaining documented fork-only behavior."
+  constraints:
+    - "Pause recovery resumes only captured turn IDs and never substitutes later turns or replays external operations."
+    - "ManagerOnly completion batches retain terminal delivery and handoff admission guarantees."
+    - "Preserve Team lifecycle/work policy, nested Worker depth preparation, and ordinary Worker settings inheritance."
+    - "Keep upstream InterruptIfNoPendingInput and PendingInputStatus with the fork runtime."
+    - "Preserve MultiAgentV2 Action delivery and plaintext Code Mode action content."
+  intent_priority: must
+  code_locations:
+    - "codex-rs/core"
+    - "codex-rs/protocol/src/protocol.rs"
+    - "codex-rs/thread-store/src/local"
+  requested_by: "@rick"
+  recorded_by:
+    agent: codex
+    model: gpt-6
