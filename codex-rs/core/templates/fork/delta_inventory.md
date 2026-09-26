@@ -67,6 +67,12 @@ release or merge rules.
   `null`. The query does not reserve capacity; runtime admission and the existing
   global agent-count, depth, and resource limits remain authoritative.
 
+- MultiAgentV2 messages dispatched through Code Mode carry their plain
+  function-argument text as plaintext agent-message content, so nested
+  `send_message_action` and other messaging calls do not become provider
+  `encrypted_content` items. Direct provider tool calls retain their encrypted
+  message handling.
+
 - Team status-line model items show the active thread's Lead or Worker model and
   reasoning level beside the other role's configured default. Worker defaults
   are labeled explicitly so a Lead footer does not imply that every active
@@ -1267,6 +1273,9 @@ release or merge rules.
   the configured ceiling and one consistent active/pending/remaining snapshot,
   reports an unset ceiling as unbounded, excludes grandchildren, and does not
   reserve a slot or change runtime admission.
+- Verify ManagerOnly Code Mode nested `send_message_action` carries the
+  supplied message as Worker `input_text`, not as encrypted content; direct
+  provider messaging continues to preserve encrypted message handling.
 - Verify Team model status-line items display the assigned Team profile model
   and reasoning level for the active role plus the other role's configured
   default. Thread model and effort patches are canonicalized by the active Team

@@ -11,6 +11,57 @@ const LEAD_SPAWN_CALL_ID: &str = "manager-only-lead-spawn";
 const WORKER_EXEC_CALL_ID: &str = "manager-only-worker-exec";
 const CODE_MODE_CALL_ID: &str = "manager-only-code-mode";
 const CODE_MODE_EXEC_CALL_ID: &str = "manager-only-code-mode-exec";
+const CODE_MODE_WORKER_GATE_CALL_ID: &str = "manager-only-code-mode-worker-gate";
+const MANAGER_ONLY_CODE_MODE_ACTION: &str = "manager-only-code-mode-action";
+
+fn request_contains_agent_message_content(
+    request: &ResponsesRequest,
+    content_type: &str,
+    expected_text: &str,
+) -> bool {
+    fn contains(value: &Value, content_type: &str, expected_text: &str) -> bool {
+        match value {
+            Value::Array(items) => items
+                .iter()
+                .any(|item| contains(item, content_type, expected_text)),
+            Value::Object(fields) => {
+                let matches_current = fields
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|item_type| item_type == content_type)
+                    && match content_type {
+                        "input_text" => fields
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.contains(expected_text)),
+                        _ => false,
+                    };
+                matches_current
+                    || fields
+                        .values()
+                        .any(|value| contains(value, content_type, expected_text))
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+        }
+    }
+
+    contains(&request.body_json(), content_type, expected_text)
+}
+
+fn request_contains_encrypted_content(request: &ResponsesRequest) -> bool {
+    fn contains(value: &Value) -> bool {
+        match value {
+            Value::Array(items) => items.iter().any(contains),
+            Value::Object(fields) => {
+                fields.get("type").and_then(Value::as_str) == Some("encrypted_content")
+                    || fields.values().any(contains)
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+        }
+    }
+
+    contains(&request.body_json())
+}
 
 fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverrides {
     ThreadSettingsOverrides {
@@ -1054,8 +1105,19 @@ async fn manager_only_code_mode_keeps_worker_capacity_and_nested_execution(
         "task_name": "manager_only_code_mode_worker",
         "message": MANAGER_ONLY_WORKER_TASK,
     }))?;
+    let worker_gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": "manager-only-code-mode-worker-action",
+            "participants": 2,
+            "timeout_ms": 60_000,
+        },
+    }))?;
+    let action_message = serde_json::to_string(MANAGER_ONLY_CODE_MODE_ACTION)?;
     let lead_code = format!(
-        "const worker = await tools.collaboration__spawn_agent({lead_spawn_args});\ntext(JSON.stringify(worker));"
+        "const worker = await tools.collaboration__spawn_agent({lead_spawn_args});\n\
+         await tools.send_message_action({{ target: worker.task_name, message: {action_message} }});\n\
+         await tools.test_sync_tool({worker_gate_args});\n\
+         text(JSON.stringify(worker));"
     );
     let lead_exec_code = r#"
 try {
@@ -1107,17 +1169,34 @@ try {
         ]),
     )
     .await;
-    let worker_exec = mount_sse_once_match(
+    let worker_gate = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, MANAGER_ONLY_WORKER_TASK)
                 && request_has_model(request, WORKER_MODEL)
-                && !request_has_function_call_output(request, WORKER_EXEC_CALL_ID)
+                && !request_has_function_call_output(request, CODE_MODE_WORKER_GATE_CALL_ID)
         },
         sse(vec![
             ev_response_created("manager-only-code-mode-worker-1"),
-            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", worker_exec_args),
+            ev_function_call(
+                CODE_MODE_WORKER_GATE_CALL_ID,
+                "test_sync_tool",
+                &worker_gate_args,
+            ),
             ev_completed("manager-only-code-mode-worker-1"),
+        ]),
+    )
+    .await;
+    let worker_exec = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, WORKER_MODEL)
+                && request_has_function_call_output(request, CODE_MODE_WORKER_GATE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-only-code-mode-worker-2"),
+            ev_function_call(WORKER_EXEC_CALL_ID, "exec_command", worker_exec_args),
+            ev_completed("manager-only-code-mode-worker-2"),
         ]),
     )
     .await;
@@ -1136,8 +1215,18 @@ try {
     .await;
 
     let mut builder = test_codex()
+        .with_model_info_override(lead_model, |model_info| {
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
         .with_model_info_override(WORKER_MODEL, |model_info| {
             model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
         })
         .with_model(INITIAL_MODEL)
         .with_config(move |config| {
@@ -1207,6 +1296,12 @@ try {
         "ManagerOnly Code Mode should expose standalone worker_capacity: {exec}"
     );
     assert!(
+        function_tools
+            .iter()
+            .any(|tool| tool["name"] == "send_message_action"),
+        "ManagerOnly Code Mode should expose send_message_action as a standalone function: {function_tools:?}"
+    );
+    assert!(
         !function_tools
             .iter()
             .any(|tool| tool["name"] == "exec_command"),
@@ -1249,15 +1344,39 @@ try {
         "the manager_only Lead's Code Mode exec call should reach its handler without launching a process: {code_mode_exec_response:?}"
     );
 
-    let worker_request = wait_for_captured_request(
-        &worker_exec,
+    let worker_gate_request = wait_for_captured_request(
+        &worker_gate,
         |request| {
             request.body_contains_text(MANAGER_ONLY_WORKER_TASK)
                 && response_request_has_model(request, WORKER_MODEL)
         },
-        "Worker spawned by the Code Mode Lead",
+        "Worker spawned by the Code Mode Lead before its action message",
     )
     .await;
+    assert!(request_contains_agent_message_content(
+        &worker_gate_request,
+        "input_text",
+        MANAGER_ONLY_WORKER_TASK,
+    ));
+
+    let worker_request = wait_for_captured_request(
+        &worker_exec,
+        |request| {
+            response_request_has_model(request, WORKER_MODEL)
+                && response_request_has_function_call_output(request, CODE_MODE_WORKER_GATE_CALL_ID)
+        },
+        "Worker after its gate and Code Mode action message",
+    )
+    .await;
+    assert!(request_contains_agent_message_content(
+        &worker_request,
+        "input_text",
+        MANAGER_ONLY_CODE_MODE_ACTION,
+    ));
+    assert!(
+        !request_contains_encrypted_content(&worker_request),
+        "Code Mode action arguments should not become encrypted-content items in the Worker request"
+    );
     let worker_additional_tools = worker_request
         .inputs_of_type("additional_tools")
         .into_iter()
