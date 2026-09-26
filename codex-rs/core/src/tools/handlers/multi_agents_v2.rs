@@ -4,6 +4,7 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_resolver::resolve_agent_target;
 use crate::agent::types::AgentMessage;
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -58,13 +59,11 @@ fn agent_message_from_tool(
     message: String,
     source: &crate::tools::context::ToolCallSource,
 ) -> AgentMessage {
-    if matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-    ) {
-        AgentMessage::Plaintext(message)
-    } else {
-        AgentMessage::Encrypted(message)
+    match source {
+        ToolCallSource::DirectPlaintextMessage | ToolCallSource::CodeMode { .. } => {
+            AgentMessage::Plaintext(message)
+        }
+        ToolCallSource::Direct => AgentMessage::Encrypted(message),
     }
 }
 
