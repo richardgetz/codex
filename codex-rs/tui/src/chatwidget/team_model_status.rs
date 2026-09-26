@@ -1,4 +1,8 @@
 //! Role-aware model and reasoning values for the footer status line.
+//!
+//! Team assignments are authoritative: Core canonicalizes every thread model
+//! and effort patch to the active role's assigned profile. The current thread
+//! settings are only a fallback when a role profile is missing from a snapshot.
 
 use super::ChatWidget;
 use codex_app_server_protocol::TeamMode;
@@ -12,16 +16,6 @@ pub(super) enum TeamModelStatusItem {
 }
 
 impl ChatWidget {
-    pub(super) fn prefer_current_settings_for_team_status(&mut self) {
-        if self
-            .team_settings
-            .as_ref()
-            .is_some_and(|team| team.mode == TeamMode::LeadWorker && team.role.is_some())
-        {
-            self.team_status_uses_current_settings = true;
-        }
-    }
-
     pub(super) fn team_status_line_value(&self, item: TeamModelStatusItem) -> Option<String> {
         let team = self
             .team_settings
@@ -32,7 +26,6 @@ impl ChatWidget {
         let current_reasoning = self.effective_reasoning_effort();
         let current_reasoning =
             Self::status_line_reasoning_effort_label(current_reasoning.as_ref());
-        let use_current_settings = self.team_status_uses_current_settings;
         let profile_model_name = |model: Option<&str>| {
             model
                 .filter(|model| !model.trim().is_empty())
@@ -43,50 +36,36 @@ impl ChatWidget {
         };
         let lead_is_active = active_role == Some(TeamRole::Lead);
         let worker_is_active = active_role == Some(TeamRole::Worker);
-        let lead_model = if lead_is_active && use_current_settings {
-            current_model.clone()
-        } else {
-            profile_model_name(team.lead_model.as_deref()).unwrap_or_else(|| {
-                if lead_is_active {
-                    current_model.clone()
-                } else {
-                    "not configured".to_string()
-                }
-            })
-        };
-        let lead_reasoning = if lead_is_active && use_current_settings {
-            current_reasoning.clone()
-        } else {
+        let lead_model = profile_model_name(team.lead_model.as_deref()).unwrap_or_else(|| {
+            if lead_is_active {
+                current_model.clone()
+            } else {
+                "not configured".to_string()
+            }
+        });
+        let lead_reasoning =
             profile_reasoning(team.lead_reasoning_effort.as_ref()).unwrap_or_else(|| {
                 if lead_is_active {
                     current_reasoning.clone()
                 } else {
                     Self::status_line_reasoning_effort_label(None)
                 }
-            })
-        };
-        let worker_model = if worker_is_active && use_current_settings {
-            current_model.clone()
-        } else {
-            profile_model_name(team.worker_model.as_deref()).unwrap_or_else(|| {
-                if worker_is_active {
-                    current_model.clone()
-                } else {
-                    "not configured".to_string()
-                }
-            })
-        };
-        let worker_reasoning = if worker_is_active && use_current_settings {
-            current_reasoning.clone()
-        } else {
-            profile_reasoning(team.worker_reasoning_effort.as_ref()).unwrap_or_else(|| {
+            });
+        let worker_model = profile_model_name(team.worker_model.as_deref()).unwrap_or_else(|| {
+            if worker_is_active {
+                current_model.clone()
+            } else {
+                "not configured".to_string()
+            }
+        });
+        let worker_reasoning = profile_reasoning(team.worker_reasoning_effort.as_ref())
+            .unwrap_or_else(|| {
                 if worker_is_active {
                     current_reasoning.clone()
                 } else {
                     Self::status_line_reasoning_effort_label(None)
                 }
-            })
-        };
+            });
         let lead_label = if lead_is_active {
             "Lead"
         } else {
@@ -111,8 +90,7 @@ impl ChatWidget {
                     Some(TeamRole::Worker) => team.worker_model.as_deref(),
                     None => None,
                 };
-                let service_tier_label = if use_current_settings
-                    || active_profile_model.is_none()
+                let service_tier_label = if active_profile_model.is_none()
                     || active_profile_model == Some(self.current_model())
                 {
                     self.current_service_tier()

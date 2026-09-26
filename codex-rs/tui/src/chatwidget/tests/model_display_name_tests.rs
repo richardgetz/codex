@@ -155,7 +155,7 @@ fn render_status_snapshot(chat: &mut ChatWidget, width: u16) -> String {
 }
 
 #[tokio::test]
-async fn status_line_setup_team_models_and_refreshes_after_settings_changes() {
+async fn status_line_setup_team_profiles_remain_authoritative_after_settings_changes() {
     let (mut chat, _events, _ops) = make_chatwidget_manual(Some("gpt-6-sol")).await;
     install_team_model_catalog(&mut chat);
     chat.set_model("gpt-6-sol");
@@ -212,11 +212,12 @@ async fn status_line_setup_team_models_and_refreshes_after_settings_changes() {
         render_status_snapshot(&mut chat, 40)
     );
 
+    // Local selections are optimistic; Core keeps the role's assigned profile authoritative.
     chat.set_model("gpt-6-luna");
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
     assert_eq!(
         chat.status_line_text(),
-        Some("Lead: GPT-6 Luna high · Worker default: GPT-6 Sol xhigh".to_string())
+        Some("Lead: GPT-6 Astra xhigh · Worker default: GPT-6 Sol xhigh".to_string())
     );
     chat.set_team_settings(Some(team_status_settings(
         codex_app_server_protocol::TeamMode::LeadWorker,
@@ -228,7 +229,7 @@ async fn status_line_setup_team_models_and_refreshes_after_settings_changes() {
     )));
     assert_eq!(
         chat.status_line_text(),
-        Some("Lead: GPT-6 Luna high · Worker default: GPT-6 Sol xhigh".to_string())
+        Some("Lead: GPT-6 Astra xhigh · Worker default: GPT-6 Sol xhigh".to_string())
     );
 
     chat.set_team_settings(Some(team_status_settings(
@@ -273,7 +274,7 @@ async fn status_line_setup_team_models_and_refreshes_after_settings_changes() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
     assert_eq!(
         chat.status_line_text(),
-        Some("Lead default: GPT-6 Luna high · Worker: GPT-6 Astra high".to_string())
+        Some("Lead default: GPT-6 Luna high · Worker: GPT-6 Sol xhigh".to_string())
     );
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
