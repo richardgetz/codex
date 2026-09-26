@@ -1,6 +1,6 @@
 intent:
-  id: stable-refresh-rust-v0.157.1-2026-09-26
-  change_type: maintenance
+  id: "intent/2026-09-26/stable-refresh-rust-v0.157.1#71a3203d56"
+  change_type: chore
   scope: stable refresh
   summary: Integrate upstream rust-v0.157.1 into the stable-based fork refresh branch while retaining maintained fork contracts.
   decision: Merge the upstream tag after resolving semantic conflicts. Preserve Team lifecycle and exact-turn pause recovery, ManagerOnly completion delivery guarantees, fork spawn settings/depth policy, account and daemon ownership, network policy, and append upstream migrations after shipped fork migrations as 0065 and 0066.
@@ -16,7 +16,7 @@ intent:
     - codex-rs/state/migrations
     - codex-rs/tui
     - codex-rs/core/templates/fork/delta_inventory.md
-  requested_by: Rick
-  recorded_by: Codex
-  agent: Codex
-  model: gpt-6
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: Codex
+    model: gpt-6
