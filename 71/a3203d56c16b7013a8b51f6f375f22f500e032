@@ -1,0 +1,22 @@
+intent:
+  id: stable-refresh-rust-v0.157.1-2026-09-26
+  change_type: maintenance
+  scope: stable refresh
+  summary: Integrate upstream rust-v0.157.1 into the stable-based fork refresh branch while retaining maintained fork contracts.
+  decision: Merge the upstream tag after resolving semantic conflicts. Preserve Team lifecycle and exact-turn pause recovery, ManagerOnly completion delivery guarantees, fork spawn settings/depth policy, account and daemon ownership, network policy, and append upstream migrations after shipped fork migrations as 0065 and 0066.
+  constraints:
+    - Keep the shipped migration filenames and checksums unchanged.
+    - Do not merge into stable, push, or open a pull request from this worker.
+    - Leave schema generation and Rust validation to the designated build owner.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core
+    - codex-rs/app-server
+    - codex-rs/app-server-protocol
+    - codex-rs/state/migrations
+    - codex-rs/tui
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: Rick
+  recorded_by: Codex
+  agent: Codex
+  model: gpt-6
