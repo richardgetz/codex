@@ -34,10 +34,10 @@ impl<E: SpanExporter> SpanExporter for PolicyExporter<E> {
         let export = self.exporter.export(batch);
         permit.run(export).await.map_err(denied)?
     }
-    fn shutdown_with_timeout(&mut self, timeout: Duration) -> OTelSdkResult {
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         self.exporter.shutdown_with_timeout(timeout)
     }
-    fn force_flush(&mut self) -> OTelSdkResult {
+    fn force_flush(&self) -> OTelSdkResult {
         self.exporter.force_flush()
     }
     fn set_resource(&mut self, resource: &Resource) {
