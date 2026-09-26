@@ -366,9 +366,7 @@ impl HttpClientBuilder {
             builder = builder.use_native_tls();
         }
         if let Some(certificate) = self.tls.root_certificate {
-            builder = builder
-                .tls_built_in_root_certs(false)
-                .add_root_certificate(certificate);
+            builder = builder.tls_certs_only([certificate]);
         }
         if let Some(identity) = self.tls.client_identity {
             builder = builder.identity(identity).https_only(true);
