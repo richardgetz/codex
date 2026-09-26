@@ -49,8 +49,14 @@ pub(super) async fn update(
 ) {
     let mut updates = prepare_update(overrides);
     updates.usage_policy_update = usage_policy_update;
-    if let Err(error) =
-        apply_update(session, submission_id.clone(), updates, handoff_admission).await
+    if let Err(error) = apply_update_with_policy(
+        session,
+        submission_id.clone(),
+        updates,
+        handoff_admission,
+        PendingContinuationUpdate::Supersede,
+    )
+    .await
     {
         session
             .send_event_raw(Event {
@@ -62,10 +68,13 @@ pub(super) async fn update(
                 }),
             })
             .await;
-    } else {
-        // Standalone settings changes supersede a pending automatic continuation.
-        session.state.lock().await.last_started_turn_id = None;
     }
+}
+
+#[derive(Clone, Copy)]
+enum PendingContinuationUpdate {
+    Preserve,
+    Supersede,
 }
 
 /// Converts protocol overrides into the internal settings update shape.
@@ -131,6 +140,23 @@ pub(super) async fn apply_update(
     updates: SessionSettingsUpdate,
     handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> ConstraintResult<()> {
+    apply_update_with_policy(
+        session,
+        submission_id,
+        updates,
+        handoff_admission,
+        PendingContinuationUpdate::Preserve,
+    )
+    .await
+}
+
+async fn apply_update_with_policy(
+    session: &Arc<Session>,
+    submission_id: String,
+    updates: SessionSettingsUpdate,
+    handoff_admission: Option<&HandoffAdmissionGuard>,
+    pending_continuation_update: PendingContinuationUpdate,
+) -> ConstraintResult<()> {
     let _settings_guard = acquire_persistence_lock(session).await;
     let release_pending_manager_completions = updates
         .team
@@ -139,6 +165,10 @@ pub(super) async fn apply_update(
         && session.get_config().await.effective_team_lead_work_policy()
             == TeamLeadWorkPolicy::ManagerOnly;
     let commit = session.update_settings(updates).await?;
+    if matches!(pending_continuation_update, PendingContinuationUpdate::Supersede) {
+        // Invalidate the continuation before its accepted settings snapshot can be delivered.
+        session.state.lock().await.last_started_turn_id = None;
+    }
     emit_applied(
         session,
         submission_id,

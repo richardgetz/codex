@@ -321,6 +321,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -502,6 +503,7 @@ async fn conversation_records_history_without_an_event_observer(
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode:
                     codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+                backend_reasoning_status: false,
                 codex_response_handoff_channel_prefixes: None,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -612,6 +614,7 @@ async fn conversation_start_defaults_to_v2_and_gpt_realtime_1_5() -> Result<()> 
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -707,6 +710,7 @@ async fn conversation_websocket_transports_send_codex_headers_without_creating_a
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -877,6 +881,7 @@ async fn conversation_webrtc_frameless_chatgpt_sends_codex_headers_to_backend(
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: model.map(str::to_string),
             output_modality: RealtimeOutputModality::Audio,
@@ -1038,6 +1043,7 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: Some("session-override-model".to_string()),
             output_modality: RealtimeOutputModality::Audio,
@@ -1402,6 +1408,7 @@ async fn conversation_webrtc_live_reconnects_sideband_after_unclean_disconnect(
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1567,6 +1574,7 @@ async fn conversation_webrtc_start_uses_avas_query() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1672,6 +1680,7 @@ async fn conversation_webrtc_default_v1_ignores_configured_v2_voice() -> Result<
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1739,6 +1748,7 @@ async fn conversation_webrtc_default_v1_rejects_explicit_v2_voice() -> Result<()
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1816,6 +1826,7 @@ async fn conversation_webrtc_start_uses_configured_call_base_url_for_avas() -> R
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -1930,6 +1941,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2037,6 +2049,7 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2137,6 +2150,7 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2235,6 +2249,7 @@ async fn assert_transport_close_tail_flush(
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2358,6 +2373,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2416,6 +2432,7 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2522,6 +2539,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2559,6 +2577,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2667,6 +2686,7 @@ async fn conversation_uses_experimental_realtime_ws_base_url_override() -> Resul
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2743,6 +2763,7 @@ async fn conversation_uses_default_realtime_backend_prompt() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2827,6 +2848,7 @@ async fn conversation_uses_empty_instructions_for_null_or_empty_prompt() -> Resu
                 codex_response_item_prefix: None,
                 codex_response_handoff_mode:
                     codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+                backend_reasoning_status: false,
                 codex_response_handoff_channel_prefixes: None,
                 model: None,
                 output_modality: RealtimeOutputModality::Audio,
@@ -2904,6 +2926,7 @@ async fn conversation_uses_explicit_start_voice() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -2973,6 +2996,7 @@ async fn conversation_uses_configured_realtime_voice() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3030,6 +3054,7 @@ async fn conversation_rejects_voice_for_wrong_realtime_version() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3088,6 +3113,7 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3172,6 +3198,7 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3250,6 +3277,7 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3321,6 +3349,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3448,6 +3477,7 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3567,6 +3597,7 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3638,6 +3669,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3742,6 +3774,7 @@ async fn conversation_user_text_turn_is_not_sent_to_realtime(ephemeral: bool) ->
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3882,6 +3915,7 @@ async fn realtime_v2_noop_tool_call_returns_empty_function_output_without_respon
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -3992,6 +4026,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -4063,6 +4098,137 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     );
 
     realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[test_case(true; "enabled")]
+#[test_case(false; "disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_relays_only_public_reasoning_as_quiet_status(enabled: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let (item_tx, item_rx) = oneshot::channel();
+    let (response_tx, response_rx) = oneshot::channel();
+    let chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_response_created("summary_response"),
+                responses::ev_reasoning_item_added("reasoning", &[""]),
+                responses::ev_reasoning_text_delta("Private raw reasoning."),
+                responses::ev_reasoning_summary_text_delta("Partial summary."),
+            ]),
+        },
+        StreamingSseChunk {
+            gate: Some(item_rx),
+            body: sse_event(responses::ev_reasoning_item(
+                "reasoning",
+                &["Older public summary", "Checking availability.", "  "],
+                &["Private raw reasoning."],
+            )),
+        },
+        StreamingSseChunk {
+            gate: Some(response_rx),
+            body: sse_event(responses::ev_completed("summary_response")),
+        },
+    ];
+    let (api_server, completions) = start_streaming_sse_server(vec![chunks]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        json!({"type":"session.started", "session":{"id":"summary_session"}}),
+        json!({"type":"delegation.created", "item":{"id":"summary_delegation", "type":"delegation", "target":"client", "content":[{"type":"input_text","text":"check availability"}]}}),
+    ], vec![]]]).await;
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V3;
+            config.model_reasoning_summary =
+                Some(codex_protocol::config_types::ReasoningSummary::None);
+        }
+    });
+    let test = builder.build_with_streaming_server(&api_server).await?;
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            // The generic default omits its wire channel; quiet status must override it.
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: enabled,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: false,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: None,
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        }))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event,
+            EventMsg::ReasoningContentDelta(delta) if delta.delta == "Partial summary."
+        )
+    })
+    .await;
+    let next_request = || {
+        wait_for_websocket_request(
+            &realtime_server,
+            /*connection_index*/ 0,
+            /*request_index*/ 1,
+        )
+    };
+    assert!(
+        timeout(Duration::from_millis(150), next_request())
+            .await
+            .is_err()
+    );
+    let requests = api_server.requests().await;
+    let model_request: Value = serde_json::from_slice(&requests[0])?;
+    assert_eq!(model_request["reasoning"].get("summary"), None);
+    let _ = item_tx.send(());
+    wait_for_event(&test.codex, |event| matches!(event,
+        EventMsg::ItemCompleted(item) if matches!(&item.item, codex_protocol::items::TurnItem::Reasoning(reasoning) if reasoning.id == "reasoning")
+    )).await;
+    if enabled {
+        assert_eq!(
+            next_request().await?.body_json(),
+            json!({
+                "type":"delegation.context.append", "delegation_item_id":"summary_delegation", "channel":"commentary",
+                "content":[{"type":"input_text","text":"[STATUS] Checking availability."}]
+            })
+        );
+    } else {
+        assert!(
+            timeout(Duration::from_millis(150), next_request())
+                .await
+                .is_err()
+        );
+    }
+    let _ = response_tx.send(());
+    completions
+        .into_iter()
+        .next()
+        .expect("one response")
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = realtime_server.single_connection();
+    assert_eq!(requests.len(), if enabled { 2 } else { 1 });
+    assert!(requests.iter().all(|request| {
+        let body = request.body_json();
+        body["type"] != "response.create" && !body.to_string().contains("Private raw reasoning")
+    }));
+    realtime_server.shutdown().await;
+    api_server.shutdown().await;
     Ok(())
 }
 
@@ -4163,6 +4329,7 @@ async fn conversation_flushes_assistant_deltas_every_200ms_for_v3_handoff() -> R
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::BemTags,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: Some(BTreeMap::from([
                 (
                     "commentary".to_string(),
@@ -4342,6 +4509,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::BemTags,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -4513,6 +4681,7 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -4801,6 +4970,7 @@ async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -4915,6 +5085,7 @@ async fn inbound_handoff_request_sends_transcript_delta_after_each_handoff() -> 
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -5048,6 +5219,7 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -5142,6 +5314,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -5276,6 +5449,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -5440,6 +5614,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -5593,6 +5768,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
@@ -5751,6 +5927,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,

@@ -10,6 +10,7 @@ pub(crate) mod search;
 mod session;
 
 pub use compact::CompactClient;
+pub use images::ImageRequestError;
 pub use images::ImagesClient;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;

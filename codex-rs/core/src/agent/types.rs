@@ -60,6 +60,8 @@ pub enum MessageDeliveryMode {
     QueueOnly,
     /// Deliver to the active turn or start work if the agent is idle.
     TriggerTurn,
+    /// Deliver an actionable message that can wake its recipient without becoming a follow-up.
+    Action,
 }
 
 /// Keeps model-provided encrypted content distinct from text that needs a context wrapper.

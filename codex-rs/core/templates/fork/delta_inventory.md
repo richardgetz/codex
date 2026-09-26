@@ -45,6 +45,17 @@ release or merge rules.
   fork's large merged async dispatch path from aborting during `just codex`
   startup.
 
+- Stable refresh `rust-v0.157.1` preserves shipped migration versions and
+  checksums, retaining the fork's `0056_rick_git_info_clears.sql`,
+  `0057_upstream_threads_originator.sql`, and `0059`–`0064` migration sequence.
+  The colliding upstream creator identity and Guardian metadata cleanup
+  migrations are appended as `0065` and `0066`.
+
+- Plain-name skill selection keeps the stable authority priority of executor,
+  cloud, custom resource, then host. The upstream Orchestrator-to-Cloud source
+  rename retains the former Orchestrator priority, so executor-owned skills
+  still win host name collisions.
+
 - Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
   recovery contract, account and launcher ownership, pause/continue and ETA
   APIs, and migration numbering. Upstream attachment state is adapted to the
@@ -1031,6 +1042,14 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify upstream migration collisions preserve every shipped stable filename,
+  SQL body, and applied checksum. For `rust-v0.157.1`, keep migration `0056`
+  Git-clear markers and `0057` thread-originator intact, plus fork migrations
+  `0059`–`0064`; apply upstream creator identity and Guardian cleanup at `0065`
+  and `0066`, with no duplicate SQL objects.
+- Verify plain-name skill mentions preserve executor, cloud, custom-resource,
+  and host priority after upstream changes the source kind from Orchestrator to
+  Cloud; executor-owned skills must still win host-name collisions.
 - Verify implicit local-daemon startup performs one bounded handshake that is
   reused for picker and direct-ID resume, preserves embedded startup when no
   socket exists, and fails closed when an existing endpoint is stale or rejects

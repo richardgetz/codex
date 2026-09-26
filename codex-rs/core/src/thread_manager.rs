@@ -19,6 +19,7 @@ use crate::session::GitEnrichmentPolicy;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
+use crate::session::Submission;
 use crate::session::handoff_preflight::HandoffPreflight;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
@@ -85,7 +86,6 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
@@ -473,7 +473,8 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// `Arc` reference that can be downgraded to by `AgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
-    threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    // Eviction updates this registry and residency together, locking the registry first.
+    pub(crate) threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     /// Process-wide admission fence used while taking an all-root handoff snapshot.
     handoff: Arc<ThreadManagerHandoffState>,
     shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
@@ -920,37 +921,6 @@ impl ThreadManager {
         )
     }
 
-    pub fn validate_environment_selections(
-        &self,
-        environments: &[TurnEnvironmentSelection],
-    ) -> CodexResult<()> {
-        let mut environment_ids = HashSet::with_capacity(environments.len());
-        for environment in environments {
-            if environment.cwd.inferred_native_path_string().len() > MAX_TURN_ENVIRONMENT_CWD_BYTES
-            {
-                return Err(CodexErr::InvalidRequest(
-                    "turn environment working directory exceeds the maximum size".to_string(),
-                ));
-            }
-            if !environment_ids.insert(environment.environment_id.as_str()) {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "duplicate turn environment id `{}`",
-                    environment.environment_id
-                )));
-            }
-            self.state
-                .environment_manager
-                .get_environment(&environment.environment_id)
-                .ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "unknown turn environment id `{}`",
-                        environment.environment_id
-                    ))
-                })?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn git_root_discovery(&self) -> Arc<GitRootDiscovery> {
         Arc::clone(&self.state.git_root_discovery)
     }
@@ -1389,8 +1359,13 @@ impl ThreadManager {
         let mut request = ThreadSpawnRequest::new(
             options,
             Arc::clone(&parent.session.services.auth_manager),
-            parent.session.services.agent_control.clone(),
+            parent
+                .session
+                .services
+                .local_agent_runtime
+                .control(parent.session.session_id()),
         );
+        request.parent_originator = Some(parent.config_snapshot().await.originator);
         request.parent_thread_id = Some(parent_thread_id);
         request.forked_from_thread_id = forked_from_thread_id;
         request.fork_persistence = ForkPersistence::Copied {
@@ -1614,7 +1589,11 @@ impl ThreadManager {
             ))
         })?;
         let config = parent.session.get_config().await.as_ref().clone();
-        let agent_control = parent.session.services.agent_control.clone();
+        let agent_control = parent
+            .session
+            .services
+            .local_agent_runtime
+            .control(parent.session.session_id());
         agent_control
             .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
             .await
@@ -2769,6 +2748,16 @@ impl ThreadManagerState {
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
+        let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
+            thread
+                .session
+                .services
+                .local_agent_runtime
+                .pin_v2_residency(self, &thread)
+                .await?
+        } else {
+            None
+        };
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
             && let Some(captured_op) = capture_test_op(&op)
@@ -2779,7 +2768,13 @@ impl ThreadManagerState {
         if !is_team_lead_completion {
             return thread
                 .io
-                .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+                .submit_with_trace(
+                    op,
+                    /*trace*/ None,
+                    parent_turn_id,
+                    root_turn_id,
+                    residency_guard,
+                )
                 .await;
         }
         let submission_id = crate::session::new_submission_id();
@@ -2794,6 +2789,7 @@ impl ThreadManagerState {
             trace: None,
             parent_turn_id,
             root_turn_id,
+            residency_guard,
         };
         if let Err(err) = thread.io.submit_with_id(submission).await {
             thread
@@ -3137,7 +3133,7 @@ impl ThreadManagerState {
         request.parent_thread_id = parent_thread_id;
         request.forked_from_thread_id = forked_from_thread_id;
         request.initial_collaboration_mode = initial_collaboration_mode;
-        request.fork_persistence = ForkPersistence::Copied {
+        request.fork_persistence = ForkPersistence::CopiedDeferred {
             inherited_usage_policy,
             inherited_thread_settings,
         };

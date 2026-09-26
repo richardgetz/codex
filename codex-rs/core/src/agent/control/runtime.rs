@@ -1,0 +1,146 @@
+//! Shared state and startup bindings for one local agent tree.
+//! Registry identity is allocation identity; cloning this handle preserves ownership checks.
+
+use super::LocalAgentControl;
+use super::execution::AgentExecutionLimiter;
+use super::residency::V2Residency;
+use super::worker_limit::TeamWorkerLimiter;
+use crate::agent::eta_reminders::EtaReminderController;
+use crate::agent::registry::AgentRegistry;
+use crate::config::RolloutBudgetConfig;
+use crate::rollout_budget::RolloutBudget;
+use crate::thread_manager::ThreadIdGenerator;
+use crate::thread_manager::ThreadManagerState;
+use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
+use codex_extension_api::ThreadInstructionsProvider;
+use codex_protocol::SessionId;
+use codex_protocol::protocol::ThreadUsagePolicy;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
+use std::sync::Weak;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicU64;
+use std::collections::HashSet;
+use codex_protocol::ThreadId;
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
+
+/// Local tree state, kept separate from the shared agent operation interface.
+#[derive(Clone)]
+pub(crate) struct LocalAgentRuntime {
+    /// Weak handle back to the global thread registry/state.
+    /// This is `Weak` to avoid reference cycles and shadow persistence of the form
+    /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
+    pub(super) manager: Weak<ThreadManagerState>,
+    /// Captured at construction so delegates retain their manager's allocation policy.
+    pub(super) thread_id_generator: ThreadIdGenerator,
+    pub(super) agent_execution_limiter: Arc<AgentExecutionLimiter>,
+    /// Atomic admission shared by direct Workers and pending spawns.
+    pub(super) team_worker_limiter: Arc<TeamWorkerLimiter>,
+    /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
+    pub(super) rollout_budget: Arc<RolloutBudget>,
+    /// The user-selected root routing tier, shared by the entire agent tree.
+    pub(super) root_service_tier: Arc<ArcSwapOption<String>>,
+    /// Serializes root tier commits with descendant synchronization.
+    pub(super) root_service_tier_update: Arc<Mutex<()>>,
+    /// Serializes settings events sent while a root routing tier changes.
+    pub(super) root_service_tier_propagation: Arc<Mutex<()>>,
+    /// The complete root usage policy, shared by the entire agent tree.
+    pub(super) root_usage_policy: Arc<ArcSwap<ThreadUsagePolicy>>,
+    /// Serializes root usage-policy commits with descendant synchronization.
+    pub(super) root_usage_auto_resume_update: Arc<Mutex<()>>,
+    /// Serializes settings events sent while the root usage policy changes.
+    pub(super) root_usage_auto_resume_propagation: Arc<Mutex<()>>,
+    /// Root-scoped process-local manual pause switch shared by loaded descendants.
+    pub(super) root_activity_paused: Arc<AtomicBool>,
+    /// Serializes durable Team activity transitions across the loaded root tree.
+    pub(super) root_activity_transition: Arc<Mutex<()>>,
+    /// Serializes manual pause publication with child startup reconciliation.
+    pub(super) root_activity_pause_update: Arc<Mutex<()>>,
+    /// Serializes descendant activity propagation and preserves toggle order.
+    pub(super) root_activity_pause_propagation: Arc<Mutex<()>>,
+    /// Wakes retained turns when the root activity pause is released.
+    pub(super) root_activity_resume_notify: Arc<Notify>,
+    /// Root-scoped process-local fence that rejects new work during daemon handoff.
+    pub(crate) handoff_admission_sealed: Arc<AtomicBool>,
+    /// Number of admissions that passed the handoff fence before it sealed.
+    pub(crate) handoff_admission_in_flight: Arc<AtomicU32>,
+    /// Number of terminal deliveries and watcher registrations in flight.
+    pub(crate) handoff_delivery_state: Arc<AtomicU64>,
+    /// Set when a sealed completion could not be persisted durably.
+    pub(crate) handoff_delivery_failed: Arc<AtomicBool>,
+    /// Set when a durable inbound payload is incompatible or malformed.
+    pub(crate) handoff_inbound_unsupported: Arc<AtomicBool>,
+    /// Threads intentionally stopped by handoff, keyed by thread id.
+    pub(crate) handoff_suspended_threads: Arc<StdMutex<HashSet<ThreadId>>>,
+    /// Wakes the handoff coordinator after admission and terminal delivery transitions.
+    pub(crate) handoff_admission_notify: Arc<Notify>,
+    /// Retains the root's opt-in instruction provider even when the root is unloaded.
+    pub(super) shared_thread_instructions_provider:
+        Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
+    pub(super) registry: Arc<AgentRegistry>,
+    pub(super) residency: Arc<V2Residency>,
+    /// One-shot ETA reminders shared by the root and all descendants.
+    pub(super) eta_reminders: Arc<EtaReminderController>,
+}
+
+impl LocalAgentRuntime {
+    pub(super) fn new(
+        manager: Weak<ThreadManagerState>,
+        thread_id_generator: ThreadIdGenerator,
+        rollout_budget: Option<RolloutBudgetConfig>,
+    ) -> Self {
+        let runtime = Self {
+            manager,
+            thread_id_generator,
+            registry: Arc::default(),
+            residency: Arc::default(),
+            agent_execution_limiter: Arc::default(),
+            team_worker_limiter: Arc::default(),
+            rollout_budget: Arc::default(),
+            root_service_tier: Arc::new(ArcSwapOption::from(None)),
+            root_service_tier_update: Arc::new(Mutex::new(())),
+            root_service_tier_propagation: Arc::new(Mutex::new(())),
+            root_usage_policy: Arc::new(ArcSwap::from_pointee(ThreadUsagePolicy::default())),
+            root_usage_auto_resume_update: Arc::new(Mutex::new(())),
+            root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
+            root_activity_paused: Arc::new(AtomicBool::new(false)),
+            root_activity_transition: Arc::new(Mutex::new(())),
+            root_activity_pause_update: Arc::new(Mutex::new(())),
+            root_activity_pause_propagation: Arc::new(Mutex::new(())),
+            root_activity_resume_notify: Arc::new(Notify::new()),
+            handoff_admission_sealed: Arc::new(AtomicBool::new(false)),
+            handoff_admission_in_flight: Arc::new(AtomicU32::new(0)),
+            handoff_delivery_state: Arc::new(AtomicU64::new(0)),
+            handoff_delivery_failed: Arc::new(AtomicBool::new(false)),
+            handoff_inbound_unsupported: Arc::new(AtomicBool::new(false)),
+            handoff_suspended_threads: Arc::new(StdMutex::new(HashSet::new())),
+            handoff_admission_notify: Arc::new(Notify::new()),
+            shared_thread_instructions_provider: Arc::default(),
+            eta_reminders: Arc::new(EtaReminderController::default()),
+        };
+        if let Some(rollout_budget) = rollout_budget {
+            runtime.rollout_budget.configure(rollout_budget);
+        }
+        runtime
+    }
+
+    /// Bind local startup to the same tree state with this session's identity.
+    pub(crate) fn control(&self, session_id: SessionId) -> LocalAgentControl {
+        LocalAgentControl {
+            session_id,
+            runtime: self.clone(),
+        }
+    }
+}
+
+impl std::ops::Deref for LocalAgentControl {
+    type Target = LocalAgentRuntime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}

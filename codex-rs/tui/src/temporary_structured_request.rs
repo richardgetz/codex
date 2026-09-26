@@ -90,6 +90,7 @@ pub(crate) async fn start_temporary_thread(
         ("features.view_image".to_string(), false.into()),
         ("orchestrator.skills.enabled".to_string(), false.into()),
         ("schedule.enabled".to_string(), false.into()),
+        ("cloud.skills.enabled".to_string(), false.into()),
         ("skills.include_instructions".to_string(), false.into()),
         ("scratchpad.enabled".to_string(), false.into()),
         (

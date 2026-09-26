@@ -1145,6 +1145,7 @@ mod tests {
             )
             .await
             .expect("test cloud config loader"),
+            embedded_network_policy: Default::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             log_db: None,
             state_db: None,

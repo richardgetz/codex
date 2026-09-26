@@ -227,14 +227,18 @@ fn read_windows_vscode_detection_with_timeout(
 #[path = "windows_term_program_tests.rs"]
 mod windows_term_program_tests;
 
-pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) {
+/// Restore keyboard reporting and return the mouse policy from the same fresh tmux probe.
+pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::MouseCapture {
+    let tmux_options = super::tmux::options();
     if keyboard_enhancement_disabled() {
-        return;
+        return tmux_options.mouse_capture;
     }
 
     let running_in_tmux_session = running_in_tmux_session();
-    let tmux_extended_keys_format = if running_in_tmux_session {
-        read_tmux_extended_keys_format()
+    let tmux_extended_keys_format = if running_in_tmux_session
+        && tmux_options.extended_keys_enabled == Some(true)
+    {
+        tmux_options.extended_keys_format.as_deref()
     } else {
         None
     };
@@ -261,17 +265,16 @@ pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) {
             terminal.name,
             all_keys_supported,
             running_in_tmux_session,
-            tmux_extended_keys_format.as_deref(),
+            tmux_extended_keys_format,
             realtime_voice_enabled,
         ))
     );
 
-    if tmux_should_enable_modify_other_keys_for(
-        running_in_tmux_session,
-        tmux_extended_keys_format.as_deref(),
-    ) {
+    if tmux_should_enable_modify_other_keys_for(running_in_tmux_session, tmux_extended_keys_format)
+    {
         let _ = execute!(writer, EnableModifyOtherKeys);
     }
+    tmux_options.mouse_capture
 }
 
 fn keyboard_enhancement_flags(
@@ -369,89 +372,6 @@ fn tmux_should_enable_modify_other_keys_for(
     running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
 }
 
-fn read_tmux_extended_keys_format() -> Option<String> {
-    if !read_tmux_extended_keys_enabled()? {
-        return None;
-    }
-
-    let executable = codex_utils_path::system_executable("tmux")?;
-    let path = codex_utils_path::system_path().ok()?;
-    for args in [
-        ["display-message", "-p", "#{extended-keys-format}"],
-        ["show-options", "-gqv", "extended-keys-format"],
-    ] {
-        let output = std::process::Command::new(&executable)
-            .env("PATH", &path)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            continue;
-        }
-
-        if let Some(value) = String::from_utf8(output.stdout)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        {
-            return Some(value);
-        }
-    }
-
-    None
-}
-
-fn read_tmux_extended_keys_enabled() -> Option<bool> {
-    for args in [
-        ["display-message", "-p", "#{extended-keys}"],
-        ["show-options", "-gqv", "extended-keys"],
-    ] {
-        let output = match std::process::Command::new("tmux")
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => continue,
-        };
-
-        if !output.status.success() {
-            continue;
-        }
-
-        let value = match String::from_utf8(output.stdout) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-
-        if let Some(enabled) = parse_tmux_bool(value.trim()) {
-            return Some(enabled);
-        }
-    }
-
-    None
-}
-
-fn parse_tmux_bool(value: &str) -> Option<bool> {
-    if value.eq_ignore_ascii_case("on")
-        || value.eq_ignore_ascii_case("always")
-        || value.eq_ignore_ascii_case("true")
-        || value == "1"
-    {
-        Some(true)
-    } else if value.eq_ignore_ascii_case("off")
-        || value.eq_ignore_ascii_case("false")
-        || value == "0"
-    {
-        Some(false)
-    } else {
-        None
-    }
-}
 
 pub(super) fn restore_keyboard_enhancement_stack(writer: &mut impl Write) {
     let _ = execute!(writer, PopKeyboardEnhancementFlags, DisableModifyOtherKeys);

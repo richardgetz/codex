@@ -43,7 +43,7 @@ const LOCAL_SECRETS_FILENAME: &str = "local.age";
 const CODEX_AUTH_SECRETS_FILENAME: &str = "codex_auth.age";
 const MCP_OAUTH_SECRETS_FILENAME: &str = "mcp_oauth.age";
 const GATEWAY_OAUTH_SECRETS_FILENAME: &str = "gateway_oauth.age";
-static MCP_OAUTH_CACHE: Mutex<Option<CachedMcpSecrets>> = Mutex::new(None);
+static MCP_OAUTH_CACHE: Mutex<Option<CachedSecrets>> = Mutex::new(None);
 
 /// Selects the local encrypted file used by a `LocalSecretsBackend`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -65,7 +65,7 @@ struct SecretsFile {
     secrets: BTreeMap<String, String>,
 }
 
-struct CachedMcpSecrets {
+struct CachedSecrets {
     path: PathBuf,
     ciphertext_hash: [u8; 32],
     passphrase_hash: [u8; 32],
@@ -81,11 +81,22 @@ impl SecretsFile {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LocalSecretsBackend {
     codex_home: PathBuf,
     keyring_store: Arc<dyn KeyringStore>,
     namespace: LocalSecretsNamespace,
+    gateway_cache: Arc<Mutex<Option<CachedSecrets>>>,
+}
+
+impl std::fmt::Debug for LocalSecretsBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalSecretsBackend")
+            .field("codex_home", &self.codex_home)
+            .field("keyring_store", &self.keyring_store)
+            .field("namespace", &self.namespace)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LocalSecretsBackend {
@@ -106,6 +117,7 @@ impl LocalSecretsBackend {
             codex_home,
             keyring_store,
             namespace,
+            gateway_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -165,6 +177,16 @@ impl LocalSecretsBackend {
         self.secrets_dir().join(filename)
     }
 
+    /// Gateway readers share one bounded cache per backend; independent managers
+    /// still reread the ciphertext and keyring before reusing decrypted credentials.
+    fn decrypted_cache(&self) -> Option<&Mutex<Option<CachedSecrets>>> {
+        match self.namespace {
+            LocalSecretsNamespace::McpOAuth => Some(&MCP_OAUTH_CACHE),
+            LocalSecretsNamespace::GatewayOAuth => Some(&self.gateway_cache),
+            LocalSecretsNamespace::ManagedSecrets | LocalSecretsNamespace::CodexAuth => None,
+        }
+    }
+
     fn load_file(&self) -> Result<SecretsFile> {
         let path = self.secrets_path();
         if !path.exists() {
@@ -174,13 +196,11 @@ impl LocalSecretsBackend {
         let ciphertext = fs::read(&path)
             .with_context(|| format!("failed to read secrets file at {}", path.display()))?;
         let passphrase = self.load_or_create_passphrase()?;
-        let cache = (self.namespace == LocalSecretsNamespace::McpOAuth).then(|| {
+        let cache = self.decrypted_cache().map(|cache| {
             let ciphertext_hash: [u8; 32] = Sha256::digest(&ciphertext).into();
             let passphrase_hash: [u8; 32] =
                 Sha256::digest(passphrase.expose_secret().as_bytes()).into();
-            let cache = MCP_OAUTH_CACHE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
             (cache, ciphertext_hash, passphrase_hash)
         });
         if let Some((cache, ciphertext_hash, passphrase_hash)) = cache.as_ref()
@@ -208,7 +228,7 @@ impl LocalSecretsBackend {
             SECRETS_VERSION
         );
         if let Some((mut cache, ciphertext_hash, passphrase_hash)) = cache {
-            *cache = Some(CachedMcpSecrets {
+            *cache = Some(CachedSecrets {
                 path,
                 ciphertext_hash,
                 passphrase_hash,
@@ -228,10 +248,8 @@ impl LocalSecretsBackend {
         let ciphertext = encrypt_with_passphrase(&plaintext, &passphrase)?;
         let path = self.secrets_path();
         write_file_atomically(&path, &ciphertext)?;
-        if self.namespace == LocalSecretsNamespace::McpOAuth {
-            let mut cache = MCP_OAUTH_CACHE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+        if let Some(cache) = self.decrypted_cache() {
+            let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
             if cache.as_ref().is_some_and(|cached| cached.path == path) {
                 *cache = None;
             }

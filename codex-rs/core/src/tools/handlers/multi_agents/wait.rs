@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::api::StatusSubscription;
 use crate::agent::status::is_final;
 use crate::session::InputQueueActivity;
 use crate::session::LeadIdleArmMode;
@@ -6,6 +7,7 @@ use crate::session::format_lead_wait_message;
 use crate::session::session::Session;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v1;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_tools::ToolSpec;
 use futures::FutureExt;
@@ -15,7 +17,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
 
 use tokio::time::timeout_at;
@@ -164,13 +165,23 @@ impl Handler {
         let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
         let mut initial_final_statuses = Vec::new();
         for id in &receiver_thread_ids {
-            match session.services.agent_control.subscribe_status(*id).await {
-                Ok(rx) => {
-                    let status = rx.borrow().clone();
+            let subscription = async {
+                let mut updates = session.services.agent_control.subscribe_status(*id).await?;
+                let initial = updates
+                    .next()
+                    .await
+                    .transpose()?
+                    .ok_or(CodexErr::InternalAgentDied)?;
+                Ok::<_, CodexErr>((initial, updates))
+            }
+            .await;
+            match subscription {
+                Ok((initial, updates)) => {
+                    let status = initial.status().cloned().unwrap_or(AgentStatus::NotFound);
                     if is_final(&status) {
                         initial_final_statuses.push((*id, status));
                     }
-                    status_rxs.push((*id, rx));
+                    status_rxs.push((*id, updates));
                 }
                 Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
@@ -254,24 +265,26 @@ impl Handler {
                 let deadline = lead_deadline.map(|deadline| deadline.instant);
                 results =
                     wait_for_lead_statuses(&mut futures, activity_rx, pending_activity, deadline)
-                        .await;
+                        .await?;
             } else {
                 let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
                 loop {
                     match timeout_at(deadline, futures.next()).await {
-                        Ok(Some(Some(result))) => {
+                        Ok(Some(Ok(Some(result)))) => {
                             results.push(result);
                             break;
                         }
-                        Ok(Some(None)) => continue,
+                        Ok(Some(Ok(None))) => continue,
+                        Ok(Some(Err(err))) => return Err(err),
                         Ok(None) | Err(_) => break,
                     }
                 }
                 if !results.is_empty() {
                     loop {
                         match futures.next().now_or_never() {
-                            Some(Some(Some(result))) => results.push(result),
-                            Some(Some(None)) => continue,
+                            Some(Some(Ok(Some(result)))) => results.push(result),
+                            Some(Some(Ok(None))) => continue,
+                            Some(Some(Err(err))) => return Err(err),
                             Some(None) | None => break,
                         }
                     }
@@ -404,12 +417,12 @@ async fn wait_for_lead_statuses<F>(
     activity_rx: &mut Receiver<InputQueueActivity>,
     pending_activity: Option<InputQueueActivity>,
     deadline: Option<Instant>,
-) -> Vec<(ThreadId, AgentStatus)>
+) -> Result<Vec<(ThreadId, AgentStatus)>, FunctionCallError>
 where
-    F: Future<Output = Option<(ThreadId, AgentStatus)>> + Send,
+    F: Future<Output = Result<Option<(ThreadId, AgentStatus)>, FunctionCallError>> + Send,
 {
     if pending_activity.is_some() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut results = Vec::new();
@@ -433,24 +446,26 @@ where
         };
         match signal {
             LeadWaitSignal::Activity => break,
-            LeadWaitSignal::Status(Some(Some(result))) => {
+            LeadWaitSignal::Status(Some(Ok(Some(result)))) => {
                 results.push(result);
                 break;
             }
-            LeadWaitSignal::Status(Some(None)) => continue,
+            LeadWaitSignal::Status(Some(Ok(None))) => continue,
+            LeadWaitSignal::Status(Some(Err(err))) => return Err(err),
             LeadWaitSignal::Status(None) => break,
         }
     }
     if !results.is_empty() {
         loop {
             match futures.next().now_or_never() {
-                Some(Some(Some(result))) => results.push(result),
-                Some(Some(None)) => continue,
+                Some(Some(Ok(Some(result)))) => results.push(result),
+                Some(Some(Ok(None))) => continue,
+                Some(Some(Err(err))) => return Err(err),
                 Some(None) | None => break,
             }
         }
     }
-    results
+    Ok(results)
 }
 
 impl ToolOutput for WaitAgentResult {
@@ -474,21 +489,15 @@ impl ToolOutput for WaitAgentResult {
 async fn wait_for_final_status(
     session: Arc<Session>,
     thread_id: ThreadId,
-    mut status_rx: Receiver<AgentStatus>,
-) -> Option<(ThreadId, AgentStatus)> {
-    let mut status = status_rx.borrow().clone();
-    if is_final(&status) {
-        return Some((thread_id, status));
-    }
-
-    loop {
-        if status_rx.changed().await.is_err() {
-            let latest = session.services.agent_control.get_status(thread_id).await;
-            return is_final(&latest).then_some((thread_id, latest));
-        }
-        status = status_rx.borrow().clone();
+    mut updates: StatusSubscription,
+) -> Result<Option<(ThreadId, AgentStatus)>, FunctionCallError> {
+    while let Some(snapshot) = updates.next().await {
+        let snapshot = snapshot.map_err(|err| collab_agent_error(thread_id, err))?;
+        let status = snapshot.status().cloned().unwrap_or(AgentStatus::NotFound);
         if is_final(&status) {
-            return Some((thread_id, status));
+            return Ok(Some((thread_id, status)));
         }
     }
+    let latest = session.services.agent_control.get_status(thread_id).await;
+    Ok(is_final(&latest).then_some((thread_id, latest)))
 }

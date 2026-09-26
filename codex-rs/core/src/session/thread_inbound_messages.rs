@@ -1,11 +1,11 @@
 use std::time::Duration;
 
 use crate::agent::control::AgentControl;
+use crate::session::Submission;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::Submission;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db;
@@ -237,6 +237,7 @@ async fn enqueue_claimed_messages(
             parent_turn_id,
             trace: None,
             root_turn_id,
+            residency_guard: None,
         };
         if tx_sub.send(submission).await.is_err() {
             for pending in &messages[index..] {
@@ -266,7 +267,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::Submission;
+    use crate::session::Submission;
     use codex_protocol::turn_input::TurnStartOptions;
     use codex_protocol::user_input::UserInput;
     use codex_utils_absolute_path::test_support::PathExt;
@@ -505,6 +506,7 @@ mod tests {
                 parent_turn_id: None,
                 trace: None,
                 root_turn_id: None,
+                residency_guard: None,
             })
             .await
             .expect("fill submission channel");

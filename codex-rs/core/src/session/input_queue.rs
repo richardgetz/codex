@@ -916,6 +916,10 @@ fn truncate_progress_message(message: &str) -> String {
 }
 
 impl TurnInputQueue {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn has_pending_input(&self) -> bool {
         self.status().has_pending_input
     }

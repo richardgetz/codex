@@ -37,6 +37,8 @@ impl ChatWidget {
             session_telemetry,
             environment_manager: _,
         } = common;
+        // Keep asynchronous widget callbacks scoped separately from the app and other widgets.
+        let app_event_tx = AppEventSender::new(app_event_tx.app_event_tx);
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();
@@ -189,6 +191,7 @@ impl ChatWidget {
             rate_limit_warnings: RateLimitWarningState::default(),
             last_team_usage_limit_error: None,
             exhausted_account_rotation_aliases: HashSet::new(),
+            clock_format: crate::clock_format::ClockFormat::system(),
             usage_notice_state: usage_notice::UsageNoticeState::default(),
             backend_banner_state: backend_banners::BackendBannerState::default(),
             automatic_model_switch_state: backend_banners::AutomaticModelSwitchState::default(),
@@ -257,6 +260,7 @@ impl ChatWidget {
             active_side_conversation: false,
             blocks_direct_input: false,
             external_writer_view: false,
+            fork_in_progress: false,
             misalignment_policy_violation: None,
             normal_placeholder_text: placeholder,
             side_placeholder_text: side_placeholder,
