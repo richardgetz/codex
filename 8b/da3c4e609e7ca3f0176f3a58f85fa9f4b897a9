@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-26/stable-refresh-api-reconciliation#8bda3c4e60"
+  change_type: fix
+  scope: stable refresh core integration
+  summary: Reconcile compiler failures at the upstream and fork API boundaries.
+  decision: Use the canonical history and usage-hint types, restore the fork's non-recursive child resume and Team status watcher at the refactored AgentControl boundary, export the handoff guards, adapt optional attribution recording and cloud-skill configuration, and retain upstream V2 catalog overrides and error mapping.
+  constraints:
+    - Preserve fork Team lifecycle, pause and handoff behavior, and child graph recovery ownership.
+    - Preserve the V2 tool namespace, model catalog overrides, and Code Mode argument handling.
+    - Keep legacy Orchestrator skill configuration inert while retaining the independent Orchestrator MCP setting.
+    - Do not alter shipped migrations, release targets, or stable.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core
+    - codex-rs/mcp-server/src/message_processor.rs
+  requested_by: stable refresh validation assignment
+  recorded_by:
+    agent: Codex
+    model: gpt-6
