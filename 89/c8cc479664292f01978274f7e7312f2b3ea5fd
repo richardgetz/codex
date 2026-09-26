@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-26/otel-lock-alignment#89c8cc4796"
+  change_type: "chore"
+  scope: "dependencies"
+  summary: "Keep Cargo and Bazel lockfiles aligned after moving the policy HTTP adapter to OpenTelemetry 0.32."
+  decision: "Remove only the now-unused OpenTelemetry 0.31 and opentelemetry-http 0.31 package entries and regenerate Bazel crate facts."
+  constraints:
+    - "Do not upgrade unrelated packages."
+    - "Preserve the 0.32 exporter dependency graph used by the workspace."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/Cargo.lock"
+    - "MODULE.bazel.lock"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
