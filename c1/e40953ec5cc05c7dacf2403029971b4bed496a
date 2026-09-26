@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-26/stable-refresh-core-api-reconciliation-followup"
+  change_type: fix
+  scope: stable refresh core integration
+  summary: Reconnect fork core call sites to upstream session and agent APIs.
+  decision: Use the merged AgentControl spawn and status stream, preserve optional MCP attribution, pass current thread setup fields, and reuse registered environment validation.
+  constraints:
+    - Preserve memory helper source, timeout, final status handling, and cleanup.
+    - Persist MCP attribution only after rollout writes succeed; skip attribution when the recorder is absent.
+    - Preserve rollback reminder re-arming and configured direct Worker capacity.
+    - Keep environment ID, duplicate selection, and working directory validation.
+    - Do not alter shipped migrations, release targets, or stable.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core
+  requested_by: stable refresh validation assignment
+  recorded_by:
+    agent: Codex
+    model: gpt-6
