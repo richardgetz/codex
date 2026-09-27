@@ -170,7 +170,7 @@ impl ThreadConfigSnapshot {
             user_preferences_memory_policy: self.user_preferences_memory_policy,
             usage_policy: self.usage_policy,
             team: self.team,
-            disabled_plugin_ids: self.disabled_plugin_ids.clone(),
+            disabled_plugin_ids: self.disabled_plugin_ids,
         }
     }
 

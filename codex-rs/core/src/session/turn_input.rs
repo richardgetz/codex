@@ -547,7 +547,7 @@ async fn start_if_idle(
         .await;
 
     let mut task_input = merge_additional_context_input(session, additional_context).await;
-    let mut initial_pending_input = Vec::new();
+    let initial_pending_input = Vec::new();
     match kind {
         TurnStartKind::User => {
             session.clear_connector_selection().await;

@@ -5029,7 +5029,7 @@ impl Session {
         let (items, image_preparations) = self
             .prepare_conversation_items_for_history(turn_context, model_info, items)
             .await;
-        let mut items = items
+        let items = items
             .into_owned()
             .into_iter()
             .map(ResponseItemEnvelope::new)

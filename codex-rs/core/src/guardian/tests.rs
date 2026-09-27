@@ -9,6 +9,7 @@ use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::guardian::assessment::guardian_output_schema;
 use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;

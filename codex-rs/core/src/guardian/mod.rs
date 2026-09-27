@@ -29,8 +29,11 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
+
+#[cfg(test)]
 use codex_prompts::ResolvedModelMessages;
 
+#[cfg(test)]
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::step_context::StepContext;
@@ -191,10 +194,6 @@ impl From<&Arc<TurnContext>> for GuardianReviewContext {
     }
 }
 
-pub use assessment::GuardianAssessment;
-pub use assessment::guardian_output_schema;
-pub use assessment::parse_guardian_assessment;
-pub use reviewer_config::build_guardian_review_session_config;
 
 #[derive(Debug, Default)]
 pub(crate) struct GuardianRejectionCircuitBreaker {

@@ -61,13 +61,9 @@ pub(crate) use self::LocalAgentControl as AgentControl;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
 pub(crate) use self::runtime::LocalAgentRuntime;
-pub(crate) use self::team::PruneIdleAgentsReport;
 pub(crate) use self::team::TerminalResultDeliveryGuard;
 pub(crate) use self::worker_limit::TeamWorkerLease;
 
-use self::worker_limit::TeamWorkerLimiter;
-use crate::agent::eta_reminders::EtaReminderController;
-pub(crate) use crate::agent::types::SpawnAgentForkMode;
 pub(crate) use crate::agent::types::SpawnAgentOptions;
 
 mod activity;

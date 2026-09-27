@@ -2,6 +2,7 @@ use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::context::ContextualUserFragment;
 use crate::context_manager::ContextManager;
+use crate::guardian::assessment::guardian_output_schema;
 use crate::session::Submission;
 use codex_guardian_reviewer::ReviewerRequest;
 use codex_guardian_reviewer::guardian_output_contract_prompt;
@@ -241,7 +242,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
             tty: false,
         },
         reasons: ApprovalRequestReasons::default(),
-        schema: super::super::guardian_output_schema(),
+        schema: guardian_output_schema(),
         review_model: ReviewModel {
             model,
             reasoning_effort,

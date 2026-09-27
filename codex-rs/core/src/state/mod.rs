@@ -5,7 +5,6 @@ mod session;
 mod turn;
 mod turn_token_usage;
 
-pub(crate) use crate::tools::ExecutedToolCallRecorder;
 pub(crate) use crate::tools::ExecutedToolCalls;
 pub(crate) use additional_context::AdditionalContextStore;
 pub(crate) use auto_compact_window::AutoCompactWindowIds;

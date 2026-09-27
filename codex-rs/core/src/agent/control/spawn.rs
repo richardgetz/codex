@@ -752,7 +752,7 @@ impl LocalAgentControl {
                     };
                 let inherited_usage_policy = parent_thread_settings
                     .as_ref()
-                    .map(|settings| settings.usage_policy.clone());
+                    .map(|settings| settings.usage_policy);
                 Box::pin(state.spawn_new_thread_with_source_and_settings(
                     config.clone(),
                     self.clone(),
@@ -954,7 +954,7 @@ impl LocalAgentControl {
             Some(parent_thread.session.thread_settings_snapshot().await);
         let inherited_usage_policy = inherited_thread_settings
             .as_ref()
-            .map(|settings| settings.usage_policy.clone());
+            .map(|settings| settings.usage_policy);
         let (subagent_developer_instructions, parent_developer_instructions) = match (
             multi_agent_version,
             config

@@ -8220,7 +8220,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let executed_tool_calls = config
         .features
         .enabled(Feature::ExecutedToolCallMetadata)
-        .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
+        .then(|| Arc::new(crate::tools::ExecutedToolCallRecorder::default()));
     let (hooks, async_hook_results) = Hooks::new(
         HooksConfig {
             legacy_notify_argv: config.notify.clone(),
@@ -10775,7 +10775,7 @@ where
     let executed_tool_calls = config
         .features
         .enabled(Feature::ExecutedToolCallMetadata)
-        .then(|| Arc::new(crate::state::ExecutedToolCallRecorder::default()));
+        .then(|| Arc::new(crate::tools::ExecutedToolCallRecorder::default()));
     let (hooks, async_hook_results) = Hooks::new(
         HooksConfig {
             legacy_notify_argv: config.notify.clone(),
