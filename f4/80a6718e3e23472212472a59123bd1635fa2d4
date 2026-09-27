@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/team-policy-wait-timeout-diagnostics#f480a6718e"
+  change_type: "test"
+  scope: "codex-core Team policy wait integration"
+  summary: "Include observed settings event IDs and wait call IDs when the policy/deadline integration fixture times out."
+  decision: "Keep both behavioral assertions and improve only timeout diagnostics so the next failure identifies the missing transition."
+  constraints:
+    - "Test-only change; no runtime behavior changes."
+    - "Preserve current policy and oversight deadline assertions."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
