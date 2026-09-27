@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-27/stable-refresh-core-clippy-cleanups"
+  change_type: chore
+  scope: codex-core mechanical cleanup
+  summary: Apply scoped Clippy suggestions after the codex-core repair validation.
+  decision: Remove unused imports and redundant clones identified by cargo clippy --fix.
+  constraints:
+    - Keep the changes mechanical and preserve behavior.
+    - Do not rerun tests after required fix/fmt unless a source repair requires it.
+    - Do not alter stable, release metadata, or migrations.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/compact.rs
+    - codex-rs/core/src/config/config_tests.rs
+    - codex-rs/core/src/session/tests.rs
+  requested_by: stable refresh Rust validation
+  recorded_by:
+    agent: Codex
+    model: gpt-6
