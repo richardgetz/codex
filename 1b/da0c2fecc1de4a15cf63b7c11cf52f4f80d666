@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-27/live-team-policy-test-barrier"
+  change_type: "test"
+  scope: "codex-core Team live policy integration fixture"
+  summary: "Make the active-turn Team policy integration test deterministic."
+  decision: "Hold each already-started test tool at a two-party barrier until the ThreadSettingsApplied acknowledgement is observed, then inspect the next model request for the committed Lead policy."
+  constraints:
+    - "Keep prompt_guided as the default and manager_only opt-in."
+    - "Do not cancel or replay model, tool, Worker, or external work already running."
+    - "Use test barriers rather than timing sleeps to order policy commits and next model samples."
+    - "Keep the existing live-toggle and next-step model-context behavior under test."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_manager_only.rs::live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
