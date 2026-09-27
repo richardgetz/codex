@@ -970,8 +970,8 @@ class AsyncTurnHandle:
 
     async def stream(self) -> AsyncIterator[Notification]:
         """Yield only notifications routed to this async turn handle."""
-        await self._codex._ensure_initialized()
         try:
+            await self._codex._ensure_initialized()
             while True:
                 event = await asyncio.to_thread(self._subscription.next)
                 yield event
