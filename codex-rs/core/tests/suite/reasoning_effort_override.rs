@@ -143,7 +143,7 @@ async fn worker_reasoning_overrides_follow_effective_client_policy(
     options.thread_source = Some(thread_source);
     let forked = test
         .thread_manager
-        .fork_thread(
+        .fork_thread_with_start_options(
             ForkSnapshot::Interrupted,
             options,
             parent.rollout_path().expect("parent rollout path"),

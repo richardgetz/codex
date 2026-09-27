@@ -48,12 +48,17 @@ async fn ephemeral_fork_skips_stored_title_lookup() -> anyhow::Result<()> {
     test.thread_manager
         .fork_thread_from_history(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions::new(config),
+            config,
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: test.session_configured.thread_id,
                 history: Arc::new(Vec::new()),
                 rollout_path: None,
             }),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
         )
         .await?;
 
@@ -242,8 +247,13 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
         .thread_manager
         .fork_thread_from_history(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions::new(test.config.clone()),
+            test.config.clone(),
             history.clone(),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
         )
         .await?;
     pretty_assertions::assert_eq!(
@@ -255,15 +265,20 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
         selected
     );
 
+    let explicit_thread_settings = test.codex.thread_settings_snapshot().await;
     let explicit = test
         .thread_manager
-        .fork_thread_from_history(
+        .fork_thread_from_history_with_settings(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions {
-                disabled_plugin_ids: Some(Vec::new()),
-                ..codex_core::StartThreadOptions::new(test.config.clone())
-            },
+            test.config.clone(),
             history,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
+            Some(explicit_thread_settings),
+            codex_core::ThreadSettingsOverrideFlags::default(),
         )
         .await?;
     pretty_assertions::assert_eq!(

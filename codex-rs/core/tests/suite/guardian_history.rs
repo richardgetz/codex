@@ -124,8 +124,13 @@ async fn guardian_history_survives_restart_and_user_fork(
         initial
             .thread_manager
             .fork_prepared_thread(
-                codex_core::StartThreadOptions::new(initial.config.clone()),
+                initial.config.clone(),
                 prepared,
+                /*thread_source*/ None,
+                /*parent_trace*/ None,
+                codex_protocol::mcp::ClientMcpExtensions::default(),
+                /*reserved_thread_id*/ None,
+                codex_protocol::protocol::ThreadUsagePolicy::default(),
             )
             .await?
     } else {
@@ -133,8 +138,13 @@ async fn guardian_history_survives_restart_and_user_fork(
             .thread_manager
             .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
-                codex_core::StartThreadOptions::new(initial.config.clone()),
+                initial.config.clone(),
                 history.clone(),
+                /*thread_source*/ None,
+                /*parent_trace*/ None,
+                codex_protocol::mcp::ClientMcpExtensions::default(),
+                /*reserved_thread_id*/ None,
+                /*inherited_usage_policy*/ None,
             )
             .await?
     };

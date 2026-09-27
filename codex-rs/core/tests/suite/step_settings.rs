@@ -257,6 +257,18 @@ async fn submit_turn_settings(
     Ok(tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), outcome).await??)
 }
 
+async fn apply_turn_settings(
+    thread: &CodexThread,
+    turn_id: &str,
+    update: TurnSettingsUpdate,
+) -> Result<()> {
+    assert_eq!(
+        submit_turn_settings(thread, turn_id, update).await?,
+        TurnSettingsUpdateOutcome::Applied
+    );
+    Ok(())
+}
+
 fn request_settings(request: &ResponsesRequest) -> Value {
     let body = request.body_json();
     json!({
@@ -478,6 +490,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                     model: Some(model.to_string()),
                     ..Default::default()
                 },
+                usage_policy_update: None,
             })
             .await?;
         test.submit_text_turn("review previous diagnostics").await?;
@@ -590,6 +603,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                         model: Some(model.to_string()),
                         ..Default::default()
                     },
+                    usage_policy_update: None,
                 })
                 .await?;
             thread

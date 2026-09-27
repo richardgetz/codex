@@ -4857,6 +4857,7 @@ async fn inbound_handoff_request_uses_configured_model_classifier_once() -> Resu
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
             codex_response_handoff_channel_prefixes: None,
+            backend_reasoning_status: false,
             model: None,
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: true,

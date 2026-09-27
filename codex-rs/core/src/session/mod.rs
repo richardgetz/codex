@@ -1070,7 +1070,11 @@ impl Session {
         } else {
             dynamic_tools
         };
-        let disabled_plugin_ids = if disabled_plugin_ids.is_empty() {
+        // An explicitly inherited snapshot is authoritative even when its empty
+        // plugin list clears IDs that were present in rollout history.
+        let disabled_plugin_ids = if disabled_plugin_ids.is_empty()
+            && inherited_thread_settings.is_none()
+        {
             let settings_owner = match &conversation_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
                 InitialHistory::Forked(_) => forked_from_thread_id,

@@ -1564,7 +1564,7 @@ async fn fork_preserves_thread_instructions(
     let fork = match source {
         InstructionForkSource::LiveRollout => {
             test.thread_manager
-                .fork_thread(ForkSnapshot::Interrupted, options, rollout_path)
+                .fork_thread_with_start_options(ForkSnapshot::Interrupted, options, rollout_path)
                 .await?
         }
         InstructionForkSource::OfflineHistory => {
@@ -1581,7 +1581,11 @@ async fn fork_preserves_thread_instructions(
                 rollout_path: None,
             });
             test.thread_manager
-                .fork_thread_from_history(ForkSnapshot::Interrupted, options, history)
+                .fork_thread_from_history_with_start_options(
+                    ForkSnapshot::Interrupted,
+                    options,
+                    history,
+                )
                 .await?
         }
         InstructionForkSource::OfflinePrepared => {
@@ -1593,7 +1597,11 @@ async fn fork_preserves_thread_instructions(
                 })
                 .await?;
             test.thread_manager
-                .fork_prepared_thread(options, prepared)
+                .fork_prepared_thread_with_start_options(
+                    options,
+                    prepared,
+                    codex_protocol::protocol::ThreadUsagePolicy::default(),
+                )
                 .await?
         }
     };

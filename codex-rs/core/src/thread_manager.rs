@@ -2337,6 +2337,26 @@ impl ThreadManager {
         .await
     }
 
+    /// Fork a rollout while preserving the caller's thread startup options.
+    ///
+    /// This is for hosts that need to carry per-thread setup such as an
+    /// environment selection, an instruction provider, or extension data into
+    /// the fork. The forked history replaces `options.initial_history`.
+    pub async fn fork_thread_with_start_options<S>(
+        &self,
+        snapshot: S,
+        options: StartThreadOptions,
+        path: PathBuf,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        let _handoff_admission = self.begin_handoff_admission()?;
+        let history = self.initial_history_from_rollout_path(path).await?;
+        self.fork_thread_from_history_with_start_options(snapshot, options, history)
+            .await
+    }
+
     async fn initial_history_from_rollout_path(
         &self,
         rollout_path: PathBuf,
@@ -2386,6 +2406,32 @@ impl ThreadManager {
         .await
     }
 
+    /// Fork already-loaded history while preserving the caller's thread
+    /// startup options.
+    pub async fn fork_thread_from_history_with_start_options<S>(
+        &self,
+        snapshot: S,
+        options: StartThreadOptions,
+        history: InitialHistory,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(
+            options,
+            ForkHistory {
+                snapshot: snapshot.into(),
+                initial_history: history,
+                persistence: ForkPersistence::Copied {
+                    inherited_usage_policy: None,
+                    inherited_thread_settings: None,
+                },
+                thread_settings_override_flags: ThreadSettingsOverrideFlags::default(),
+            },
+        )
+        .await
+    }
+
     /// Fork an existing thread while explicitly carrying the trusted source
     /// settings snapshot when the selected history prefix omits it.
     #[allow(clippy::too_many_arguments)]
@@ -2405,8 +2451,15 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
+        let options = StartThreadOptions {
+            thread_source,
+            parent_trace,
+            client_mcp_extensions,
+            reserved_thread_id,
+            ..StartThreadOptions::new(config)
+        };
         self.fork_thread_with_initial_history(
-            config,
+            options,
             ForkHistory {
                 snapshot: snapshot.into(),
                 initial_history: history,
@@ -2416,10 +2469,6 @@ impl ThreadManager {
                 },
                 thread_settings_override_flags,
             },
-            thread_source,
-            parent_trace,
-            client_mcp_extensions,
-            reserved_thread_id,
         )
         .await
     }
@@ -2453,6 +2502,40 @@ impl ThreadManager {
         .await
     }
 
+    /// Fork prepared history while preserving the caller's thread startup
+    /// options.
+    pub async fn fork_prepared_thread_with_start_options(
+        &self,
+        options: StartThreadOptions,
+        prepared: PreparedFork,
+        inherited_usage_policy: ThreadUsagePolicy,
+    ) -> CodexResult<NewThread> {
+        let history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: prepared.source_thread_id,
+            history: Arc::clone(&prepared.model_context),
+            rollout_path: None,
+        });
+        let fork_persistence = ForkPersistence::Referenced {
+            history_base: prepared.history_base,
+            inherited_item_count: prepared.model_context.len(),
+            inherited_usage_policy,
+            inherited_thread_settings: None,
+        };
+        let result = self
+            .fork_thread_with_initial_history(
+                options,
+                ForkHistory {
+                    snapshot: ForkSnapshot::Interrupted,
+                    initial_history: history,
+                    persistence: fork_persistence,
+                    thread_settings_override_flags: ThreadSettingsOverrideFlags::default(),
+                },
+            )
+            .await;
+        drop(prepared);
+        result
+    }
+
     /// Fork reference-backed history while explicitly carrying the trusted
     /// source settings snapshot omitted from the prepared model context.
     #[allow(
@@ -2482,19 +2565,22 @@ impl ThreadManager {
             inherited_usage_policy,
             inherited_thread_settings,
         };
+        let options = StartThreadOptions {
+            thread_source,
+            parent_trace,
+            client_mcp_extensions,
+            reserved_thread_id,
+            ..StartThreadOptions::new(config)
+        };
         let result = self
             .fork_thread_with_initial_history(
-                config,
+                options,
                 ForkHistory {
                     snapshot: ForkSnapshot::Interrupted,
                     initial_history: history,
                     persistence: fork_persistence,
                     thread_settings_override_flags,
                 },
-                thread_source,
-                parent_trace,
-                client_mcp_extensions,
-                reserved_thread_id,
             )
             .await;
         drop(prepared);
@@ -2503,14 +2589,11 @@ impl ThreadManager {
 
     async fn fork_thread_with_initial_history(
         &self,
-        config: Config,
+        mut options: StartThreadOptions,
         fork_history: ForkHistory,
-        thread_source: Option<ThreadSource>,
-        parent_trace: Option<W3cTraceContext>,
-        client_mcp_extensions: ClientMcpExtensions,
-        reserved_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
+        let config = options.config.clone();
         let ForkHistory {
             snapshot,
             initial_history: history,
@@ -2528,7 +2611,7 @@ impl ThreadManager {
             .state
             .effective_multi_agent_version_for_spawn(
                 &history,
-                /*session_source*/ None,
+                options.session_source.clone(),
                 /*parent_thread_id*/ None,
                 source_thread_id,
                 &config,
@@ -2547,15 +2630,8 @@ impl ThreadManager {
                 /*developer_instructions*/ None,
             )
         });
-        let agent_control = self.agent_control_for_config(&config);
-        let options = StartThreadOptions {
-            initial_history: history,
-            thread_source,
-            parent_trace,
-            client_mcp_extensions,
-            reserved_thread_id,
-            ..StartThreadOptions::new(config)
-        };
+        let agent_control = self.agent_control_for_config(&options.config);
+        options.initial_history = history;
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.thread_settings_override_flags = thread_settings_override_flags;

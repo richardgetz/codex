@@ -51,6 +51,13 @@ release or merge rules.
   The colliding upstream creator identity and Guardian metadata cleanup
   migrations are appended as `0065` and `0066`.
 
+- Fork operations that start from rollout, loaded history, or prepared history
+  preserve explicit per-thread startup options such as environment selection,
+  thread instruction providers, MCP extensions, and thread extensions. The
+  selected fork history replaces only the options' initial history; an
+  explicitly inherited thread-settings snapshot remains authoritative even
+  when it clears previously disabled plugins.
+
 - Plain-name skill selection keeps the stable authority priority of executor,
   cloud, custom resource, then host. The upstream Orchestrator-to-Cloud source
   rename retains the former Orchestrator priority, so executor-owned skills
@@ -1022,6 +1029,13 @@ release or merge rules.
   budget), while Tokio worker stacks remain at their shared 16 MiB setting.
   Smoke `just codex` through the loaded model screen to catch startup stack
   regressions.
+
+- Verify upstream fork API changes preserve caller-supplied `StartThreadOptions`
+  for rollout, loaded-history, and prepared-history forks, including
+  environment selections, thread instruction providers, client MCP extensions,
+  thread extensions, and reserved IDs. Confirm selected history replaces only
+  `initial_history`, and an explicitly inherited thread-settings snapshot can
+  clear plugin selections without falling back to rollout metadata.
 
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source
