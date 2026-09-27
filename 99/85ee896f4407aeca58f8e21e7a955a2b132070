@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-27/manager-action-wake-test#9985ee896f"
+  change_type: "test"
+  scope: "codex-core Team ManagerOnly integration fixture"
+  summary: "Make action-wake and successful-completion-batch observations deterministic."
+  decision: "Keep the second Worker at a shared test barrier after its actionable message, then release it only after the Lead action-wake request is captured."
+  constraints:
+    - "Change test synchronization only; do not change runtime behavior."
+    - "Preserve the assertion that successful Worker results are delivered together in one later Lead wake."
+    - "Leave Rust validation to the integration build owner."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
