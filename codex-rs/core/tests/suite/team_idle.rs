@@ -895,6 +895,8 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                     MANAGER_BATCH_ROOT_WAIT_CALL_ID,
                 )
                 && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
+                && !request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
+                && !request.body_contains_text(MANAGER_BATCH_SECOND_RESULT)
         },
         "immediate manager-only action wake",
         Duration::from_secs(/*secs*/ 7),
@@ -1496,10 +1498,12 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         |request| {
             response_request_has_model(request, LEAD_MODEL)
                 && response_request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+                && request.body_contains_text("Lead work policy changed during this wait")
         },
         "Lead policy-change wake",
     )
     .await;
+    assert!(policy_wake_request.body_contains_text("Lead work policy changed during this wait"));
     assert!(policy_wake_request.body_contains_text("Lead work policy: manager_only"));
 
     let mut second_wait_started = false;

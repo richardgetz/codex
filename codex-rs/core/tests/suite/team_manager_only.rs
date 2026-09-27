@@ -756,10 +756,6 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         "helper first policy-transition barrier",
     )
     .await;
-    wait_for_event(&helper.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
     wait_for_captured_request(
         &helper_first_tool_complete,
         |request| {
