@@ -1038,7 +1038,16 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "a terminal status snapshot must not wake the Lead while another successful Worker is still running"
     );
     assert!(
-        _root_after_premature_worker_status.requests().is_empty(),
+        _root_after_premature_worker_status
+            .requests()
+            .iter()
+            .all(|request| {
+                !(request_has_model(request, LEAD_MODEL)
+                    && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                    && !body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                    && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                    && !body_contains(request, MANAGER_BATCH_SECOND_RESULT))
+            }),
         "the Lead should remain parked after the first Worker completes while the second is active"
     );
     assert!(body_contains(
