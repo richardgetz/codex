@@ -1,0 +1,17 @@
+intent:
+  id: "stable-v0.157.1-python-turn-subscription-lifecycle"
+  change_type: "fix"
+  scope: "sdk/python"
+  summary: "Restore sync and async turn-handle subscription lifecycle after the stable refresh."
+  decision: "Keep the generated request-time turn subscription flow: attach the supplied cursor subscription to each handle, consume it during streaming, close it at stream exit, and subscribe at the current turn cursor for manually constructed handles."
+  constraints:
+    - "Keep the app-server wire protocol and request payloads unchanged."
+    - "Preserve fork-specific SDK memory policy options."
+    - "Keep the repair limited to the Python SDK; do not change Rust behavior."
+  intent_priority: "must"
+  code_locations:
+    - "sdk/python/src/openai_codex/api.py"
+  requested_by: "Stable refresh release-blocker follow-up"
+  recorded_by:
+    agent: "rust_validation_owner"
+    model: "GPT-6"
