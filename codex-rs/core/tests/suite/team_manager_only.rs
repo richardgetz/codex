@@ -711,7 +711,12 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         .build_with_auto_env(&server)
         .await?;
 
-    submit_turn(&test.codex, PROMPT, ThreadSettingsOverrides::default()).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
     let initial_request = wait_for_captured_request(
         &lead_tool_call,
         |request| {
