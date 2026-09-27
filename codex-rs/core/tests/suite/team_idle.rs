@@ -1617,8 +1617,14 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         root_after_deadline
             .requests()
             .iter()
-            .all(|request| !request.body_contains_text("oversight deadline has elapsed")),
-        "the next wait must park after its request observes the committed policy"
+            .all(|request| {
+                !request.body_contains_text("oversight deadline has elapsed")
+                    && !response_request_has_function_call_output(
+                        request,
+                        DEADLINE_POLICY_WAIT_CALL_ID,
+                    )
+            }),
+        "the next wait must remain parked after its request observes the committed policy"
     );
 
     tokio::time::pause();
@@ -1631,7 +1637,12 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         }),
     )
     .await
-    .expect("the original oversight deadline should still wake the second wait");
+    .unwrap_or_else(|_| {
+        panic!(
+            "the original oversight deadline should wake the second wait; observed wait result: {:?}",
+            root_after_deadline.function_call_output_text(DEADLINE_POLICY_WAIT_CALL_ID)
+        )
+    });
     let EventMsg::Warning(deadline_warning) = deadline_warning else {
         unreachable!("deadline warning matcher should only return warnings")
     };
