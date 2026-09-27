@@ -452,7 +452,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
         requests[2].function_call_output("call-a")
     );
 
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused_request.turn_id,
         TurnSettingsUpdate {
@@ -575,8 +575,10 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
             .thread_manager
             .fork_thread(
                 ForkSnapshot::Interrupted,
-                StartThreadOptions::new(replay_config),
+                replay_config,
                 rollout_path.clone(),
+                /*thread_source*/ None,
+                /*parent_trace*/ None,
             )
             .await?
             .thread;
@@ -708,8 +710,10 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
         .thread_manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            StartThreadOptions::new(replay_config),
+            replay_config,
             rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await?
         .thread;
@@ -1512,7 +1516,7 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1528,7 +1532,7 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
     })
     .await;
     assert_eq!(paused.call_id, "pause-b");
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1688,7 +1692,7 @@ async fn captured_model_enables_and_executes_code_mode() -> Result<()> {
         )
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2662,7 +2666,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2678,7 +2682,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
     })
     .await;
     assert_eq!(paused.call_id, "pause-b");
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2816,7 +2820,7 @@ async fn captured_step_controls_mcp_output_limit(supports_images: bool) -> Resul
         .await?;
     wait_for_mcp_server(&test.codex, "calendar").await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2955,7 +2959,7 @@ async fn captured_step_settings_and_history_reach_extension_executor(
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -3056,7 +3060,7 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
         .await?;
     wait_for_mcp_server(&test.codex, "resources").await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {

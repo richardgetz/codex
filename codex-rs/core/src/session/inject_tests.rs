@@ -29,12 +29,10 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
         .record_annotated_conversation_items(&turn_context, vec![expected.clone()])
         .await;
 
-    expected.metadata.as_mut().unwrap().mcp_attribution = Some(
-        session
-            .services
-            .executed_tool_calls
-            .mcp_attribution_snapshot(),
-    );
+    if let Some(executed_tool_calls) = &session.services.executed_tool_calls {
+        expected.metadata.as_mut().unwrap().mcp_attribution =
+            Some(executed_tool_calls.mcp_attribution_snapshot());
+    }
 
     let recorded = session.clone_history().await.into_annotated_items();
     assert_eq!(recorded, vec![expected.clone()]);

@@ -90,6 +90,7 @@ async fn submit_start_only(
         TurnInputRequest::new(input),
         TurnInputMode::StartIfIdle,
         "test-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("start-only submission should be valid")
@@ -110,6 +111,7 @@ async fn submit_steer_only(
             expected_turn_id: expected_turn_id.to_string(),
         },
         "test-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("steer-only submission should be valid")

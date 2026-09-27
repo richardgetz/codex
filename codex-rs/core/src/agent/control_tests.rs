@@ -8,6 +8,7 @@ use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SpawnRequest;
+use crate::agent::LocalAgentControl;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::LiveAgent;
@@ -357,7 +358,9 @@ fn has_subagent_notification<'a>(
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 SubagentNotification::matches_text(text)
             }
-            ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
+            ContentItem::InputImage { .. }
+            | ContentItem::InputAudio { .. }
+            | ContentItem::EncryptedContent { .. } => false,
         })
     })
 }
@@ -375,7 +378,9 @@ fn history_contains_text<'a>(
             ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 text.contains(needle)
             }
-            ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
+            ContentItem::InputImage { .. }
+            | ContentItem::InputAudio { .. }
+            | ContentItem::EncryptedContent { .. } => false,
         })
     })
 }
@@ -423,7 +428,8 @@ fn history_contains_assistant_inter_agent_communication<'a>(
             }
             ContentItem::InputText { .. }
             | ContentItem::InputImage { .. }
-            | ContentItem::InputAudio { .. } => false,
+            | ContentItem::InputAudio { .. }
+            | ContentItem::EncryptedContent { .. } => false,
         })
     })
 }
@@ -1928,6 +1934,7 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context
     };
     let parent_record = TokenUsageRecord {
         thread_id: parent_thread_id,
+        parent_thread_id: None,
         turn_id: "parent-turn".to_string(),
         session_id: parent_thread.session.session_id(),
         root_turn_id: "parent-turn".to_string(),
@@ -1935,6 +1942,8 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context
         usage: parent_usage.clone(),
         turn_token_usage: parent_usage.clone(),
         thread_token_usage: parent_usage,
+        attribution: Default::default(),
+        completed_at_ms: None,
     };
     let parent_spawn_call_id = "spawn-call-token-usage".to_string();
     parent_thread
@@ -2046,11 +2055,15 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context
     let child_record = lines.iter().rev().find_map(|line| match &line.item {
         RolloutItem::TokenUsageRecord(record) => Some(record),
         _ => None,
-    });
+    }).expect("child response usage record");
+    assert!(child_record.completed_at_ms.is_some());
+    let mut child_record_without_timestamp = child_record.clone();
+    child_record_without_timestamp.completed_at_ms = None;
     assert_eq!(
-        child_record,
-        Some(&TokenUsageRecord {
+        child_record_without_timestamp,
+        TokenUsageRecord {
             thread_id: child_thread_id,
+            parent_thread_id: Some(parent_thread_id),
             turn_id: turn_context.sub_id.clone(),
             session_id: child_thread.session.session_id(),
             root_turn_id: turn_context.sub_id.clone(),
@@ -2058,7 +2071,14 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context
             usage: child_usage.clone(),
             turn_token_usage: child_usage.clone(),
             thread_token_usage: child_usage,
-        })
+            attribution: codex_protocol::protocol::TokenUsageAttribution {
+                model: Some(turn_context.model_info().slug.clone()),
+                model_provider: Some(turn_context.config.model_provider_id.clone()),
+                service_tier: None,
+                context_length: Some(child_record.usage.context_length().to_string()),
+            },
+            completed_at_ms: None,
+        }
     );
 }
 
@@ -3166,7 +3186,12 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
 async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
     record_invalid_source: bool,
 ) {
-    let harness = AgentControlHarness::new().await;
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::ExecutedToolCallMetadata)
+        .expect("enable MCP attribution recording");
+    let harness = AgentControlHarness::new_with_config(home, config).await;
     let (source_thread_id, source_thread) = harness.start_thread().await;
     let turn_context = source_thread.session.new_default_turn().await;
     source_thread
@@ -3188,12 +3213,16 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
         .session
         .services
         .executed_tool_calls
+        .as_ref()
+        .expect("MCP attribution recorder is enabled")
         .record_mcp_source(source.clone());
     if record_invalid_source {
         source_thread
             .session
             .services
             .executed_tool_calls
+            .as_ref()
+            .expect("MCP attribution recorder is enabled")
             .record_mcp_source(McpAttributionSource {
                 tool_name: String::new(),
                 ..source.clone()
@@ -3230,8 +3259,10 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
         .manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            StartThreadOptions::new(harness.config.clone()),
+            harness.config.clone(),
             rollout_path.clone(),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("fork unloaded source thread");
@@ -3340,7 +3371,12 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
 
 #[tokio::test]
 async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
-    let harness = AgentControlHarness::new().await;
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::ExecutedToolCallMetadata)
+        .expect("enable MCP attribution recording");
+    let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     let old_turn_context = parent_thread.session.new_default_turn().await;
     parent_thread
@@ -3362,6 +3398,8 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .session
         .services
         .executed_tool_calls
+        .as_ref()
+        .expect("MCP attribution recorder is enabled")
         .record_mcp_source(source.clone());
     parent_thread
         .session

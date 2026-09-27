@@ -408,6 +408,8 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     session
         .services
         .executed_tool_calls
+        .as_ref()
+        .expect("metadata-enabled test config creates an executed-call recorder")
         .attach_to_prompt(&mut outputs, &mut Default::default());
     assert_eq!(outputs, original);
 
@@ -440,6 +442,8 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     session
         .services
         .executed_tool_calls
+        .as_ref()
+        .expect("the recorder remains allocated after runtime feature changes")
         .attach_to_prompt(&mut outputs, &mut Default::default());
     let mut expected = original;
     for item in &mut expected {

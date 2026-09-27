@@ -2970,12 +2970,10 @@ async fn annotated_history_uses_explicit_model_without_a_step(
     session
         .record_annotated_conversation_items(&turn_context, &model_info, expected.clone())
         .await;
-    expected[0].metadata.get_or_insert_default().mcp_attribution = Some(
-        session
-            .services
-            .executed_tool_calls
-            .mcp_attribution_snapshot(),
-    );
+    if let Some(executed_tool_calls) = &session.services.executed_tool_calls {
+        expected[0].metadata.get_or_insert_default().mcp_attribution =
+            Some(executed_tool_calls.mcp_attribution_snapshot());
+    }
     for envelope in &mut expected {
         envelope
             .metadata
@@ -7366,8 +7364,10 @@ async fn usage_policy_reset_materializes_lazy_thread_settings() {
 #[tokio::test]
 async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.executed_tool_calls =
-        crate::state::ExecutedToolCalls::new(&turn_context.config.features, &InitialHistory::New);
+    session.services.executed_tool_calls = Some(Arc::new(crate::state::ExecutedToolCalls::new(
+        &turn_context.config.features,
+        &InitialHistory::New,
+    )));
     let rollout_path = attach_thread_persistence(&mut session).await;
     let source = McpAttributionSource {
         connector_id: None,
@@ -7379,6 +7379,8 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
     session
         .services
         .executed_tool_calls
+        .as_ref()
+        .expect("test fixture installs the MCP attribution recorder")
         .record_mcp_source(source.clone());
     let expected = McpAttribution {
         status: McpAttributionStatus::Complete,
@@ -8014,8 +8016,10 @@ pub(crate) async fn build_world_state_from_turn_context(
 #[tokio::test]
 async fn response_metadata_builders_capture_fresh_mcp_attribution() {
     let (mut session, turn_context) = make_session_and_context().await;
-    session.services.executed_tool_calls =
-        crate::state::ExecutedToolCalls::new(&turn_context.config.features, &InitialHistory::New);
+    session.services.executed_tool_calls = Some(Arc::new(crate::state::ExecutedToolCalls::new(
+        &turn_context.config.features,
+        &InitialHistory::New,
+    )));
     let turn_context = Arc::new(turn_context);
     let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let before = session
@@ -8031,6 +8035,8 @@ async fn response_metadata_builders_capture_fresh_mcp_attribution() {
     session
         .services
         .executed_tool_calls
+        .as_ref()
+        .expect("test fixture installs the MCP attribution recorder")
         .record_mcp_source(source.clone());
     let after = session
         .responses_metadata(&step_context, CodexResponsesRequestKind::Turn)
@@ -8300,7 +8306,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             thread_id,
             Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
             &config.code_mode,
-            executed_tool_calls,
+            executed_tool_calls.as_deref().cloned().unwrap_or_default(),
         ),
         orchestrator_memory_generation: AtomicU64::new(0),
         orchestrator_supervision:
@@ -10855,7 +10861,7 @@ where
             thread_id,
             Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
             &config.code_mode,
-            executed_tool_calls,
+            executed_tool_calls.as_deref().cloned().unwrap_or_default(),
         ),
         orchestrator_memory_generation: AtomicU64::new(0),
         orchestrator_supervision:
@@ -15930,6 +15936,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         codex_protocol::user_input::ByteRange { start: 5, end: 12 },
         Some("pending marker".to_string()),
     );
+    let image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=".to_string();
     let pending_user_input = vec![
         UserInput::Text {
             text: "late pending input".to_string(),

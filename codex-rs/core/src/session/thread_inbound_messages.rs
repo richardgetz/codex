@@ -292,6 +292,8 @@ mod tests {
         runtime
             .upsert_thread(&codex_state::ThreadMetadata {
                 originator: None,
+                creator_user_id: None,
+                creator_account_id: None,
                 id: thread_id,
                 rollout_path: codex_home.join(format!("rollout-{thread_id}.jsonl")),
                 created_at: now,

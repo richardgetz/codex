@@ -231,7 +231,7 @@ async fn prompt_tools_are_consistent_across_requests(
     let mode_instructions = if custom_instructions {
         "## Plan tool\nPreserve this custom collaboration policy.\n".to_string()
     } else {
-        builtin_collaboration_mode_presets()
+        builtin_collaboration_mode_presets(Default::default())
             .into_iter()
             .find(|preset| preset.mode == Some(ModeKind::Plan))
             .and_then(|preset| preset.developer_instructions.flatten())

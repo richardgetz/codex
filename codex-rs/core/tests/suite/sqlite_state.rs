@@ -156,8 +156,10 @@ async fn thread_creator_survives_resume_and_forks_use_current_auth() -> Result<(
             .thread_manager
             .fork_thread(
                 codex_core::ForkSnapshot::Interrupted,
-                StartThreadOptions::new(resumed.config.clone()),
+                resumed.config.clone(),
                 rollout_path,
+                /*thread_source*/ None,
+                /*parent_trace*/ None,
             )
             .await?;
         fork.thread
