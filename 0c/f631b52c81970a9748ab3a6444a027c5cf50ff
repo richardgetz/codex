@@ -1,0 +1,19 @@
+intent:
+  id: stable-v0.157.1-python-thread-policy-types
+change_type: fix
+scope: sdk/python public types and API reference
+summary: Export thread memory policy types through the supported public type module and document lifecycle options.
+decision: Make the same protocol policy models used by the sync and async lifecycle wrappers importable from openai_codex.types, and list both optional options for start, resume, and fork.
+constraints:
+  - Keep serialized protocol names and policy behavior unchanged.
+  - Keep documentation aligned with the generated Python signatures.
+  - Cover the public export list through the existing signature/export test.
+intent_priority: compatibility
+code_locations:
+  - sdk/python/src/openai_codex/types.py
+  - sdk/python/tests/test_public_api_signatures.py
+  - sdk/python/docs/api-reference.md
+requested_by: Independent follow-up review
+recorded_by: Codex
+agent: rust_validation_owner
+model: GPT-6
