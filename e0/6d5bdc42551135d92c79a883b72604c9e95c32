@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/focus-active-team-policy-regression#e06d5bdc42"
+  change_type: "test"
+  scope: "codex-core active Team policy update integration"
+  summary: "Keep one barrier-controlled active-turn policy change in the model-context regression."
+  decision: "Retain the PromptGuided-to-ManagerOnly next-sampling assertion and rely on the existing ManagerOnly-to-PromptGuided buffered-completion integration for reverse-switch behavior."
+  constraints:
+    - "Keep the settings acknowledgement before releasing the in-flight tool."
+    - "Do not modify runtime behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_manager_only.rs::live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
