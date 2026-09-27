@@ -16669,10 +16669,8 @@ async fn explicit_user_progress_drain_prevents_empty_manager_completion_wake() {
 async fn manager_completion_delivery_ack_waits_for_parent_buffer_insertion() {
     let mut config = test_config().await;
     let home = tempfile::tempdir().expect("create manager home");
-    config.codex_home = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-        home.path(),
-    )
-    .expect("manager home should be absolute");
+    config.codex_home = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(home.path())
+        .expect("manager home should be absolute");
     let profile = codex_config::TeamModelProfile {
         model: "gpt-5.5".to_string(),
         reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
@@ -16799,10 +16797,8 @@ async fn manager_completion_delivery_ack_waits_for_parent_buffer_insertion() {
 async fn triggered_team_lead_completion_ack_blocks_older_manager_batch() {
     let mut config = test_config().await;
     let home = tempfile::tempdir().expect("create manager home");
-    config.codex_home = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-        home.path(),
-    )
-    .expect("manager home should be absolute");
+    config.codex_home = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(home.path())
+        .expect("manager home should be absolute");
     let profile = codex_config::TeamModelProfile {
         model: "gpt-5.5".to_string(),
         reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,

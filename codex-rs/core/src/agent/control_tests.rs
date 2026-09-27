@@ -2,13 +2,13 @@ use super::*;
 use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
+use crate::agent::LocalAgentControl;
 use crate::agent::agent_status_from_event;
 use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SpawnRequest;
-use crate::agent::LocalAgentControl;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::LiveAgent;
@@ -40,7 +40,6 @@ use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
-use futures::StreamExt;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -98,6 +97,7 @@ use codex_thread_store::PersistContext;
 use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses::strip_response_item_ids;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use std::sync::RwLock;
 use tempfile::TempDir;
@@ -2057,10 +2057,14 @@ async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context
             ..parent_resume_metadata
         }
     );
-    let child_record = lines.iter().rev().find_map(|line| match &line.item {
-        RolloutItem::TokenUsageRecord(record) => Some(record),
-        _ => None,
-    }).expect("child response usage record");
+    let child_record = lines
+        .iter()
+        .rev()
+        .find_map(|line| match &line.item {
+            RolloutItem::TokenUsageRecord(record) => Some(record),
+            _ => None,
+        })
+        .expect("child response usage record");
     assert!(child_record.completed_at_ms.is_some());
     let mut child_record_without_timestamp = child_record.clone();
     child_record_without_timestamp.completed_at_ms = None;

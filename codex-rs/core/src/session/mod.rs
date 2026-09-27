@@ -1072,26 +1072,25 @@ impl Session {
         };
         // An explicitly inherited snapshot is authoritative even when its empty
         // plugin list clears IDs that were present in rollout history.
-        let disabled_plugin_ids = if disabled_plugin_ids.is_empty()
-            && inherited_thread_settings.is_none()
-        {
-            let settings_owner = match &conversation_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => forked_from_thread_id,
-                InitialHistory::New | InitialHistory::Cleared => None,
+        let disabled_plugin_ids =
+            if disabled_plugin_ids.is_empty() && inherited_thread_settings.is_none() {
+                let settings_owner = match &conversation_history {
+                    InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                    InitialHistory::Forked(_) => forked_from_thread_id,
+                    InitialHistory::New | InitialHistory::Cleared => None,
+                };
+                settings_owner
+                    .and_then(|thread_id| {
+                        codex_history::latest_disabled_plugin_ids(
+                            conversation_history.get_rollout_items(),
+                            thread_id,
+                        )
+                    })
+                    .map(<[String]>::to_vec)
+                    .unwrap_or_default()
+            } else {
+                disabled_plugin_ids
             };
-            settings_owner
-                .and_then(|thread_id| {
-                    codex_history::latest_disabled_plugin_ids(
-                        conversation_history.get_rollout_items(),
-                        thread_id,
-                    )
-                })
-                .map(<[String]>::to_vec)
-                .unwrap_or_default()
-        } else {
-            disabled_plugin_ids
-        };
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let persisted_collaboration_mode = match &conversation_history {
@@ -5070,30 +5069,30 @@ impl Session {
         let force_mcp_checkpoint = items
             .iter()
             .any(|envelope| crate::context_manager::is_user_turn_boundary(&envelope.item));
-        let mcp_revision = self
-            .services
-            .executed_tool_calls
-            .as_ref()
-            .and_then(|executed_tool_calls| {
-                executed_tool_calls
-                    .mcp_attribution_checkpoint(force_mcp_checkpoint)
-                    .and_then(|(attribution, revision)| {
-                        let first_persisted = items
-                            .iter()
-                            .position(|envelope| should_persist_response_item(&envelope.item))?;
-                        for (index, envelope) in items.iter_mut().enumerate() {
-                            // Rollout batches may be partially written. Checkpoint the first persisted
-                            // item, and repeat the checkpoint at turn boundaries retained by forks.
-                            if index == first_persisted
-                                || crate::context_manager::is_user_turn_boundary(&envelope.item)
-                            {
-                                envelope.metadata.get_or_insert_default().mcp_attribution =
-                                    Some(attribution.clone());
+        let mcp_revision =
+            self.services
+                .executed_tool_calls
+                .as_ref()
+                .and_then(|executed_tool_calls| {
+                    executed_tool_calls
+                        .mcp_attribution_checkpoint(force_mcp_checkpoint)
+                        .and_then(|(attribution, revision)| {
+                            let first_persisted = items.iter().position(|envelope| {
+                                should_persist_response_item(&envelope.item)
+                            })?;
+                            for (index, envelope) in items.iter_mut().enumerate() {
+                                // Rollout batches may be partially written. Checkpoint the first persisted
+                                // item, and repeat the checkpoint at turn boundaries retained by forks.
+                                if index == first_persisted
+                                    || crate::context_manager::is_user_turn_boundary(&envelope.item)
+                                {
+                                    envelope.metadata.get_or_insert_default().mcp_attribution =
+                                        Some(attribution.clone());
+                                }
                             }
-                        }
-                        Some((Arc::clone(executed_tool_calls), revision))
-                    })
-            });
+                            Some((Arc::clone(executed_tool_calls), revision))
+                        })
+                });
         let response_items = items
             .iter()
             .map(|envelope| envelope.item.clone())
@@ -5526,21 +5525,21 @@ impl Session {
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
         }
-        let mcp_revision = self
-            .services
-            .executed_tool_calls
-            .as_ref()
-            .and_then(|executed_tool_calls| {
-                executed_tool_calls
-                    .mcp_attribution_checkpoint(/*force*/ true)
-                    .and_then(|(attribution, revision)| {
-                        items.last_mut().map(|envelope| {
-                            envelope.metadata.get_or_insert_default().mcp_attribution =
-                                Some(attribution);
-                            (Arc::clone(executed_tool_calls), revision)
+        let mcp_revision =
+            self.services
+                .executed_tool_calls
+                .as_ref()
+                .and_then(|executed_tool_calls| {
+                    executed_tool_calls
+                        .mcp_attribution_checkpoint(/*force*/ true)
+                        .and_then(|(attribution, revision)| {
+                            items.last_mut().map(|envelope| {
+                                envelope.metadata.get_or_insert_default().mcp_attribution =
+                                    Some(attribution);
+                                (Arc::clone(executed_tool_calls), revision)
+                            })
                         })
-                    })
-            });
+                });
         if let Some(checkpoint) = items.iter_mut().rev().find(|envelope| {
             matches!(
                 envelope.item,

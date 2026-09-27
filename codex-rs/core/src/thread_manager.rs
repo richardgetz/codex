@@ -1393,10 +1393,7 @@ impl ThreadManager {
                 &options.config.workspace_roots,
             )
         });
-        validate_environment_ids_and_cwds(
-            self.state.environment_manager.as_ref(),
-            &environments,
-        )?;
+        validate_environment_ids_and_cwds(self.state.environment_manager.as_ref(), &environments)?;
         options.environments = Some(environments);
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history

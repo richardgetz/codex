@@ -12,10 +12,10 @@ use super::types::MemoryEvent;
 use super::types::MemoryOperation;
 use super::types::MemoryScope;
 use super::types::MemorySignal;
+use crate::agent::AgentStatus;
 use crate::agent::api::AgentControl as AgentControlApi;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
-use crate::agent::AgentStatus;
 use crate::config::Config;
 use crate::orchestrator_memory::live::consolidate_preferences;
 use crate::session::session::Session;
@@ -133,8 +133,8 @@ pub(super) async fn consolidate_with_model(
             options: crate::agent::control::SpawnAgentOptions::default(),
         },
     )
-        .await
-        .context("spawn orchestrator-memory consolidation agent")?;
+    .await
+    .context("spawn orchestrator-memory consolidation agent")?;
     let thread_id = agent.thread_id;
 
     let final_status = wait_for_final_status(&agent_control, thread_id).await;
@@ -221,8 +221,8 @@ pub(super) async fn cleanup_events_with_model(
             options: crate::agent::control::SpawnAgentOptions::default(),
         },
     )
-        .await
-        .context("spawn orchestrator-memory cleanup agent")?;
+    .await
+    .context("spawn orchestrator-memory cleanup agent")?;
     let thread_id = agent.thread_id;
 
     let final_status = wait_for_final_status(&agent_control, thread_id).await;

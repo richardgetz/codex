@@ -7,10 +7,10 @@ use super::types::MemoryBucket;
 use super::types::MemoryOperation;
 use super::types::MemoryScope;
 use super::types::MemorySignal;
+use crate::agent::AgentStatus;
 use crate::agent::api::AgentControl as AgentControlApi;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
-use crate::agent::AgentStatus;
 use crate::config::Config;
 use crate::session::session::Session;
 use anyhow::Context;
@@ -103,8 +103,8 @@ pub(super) async fn classify_with_model(
             options: crate::agent::control::SpawnAgentOptions::default(),
         },
     )
-        .await
-        .context("spawn orchestrator-memory classification agent")?;
+    .await
+    .context("spawn orchestrator-memory classification agent")?;
     let thread_id = agent.thread_id;
 
     let final_status = wait_for_final_status(&agent_control, thread_id).await;

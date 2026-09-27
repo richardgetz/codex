@@ -710,15 +710,13 @@ async fn handle_approved_mcp_tool_call(
         .then(|| prepared_call.tool_info().connector_id.clone())
         .flatten();
     if let Some(executed_tool_calls) = sess.services.executed_tool_calls.as_ref() {
-        executed_tool_calls.record_mcp_source(
-            codex_protocol::mcp::McpAttributionSource {
-                connector_id: source_connector_id,
-                plugin_id: prepared_call.plugin_id().map(str::to_string),
-                server_name: prepared_call.server_name().to_string(),
-                tool_name: prepared_call.tool_info().tool.name.to_string(),
-                first_turn_id: turn_context.sub_id.clone(),
-            },
-        );
+        executed_tool_calls.record_mcp_source(codex_protocol::mcp::McpAttributionSource {
+            connector_id: source_connector_id,
+            plugin_id: prepared_call.plugin_id().map(str::to_string),
+            server_name: prepared_call.server_name().to_string(),
+            tool_name: prepared_call.tool_info().tool.name.to_string(),
+            first_turn_id: turn_context.sub_id.clone(),
+        });
     }
     notify_mcp_tool_call_completed(
         sess,

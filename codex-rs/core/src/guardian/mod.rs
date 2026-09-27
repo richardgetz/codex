@@ -194,7 +194,6 @@ impl From<&Arc<TurnContext>> for GuardianReviewContext {
     }
 }
 
-
 #[derive(Debug, Default)]
 pub(crate) struct GuardianRejectionCircuitBreaker {
     turns: std::collections::HashMap<String, GuardianRejectionCircuitBreakerTurn>,
