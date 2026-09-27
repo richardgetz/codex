@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/stable-refresh-fork-source-borrow"
+  change_type: fix
+  scope: stable refresh fork version resolution
+  summary: Pass the fork startup session source by reference to the existing version resolver.
+  decision: Borrow StartThreadOptions.session_source with as_ref so the options-preserving fork helper matches the resolver contract without cloning.
+  constraints:
+    - Preserve the caller's session source through effective multi-agent version selection.
+    - Do not change fork history, policy inheritance, or release branch state.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/thread_manager.rs
+  requested_by: stable refresh validation assignment
+  recorded_by:
+    agent: Codex
+    model: gpt-6
