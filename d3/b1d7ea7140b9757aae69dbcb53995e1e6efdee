@@ -1,0 +1,23 @@
+intent:
+  id: intent/2026-09-27/team-event-driven-wait
+  change_type: fix
+  scope: codex-core Team Lead wait_agent
+  summary: Keep direct Worker waits event-driven without replaying terminal status snapshots or bypassing ManagerOnly completion batching.
+  decision: Wake the Lead from actionable parent input, fresh policy changes observed against the sampled StepContext, or the existing oversight deadline; do not use the persistent child status level as an additional wake channel.
+  constraints:
+    - Preserve PromptGuided as the default Lead policy.
+    - Preserve the configured oversight deadline and current default.
+    - Keep existing Lead and Worker tools available under existing permissions.
+    - Do not add short polling or waiting commentary cadence.
+    - Keep Worker completion, failure, user steer, and cancellation delivery actionable.
+  intent_priority: user_requested
+  code_locations:
+    - codex-rs/core/src/agent/control/team.rs
+    - codex-rs/core/src/context/team_instructions.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/wait_tests.rs
+    - codex-rs/core/tests/suite/team_idle.rs
+  requested_by: Rick
+  recorded_by:
+    agent: Codex
+    model: gpt-6
