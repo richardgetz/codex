@@ -1,0 +1,21 @@
+intent:
+  id: stable-v0.157.1-python-thread-memory-policy-options
+change_type: fix
+scope: sdk/python
+summary: Restore Python SDK start, resume, and fork support for per-thread memory policies.
+decision: Keep the public synchronous and asynchronous wrappers aligned with V2 request fields and forward both typed policy values unchanged into the serialized RPC parameters.
+constraints:
+  - Preserve optional omission semantics when callers do not provide either policy.
+  - Keep the change limited to SDK generation, wrappers, focused coverage, and fork inventory.
+  - Do not alter the app-server protocol or policy behavior.
+intent_priority: compatibility
+code_locations:
+  - sdk/python/scripts/update_sdk_artifacts.py
+  - sdk/python/src/openai_codex/api.py
+  - sdk/python/tests/test_public_api_runtime_behavior.py
+  - sdk/python/tests/test_public_api_signatures.py
+  - codex-rs/core/templates/fork/delta_inventory.md
+requested_by: Stable refresh frozen review follow-up
+recorded_by: Codex
+agent: rust_validation_owner
+model: GPT-6
