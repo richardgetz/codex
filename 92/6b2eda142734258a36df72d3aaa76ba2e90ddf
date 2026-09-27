@@ -1,0 +1,19 @@
+intent:
+  id: "intent/2026-09-27/stable-refresh-clippy-test-imports"
+  change_type: fix
+  scope: codex-core test compilation
+  summary: Keep test-only Guardian and recorder references compiling after scoped Clippy autofix.
+  decision: Import Guardian schema and recorder symbols from their defining modules in tests and gate helper-only imports with cfg(test), while retaining the mechanical Clippy fixes.
+  constraints:
+    - Do not restore unused production re-exports solely for tests.
+    - Preserve the previously passing focused fork behavior and test semantics.
+    - Do not alter stable, release metadata, or migrations.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/guardian
+    - codex-rs/core/src/session/tests.rs
+    - codex-rs/core/src/state/mod.rs
+  requested_by: stable refresh Rust validation
+  recorded_by:
+    agent: Codex
+    model: gpt-6
