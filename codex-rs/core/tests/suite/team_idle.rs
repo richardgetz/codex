@@ -26,6 +26,7 @@ const DEADLINE_ROOT_PROMPT: &str = "park the lead until its oversight deadline";
 const DEADLINE_CHILD_TASK: &str = "keep the worker active through the oversight deadline";
 const DEADLINE_SPAWN_CALL_ID: &str = "team-idle-deadline-spawn";
 const DEADLINE_WAIT_CALL_ID: &str = "team-idle-deadline-wait";
+const DEADLINE_POLICY_WAIT_CALL_ID: &str = "team-idle-deadline-policy-wait";
 const DEADLINE_SLEEP_CALL_ID: &str = "team-idle-deadline-sleep";
 
 const HANDOFF_ROOT_PROMPT: &str = "wake the parent when the worker has nothing left to wait for";
@@ -1243,11 +1244,31 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         ]),
     )
     .await;
-    let root_after_deadline = mount_sse_once_match(
+    let root_after_policy_change = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+                && body_contains(request, "Lead work policy changed during this wait")
+                && body_contains(request, "Lead work policy: manager_only")
+        },
+        sse(vec![
+            ev_response_created("team-idle-deadline-policy-change"),
+            ev_function_call_with_namespace(
+                DEADLINE_POLICY_WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                &wait_args,
+            ),
+            ev_completed("team-idle-deadline-policy-change"),
+        ]),
+    )
+    .await;
+    let root_after_deadline = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
                 && body_contains(request, "oversight deadline has elapsed")
         },
         sse(vec![
@@ -1362,13 +1383,98 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         "passive idle notice should be hidden by default: {passive_notice:?}"
     );
 
+    // Advance part of the current interval before changing policy. The second wait below must
+    // retain this deadline rather than start another oversight interval.
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(61)).await;
+    tokio::time::advance(Duration::from_secs(40)).await;
     tokio::time::resume();
-    let deadline_warning = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::Warning(warning) if warning.message.contains("Lead oversight deadline reached"))
-    })
+
+    let policy_update_id = test
+        .codex
+        .submit(Op::ThreadSettings {
+            thread_settings: ThreadSettingsOverrides {
+                team: Some(ThreadTeamSettingsUpdate {
+                    mode: TeamMode::LeadWorker,
+                    lead_work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            usage_policy_update: None,
+        })
+        .await?;
+    let policy_wake_request = wait_for_captured_request(
+        &root_after_policy_change,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+        },
+        "Lead policy-change wake",
+    )
     .await;
+    assert!(policy_wake_request.body_contains_text("Lead work policy: manager_only"));
+
+    let mut first_wait_ended = false;
+    let mut second_wait_started = false;
+    let mut second_wait_ended = false;
+    let mut policy_update_applied = false;
+    while !(first_wait_ended && second_wait_started && policy_update_applied) {
+        let event = tokio::time::timeout(Duration::from_secs(10), test.codex.next_event())
+            .await
+            .expect("timed out waiting for policy and wait transitions")
+            .expect("event stream should remain open");
+        let event_id = event.id;
+        let event_msg = event.msg;
+        if event_id == policy_update_id {
+            match &event_msg {
+                EventMsg::ThreadSettingsApplied(_) => policy_update_applied = true,
+                EventMsg::Error(error) => panic!("policy update failed: {}", error.message),
+                _ => {}
+            }
+        }
+        match event_msg {
+            EventMsg::CollabWaitingEnd(end) if end.call_id == DEADLINE_WAIT_CALL_ID => {
+                first_wait_ended = true;
+            }
+            EventMsg::ItemStarted(item)
+                if matches!(&item.item, TurnItem::CollabAgentToolCall(call) if call.id == DEADLINE_POLICY_WAIT_CALL_ID) =>
+            {
+                second_wait_started = true;
+            }
+            EventMsg::CollabWaitingEnd(end) if end.call_id == DEADLINE_POLICY_WAIT_CALL_ID => {
+                second_wait_ended = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        !second_wait_ended,
+        "the second wait must not reuse the frozen turn-start policy baseline"
+    );
+
+    let second_wait_ended_early = tokio::time::timeout(
+        Duration::from_millis(250),
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::CollabWaitingEnd(end) if end.call_id == DEADLINE_POLICY_WAIT_CALL_ID)
+        }),
+    )
+    .await;
+    assert!(
+        second_wait_ended_early.is_err(),
+        "the next wait must park after its request observes the committed policy"
+    );
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(21)).await;
+    tokio::time::resume();
+    let deadline_warning = tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::Warning(warning) if warning.message.contains("Lead oversight deadline reached"))
+        }),
+    )
+    .await
+    .expect("the original oversight deadline should still wake the second wait");
     let EventMsg::Warning(deadline_warning) = deadline_warning else {
         unreachable!("deadline warning matcher should only return warnings")
     };

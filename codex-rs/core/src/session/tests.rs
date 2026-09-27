@@ -307,6 +307,9 @@ impl StepContext {
                 settings.model_info.as_ref(),
             ),
             settings: Arc::new(settings),
+            team_lead_work_policy: arc_swap::ArcSwap::from_pointee(
+                turn.config.effective_team_lead_work_policy(),
+            ),
             session_telemetry: turn.session_telemetry.clone(),
             turn: Arc::clone(&turn),
             environments,

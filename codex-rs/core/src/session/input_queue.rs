@@ -78,6 +78,7 @@ mod turn_input_response_item {
 pub(crate) enum InputQueueActivity {
     Mailbox,
     Steer,
+    TeamPolicyChanged,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -435,6 +436,12 @@ impl InputQueue {
             None
         };
         (activity_rx, pending_activity)
+    }
+
+    /// Wakes an active wait so the Lead can sample again with the committed work policy.
+    pub(crate) fn notify_team_policy_changed(&self) {
+        self.activity_tx
+            .send_replace(InputQueueActivity::TeamPolicyChanged);
     }
 
     pub(crate) async fn enqueue_mailbox_communication(

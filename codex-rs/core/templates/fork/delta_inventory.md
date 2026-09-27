@@ -136,8 +136,12 @@ release or merge rules.
   captured in thread snapshots so resume and fork preserve the selected mode,
   while legacy snapshots keep the default. An active Lead can also change its
   thread-owned policy independently through `/team work-policy` and
-  `thread/settings/update`; the selection takes effect on the next turn without
-  changing Team mode, role, profile assignments, or global defaults. TUI Team
+  `thread/settings/update`; the committed selection updates the next model step
+  in an active turn as well as later turns, without changing Team mode, role,
+  profile assignments, or global defaults. An explicit parked Lead wait wakes
+  for reassessment under the current policy while preserving the existing
+  oversight deadline and already-running Worker, tool, and external work. The
+  settings acknowledgement follows policy commit and wait notification. TUI Team
   settings updates wait for a matching settings snapshot or the bounded
   confirmation timeout; stale snapshots cannot reject a pending update, and
   uncorrelated terminal errors stay visible without clearing any pending Team
@@ -1242,9 +1246,14 @@ release or merge rules.
   snapshots retain the default. Verify `thread/settings/update` changes only the
   active Lead thread's `leadWorkPolicy`, preserves Team mode, role, model and
   effort assignments, and balance, reports the selection in thread settings,
-  rejects non-Lead or inactive-Team updates, and takes effect on the next tool
-  plan in both directions. Verify the selection survives cold resume while
-  fresh threads retain configured defaults. Verify `manager_only` applies only
+  rejects non-Lead or inactive-Team updates, and applies before the next model
+  request and tool plan in the current turn in both directions. Verify a parked
+  explicit wait re-evaluates after policy commit, a setting update racing with
+  wait admission is observed, latest-toggle-wins, and already-running provider,
+  tool, Worker, and external operations finish without replay or cancellation.
+  The wake must not restart or extend the configured oversight deadline.
+  Verify the selection survives cold resume while fresh threads retain
+  configured defaults. Verify `manager_only` applies only
   to the Lead:
   it preserves human alignment, planning, delegation, coordination, and review;
   Workers own substantive execution across repositories independent of local

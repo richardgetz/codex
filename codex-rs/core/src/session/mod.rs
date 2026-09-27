@@ -2801,6 +2801,7 @@ impl Session {
             permission_profile_changed,
             mcp_inputs_changed,
             root_service_tier_changed,
+            lead_work_policy_changed,
             usage_policy_changed,
             root_usage_policy_changed,
         ) = {
@@ -2830,6 +2831,16 @@ impl Session {
             let root_service_tier_changed = updated.parent_thread_id.is_none()
                 && state.session_configuration.step_settings.service_tier
                     != updated.step_settings.service_tier;
+            let lead_work_policy_changed = updates.team.as_ref().is_some_and(|team| {
+                team.lead_work_policy.is_some()
+                    && state
+                        .session_configuration
+                        .original_config_do_not_use
+                        .effective_team_lead_work_policy()
+                        != updated
+                            .original_config_do_not_use
+                            .effective_team_lead_work_policy()
+            });
             if mcp_inputs_changed {
                 self.mark_mcp_runtime_dirty();
             }
@@ -2876,10 +2887,14 @@ impl Session {
                 permission_profile_changed,
                 mcp_inputs_changed,
                 root_service_tier_changed,
+                lead_work_policy_changed,
                 usage_policy_changed,
                 root_usage_policy_changed,
             )
         };
+        if lead_work_policy_changed {
+            self.input_queue.notify_team_policy_changed();
+        }
         if usage_policy_changed {
             // Wake a parked usage wait so disabling auto-resume (or changing its
             // floor) takes effect immediately. The request is ignored when no
@@ -5396,8 +5411,12 @@ impl Session {
         )
         .or_cancel(cancellation_token)
         .await??;
+        let initial_team_lead_work_policy = turn_context.config.effective_team_lead_work_policy();
         Ok(Arc::new(StepContext {
             settings,
+            team_lead_work_policy: arc_swap::ArcSwap::from_pointee(
+                initial_team_lead_work_policy,
+            ),
             token_budget,
             session_telemetry,
             turn: turn_context,

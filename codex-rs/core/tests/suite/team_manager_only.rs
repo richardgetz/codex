@@ -74,6 +74,31 @@ fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverride
     }
 }
 
+fn latest_team_role_instructions(request: &ResponsesRequest) -> Option<String> {
+    request
+        .inputs_of_type("message")
+        .into_iter()
+        .rev()
+        .find_map(|message| {
+            let has_team_role_instructions = message
+                .get("internal_chat_message_metadata_passthrough")?
+                .get("content_item_kinds")?
+                .as_array()?
+                .iter()
+                .any(|kind| kind.as_str() == Some("team.role_instructions"));
+            has_team_role_instructions.then(|| {
+                message["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|item| item["type"].as_str() == Some("input_text"))
+                    .filter_map(|item| item["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        })
+}
+
 async fn wait_for_completed_agent_message(thread: &codex_core::CodexThread, expected: &str) {
     let expected_status =
         codex_protocol::protocol::AgentStatus::Completed(Some(expected.to_string()));
@@ -583,6 +608,166 @@ async fn lead_work_policy_changes_next_turn_and_survives_resume() -> Result<()> 
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    const PROMPT: &str = "change the Lead policy while this turn is running";
+    const FIRST_TOOL_CALL_ID: &str = "live-policy-active-turn-first-gate";
+    const SECOND_TOOL_CALL_ID: &str = "live-policy-active-turn-second-gate";
+    const TOOL_ARGS: &str = r#"{"sleep_before_ms":1500}"#;
+
+    let lead_tool_call = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+                && !request_has_function_call_output(request, FIRST_TOOL_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-active-turn-first-tool-call"),
+            ev_function_call(FIRST_TOOL_CALL_ID, "test_sync_tool", TOOL_ARGS),
+            ev_completed("live-policy-active-turn-first-tool-call"),
+        ]),
+    )
+    .await;
+    let lead_after_first_tool = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, FIRST_TOOL_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-active-turn-second-tool-call"),
+            ev_function_call(SECOND_TOOL_CALL_ID, "test_sync_tool", TOOL_ARGS),
+            ev_completed("live-policy-active-turn-second-tool-call"),
+        ]),
+    )
+    .await;
+    let lead_after_second_tool = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, SECOND_TOOL_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-active-turn-after-second-tool"),
+            ev_assistant_message(
+                "live-policy-active-turn-complete",
+                "the active turn continued after applying both policy changes",
+            ),
+            ev_completed("live-policy-active-turn-after-second-tool"),
+        ]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("UnifiedExec feature");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    submit_turn(&test.codex, PROMPT, ThreadSettingsOverrides::default()).await?;
+    let initial_request = wait_for_captured_request(
+        &lead_tool_call,
+        |request| {
+            request.body_contains_text(PROMPT) && response_request_has_model(request, LEAD_MODEL)
+        },
+        "active Lead turn before the policy update",
+    )
+    .await;
+    let initial_instructions = latest_team_role_instructions(&initial_request)
+        .expect("initial request should contain the Lead instructions");
+    assert!(
+        !initial_instructions.contains("Lead work policy: manager_only"),
+        "the Lead starts in the configured prompt-guided policy: {initial_instructions}"
+    );
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::ManagerOnly),
+    )
+    .await?;
+    pretty_assertions::assert_eq!(
+        test.codex
+            .config_snapshot()
+            .await
+            .team
+            .as_ref()
+            .and_then(|team| team.lead_work_policy),
+        Some(TeamLeadWorkPolicy::ManagerOnly)
+    );
+
+    let next_step = wait_for_captured_request(
+        &lead_after_first_tool,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, FIRST_TOOL_CALL_ID)
+        },
+        "next model request after applying the policy update",
+    )
+    .await;
+    let team_instructions = latest_team_role_instructions(&next_step)
+        .expect("next request should contain the updated Lead instructions");
+    assert!(
+        team_instructions.contains("Lead work policy: manager_only"),
+        "the active turn should use its latest committed Lead policy: {team_instructions}"
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::PromptGuided),
+    )
+    .await?;
+    pretty_assertions::assert_eq!(
+        test.codex
+            .config_snapshot()
+            .await
+            .team
+            .as_ref()
+            .and_then(|team| team.lead_work_policy),
+        Some(TeamLeadWorkPolicy::PromptGuided)
+    );
+    let final_step = wait_for_captured_request(
+        &lead_after_second_tool,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, SECOND_TOOL_CALL_ID)
+        },
+        "next model request after switching back to PromptGuided",
+    )
+    .await;
+    let final_team_instructions = latest_team_role_instructions(&final_step)
+        .expect("final request should contain the updated Lead instructions");
+    assert!(
+        !final_team_instructions.contains("Lead work policy: manager_only"),
+        "the active turn should reflect the latest PromptGuided policy: {final_team_instructions}"
+    );
+    Ok(())
+}
+
 
 const POLICY_SWITCH_ROOT_PROMPT: &str = "delegate both workers before changing Lead policy";
 const POLICY_SWITCH_FIRST_TASK: &str = "policy switch first worker task";
