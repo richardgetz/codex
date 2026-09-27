@@ -1,0 +1,18 @@
+intent:
+  id: "stable-v0.157.1-python-async-turn-subscription-cleanup"
+  change_type: "fix"
+  scope: "sdk/python"
+  summary: "Close async turn subscriptions when stream initialization fails or is cancelled."
+  decision: "Enter AsyncTurnHandle.stream's try/finally before awaiting client initialization so the request-time subscription is released on every exit path."
+  constraints:
+    - "Preserve preattached request-time event cursors and ordinary sync/async streaming behavior."
+    - "Keep app-server wire requests unchanged."
+    - "Keep the change limited to the Python SDK and its focused regression test."
+  intent_priority: "compatibility"
+  code_locations:
+    - "sdk/python/src/openai_codex/api.py"
+    - "sdk/python/tests/test_turn_subscriptions.py"
+  requested_by: "Focused post-change review of e86562f518"
+  recorded_by:
+    agent: "rust_validation_owner"
+    model: "GPT-6"
