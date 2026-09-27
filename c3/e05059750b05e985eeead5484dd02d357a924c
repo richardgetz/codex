@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-27/team-wait-fixture-diagnostics"
+  change_type: "test"
+  scope: "codex-core Team wait and live policy integration fixtures"
+  summary: "Expose captured model request details on route timeout and start the active-turn fixture without awaiting a gated tool."
+  decision: "Report bounded model, tool-output, and user-message summaries when a route capture fails. Start the Lead turn asynchronously so the test can commit the policy update and release the already-running tool barrier before waiting for turn completion."
+  constraints:
+    - "Do not modify production behavior."
+    - "Keep the active-turn policy change ordered by the existing two-party test barrier."
+    - "Keep captured diagnostic text bounded."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team.rs::wait_for_captured_request_with_timeout"
+    - "codex-rs/core/tests/suite/team_manager_only.rs::live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
