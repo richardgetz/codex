@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-27/team-wait-fixture-observed-outcomes"
+  change_type: "test"
+  scope: "codex-core Team wait integration fixtures"
+  summary: "Align the policy reassessment fixture with the observed input-interrupted wait outcome and report route-level action wake predicates on failure."
+  decision: "Require the next Lead sample after the settings commit to contain ManagerOnly instructions while allowing the wait output to reflect either the policy-change signal or an overlapping input interruption. Record only root wait requests examined by the action/deadline matchers so a missing mock response reports the exact action, completion, policy, and wait-output predicates."
+  constraints:
+    - "Preserve the existing oversight deadline and verify the second wait remains parked until that deadline."
+    - "Keep the action route and captured-request predicates equivalent."
+    - "Do not change production dispatch behavior in the test-only commit."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+    - "codex-rs/core/tests/suite/team_idle.rs::team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
