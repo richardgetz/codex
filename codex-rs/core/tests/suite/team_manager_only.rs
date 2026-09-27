@@ -600,7 +600,40 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
     const PROMPT: &str = "change the Lead policy while this turn is running";
     const FIRST_TOOL_CALL_ID: &str = "live-policy-active-turn-first-gate";
     const SECOND_TOOL_CALL_ID: &str = "live-policy-active-turn-second-gate";
-    const TOOL_ARGS: &str = r#"{"sleep_before_ms":1500}"#;
+    const FIRST_TOOL_BARRIER_ID: &str = "live-policy-active-turn-first-barrier";
+    const SECOND_TOOL_BARRIER_ID: &str = "live-policy-active-turn-second-barrier";
+    const RELEASE_FIRST_TOOL_PROMPT: &str = "release the first live policy tool";
+    const RELEASE_FIRST_TOOL_CALL_ID: &str = "live-policy-active-turn-release-first";
+    const RELEASE_SECOND_TOOL_PROMPT: &str = "release the second live policy tool";
+    const RELEASE_SECOND_TOOL_CALL_ID: &str = "live-policy-active-turn-release-second";
+    let first_tool_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": FIRST_TOOL_BARRIER_ID,
+            "participants": 2,
+            "timeout_ms": 30_000,
+        },
+    }))?;
+    let second_tool_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": SECOND_TOOL_BARRIER_ID,
+            "participants": 2,
+            "timeout_ms": 30_000,
+        },
+    }))?;
+    let first_tool_release_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": FIRST_TOOL_BARRIER_ID,
+            "participants": 2,
+            "timeout_ms": 30_000,
+        },
+    }))?;
+    let second_tool_release_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": SECOND_TOOL_BARRIER_ID,
+            "participants": 2,
+            "timeout_ms": 30_000,
+        },
+    }))?;
 
     let lead_tool_call = mount_sse_once_match(
         &server,
@@ -611,7 +644,7 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         },
         sse(vec![
             ev_response_created("live-policy-active-turn-first-tool-call"),
-            ev_function_call(FIRST_TOOL_CALL_ID, "test_sync_tool", TOOL_ARGS),
+            ev_function_call(FIRST_TOOL_CALL_ID, "test_sync_tool", &first_tool_args),
             ev_completed("live-policy-active-turn-first-tool-call"),
         ]),
     )
@@ -624,7 +657,7 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         },
         sse(vec![
             ev_response_created("live-policy-active-turn-second-tool-call"),
-            ev_function_call(SECOND_TOOL_CALL_ID, "test_sync_tool", TOOL_ARGS),
+            ev_function_call(SECOND_TOOL_CALL_ID, "test_sync_tool", &second_tool_args),
             ev_completed("live-policy-active-turn-second-tool-call"),
         ]),
     )
@@ -642,6 +675,66 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
                 "the active turn continued after applying both policy changes",
             ),
             ev_completed("live-policy-active-turn-after-second-tool"),
+        ]),
+    )
+    .await;
+    let helper_first_tool_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, RELEASE_FIRST_TOOL_PROMPT)
+                && request_has_model(request, INITIAL_MODEL)
+        },
+        sse(vec![
+            ev_response_created("live-policy-helper-first-tool-gate"),
+            ev_function_call(
+                RELEASE_FIRST_TOOL_CALL_ID,
+                "test_sync_tool",
+                &first_tool_release_args,
+            ),
+            ev_completed("live-policy-helper-first-tool-gate"),
+        ]),
+    )
+    .await;
+    let helper_first_tool_complete = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request_has_function_call_output(request, RELEASE_FIRST_TOOL_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-helper-first-tool-complete"),
+            ev_assistant_message("live-policy-helper-first-tool-message", "first tool released"),
+            ev_completed("live-policy-helper-first-tool-complete"),
+        ]),
+    )
+    .await;
+    let helper_second_tool_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, RELEASE_SECOND_TOOL_PROMPT)
+                && request_has_model(request, INITIAL_MODEL)
+        },
+        sse(vec![
+            ev_response_created("live-policy-helper-second-tool-gate"),
+            ev_function_call(
+                RELEASE_SECOND_TOOL_CALL_ID,
+                "test_sync_tool",
+                &second_tool_release_args,
+            ),
+            ev_completed("live-policy-helper-second-tool-gate"),
+        ]),
+    )
+    .await;
+    let helper_second_tool_complete = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request_has_function_call_output(request, RELEASE_SECOND_TOOL_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-helper-second-tool-complete"),
+            ev_assistant_message("live-policy-helper-second-tool-message", "second tool released"),
+            ev_completed("live-policy-helper-second-tool-complete"),
         ]),
     )
     .await;
@@ -670,6 +763,15 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
                 .expect("MultiAgentV2 feature");
             configure_team(config, TeamMode::LeadWorker);
         })
+        .build_with_auto_env(&server)
+        .await?;
+    let helper = test_codex()
+        .with_model_info_override(INITIAL_MODEL, |model_info| {
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
         .build_with_auto_env(&server)
         .await?;
 
@@ -702,6 +804,35 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
             .and_then(|team| team.lead_work_policy),
         Some(TeamLeadWorkPolicy::ManagerOnly)
     );
+    helper
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: RELEASE_FIRST_TOOL_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &helper_first_tool_gate,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && request.body_contains_text(RELEASE_FIRST_TOOL_PROMPT)
+        },
+        "helper first policy-transition barrier",
+    )
+    .await;
+    wait_for_event(&helper.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_captured_request(
+        &helper_first_tool_complete,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && response_request_has_function_call_output(request, RELEASE_FIRST_TOOL_CALL_ID)
+        },
+        "helper first policy-transition barrier release",
+    )
+    .await;
 
     let next_step = wait_for_captured_request(
         &lead_after_first_tool,
@@ -733,6 +864,35 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
             .and_then(|team| team.lead_work_policy),
         Some(TeamLeadWorkPolicy::PromptGuided)
     );
+    helper
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: RELEASE_SECOND_TOOL_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &helper_second_tool_gate,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && request.body_contains_text(RELEASE_SECOND_TOOL_PROMPT)
+        },
+        "helper second policy-transition barrier",
+    )
+    .await;
+    wait_for_event(&helper.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_captured_request(
+        &helper_second_tool_complete,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && response_request_has_function_call_output(request, RELEASE_SECOND_TOOL_CALL_ID)
+        },
+        "helper second policy-transition barrier release",
+    )
+    .await;
     let final_step = wait_for_captured_request(
         &lead_after_second_tool,
         |request| {
