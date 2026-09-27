@@ -558,10 +558,17 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "task_name": "manager_batch_second",
         "fork_turns": "none",
     }))?;
-    let gate_args = serde_json::to_string(&json!({
+    let first_gate_args = serde_json::to_string(&json!({
         "barrier": {
-            "id": MANAGER_BATCH_GATE_ID,
-            "participants": 2,
+            "id": format!("{MANAGER_BATCH_GATE_ID}-first"),
+            "participants": 1,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let second_gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": format!("{MANAGER_BATCH_GATE_ID}-second"),
+            "participants": 1,
             "timeout_ms": 10_000,
         },
     }))?;
@@ -616,6 +623,25 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
+    let _root_after_premature_worker_status = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+                && !body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-premature-status"),
+            ev_assistant_message(
+                "manager-batch-root-premature-status-message",
+                "the wait woke before an actionable Worker result",
+            ),
+            ev_completed("manager-batch-root-premature-status"),
+        ]),
+    )
+    .await;
     let root_after_action = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -663,7 +689,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
             ev_function_call(
                 MANAGER_BATCH_FIRST_GATE_CALL_ID,
                 "test_sync_tool",
-                &gate_args,
+                &first_gate_args,
             ),
             ev_completed("manager-batch-first-worker-gate"),
         ]),
@@ -685,14 +711,14 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
-    let _second_worker_action = mount_sse_once_match(
+    let _second_worker_action = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, MANAGER_BATCH_SECOND_TASK)
                 && request_has_model(request, WORKER_MODEL)
                 && !request_has_function_call_output(request, MANAGER_BATCH_ACTION_CALL_ID)
         },
-        sse(vec![
+        sse_response(sse(vec![
             ev_response_created("manager-batch-second-worker-action"),
             ev_function_call(
                 MANAGER_BATCH_ACTION_CALL_ID,
@@ -700,7 +726,8 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                 &action_args,
             ),
             ev_completed("manager-batch-second-worker-action"),
-        ]),
+        ]))
+        .set_delay(Duration::from_secs(/*secs*/ 2)),
     )
     .await;
     let _second_worker_gate = mount_sse_once_match(
@@ -715,7 +742,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
             ev_function_call(
                 MANAGER_BATCH_SECOND_GATE_CALL_ID,
                 "test_sync_tool",
-                &gate_args,
+                &second_gate_args,
             ),
             ev_completed("manager-batch-second-worker-gate"),
         ]),
@@ -873,6 +900,15 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         completion_wakes.len(),
         1,
         "both successful Worker completions should share one Lead wake"
+    );
+    assert_eq!(
+        lead_requests.len(),
+        4,
+        "a terminal status snapshot must not wake the Lead while another successful Worker is still running"
+    );
+    assert!(
+        _root_after_premature_worker_status.requests().is_empty(),
+        "the Lead should remain parked after the first Worker completes while the second is active"
     );
     assert!(body_contains(
         completion_wakes[0],
