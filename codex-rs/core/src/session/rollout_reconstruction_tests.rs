@@ -250,6 +250,7 @@ fn compacted_rollout_items(
     vec![
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some(turn_id.clone()),
                 turn_id: turn_id.clone(),
                 trace_id: None,
                 started_at: None,
@@ -284,6 +285,7 @@ fn compacted_rollout_items(
             window_id: None,
             compaction_response_id: None,
             latest_token_usage_record: None,
+            resume_metadata: None,
         }),
         RolloutItem::TurnContext(turn_context.to_turn_context_item()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
@@ -2238,6 +2240,7 @@ async fn record_initial_history_stale_environment_context_does_not_seed_baseline
     turn_context.config = Arc::new(config);
     let turn_context = Arc::new(turn_context);
     let environment = turn_context
+        .initial_environments
         .environments
         .primary()
         .expect("test should have a primary environment");
@@ -2328,7 +2331,7 @@ async fn step_environment_snapshot_world_state_includes_subagents() {
 
     let world_state = build_world_state_from_environment_snapshot(
         &turn_context,
-        &turn_context.environments,
+        &turn_context.initial_environments.environments,
         "- worker [Atlas]",
     )
     .await;
@@ -2359,6 +2362,7 @@ async fn record_initial_history_newer_stale_environment_context_controls_baselin
 
     let mut replacement_history = session.build_initial_context(&turn_context).await;
     let environment = turn_context
+        .initial_environments
         .environments
         .primary()
         .expect("test should have a primary environment");

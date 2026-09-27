@@ -1284,7 +1284,7 @@ mod tests {
 
     #[test]
     fn turn_input_queue_distinguishes_user_and_automatic_pending_input() {
-        let automatic_output = TurnInput::FunctionCallOutput(ResponseItem::Other);
+        let automatic_output = TurnInput::FunctionCallOutput(ResponseItem::Other.into());
         let user_input = TurnInput::UserInput {
             acceptance_order: None,
             content: vec![UserInput::Text {
@@ -1307,7 +1307,7 @@ mod tests {
         );
         assert_eq!(
             TurnInputQueue {
-                items: vec![TurnInput::FunctionCallOutput(ResponseItem::Other)],
+                items: vec![TurnInput::FunctionCallOutput(ResponseItem::Other.into())],
             }
             .status(),
             PendingInputStatus {

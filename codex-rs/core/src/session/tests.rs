@@ -1921,7 +1921,7 @@ async fn get_base_instructions_no_user_content() {
 
     for test_case in test_cases {
         let model_info = model_info_for_slug(test_case.slug, &config);
-        let model_instructions = model_info.get_model_instructions(config.personality);
+        let model_instructions = codex_prompts::render_model_instructions(&model_info);
         if test_case.expects_apply_patch_description {
             assert_eq!(
                 model_instructions.as_str(),
@@ -4866,6 +4866,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
     sess.persist_rollout_items(&[
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some(first_turn_id.clone()),
                 turn_id: first_turn_id.clone(),
                 trace_id: None,
                 started_at: None,
@@ -4897,6 +4898,7 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some(rolled_back_turn_id.clone()),
                 turn_id: rolled_back_turn_id.clone(),
                 trace_id: None,
                 started_at: None,
@@ -4990,6 +4992,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     sess.persist_rollout_items(&[
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some(first_turn_id.clone()),
                 turn_id: first_turn_id.clone(),
                 trace_id: None,
                 started_at: None,
@@ -5019,6 +5022,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some(compact_turn_id.clone()),
                 turn_id: compact_turn_id.clone(),
                 trace_id: None,
                 started_at: None,
@@ -5044,6 +5048,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
             window_id: Some(compacted_window_id.to_string()),
             compaction_response_id: None,
             latest_token_usage_record: None,
+            resume_metadata: None,
         }),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: compact_turn_id,
@@ -5056,6 +5061,7 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some(rolled_back_turn_id.clone()),
                 turn_id: rolled_back_turn_id.clone(),
                 trace_id: None,
                 started_at: None,
@@ -5139,6 +5145,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     sess.persist_rollout_items(&[
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some("turn-1".to_string()),
                 turn_id: "turn-1".to_string(),
                 trace_id: None,
                 started_at: None,
@@ -5168,6 +5175,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some("turn-2".to_string()),
                 turn_id: "turn-2".to_string(),
                 trace_id: None,
                 started_at: None,
@@ -5197,6 +5205,7 @@ async fn thread_rollback_persists_marker_and_replays_cumulatively() {
         })),
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                root_turn_id: Some("turn-3".to_string()),
                 turn_id: "turn-3".to_string(),
                 trace_id: None,
                 started_at: None,
@@ -5749,7 +5758,7 @@ fn test_codex_thread(session: Session) -> CodexThread {
     CodexThread::new(
         session,
         io,
-        session_configured,
+        (&session_configured).into(),
         /*rollout_path*/ None,
         SessionSource::Exec,
     )
@@ -6857,7 +6866,7 @@ async fn session_configuration_apply_rebinds_symbolic_profile_to_updated_workspa
                 )),
                 permission_profile: Some(permission_profile),
                 active_permission_profile: Some(ActivePermissionProfile::new("dev")),
-                profile_workspace_roots: Some(vec![profile_root.clone()]),
+                profile_workspace_roots: Some(vec![profile_root.clone().into()]),
                 ..Default::default()
             },
             &old_environments,
@@ -13980,7 +13989,6 @@ async fn built_tools_keeps_unavailable_mcp_placeholder_when_inventory_lists_serv
         session.as_ref(),
         turn_context.as_ref(),
         step_context.settings.model_info.as_ref(),
-        step_context.settings.model_info.model_messages.as_ref(),
         &step_context.environments,
         &step_context.mcp,
         turn_context.extension_data.as_ref(),
@@ -16577,6 +16585,7 @@ async fn manager_completion_flush_reuses_dispatch_admission_during_handoff() {
             parent_turn_id: None,
             root_turn_id: None,
             trace: None,
+            residency_guard: None,
         })
         .await
         .expect("settings dispatch should be queued");
@@ -16658,7 +16667,12 @@ async fn explicit_user_progress_drain_prevents_empty_manager_completion_wake() {
 
 #[tokio::test]
 async fn manager_completion_delivery_ack_waits_for_parent_buffer_insertion() {
-    let (_home, mut config) = test_config().await;
+    let mut config = test_config().await;
+    let home = tempfile::tempdir().expect("create manager home");
+    config.codex_home = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+        home.path(),
+    )
+    .expect("manager home should be absolute");
     let profile = codex_config::TeamModelProfile {
         model: "gpt-5.5".to_string(),
         reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
@@ -16783,7 +16797,12 @@ async fn manager_completion_delivery_ack_waits_for_parent_buffer_insertion() {
 
 #[tokio::test]
 async fn triggered_team_lead_completion_ack_blocks_older_manager_batch() {
-    let (_home, mut config) = test_config().await;
+    let mut config = test_config().await;
+    let home = tempfile::tempdir().expect("create manager home");
+    config.codex_home = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
+        home.path(),
+    )
+    .expect("manager home should be absolute");
     let profile = codex_config::TeamModelProfile {
         model: "gpt-5.5".to_string(),
         reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,

@@ -12,6 +12,7 @@ use crate::guardian::approval_request::guardian_request_target_item_id;
 use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;
+use crate::session::tests::update_selected_settings_for_test;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
@@ -1454,6 +1455,7 @@ fn guardian_exec_command_uses_executor_cwd_convention(
         justification: None,
         tty: false,
         proposed_execpolicy_amendment: None,
+        allow_browser: false,
     }
     .into_guardian_request(Some(cwd_convention))
     .expect("Guardian request should render executor cwd");
@@ -1810,6 +1812,14 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
     let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
     Arc::make_mut(&mut Arc::get_mut(&mut turn).expect("unshared turn").config)
         .guardian_policy_config = configured_policy.map(str::to_owned);
+    update_turn_settings_for_test(
+        Arc::get_mut(&mut turn).expect("unshared turn"),
+        |settings| {
+            update_selected_settings_for_test(settings, |selected| {
+                selected.personality = Some(codex_protocol::config_types::Personality::Friendly);
+            })
+        },
+    );
     let mut captured = GuardianReviewContext::from(&turn);
     let parent = Arc::make_mut(&mut captured.model_info);
     parent.slug = "captured-parent".to_string();
@@ -1820,7 +1830,6 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
             "policy_template": "captured template: {{ tenant_policy_config }}",
         },
     }))?);
-    captured.personality = Some(codex_protocol::config_types::Personality::Friendly);
 
     Arc::get_mut(&mut session)
         .expect("unshared session")
@@ -1840,8 +1849,16 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
         .as_mut()
         .unwrap()
         .policy = Some("changed action policy".to_string());
-    let mut different_personality = changed_policy.clone();
-    different_personality.personality = Some(codex_protocol::config_types::Personality::Pragmatic);
+    let mut pragmatic_turn = session.new_default_turn().await;
+    let pragmatic_turn_mut = Arc::get_mut(&mut pragmatic_turn).expect("unshared turn");
+    pragmatic_turn_mut.config = Arc::clone(&turn.config);
+    update_turn_settings_for_test(pragmatic_turn_mut, |settings| {
+        update_selected_settings_for_test(settings, |selected| {
+            selected.personality = Some(codex_protocol::config_types::Personality::Pragmatic);
+        })
+    });
+    let mut different_personality = GuardianReviewContext::from(&pragmatic_turn);
+    different_personality.model_info = Arc::clone(&captured.model_info);
     for (index, context) in [captured, changed_policy, different_personality]
         .into_iter()
         .enumerate()

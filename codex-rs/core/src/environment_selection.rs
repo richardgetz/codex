@@ -2383,7 +2383,7 @@ url = "ws://127.0.0.1:8765"
         let remote = ThreadEnvironments::new(
             Arc::new(EnvironmentManager::default_for_tests()),
             crate::shell::default_user_shell(),
-            test_environment_config(),
+            ThreadEnvironmentDefaults::new(test_environment_config(), SandboxType::None),
             ShellSnapshot::disabled(),
             TurnEnvironmentSnapshot {
                 environments: vec![TurnEnvironmentState::Ready(TurnEnvironment::new(

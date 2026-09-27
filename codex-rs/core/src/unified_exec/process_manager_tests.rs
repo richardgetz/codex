@@ -30,6 +30,7 @@ async fn browser_runtime_requires_default_sandbox_permissions() {
     let (_session, turn, _rx_event) =
         crate::session::tests::make_session_and_context_with_rx().await;
     let turn_environment = turn
+        .initial_environments
         .environments
         .primary()
         .cloned()

@@ -91,7 +91,7 @@ fn catalog_persistent_instructions_are_bounded() {
     let instructions = "x".repeat(40_000);
     let state = PersistentModeState::new(
         Some(&ReasoningEffort::Persistent),
-        Some(&instructions),
+        &instructions,
         /*send_user_message_async_available*/ false,
     );
 

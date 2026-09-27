@@ -166,7 +166,7 @@ impl GuardianReviewSession {
     async fn from_test_parts(session: Arc<Session>, io: SessionIo) -> Self {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             session.get_config().await.as_ref(),
-            session.user_instructions().await,
+            session.inherited_instructions().await,
             session.clone_history().await.history_version(),
             session.guardian_context_mode,
         );
@@ -176,11 +176,9 @@ impl GuardianReviewSession {
             cancel_token: CancellationToken::new(),
             reuse_key,
             state: Mutex::new(GuardianReviewState {
-                prior_review_count: 0,
-                last_reviewed_transcript_cursor: None,
+                conversation: ConversationState::default(),
                 last_admitted_node_repl_response_sequence: 0,
                 pending_node_repl_evidence_admission: None,
-                last_committed_fork_snapshot: None,
             }),
         }
     }

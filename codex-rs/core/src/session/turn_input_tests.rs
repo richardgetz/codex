@@ -160,6 +160,7 @@ async fn steering_does_not_wait_for_realtime_history() {
                 }]),
                 mode,
                 "steer-submission".to_string(),
+                /*handoff_admission*/ None,
             ),
         )
         .await
@@ -205,6 +206,7 @@ async fn accepted_input_applies_thread_settings() {
         }),
         TurnInputMode::StartOrSteer,
         "sub-1".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("submit user turn");
@@ -357,6 +359,7 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
         .with_thread_settings(invalid_override.clone()),
         TurnInputMode::StartIfIdle,
         "automatic-plan-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("current Plan must reject before settings validation");
@@ -388,6 +391,7 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
         .with_thread_settings(invalid_override),
         TurnInputMode::StartIfIdle,
         "invalid-automatic-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await;
     let error = result.expect_err("invalid automatic settings must be rejected");
@@ -983,6 +987,7 @@ async fn steer_only_enforces_expected_turn_id() {
         ),
         TurnInputMode::StartOrSteer,
         "test-submission".to_string(),
+        /*handoff_admission*/ None,
     )
     .await
     .expect("standalone output should steer the active turn");
@@ -1066,6 +1071,7 @@ async fn rejects_non_regular_turns() {
             TurnInputRequest::user_input(steer_input),
             TurnInputMode::StartOrSteer,
             "test-submission".to_string(),
+            /*handoff_admission*/ None,
         )
         .await
         .expect("start-or-steer submission should be valid");

@@ -40,6 +40,7 @@ use codex_extension_api::LoadedUserInstructions;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use futures::StreamExt;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -1723,6 +1724,10 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
                 ThreadSettingsAppliedEvent {
                     thread_id: Some(parent_thread_id),
                     thread_settings: ThreadSettingsSnapshot {
+                        memory_policy: Default::default(),
+                        user_preferences_memory_policy: Default::default(),
+                        usage_policy: Default::default(),
+                        team: None,
                         disabled_plugin_ids: Vec::new(),
                         model: "parent-only-model".to_string(),
                         model_provider_id: "parent-only-provider".to_string(),

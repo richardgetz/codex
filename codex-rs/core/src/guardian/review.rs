@@ -148,7 +148,7 @@ pub(super) async fn guardian_review_session_config(
         review_model.model.as_str(),
         review_model.reasoning_effort.clone(),
         context.reasoning_summary,
-        context.turn.config.personality,
+        context.turn.personality(),
         model_messages,
     )?;
     if context.model_info.computer_use_review_required() {
@@ -226,7 +226,7 @@ async fn run_guardian_review_session_before_deadline(
                 schema,
                 review_model: session_config.review_model,
                 reasoning_summary: context.reasoning_summary,
-                personality: context.turn.config.personality,
+                personality: context.turn.personality(),
                 external_cancel,
                 deadline,
             },

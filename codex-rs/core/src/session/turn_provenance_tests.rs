@@ -11,6 +11,7 @@ use crate::session::turn::McpStartupRequirements;
 use crate::session::turn_context::TurnContext;
 use codex_login::CodexAuth;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -208,21 +209,29 @@ fn request_fingerprint_preserves_text_normalization_and_hashes_structured_inputs
     );
 
     let image_a = with_structured_input(UserInput::Image {
-        image_url: "data:image/png;base64,dataAA".to_string(),
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,dataAA".to_string(),
+        },
         detail: Some(ImageDetail::Auto),
     });
     let image_b = with_structured_input(UserInput::Image {
-        image_url: "data:image/png;base64,dataAg".to_string(),
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,dataAg".to_string(),
+        },
         detail: Some(ImageDetail::Auto),
     });
     assert_ne!(request_fingerprint(&image_a), request_fingerprint(&image_b));
 
     let image_detail_a = with_structured_input(UserInput::Image {
-        image_url: "data:image/png;base64,same".to_string(),
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,same".to_string(),
+        },
         detail: Some(ImageDetail::Low),
     });
     let image_detail_b = with_structured_input(UserInput::Image {
-        image_url: "data:image/png;base64,same".to_string(),
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,same".to_string(),
+        },
         detail: Some(ImageDetail::High),
     });
     assert_ne!(
@@ -308,7 +317,9 @@ fn request_fingerprint_preserves_text_normalization_and_hashes_structured_inputs
     );
 
     let image = UserInput::Image {
-        image_url: "data:image/png;base64,same".to_string(),
+        image: ImageReference::Inline {
+            image_url: "data:image/png;base64,same".to_string(),
+        },
         detail: Some(ImageDetail::Auto),
     };
     let partitioned_a = vec![text("move"), image.clone(), text("A to B")];
