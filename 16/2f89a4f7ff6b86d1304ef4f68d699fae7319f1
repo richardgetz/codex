@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/captured-response-predicates#162f89a4f7"
+  change_type: "test"
+  scope: "codex-core Team ManagerOnly integration fixture"
+  summary: "Use ResponsesRequest predicates for captured mock requests."
+  decision: "Match the predicate helpers to the captured ResponsesRequest type instead of wiremock's raw request type."
+  constraints:
+    - "Limit the change to the integration test fixture."
+    - "Do not run Rust validation outside the designated build owner."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
