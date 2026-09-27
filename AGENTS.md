@@ -83,7 +83,9 @@ In the codex-rs folder where the rust code lives:
     the new implementation so the invariants stay close to the code that owns them.
   - Avoid adding new standalone methods to `codex-rs/tui/src/chatwidget.rs` unless the change is
     trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.
-- When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
+- When running Rust commands (e.g. `just fix` or `just test`), be patient: slow progress, quiet
+  output, and Cargo lock waits alone do not establish failure. Do not stop a command on those
+  signals alone.
 
 Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making code changes anywhere in this repository; do not ask for approval to run it. Additionally, validate in this order:
 
@@ -107,7 +109,12 @@ Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in 
 - Record the command, owner, integrated source revision, target/cache location, and log or session identifier before launch. Report the first meaningful failure or completion with that identity so another worker can reproduce the exact run.
 - For semantic source changes, run required code generation once per source revision and only when the changed source requires it. Run the relevant project test once per integrated source revision; after a source or configuration repair, rerun once for the new revision, allowing bounded retries only for diagnosed infrastructure or flaky failures. The docs-only and formatting-only exception above still applies. Then perform the required scoped `fix` and final `fmt` sequencing; do not repeat expensive validation without a source or configuration change that justifies it.
 - Prefer a documented terminal-event wake when it is already available and appropriate to the task. Otherwise, retain the existing command session and use its supported bounded wait (for example, the returned session identifier with `write_stdin` and the longest permitted yield interval consistent with responsiveness) only when another observation is needed. The wait itself does not require a separate model status turn; do not start replacement commands, issue rapid unchanged polls, or send unchanged status updates while the command is running. Process/output watchers do not necessarily create a new model turn; `write_stdin` and `wait_agent` do not subscribe an idle worker to an arbitrary command, and enabling Goal or Team mode solely to wait is not an implicit workaround. If the runner exposes no completion callback or wait handle, state that limitation and wait for an explicit owner/user check.
-- Completion, failure, cancellation, or an owner handoff ends the wait. Never infer completion from elapsed time, idle output, or an unchanged status line, and do not kill a Rust process by PID.
+- Completion, a definitive failure, cancellation, or an owner handoff ends the wait. Never infer
+  completion or failure from elapsed time, idle output, or an unchanged status line. When direct
+  evidence establishes that a Rust build failed, its owner may stop only that exact command's
+  process tree without separate user approval, then clear only the stale shared Cargo lock left by
+  that tree. Use the supported command/session handle when available; if it was lost, the owner may
+  identify its own process tree by PID. Never stop another owner's Rust process.
 
 ## The `codex-core` crate
 
