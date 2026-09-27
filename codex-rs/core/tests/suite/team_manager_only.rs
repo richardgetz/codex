@@ -76,27 +76,10 @@ fn lead_work_policy_update(policy: TeamLeadWorkPolicy) -> ThreadSettingsOverride
 
 fn latest_team_role_instructions(request: &ResponsesRequest) -> Option<String> {
     request
-        .inputs_of_type("message")
+        .message_input_texts("developer")
         .into_iter()
         .rev()
-        .find_map(|message| {
-            let has_team_role_instructions = message
-                .get("internal_chat_message_metadata_passthrough")?
-                .get("content_item_kinds")?
-                .as_array()?
-                .iter()
-                .any(|kind| kind.as_str() == Some("team.role_instructions"));
-            has_team_role_instructions.then(|| {
-                message["content"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|item| item["type"].as_str() == Some("input_text"))
-                    .filter_map(|item| item["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-        })
+        .find(|text| text.contains("<team_role_instructions>"))
 }
 
 async fn wait_for_completed_agent_message(thread: &codex_core::CodexThread, expected: &str) {

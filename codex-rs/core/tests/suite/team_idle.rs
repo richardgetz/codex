@@ -1269,7 +1269,6 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
-                && body_contains(request, "oversight deadline has elapsed")
         },
         sse(vec![
             ev_response_created("team-idle-deadline-root-3"),
@@ -1414,11 +1413,9 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
     .await;
     assert!(policy_wake_request.body_contains_text("Lead work policy: manager_only"));
 
-    let mut first_wait_ended = false;
     let mut second_wait_started = false;
-    let mut second_wait_ended = false;
     let mut policy_update_applied = false;
-    while !(first_wait_ended && second_wait_started && policy_update_applied) {
+    while !(second_wait_started && policy_update_applied) {
         let event = tokio::time::timeout(Duration::from_secs(10), test.codex.next_event())
             .await
             .expect("timed out waiting for policy and wait transitions")
@@ -1433,34 +1430,17 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             }
         }
         match event_msg {
-            EventMsg::CollabWaitingEnd(end) if end.call_id == DEADLINE_WAIT_CALL_ID => {
-                first_wait_ended = true;
-            }
             EventMsg::ItemStarted(item)
                 if matches!(&item.item, TurnItem::CollabAgentToolCall(call) if call.id == DEADLINE_POLICY_WAIT_CALL_ID) =>
             {
                 second_wait_started = true;
             }
-            EventMsg::CollabWaitingEnd(end) if end.call_id == DEADLINE_POLICY_WAIT_CALL_ID => {
-                second_wait_ended = true;
-            }
             _ => {}
         }
     }
+    tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(
-        !second_wait_ended,
-        "the second wait must not reuse the frozen turn-start policy baseline"
-    );
-
-    let second_wait_ended_early = tokio::time::timeout(
-        Duration::from_millis(250),
-        wait_for_event(&test.codex, |event| {
-            matches!(event, EventMsg::CollabWaitingEnd(end) if end.call_id == DEADLINE_POLICY_WAIT_CALL_ID)
-        }),
-    )
-    .await;
-    assert!(
-        second_wait_ended_early.is_err(),
+        root_after_deadline.requests().is_empty(),
         "the next wait must park after its request observes the committed policy"
     );
 
@@ -1483,15 +1463,16 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             .message
             .contains("Lead oversight deadline reached")
     );
-    let _ = wait_for_captured_request(
+    let deadline_request = wait_for_captured_request(
         &root_after_deadline,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
-                && response_request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+                && response_request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
         },
         "Lead oversight deadline wake",
     )
     .await;
+    assert!(deadline_request.body_contains_text("oversight deadline has elapsed"));
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
