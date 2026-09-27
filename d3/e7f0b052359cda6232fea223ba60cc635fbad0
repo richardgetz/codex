@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-27/stable-refresh-fork-start-options"
+  change_type: fix
+  scope: stable refresh fork startup
+  summary: Preserve caller-supplied thread startup options when forking rollout, loaded, or prepared history.
+  decision: Add options-preserving ThreadManager fork entry points and carry the supplied options through spawn, replacing only initial history with the selected fork history.
+  constraints:
+    - Preserve environment selections, instruction providers, MCP and thread extensions, session source, trace context, and reserved thread identity.
+    - Keep explicitly inherited thread settings authoritative, including an empty plugin selection that clears rollout state.
+    - Retain existing Config-based fork APIs and their behavior.
+    - Do not alter shipped migrations, release targets, or stable.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/thread_manager.rs
+    - codex-rs/core/src/session/mod.rs
+    - codex-rs/core/tests/suite
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: stable refresh validation assignment
+  recorded_by:
+    agent: Codex
+    model: gpt-6
