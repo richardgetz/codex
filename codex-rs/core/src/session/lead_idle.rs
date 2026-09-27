@@ -226,7 +226,9 @@ impl Session {
             return None;
         }
         if mode == LeadIdleArmMode::CompletedLeadTurn && self.active_turn.lock().await.is_some() {
-            self.cancel_lead_oversight().await;
+            // A new turn may have started between clearing the previous turn and arming its
+            // idle deadline. Do not cancel a deadline already owned by the parked Worker wait:
+            // a settings or review turn can be active while that original interval continues.
             return None;
         }
         let active_workers = self
