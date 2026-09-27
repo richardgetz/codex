@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Iterator
 
 from ._approval_mode import (
@@ -22,6 +22,7 @@ from ._inputs import (
     TextInput as TextInput,
     _normalize_run_input,
     _to_wire_input,
+    _to_wire_turn_input,
 )
 from ._login import (
     AsyncChatgptLoginHandle,
@@ -33,6 +34,7 @@ from ._login import (
     start_chatgpt_login,
     start_device_code_login,
 )
+from ._message_router import _TurnSubscription
 from ._run import (
     TurnResult,
     _collect_async_turn_result,
@@ -883,6 +885,19 @@ class TurnHandle:
     _client: CodexClient
     thread_id: str
     id: str
+    _subscription: _TurnSubscription = field(init=False, repr=False, compare=False)
+
+    def __init__(
+        self, _client: CodexClient, thread_id: str, id: str, *, _subscription=None
+    ) -> None:
+        self._client, self.thread_id, self.id = _client, thread_id, id
+        if _subscription is None:
+            self.__post_init__()
+        else:
+            self._subscription = _subscription
+
+    def __post_init__(self) -> None:
+        self._subscription = self._client._subscribe_turn_notifications(self.id)
 
     def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
@@ -898,10 +913,9 @@ class TurnHandle:
 
     def stream(self) -> Iterator[Notification]:
         """Yield only notifications routed to this turn handle."""
-        self._client.register_turn_notifications(self.id)
         try:
             while True:
-                event = self._client.next_turn_notification(self.id)
+                event = self._subscription.next()
                 yield event
                 if (
                     event.method == "turn/completed"
@@ -910,7 +924,7 @@ class TurnHandle:
                 ):
                     break
         finally:
-            self._client.unregister_turn_notifications(self.id)
+            self._subscription.close()
 
     def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""
@@ -928,6 +942,17 @@ class AsyncTurnHandle:
     _codex: AsyncCodex
     thread_id: str
     id: str
+    _subscription: _TurnSubscription = field(init=False, repr=False, compare=False)
+
+    def __init__(self, _codex: AsyncCodex, thread_id: str, id: str, *, _subscription=None) -> None:
+        self._codex, self.thread_id, self.id = _codex, thread_id, id
+        if _subscription is None:
+            self.__post_init__()
+        else:
+            self._subscription = _subscription
+
+    def __post_init__(self) -> None:
+        self._subscription = self._codex._client._subscribe_turn_notifications(self.id)
 
     async def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
@@ -946,10 +971,9 @@ class AsyncTurnHandle:
     async def stream(self) -> AsyncIterator[Notification]:
         """Yield only notifications routed to this async turn handle."""
         await self._codex._ensure_initialized()
-        self._codex._client.register_turn_notifications(self.id)
         try:
             while True:
-                event = await self._codex._client.next_turn_notification(self.id)
+                event = await asyncio.to_thread(self._subscription.next)
                 yield event
                 if (
                     event.method == "turn/completed"
@@ -958,7 +982,7 @@ class AsyncTurnHandle:
                 ):
                     break
         finally:
-            self._codex._client.unregister_turn_notifications(self.id)
+            self._subscription.close()
 
     async def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""
