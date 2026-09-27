@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/team-premature-wake-route-assertion"
+  change_type: "test"
+  scope: "codex-core Team ManagerOnly wait integration"
+  summary: "Check premature wait wakes against the route predicate instead of the global request capture."
+  decision: "Retain the Lead request count and additionally assert that no captured request satisfies the premature-status route while one Worker is complete and another is active."
+  constraints:
+    - "Preserve the real action wake and final completion-batch checks."
+    - "Do not change runtime behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
