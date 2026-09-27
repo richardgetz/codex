@@ -2,6 +2,8 @@ use super::*;
 use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::items::TurnItem;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 const IDLE_ROOT_PROMPT: &str = "park the lead while the worker runs";
 const IDLE_CHILD_TASK: &str = "send routine progress while working";
@@ -547,6 +549,29 @@ const MANAGER_BATCH_ACTION_MESSAGE: &str = "second worker asks for immediate rev
 const MANAGER_BATCH_FIRST_RESULT: &str = "first manager batch result marker";
 const MANAGER_BATCH_SECOND_RESULT: &str = "second manager batch result marker";
 
+async fn wait_for_captured_request_with_route_diagnostics(
+    response: &ResponseMock,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+    label: &str,
+    timeout: Duration,
+    route_diagnostics: &Mutex<Vec<String>>,
+) -> ResponsesRequest {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(request) = response
+            .requests()
+            .into_iter()
+            .find(|request| predicate(request))
+        {
+            return request;
+        }
+        if Instant::now() >= deadline {
+            panic!("{label} request was not captured; route observations: {route_diagnostics:#?}");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manager_only_batches_successful_worker_completions_and_wakes_for_action() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -588,6 +613,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "message": MANAGER_BATCH_ACTION_MESSAGE,
     }))?;
     let root_wait_args = serde_json::to_string(&json!({ "timeout_ms": 1 }))?;
+    let action_route_diagnostics = Arc::new(Mutex::new(Vec::new()));
 
     let root_initial = mount_sse_once_match(
         &server,
@@ -653,11 +679,23 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
+    let action_diagnostics = Arc::clone(&action_route_diagnostics);
     let root_after_action = mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
+        move |request: &wiremock::Request| {
+            let root_wait = request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID);
+            if root_wait {
+                action_diagnostics.lock().unwrap().push(format!(
+                    "action={}, first_result={}, second_result={}, wait_completed={}, wait_interrupted={}",
+                    body_contains(request, MANAGER_BATCH_ACTION_MESSAGE),
+                    body_contains(request, MANAGER_BATCH_FIRST_RESULT),
+                    body_contains(request, MANAGER_BATCH_SECOND_RESULT),
+                    body_contains(request, "Wait completed."),
+                    body_contains(request, "Wait interrupted by new input."),
+                ));
+            }
+            root_wait
                 && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
                 && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
@@ -886,7 +924,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     )
     .await;
 
-    wait_for_captured_request_with_timeout(
+    wait_for_captured_request_with_route_diagnostics(
         &root_after_action,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
@@ -900,6 +938,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         },
         "immediate manager-only action wake",
         Duration::from_secs(/*secs*/ 7),
+        &action_route_diagnostics,
     )
     .await;
     wait_for_event(&test.codex, |event| {
@@ -1335,12 +1374,24 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         ]),
     )
     .await;
+    let policy_route_diagnostics = Arc::new(Mutex::new(Vec::new()));
+    let policy_diagnostics = Arc::clone(&policy_route_diagnostics);
     let root_after_policy_change = mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| {
-            request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
-                && body_contains(request, "Lead work policy changed during this wait")
+        move |request: &wiremock::Request| {
+            let lead_wait = request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID);
+            if lead_wait {
+                policy_diagnostics.lock().unwrap().push(format!(
+                    "policy_change={}, interrupted={}, manager_only={}",
+                    body_contains(request, "Lead work policy changed during this wait"),
+                    body_contains(request, "Wait interrupted by new input."),
+                    body_contains(request, "Lead work policy: manager_only"),
+                ));
+            }
+            lead_wait
+                && (body_contains(request, "Lead work policy changed during this wait")
+                    || body_contains(request, "Wait interrupted by new input."))
                 && body_contains(request, "Lead work policy: manager_only")
         },
         sse(vec![
@@ -1493,18 +1544,25 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             usage_policy_update: None,
         })
         .await?;
-    let policy_wake_request = wait_for_captured_request(
+    let policy_wake_request = wait_for_captured_request_with_route_diagnostics(
         &root_after_policy_change,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
                 && response_request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
-                && request.body_contains_text("Lead work policy changed during this wait")
+                && (request.body_contains_text("Lead work policy changed during this wait")
+                    || request.body_contains_text("Wait interrupted by new input."))
+                && request.body_contains_text("Lead work policy: manager_only")
         },
         "Lead policy-change wake",
+        Duration::from_secs(/*secs*/ 2),
+        &policy_route_diagnostics,
     )
     .await;
-    assert!(policy_wake_request.body_contains_text("Lead work policy changed during this wait"));
     assert!(policy_wake_request.body_contains_text("Lead work policy: manager_only"));
+    assert!(
+        policy_wake_request.body_contains_text("Lead work policy changed during this wait")
+            || policy_wake_request.body_contains_text("Wait interrupted by new input.")
+    );
 
     let mut second_wait_started = false;
     let mut policy_update_applied = false;

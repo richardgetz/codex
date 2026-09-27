@@ -224,37 +224,7 @@ async fn wait_for_captured_request_with_timeout(
             return request;
         }
         if Instant::now() >= deadline {
-            let captured_requests = response
-                .requests()
-                .into_iter()
-                .map(|request| {
-                    let model = request.body_json()["model"]
-                        .as_str()
-                        .unwrap_or("<missing model>")
-                        .to_string();
-                    let outputs = request
-                        .input()
-                        .into_iter()
-                        .filter(|item| item["type"].as_str() == Some("function_call_output"))
-                        .map(|item| {
-                            let call_id = item["call_id"].as_str().unwrap_or("<missing call id>");
-                            let output = item["output"].as_str().unwrap_or("<missing output>");
-                            format!("{call_id}: {}", output.chars().take(240).collect::<String>())
-                        })
-                        .collect::<Vec<_>>();
-                    let user_messages = request
-                        .message_input_texts("user")
-                        .into_iter()
-                        .map(|message| message.chars().take(240).collect::<String>())
-                        .collect::<Vec<_>>();
-                    let lead_policy = request
-                        .body_json()["instructions"]
-                        .as_str()
-                        .is_some_and(|instructions| instructions.contains("Lead work policy: manager_only"));
-                    format!("model={model}, lead_policy={lead_policy}, outputs={outputs:?}, user_messages={user_messages:?}")
-                })
-                .collect::<Vec<_>>();
-            panic!("{label} request was not captured; observed requests: {captured_requests:#?}");
+            panic!("{label} request was not captured");
         }
         sleep(Duration::from_millis(10)).await;
     }
