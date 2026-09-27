@@ -1,0 +1,22 @@
+intent:
+  id: "intent/2026-09-27/stable-refresh-formatting#df1449aca2"
+  change_type: "chore"
+  scope: "core"
+  summary: "Apply repository formatting to Rust changes made during the stable refresh."
+  decision: "Keep the integrated source in the repository's canonical formatted layout."
+  constraints:
+    - "Formatting changes must not alter behavior."
+    - "Run just fmt after code edits in the repository."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/src/agent/control_tests.rs"
+    - "codex-rs/core/src/guardian"
+    - "codex-rs/core/src/mcp_tool_call.rs"
+    - "codex-rs/core/src/orchestrator_memory"
+    - "codex-rs/core/src/session"
+    - "codex-rs/core/src/thread_manager.rs"
+    - "codex-rs/core/src/tools/spec_plan.rs"
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-6"
