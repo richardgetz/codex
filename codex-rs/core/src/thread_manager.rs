@@ -2611,7 +2611,7 @@ impl ThreadManager {
             .state
             .effective_multi_agent_version_for_spawn(
                 &history,
-                options.session_source.clone(),
+                options.session_source.as_ref(),
                 /*parent_thread_id*/ None,
                 source_thread_id,
                 &config,
