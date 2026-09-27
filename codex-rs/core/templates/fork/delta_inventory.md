@@ -828,6 +828,8 @@ release or merge rules.
   - App-server: `thread/start`, `thread/resume`, and `thread/fork` accept
     `userPreferencesMemoryPolicy`; loaded threads can be changed live with
     `thread/userPreferencesMemoryPolicy/set`.
+  - Python SDK sync and async `thread_start`, `thread_resume`, and `thread_fork`
+    wrappers accept and forward both memory policy options.
   - Startup copy migration is available with
     `migrate_from_orchestrator_memory = true`.
   - `disable_orchestrator_memory_after_migration = true` disables the effective
@@ -1036,6 +1038,10 @@ release or merge rules.
   thread extensions, and reserved IDs. Confirm selected history replaces only
   `initial_history`, and an explicitly inherited thread-settings snapshot can
   clear plugin selections without falling back to rollout metadata.
+
+- Verify Python SDK sync and async `thread_start`, `thread_resume`, and
+  `thread_fork` wrappers expose and serialize both `memory_policy` and
+  `user_preferences_memory_policy` using their protocol field names.
 
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source

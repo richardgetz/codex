@@ -11,6 +11,7 @@ from ._approval_mode import (
 )
 from ._initialize_metadata import validate_initialize_metadata
 from ._inputs import (
+    ExternalMessage as ExternalMessage,
     ImageInput as ImageInput,
     Input as Input,
     InputItem as InputItem,
@@ -45,6 +46,7 @@ from .generated.v2_all import (
     GetAccountParams,
     GetAccountResponse,
     LoginAccountParams,
+    MemoryAccessPolicy,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -68,6 +70,7 @@ from .generated.v2_all import (
     TurnInterruptResponse,
     TurnStartParams,
     TurnSteerResponse,
+    UserPreferencesMemoryBucketPolicy,
 )
 from .models import InitializeResponse, JsonObject, Notification
 
@@ -138,6 +141,7 @@ class Codex:
         cwd: str | None = None,
         developer_instructions: str | None = None,
         ephemeral: bool | None = None,
+        memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
@@ -146,6 +150,7 @@ class Codex:
         service_tier: str | None = None,
         session_start_source: ThreadStartSource | None = None,
         thread_source: ThreadSource | None = None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> Thread:
         """Create a new Codex conversation thread."""
         approval_policy, approvals_reviewer = _approval_mode_settings(approval_mode)
@@ -157,6 +162,7 @@ class Codex:
             cwd=cwd,
             developer_instructions=developer_instructions,
             ephemeral=ephemeral,
+            memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
             personality=personality,
@@ -165,6 +171,7 @@ class Codex:
             service_tier=service_tier,
             session_start_source=session_start_source,
             thread_source=thread_source,
+            user_preferences_memory_policy=user_preferences_memory_policy,
         )
         started = self._client.thread_start(params)
         return Thread(self._client, started.thread.id)
@@ -210,11 +217,13 @@ class Codex:
         cwd: str | None = None,
         developer_instructions: str | None = None,
         include_turns: bool | None = None,
+        memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
         sandbox: Sandbox | None = None,
         service_tier: str | None = None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> Thread:
         """Resume an existing conversation thread by ID.
 
@@ -231,11 +240,13 @@ class Codex:
             cwd=cwd,
             developer_instructions=developer_instructions,
             exclude_turns=None if include_turns is None else not include_turns,
+            memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
             personality=personality,
             sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
+            user_preferences_memory_policy=user_preferences_memory_policy,
         )
         resumed = self._client.thread_resume(thread_id, params)
         return Thread(self._client, resumed.thread.id)
@@ -251,11 +262,13 @@ class Codex:
         developer_instructions: str | None = None,
         ephemeral: bool | None = None,
         include_turns: bool | None = None,
+        memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
         sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> Thread:
         """Create a new thread from an existing thread.
 
@@ -273,11 +286,13 @@ class Codex:
             developer_instructions=developer_instructions,
             ephemeral=ephemeral,
             exclude_turns=None if include_turns is None else not include_turns,
+            memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
             sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
             thread_source=thread_source,
+            user_preferences_memory_policy=user_preferences_memory_policy,
         )
         forked = self._client.thread_fork(thread_id, params)
         return Thread(self._client, forked.thread.id)
@@ -396,6 +411,7 @@ class AsyncCodex:
         cwd: str | None = None,
         developer_instructions: str | None = None,
         ephemeral: bool | None = None,
+        memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
@@ -404,6 +420,7 @@ class AsyncCodex:
         service_tier: str | None = None,
         session_start_source: ThreadStartSource | None = None,
         thread_source: ThreadSource | None = None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> AsyncThread:
         """Create a new Codex conversation thread."""
         await self._ensure_initialized()
@@ -416,6 +433,7 @@ class AsyncCodex:
             cwd=cwd,
             developer_instructions=developer_instructions,
             ephemeral=ephemeral,
+            memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
             personality=personality,
@@ -424,6 +442,7 @@ class AsyncCodex:
             service_tier=service_tier,
             session_start_source=session_start_source,
             thread_source=thread_source,
+            user_preferences_memory_policy=user_preferences_memory_policy,
         )
         started = await self._client.thread_start(params)
         return AsyncThread(self, started.thread.id)
@@ -470,11 +489,13 @@ class AsyncCodex:
         cwd: str | None = None,
         developer_instructions: str | None = None,
         include_turns: bool | None = None,
+        memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
         personality: Personality | None = None,
         sandbox: Sandbox | None = None,
         service_tier: str | None = None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> AsyncThread:
         """Resume an existing conversation thread by ID.
 
@@ -492,11 +513,13 @@ class AsyncCodex:
             cwd=cwd,
             developer_instructions=developer_instructions,
             exclude_turns=None if include_turns is None else not include_turns,
+            memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
             personality=personality,
             sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
+            user_preferences_memory_policy=user_preferences_memory_policy,
         )
         resumed = await self._client.thread_resume(thread_id, params)
         return AsyncThread(self, resumed.thread.id)
@@ -512,11 +535,13 @@ class AsyncCodex:
         developer_instructions: str | None = None,
         ephemeral: bool | None = None,
         include_turns: bool | None = None,
+        memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
         sandbox: Sandbox | None = None,
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
+        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> AsyncThread:
         """Create a new thread from an existing thread.
 
@@ -535,11 +560,13 @@ class AsyncCodex:
             developer_instructions=developer_instructions,
             ephemeral=ephemeral,
             exclude_turns=None if include_turns is None else not include_turns,
+            memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
             sandbox=_sandbox_mode(sandbox),
             service_tier=service_tier,
             thread_source=thread_source,
+            user_preferences_memory_policy=user_preferences_memory_policy,
         )
         forked = await self._client.thread_fork(thread_id, params)
         return AsyncThread(self, forked.thread.id)
