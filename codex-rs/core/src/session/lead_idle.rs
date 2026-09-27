@@ -108,12 +108,23 @@ impl LeadIdleController {
     ) -> Option<LeadIdleDeadline> {
         let mut state = self.state.lock().await;
         if let Some(deadline) = state.deadline {
+            tracing::debug!(
+                generation = state.generation,
+                mode = ?mode,
+                deadline_unix_secs = state.deadline_unix_secs,
+                "reused Lead oversight deadline"
+            );
             return Some(LeadIdleDeadline {
                 instant: deadline,
                 unix_secs: state.deadline_unix_secs.unwrap_or(deadline_unix_secs),
             });
         }
         if mode == LeadIdleArmMode::ExplicitWait && !state.rearm_allowed {
+            tracing::debug!(
+                generation = state.generation,
+                mode = ?mode,
+                "refused to rearm a claimed Lead oversight deadline"
+            );
             return None;
         }
         let deadline = Instant::now().checked_add(timeout)?;
@@ -125,6 +136,13 @@ impl LeadIdleController {
         state.deadline = Some(deadline);
         state.deadline_unix_secs = Some(deadline_unix_secs);
         state.rearm_allowed = false;
+        tracing::debug!(
+            generation,
+            mode = ?mode,
+            timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+            deadline_unix_secs,
+            "armed Lead oversight deadline"
+        );
         let timer = tokio::spawn(async move {
             sleep_until(deadline).await;
             if let Some(session) = session.upgrade() {
@@ -301,12 +319,23 @@ impl Session {
     /// cancelled timer is a no-op; if all Workers finished before it fired there is no synthetic
     /// Lead turn. A subsequent completed Lead assessment may arm a fresh interval.
     pub(crate) async fn handle_lead_oversight_deadline(self: &Arc<Self>, generation: u64) {
-        if !self.lead_idle_controller.claim_deadline(generation).await
-            || !self.is_team_lead().await
-            || self.is_activity_paused()
-            || self.shutdown_requested()
-            || self.is_interrupted()
-        {
+        if !self.lead_idle_controller.claim_deadline(generation).await {
+            tracing::debug!(generation, "ignored stale Lead oversight deadline");
+            return;
+        }
+        let is_team_lead = self.is_team_lead().await;
+        let is_paused = self.is_activity_paused();
+        let is_shutting_down = self.shutdown_requested();
+        let is_interrupted = self.is_interrupted();
+        if !is_team_lead || is_paused || is_shutting_down || is_interrupted {
+            tracing::debug!(
+                generation,
+                is_team_lead,
+                is_paused,
+                is_shutting_down,
+                is_interrupted,
+                "suppressed Lead oversight deadline wake"
+            );
             return;
         }
         let active_workers = self
@@ -315,6 +344,7 @@ impl Session {
             .active_direct_worker_count(self.thread_id)
             .await;
         if active_workers == 0 {
+            tracing::debug!(generation, "suppressed Lead oversight wake because no direct Workers remain");
             return;
         }
         if !self
@@ -322,8 +352,10 @@ impl Session {
             .generation_is_current(generation)
             .await
         {
+            tracing::debug!(generation, "suppressed Lead oversight wake after generation changed");
             return;
         }
+        tracing::debug!(generation, active_workers, "Lead oversight deadline reached");
         self.emit_lead_idle_event(format!(
             "Lead oversight deadline reached; waking for review while {active_workers} direct Worker(s) remain active.",
         ))
@@ -342,8 +374,10 @@ impl Session {
             )
             .await
         {
+            tracing::debug!(generation, "failed to enqueue Lead oversight wake");
             return;
         }
+        tracing::debug!(generation, "enqueued Lead oversight wake");
         self.maybe_start_turn_for_pending_work().await;
     }
 
@@ -413,26 +447,40 @@ impl Session {
     /// so a cancelled timer cannot enqueue a stale trigger after the cleanup.
     async fn enqueue_lead_oversight_wakeup(&self, generation: u64, message: &str) -> bool {
         let Ok(_handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
+            tracing::debug!(generation, "suppressed Lead oversight wake because handoff admission is closed");
             return false;
         };
         // Keep synthetic trigger insertion in the same boundary as Team Off cleanup and other
         // actionable mailbox insertion. This prevents a deadline wake from being cleared or
         // stranded between the mailbox drain and idle-sentinel cleanup.
         let _team_lead_turn_admission = self.team_lead_turn_admission.lock().await;
-        if !self.is_team_lead().await || self.is_activity_paused() {
+        let is_team_lead = self.is_team_lead().await;
+        let is_paused = self.is_activity_paused();
+        if !is_team_lead || is_paused {
+            tracing::debug!(
+                generation,
+                is_team_lead,
+                is_paused,
+                "suppressed Lead oversight wake at Team admission"
+            );
             return false;
         }
         let state = self.lead_idle_controller.state.lock().await;
         if state.generation != generation {
+            tracing::debug!(
+                generation,
+                current_generation = state.generation,
+                "suppressed Lead oversight wake after generation changed"
+            );
             return false;
         }
-        if self
+        let active_workers = self
             .services
             .agent_control
             .active_direct_worker_count(self.thread_id)
-            .await
-            == 0
-        {
+            .await;
+        if active_workers == 0 {
+            tracing::debug!(generation, "suppressed Lead oversight wake at admission because no direct Workers remain");
             return false;
         }
         if let Some(summary) = self.input_queue.take_team_progress_summary().await {

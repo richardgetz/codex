@@ -4,6 +4,8 @@ use codex_protocol::items::TurnItem;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::sync::Mutex;
+use tracing::Level;
+use tracing_test::internal::MockWriter;
 
 const IDLE_ROOT_PROMPT: &str = "park the lead while the worker runs";
 const IDLE_CHILD_TASK: &str = "send routine progress while working";
@@ -1335,9 +1337,17 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    let trace_output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::DEBUG)
+        .with_writer(MockWriter::new(trace_output))
+        .finish();
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
 
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
@@ -1581,6 +1591,7 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
     let mut policy_update_applied = false;
     let mut seen_settings_event_ids = Vec::new();
     let mut seen_wait_call_ids = Vec::new();
+    let mut observed_deadline_warnings = Vec::new();
     while !(second_wait_started && policy_update_applied) {
         let event = tokio::time::timeout(Duration::from_secs(10), test.codex.next_event())
             .await
@@ -1597,6 +1608,11 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             if event_id == policy_update_id {
                 policy_update_applied = true;
             }
+        }
+        if let EventMsg::Warning(warning) = &event_msg
+            && warning.message.contains("Lead oversight deadline reached")
+        {
+            observed_deadline_warnings.push(warning.message.clone());
         }
         if event_id == policy_update_id {
             if let EventMsg::Error(error) = &event_msg {
@@ -1636,13 +1652,14 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             matches!(event, EventMsg::Warning(warning) if warning.message.contains("Lead oversight deadline reached"))
         }),
     )
-    .await
-    .unwrap_or_else(|_| {
-        panic!(
-            "the original oversight deadline should wake the second wait; observed wait result: {:?}",
-            root_after_deadline.function_call_output_text(DEADLINE_POLICY_WAIT_CALL_ID)
-        )
-    });
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the original oversight deadline should wake the second wait; observed wait result: {:?}; warnings seen while waiting for the second wait: {observed_deadline_warnings:#?}; timer traces: {}",
+                root_after_deadline.function_call_output_text(DEADLINE_POLICY_WAIT_CALL_ID),
+                String::from_utf8_lossy(&trace_output.lock().unwrap())
+            )
+        });
     let EventMsg::Warning(deadline_warning) = deadline_warning else {
         unreachable!("deadline warning matcher should only return warnings")
     };
