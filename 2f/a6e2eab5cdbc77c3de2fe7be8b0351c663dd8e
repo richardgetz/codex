@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-27/mcp-model-context-compile"
+  change_type: "fix"
+  scope: "mcp"
+  summary: "Preserve exhaustive approval-event matching with the current model context field."
+  decision: "Explicitly ignore model_context in the MCP approval handler's exhaustive ExecApprovalRequestEvent destructure. The handler does not consume it, while the full event is already forwarded to clients as a notification."
+  constraints:
+    - "Keep forwarding ExecApprovalRequestEvent as a notification before approval handling."
+    - "Keep this event destructure exhaustive so later protocol field additions remain compile-visible."
+    - "Do not replace explicit fields with a wildcard."
+    - "Validate the MCP server and affected release consumer packages."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/mcp-server/src/codex_tool_runner.rs"
+  requested_by: "@root"
+  recorded_by:
+    agent: "Codex Rust validation owner"
+    model: "gpt-6"
