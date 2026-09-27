@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-09-27/mcp-model-context-compile"
+  id: "intent/2026-09-27/mcp-model-context-compile#2fa6e2eab5cd"
   change_type: "fix"
   scope: "mcp"
   summary: "Preserve exhaustive approval-event matching with the current model context field."
@@ -12,7 +12,7 @@ intent:
   intent_priority: "should"
   code_locations:
     - "codex-rs/mcp-server/src/codex_tool_runner.rs"
-  requested_by: "@root"
+  requested_by: "@richardgetz"
   recorded_by:
     agent: "Codex Rust validation owner"
     model: "gpt-6"
