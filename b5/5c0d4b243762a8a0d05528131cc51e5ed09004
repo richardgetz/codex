@@ -1,0 +1,21 @@
+intent:
+  id: intent/2026-09-26/stable-refresh-core-validation#b55c0d4b24
+  change_type: fix
+  scope: stable refresh codex-core
+  summary: Repair remaining core test compile drift and preserve Guardian's captured personality in review configuration and reuse.
+  decision: Align stale fixtures with current core and protocol APIs, provide explicit root-turn and compaction-resume metadata, and read Guardian personality from the frozen TurnContext settings.
+  constraints:
+    - Keep fixture values aligned with the behavior each test covers, including offline model setup and rollout identity.
+    - Keep Guardian review reuse keyed to the effective captured turn personality.
+    - Leave schemas, dependencies, released migrations, and stable unchanged.
+    - Validate through the repository's scoped just test workflow.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/guardian/review.rs
+    - codex-rs/core/src/guardian/tests.rs
+    - codex-rs/core/src/session
+    - codex-rs/core/src/agent/control_tests.rs
+  requested_by: stable refresh Rust validation assignment
+  recorded_by:
+    agent: Codex
+    model: gpt-6
