@@ -1,0 +1,17 @@
+intent:
+  id: intent/2026-09-27/allow-generated-python-v2-aggregate
+  change_type: build
+  scope: blob-size-policy
+  summary: Allowlist the generated Python v2 aggregate module for changed-blob checks.
+  decision: Keep the required generated SDK module checked in and allow only its exact path past the 512000-byte changed-blob limit; document the exception and merge-preservation check.
+  constraints:
+    - Keep the global changed-blob threshold at 512000 bytes.
+    - Do not widen this exception to the SDK directory or other generated files.
+  intent_priority: must
+  code_locations:
+    - .github/blob-size-allowlist.txt
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: stable refresh CI follow-up
+  recorded_by:
+    agent: Codex Lead
+    model: gpt-6
