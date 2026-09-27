@@ -20,6 +20,10 @@ release or merge rules.
 
 ## Unreleased
 
+- The checked-in aggregate Python v2 protocol module may exceed the blob-size
+  threshold after upstream schema refreshes. The exact generated path is
+  allowlisted; other changed blobs remain subject to the existing limit.
+
 - Cross-process handoff journals retain metadata-only `pendingMailbox`
   observations per affected thread, including source, count, oldest age, and
   later resolution time where a preflight can confirm the queue has drained.
@@ -1002,6 +1006,10 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify `.github/blob-size-allowlist.txt` retains only the exact exception for
+  `sdk/python/src/openai_codex/generated/v2_all.py` among Python SDK paths while
+  the generated aggregate remains required; do not widen the blob-size policy.
 
 - Verify upstream handoff journal refreshes preserve metadata-only
   `pendingMailbox` observations with affected thread ID, source, count, oldest
