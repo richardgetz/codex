@@ -886,7 +886,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     )
     .await;
 
-    wait_for_captured_request(
+    wait_for_captured_request_with_timeout(
         &root_after_action,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
@@ -897,6 +897,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                 && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
         },
         "immediate manager-only action wake",
+        Duration::from_secs(/*secs*/ 7),
     )
     .await;
     wait_for_event(&test.codex, |event| {
