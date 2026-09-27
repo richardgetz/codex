@@ -2241,7 +2241,6 @@ async fn record_initial_history_stale_environment_context_does_not_seed_baseline
     let turn_context = Arc::new(turn_context);
     let environment = turn_context
         .initial_environments
-        .environments
         .primary()
         .expect("test should have a primary environment");
     let cwd = environment.cwd().inferred_native_path_string();
@@ -2331,7 +2330,7 @@ async fn step_environment_snapshot_world_state_includes_subagents() {
 
     let world_state = build_world_state_from_environment_snapshot(
         &turn_context,
-        &turn_context.initial_environments.environments,
+        &turn_context.initial_environments,
         "- worker [Atlas]",
     )
     .await;
@@ -2363,7 +2362,6 @@ async fn record_initial_history_newer_stale_environment_context_controls_baselin
     let mut replacement_history = session.build_initial_context(&turn_context).await;
     let environment = turn_context
         .initial_environments
-        .environments
         .primary()
         .expect("test should have a primary environment");
     let cwd = environment.cwd().inferred_native_path_string();

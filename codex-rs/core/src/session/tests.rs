@@ -6882,7 +6882,9 @@ async fn session_configuration_apply_rebinds_symbolic_profile_to_updated_workspa
     );
     assert_eq!(
         updated.permission_profile_state.profile_workspace_roots(),
-        &[profile_root]
+        &[codex_protocol::models::ProfileWorkspaceRoot::from(
+            profile_root.clone(),
+        )]
     );
 }
 
