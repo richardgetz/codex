@@ -1,0 +1,24 @@
+intent:
+  id: "intent/2026-09-27/team-live-policy#5872469889"
+  change_type: "fix"
+  scope: "core-team-policy"
+  summary: "Apply a Lead work-policy update to later model steps in the active turn."
+  decision: "Build Team WorldState instructions from the current thread config for each model step, record that sampled policy on StepContext, and notify parked explicit waits after a committed policy change so they reassess once under the new policy."
+  constraints:
+    - "Keep prompt_guided as the default and preserve the existing per-thread opt-in policy."
+    - "Do not cancel or replay already-running model, tool, Worker, or external work."
+    - "Preserve the existing oversight deadline across policy-change wakes."
+    - "A subsequent wait must use the policy observed by its own model step and park when no new event arrives."
+    - "Keep policy changes isolated from Team role, profile assignments, and global defaults."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/world_state.rs::build_world_state_for_step"
+    - "codex-rs/core/src/session/step_context.rs::StepContext"
+    - "codex-rs/core/src/session/mod.rs::update_settings_if"
+    - "codex-rs/core/src/session/input_queue.rs::InputQueueActivity"
+    - "codex-rs/core/tests/suite/team_manager_only.rs"
+    - "codex-rs/core/tests/suite/team_idle.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
