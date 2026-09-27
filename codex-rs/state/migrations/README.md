@@ -110,3 +110,14 @@ The `rust-v0.155.1` refresh keeps the already-shipped
 `0055_upstream_projects_recency.sql` migration unchanged. Its incoming thread
 attachment rename collides with that numeric version, so it is appended as
 `0064_upstream_thread_attachments.sql`.
+
+The `rust-v0.157.1` refresh keeps the already-shipped
+`0056_rick_git_info_clears.sql` and `0057_upstream_threads_originator.sql`
+migrations unchanged, along with the existing `0059` through `0064` migrations.
+Its incoming thread creator identity and Guardian metadata cleanup migrations
+collide with shipped versions, so they are appended as:
+
+```text
+0065_upstream_threads_creator_identity.sql
+0066_upstream_cleanup_guardian_thread_metadata.sql
+```

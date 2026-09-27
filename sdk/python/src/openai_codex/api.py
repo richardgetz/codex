@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncIterator, Iterator
 
 from ._approval_mode import (
@@ -11,6 +11,7 @@ from ._approval_mode import (
 )
 from ._initialize_metadata import validate_initialize_metadata
 from ._inputs import (
+    ExternalMessage as ExternalMessage,
     ImageInput as ImageInput,
     Input as Input,
     InputItem as InputItem,
@@ -21,6 +22,7 @@ from ._inputs import (
     TextInput as TextInput,
     _normalize_run_input,
     _to_wire_input,
+    _to_wire_turn_input,
 )
 from ._login import (
     AsyncChatgptLoginHandle,
@@ -32,6 +34,7 @@ from ._login import (
     start_chatgpt_login,
     start_device_code_login,
 )
+from ._message_router import _TurnSubscription
 from ._run import (
     TurnResult,
     _collect_async_turn_result,
@@ -45,6 +48,7 @@ from .generated.v2_all import (
     GetAccountParams,
     GetAccountResponse,
     LoginAccountParams,
+    MemoryAccessPolicy,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -68,6 +72,7 @@ from .generated.v2_all import (
     TurnInterruptResponse,
     TurnStartParams,
     TurnSteerResponse,
+    UserPreferencesMemoryBucketPolicy,
 )
 from .models import InitializeResponse, JsonObject, Notification
 
@@ -213,6 +218,7 @@ class Codex:
         config: JsonObject | None = None,
         cwd: str | None = None,
         developer_instructions: str | None = None,
+        include_turns: bool | None = None,
         memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
@@ -221,7 +227,11 @@ class Codex:
         service_tier: str | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> Thread:
-        """Resume an existing conversation thread by ID."""
+        """Resume an existing conversation thread by ID.
+
+        include_turns controls the runtime response history, not model context.
+        Omit it to preserve the runtime default. Use thread.read() for history.
+        """
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadResumeParams(
             thread_id=thread_id,
@@ -231,6 +241,7 @@ class Codex:
             config=config,
             cwd=cwd,
             developer_instructions=developer_instructions,
+            exclude_turns=None if include_turns is None else not include_turns,
             memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
@@ -252,6 +263,7 @@ class Codex:
         cwd: str | None = None,
         developer_instructions: str | None = None,
         ephemeral: bool | None = None,
+        include_turns: bool | None = None,
         memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
@@ -260,7 +272,11 @@ class Codex:
         thread_source: ThreadSource | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> Thread:
-        """Create a new thread from an existing thread."""
+        """Create a new thread from an existing thread.
+
+        include_turns controls the runtime response history, not model context.
+        Omit it to preserve the runtime default. Use thread.read() for history.
+        """
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadForkParams(
             thread_id=thread_id,
@@ -271,6 +287,7 @@ class Codex:
             cwd=cwd,
             developer_instructions=developer_instructions,
             ephemeral=ephemeral,
+            exclude_turns=None if include_turns is None else not include_turns,
             memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
@@ -473,6 +490,7 @@ class AsyncCodex:
         config: JsonObject | None = None,
         cwd: str | None = None,
         developer_instructions: str | None = None,
+        include_turns: bool | None = None,
         memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
@@ -481,7 +499,11 @@ class AsyncCodex:
         service_tier: str | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> AsyncThread:
-        """Resume an existing conversation thread by ID."""
+        """Resume an existing conversation thread by ID.
+
+        include_turns controls the runtime response history, not model context.
+        Omit it to preserve the runtime default. Use thread.read() for history.
+        """
         await self._ensure_initialized()
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadResumeParams(
@@ -492,6 +514,7 @@ class AsyncCodex:
             config=config,
             cwd=cwd,
             developer_instructions=developer_instructions,
+            exclude_turns=None if include_turns is None else not include_turns,
             memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
@@ -513,6 +536,7 @@ class AsyncCodex:
         cwd: str | None = None,
         developer_instructions: str | None = None,
         ephemeral: bool | None = None,
+        include_turns: bool | None = None,
         memory_policy: MemoryAccessPolicy | None = None,
         model: str | None = None,
         model_provider: str | None = None,
@@ -521,7 +545,11 @@ class AsyncCodex:
         thread_source: ThreadSource | None = None,
         user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None,
     ) -> AsyncThread:
-        """Create a new thread from an existing thread."""
+        """Create a new thread from an existing thread.
+
+        include_turns controls the runtime response history, not model context.
+        Omit it to preserve the runtime default. Use thread.read() for history.
+        """
         await self._ensure_initialized()
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = ThreadForkParams(
@@ -533,6 +561,7 @@ class AsyncCodex:
             cwd=cwd,
             developer_instructions=developer_instructions,
             ephemeral=ephemeral,
+            exclude_turns=None if include_turns is None else not include_turns,
             memory_policy=memory_policy,
             model=model,
             model_provider=model_provider,
@@ -608,6 +637,43 @@ class Thread:
             stream.close()
 
     # BEGIN GENERATED: Thread.flat_methods
+    def run(
+        self,
+        input: RunInput,
+        *,
+        approval_mode: ApprovalMode | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: JsonObject | None = None,
+        personality: Personality | None = None,
+        sandbox: Sandbox | None = None,
+        service_tier: str | None = None,
+        source: str | None = None,
+        summary: ReasoningSummary | None = None,
+        turn_service_tier: str | None = None,
+    ) -> TurnResult:
+        """Run a complete turn and collect its final result.
+
+        Accepts the same input and options as turn(), including ExternalMessage
+        for untrusted external content with tool-level authority.
+        """
+        turn = self.turn(
+            input,
+            approval_mode=approval_mode,
+            cwd=cwd,
+            effort=effort,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+            sandbox=sandbox,
+            service_tier=service_tier,
+            source=source,
+            summary=summary,
+            turn_service_tier=turn_service_tier,
+        )
+        return turn.run()
+
     def turn(
         self,
         input: RunInput,
@@ -620,14 +686,24 @@ class Thread:
         personality: Personality | None = None,
         sandbox: Sandbox | None = None,
         service_tier: str | None = None,
+        source: str | None = None,
         summary: ReasoningSummary | None = None,
+        turn_service_tier: str | None = None,
     ) -> TurnHandle:
-        """Start a turn and return a handle for streaming or control."""
-        wire_input = _to_wire_input(_normalize_run_input(input))
+        """Start a turn or join an active regular turn and return its handle.
+
+        ExternalMessage supplies untrusted content with tool-level authority;
+        it does not establish user authorization or approval.
+        turn_service_tier applies only to this new turn; service_tier updates
+        the thread default. source labels what initiated a new turn and grants
+        no authority. Both turn_service_tier and source are ignored when joining.
+        """
+        wire_input, tool_output = _to_wire_turn_input(input)
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
+            tool_output=tool_output,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
             cwd=cwd,
@@ -637,10 +713,14 @@ class Thread:
             personality=personality,
             sandbox_policy=_sandbox_policy(sandbox),
             service_tier=service_tier,
+            turn_trigger=source,
             summary=summary,
+            service_tier_for_turn=turn_service_tier,
         )
-        turn = self._client.turn_start(self.id, wire_input, params=params)
-        return TurnHandle(self._client, self.id, turn.turn.id)
+        turn, subscription = self._client._start_turn(
+            self.id, wire_input, params=params, for_handle=True
+        )
+        return TurnHandle(self._client, self.id, turn.turn.id, _subscription=subscription)
 
     # END GENERATED: Thread.flat_methods
 
@@ -696,6 +776,43 @@ class AsyncThread:
             await stream.aclose()
 
     # BEGIN GENERATED: AsyncThread.flat_methods
+    async def run(
+        self,
+        input: RunInput,
+        *,
+        approval_mode: ApprovalMode | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: JsonObject | None = None,
+        personality: Personality | None = None,
+        sandbox: Sandbox | None = None,
+        service_tier: str | None = None,
+        source: str | None = None,
+        summary: ReasoningSummary | None = None,
+        turn_service_tier: str | None = None,
+    ) -> TurnResult:
+        """Run a complete turn and collect its final result.
+
+        Accepts the same input and options as turn(), including ExternalMessage
+        for untrusted external content with tool-level authority.
+        """
+        turn = await self.turn(
+            input,
+            approval_mode=approval_mode,
+            cwd=cwd,
+            effort=effort,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+            sandbox=sandbox,
+            service_tier=service_tier,
+            source=source,
+            summary=summary,
+            turn_service_tier=turn_service_tier,
+        )
+        return await turn.run()
+
     async def turn(
         self,
         input: RunInput,
@@ -708,15 +825,25 @@ class AsyncThread:
         personality: Personality | None = None,
         sandbox: Sandbox | None = None,
         service_tier: str | None = None,
+        source: str | None = None,
         summary: ReasoningSummary | None = None,
+        turn_service_tier: str | None = None,
     ) -> AsyncTurnHandle:
-        """Start a turn and return a handle for streaming or control."""
+        """Start a turn or join an active regular turn and return its handle.
+
+        ExternalMessage supplies untrusted content with tool-level authority;
+        it does not establish user authorization or approval.
+        turn_service_tier applies only to this new turn; service_tier updates
+        the thread default. source labels what initiated a new turn and grants
+        no authority. Both turn_service_tier and source are ignored when joining.
+        """
+        wire_input, tool_output = _to_wire_turn_input(input)
         await self._codex._ensure_initialized()
-        wire_input = _to_wire_input(_normalize_run_input(input))
         approval_policy, approvals_reviewer = _approval_mode_override_settings(approval_mode)
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
+            tool_output=tool_output,
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
             cwd=cwd,
@@ -726,14 +853,14 @@ class AsyncThread:
             personality=personality,
             sandbox_policy=_sandbox_policy(sandbox),
             service_tier=service_tier,
+            turn_trigger=source,
             summary=summary,
+            service_tier_for_turn=turn_service_tier,
         )
-        turn = await self._codex._client.turn_start(
-            self.id,
-            wire_input,
-            params=params,
+        turn, subscription = await self._codex._client._start_turn(
+            self.id, wire_input, params=params, for_handle=True
         )
-        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
+        return AsyncTurnHandle(self._codex, self.id, turn.turn.id, _subscription=subscription)
 
     # END GENERATED: AsyncThread.flat_methods
 
@@ -758,6 +885,19 @@ class TurnHandle:
     _client: CodexClient
     thread_id: str
     id: str
+    _subscription: _TurnSubscription = field(init=False, repr=False, compare=False)
+
+    def __init__(
+        self, _client: CodexClient, thread_id: str, id: str, *, _subscription=None
+    ) -> None:
+        self._client, self.thread_id, self.id = _client, thread_id, id
+        if _subscription is None:
+            self.__post_init__()
+        else:
+            self._subscription = _subscription
+
+    def __post_init__(self) -> None:
+        self._subscription = self._client._subscribe_turn_notifications(self.id)
 
     def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
@@ -773,10 +913,9 @@ class TurnHandle:
 
     def stream(self) -> Iterator[Notification]:
         """Yield only notifications routed to this turn handle."""
-        self._client.register_turn_notifications(self.id)
         try:
             while True:
-                event = self._client.next_turn_notification(self.id)
+                event = self._subscription.next()
                 yield event
                 if (
                     event.method == "turn/completed"
@@ -785,7 +924,7 @@ class TurnHandle:
                 ):
                     break
         finally:
-            self._client.unregister_turn_notifications(self.id)
+            self._subscription.close()
 
     def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""
@@ -803,6 +942,17 @@ class AsyncTurnHandle:
     _codex: AsyncCodex
     thread_id: str
     id: str
+    _subscription: _TurnSubscription = field(init=False, repr=False, compare=False)
+
+    def __init__(self, _codex: AsyncCodex, thread_id: str, id: str, *, _subscription=None) -> None:
+        self._codex, self.thread_id, self.id = _codex, thread_id, id
+        if _subscription is None:
+            self.__post_init__()
+        else:
+            self._subscription = _subscription
+
+    def __post_init__(self) -> None:
+        self._subscription = self._codex._client._subscribe_turn_notifications(self.id)
 
     async def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
@@ -820,11 +970,10 @@ class AsyncTurnHandle:
 
     async def stream(self) -> AsyncIterator[Notification]:
         """Yield only notifications routed to this async turn handle."""
-        await self._codex._ensure_initialized()
-        self._codex._client.register_turn_notifications(self.id)
         try:
+            await self._codex._ensure_initialized()
             while True:
-                event = await self._codex._client.next_turn_notification(self.id)
+                event = await asyncio.to_thread(self._subscription.next)
                 yield event
                 if (
                     event.method == "turn/completed"
@@ -833,7 +982,7 @@ class AsyncTurnHandle:
                 ):
                     break
         finally:
-            self._codex._client.unregister_turn_notifications(self.id)
+            self._subscription.close()
 
     async def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""

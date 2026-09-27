@@ -115,7 +115,7 @@ fn select_by_plain_name<'a>(
 fn plain_name_priority(kind: &SkillSourceKind) -> u8 {
     match kind {
         SkillSourceKind::Executor => 0,
-        SkillSourceKind::Orchestrator => 1,
+        SkillSourceKind::Cloud => 1,
         SkillSourceKind::Custom(_) => 2,
         SkillSourceKind::Host => 3,
     }

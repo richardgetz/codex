@@ -43,6 +43,7 @@ EXPECTED_ROOT_EXPORTS = [
     "Input",
     "InputItem",
     "RunInput",
+    "ExternalMessage",
     "TextInput",
     "ImageInput",
     "LocalImageInput",
@@ -73,6 +74,7 @@ EXPECTED_TYPES_EXPORTS = [
     "GetAccountResponse",
     "InitializeResponse",
     "JsonObject",
+    "MemoryAccessPolicy",
     "ModelListResponse",
     "Notification",
     "Personality",
@@ -101,6 +103,8 @@ EXPECTED_TYPES_EXPORTS = [
     "TurnInterruptResponse",
     "TurnStatus",
     "TurnSteerResponse",
+    "UserPreferencesMemoryBucket",
+    "UserPreferencesMemoryBucketPolicy",
 ]
 
 
@@ -353,6 +357,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "config",
             "cwd",
             "developer_instructions",
+            "include_turns",
             "memory_policy",
             "model",
             "model_provider",
@@ -368,6 +373,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "cwd",
             "developer_instructions",
             "ephemeral",
+            "include_turns",
             "memory_policy",
             "model",
             "model_provider",
@@ -385,7 +391,9 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "personality",
             "sandbox",
             "service_tier",
+            "source",
             "summary",
+            "turn_service_tier",
         ],
         Thread.run: [
             "approval_mode",
@@ -396,7 +404,9 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "personality",
             "sandbox",
             "service_tier",
+            "source",
             "summary",
+            "turn_service_tier",
         ],
         AsyncCodex.thread_start: [
             "approval_mode",
@@ -435,6 +445,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "config",
             "cwd",
             "developer_instructions",
+            "include_turns",
             "memory_policy",
             "model",
             "model_provider",
@@ -450,6 +461,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "cwd",
             "developer_instructions",
             "ephemeral",
+            "include_turns",
             "memory_policy",
             "model",
             "model_provider",
@@ -467,7 +479,9 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "personality",
             "sandbox",
             "service_tier",
+            "source",
             "summary",
+            "turn_service_tier",
         ],
         AsyncThread.run: [
             "approval_mode",
@@ -478,7 +492,9 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "personality",
             "sandbox",
             "service_tier",
+            "source",
             "summary",
+            "turn_service_tier",
         ],
     }
 

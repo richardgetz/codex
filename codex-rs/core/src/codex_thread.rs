@@ -3,9 +3,9 @@ use crate::config::ConstraintResult;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
 use crate::elicitation::ElicitationRegistration;
-use crate::environment_selection::TurnEnvironmentState;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
+use crate::session::Submission;
 use crate::session::new_submission_id;
 use crate::session::session::Session;
 use crate::session::step_settings::StepSettingsUpdate;
@@ -46,7 +46,6 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadActivitySnapshot;
 use codex_protocol::protocol::ThreadActivityUpdatedEvent;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -80,6 +79,7 @@ use rmcp::model::ReadResourceRequestParams;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -170,7 +170,7 @@ impl ThreadConfigSnapshot {
             user_preferences_memory_policy: self.user_preferences_memory_policy,
             usage_policy: self.usage_policy,
             team: self.team,
-            disabled_plugin_ids: self.disabled_plugin_ids.clone(),
+            disabled_plugin_ids: self.disabled_plugin_ids,
         }
     }
 
@@ -243,6 +243,10 @@ pub struct GuardianRootSnapshot {
 pub struct CodexThread {
     pub(crate) session: Arc<Session>,
     pub(crate) io: SessionIo,
+    // Queued agent mail owns a read guard until handled or dropped; eviction needs a write guard.
+    pub(crate) residency_gate: Arc<RwLock<()>>,
+    // Registration source controls live access and lifecycle hooks. Managed Guardian
+    // reviewers keep their existing subagent identity inside the session.
     pub(crate) session_source: SessionSource,
     startup_metadata: ThreadStartupMetadata,
     rollout_path: Option<PathBuf>,
@@ -277,6 +281,7 @@ impl CodexThread {
         Self {
             session,
             io,
+            residency_gate: Arc::default(),
             session_source,
             startup_metadata,
             rollout_path,
@@ -294,6 +299,7 @@ impl CodexThread {
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
+            residency_guard: None,
         })
         .await?;
         Ok(id)
@@ -333,13 +339,18 @@ impl CodexThread {
     }
 
     pub(crate) async fn emit_thread_ready_lifecycle(&self) {
-        let config = self.config().await;
-        for contributor in self
+        let contributors = self
             .session
             .services
             .extensions
-            .thread_lifecycle_contributors()
-        {
+            .thread_lifecycle_contributors();
+        // Hook-free reviewers must reach their owner without suspending after registration.
+        // Otherwise cancellation can strand the registered thread before cleanup is installed.
+        if contributors.is_empty() {
+            return;
+        }
+        let config = self.config().await;
+        for contributor in contributors {
             contributor
                 .on_thread_ready(codex_extension_api::ThreadReadyInput {
                     config: config.as_ref(),
@@ -369,6 +380,13 @@ impl CodexThread {
 
     pub async fn emit_thread_idle_lifecycle_if_idle(&self, cause: ThreadIdleCause) {
         self.session.emit_thread_idle_lifecycle_if_idle(cause).await;
+    }
+
+    /// Checkpoint initialization without activating speculative persistence.
+    pub async fn checkpoint_preparation(&self) -> std::io::Result<()> {
+        self.session
+            .try_ensure_rollout_materialized(PersistContext::ThreadPreparation)
+            .await
     }
 
     #[doc(hidden)]
@@ -411,6 +429,7 @@ impl CodexThread {
                 trace,
                 parent_turn_id: None,
                 root_turn_id: None,
+                residency_guard: None,
             })
             .await?;
             return Ok(id);
@@ -418,6 +437,7 @@ impl CodexThread {
         self.io
             .submit_with_trace(
                 op, trace, /*parent_turn_id*/ None, /*root_turn_id*/ None,
+                /*residency_guard*/ None,
             )
             .await
     }
@@ -669,6 +689,7 @@ impl CodexThread {
                 client_user_message_id: None,
                 parent_turn_id: None,
                 root_turn_id: None,
+                residency_guard: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
@@ -698,6 +719,7 @@ impl CodexThread {
                 client_user_message_id: None,
                 parent_turn_id: None,
                 root_turn_id: None,
+                residency_guard: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
@@ -727,6 +749,7 @@ impl CodexThread {
                 client_user_message_id: None,
                 parent_turn_id: None,
                 root_turn_id: None,
+                residency_guard: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
@@ -814,28 +837,6 @@ impl CodexThread {
             Err(_) => return Err(items),
         };
         self.session.inject_if_running(items).await
-    }
-
-    /// Environment selections captured by the active turn, before later settings updates.
-    /// Includes environments that are still starting or have failed. Hosts use this snapshot
-    /// to authorize steering against every executor that the active turn selected.
-    pub async fn active_turn_environment_selections(
-        &self,
-    ) -> Option<Vec<TurnEnvironmentSelection>> {
-        let active = self.session.active_turn.lock().await;
-        let task = active.as_ref()?.task.as_ref()?;
-        Some(
-            task.turn_context
-                .initial_environments
-                .environments
-                .iter()
-                .map(|environment| match environment {
-                    TurnEnvironmentState::Ready(environment) => environment.selection(),
-                    TurnEnvironmentState::Starting(environment) => environment.selection.clone(),
-                    TurnEnvironmentState::Failed { selection, .. } => selection.clone(),
-                })
-                .collect(),
-        )
     }
 
     /// Captures a regular turn only after its input is recorded. The caller must flush the rollout.
@@ -1015,6 +1016,14 @@ impl CodexThread {
         self.io.next_event().await
     }
 
+    /// Returns the event count for a finite drain before transferring the receiver.
+    ///
+    /// The caller must own the only event reader until it consumes this many events.
+    /// Events queued after this snapshot remain for the next reader.
+    pub fn queued_event_count(&self) -> usize {
+        self.io.rx_event.len()
+    }
+
     pub async fn agent_status(&self) -> AgentStatus {
         self.io.agent_status().await
     }
@@ -1086,7 +1095,7 @@ impl CodexThread {
             .agent_control
             .begin_handoff_admission()?;
         self.inject_response_items_for_turn(items).await?;
-        self.session.flush_rollout().await?;
+        self.checkpoint_preparation().await?;
         Ok(())
     }
 
@@ -1309,13 +1318,13 @@ impl CodexThread {
 
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
-        if let Some((turn, inputs, _)) = self
+        if let Some((turn, settings, _, _)) = self
             .session
             .active_turn_context_and_strict_auto_review()
             .await
             && turn.sub_id == turn_id
         {
-            inputs.settings.approvals_reviewer()
+            settings.approvals_reviewer()
         } else {
             self.config_snapshot().await.approvals_reviewer
         }

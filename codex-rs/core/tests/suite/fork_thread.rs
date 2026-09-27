@@ -16,6 +16,7 @@ use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::InMemoryThreadStore;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
@@ -23,11 +24,47 @@ use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ephemeral_fork_skips_stored_title_lookup() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let store = Arc::new(InMemoryThreadStore::default());
+    let test = test_codex()
+        .with_thread_store(store.clone())
+        .build_with_auto_env(&server)
+        .await?;
+    let mut config = test.config.clone();
+    config.ephemeral = true;
+    let reads_before = store.calls().await.read_thread;
+
+    test.thread_manager
+        .fork_thread_from_history(
+            ForkSnapshot::Interrupted,
+            config,
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: test.session_configured.thread_id,
+                history: Arc::new(Vec::new()),
+                rollout_path: None,
+            }),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
+        )
+        .await?;
+
+    assert_eq!(store.calls().await.read_thread, reads_before);
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_thread_twice_drops_to_first_message() {
@@ -210,8 +247,13 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
         .thread_manager
         .fork_thread_from_history(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions::new(test.config.clone()),
+            test.config.clone(),
             history.clone(),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
         )
         .await?;
     pretty_assertions::assert_eq!(
@@ -223,15 +265,20 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
         selected
     );
 
+    let explicit_thread_settings = test.codex.thread_settings_snapshot().await;
     let explicit = test
         .thread_manager
-        .fork_thread_from_history(
+        .fork_thread_from_history_with_settings(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions {
-                disabled_plugin_ids: Some(Vec::new()),
-                ..codex_core::StartThreadOptions::new(test.config.clone())
-            },
+            test.config.clone(),
             history,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+            /*reserved_thread_id*/ None,
+            /*inherited_usage_policy*/ None,
+            Some(explicit_thread_settings),
+            codex_core::ThreadSettingsOverrideFlags::default(),
         )
         .await?;
     pretty_assertions::assert_eq!(

@@ -2,24 +2,16 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
-use crate::agent::status::is_final;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
-use crate::codex_thread::CodexThread;
-use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
-use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
-use crate::session::session::Session;
-use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
@@ -27,8 +19,6 @@ use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::turn_timing::now_unix_timestamp_ms;
-use arc_swap::ArcSwap;
-use arc_swap::ArcSwapOption;
 use codex_config::TeamLeadWorkPolicy;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_history::InitialHistory;
@@ -55,9 +45,7 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
-use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
@@ -65,188 +53,57 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::OnceLock;
 use std::sync::Weak;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::AtomicU64;
-use tokio::sync::Mutex;
-use tokio::sync::Notify;
-use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
 
-pub(crate) struct TerminalResultDeliveryGuard {
-    session: Arc<Session>,
-    parent_thread_id: ThreadId,
-}
-
-impl TerminalResultDeliveryGuard {
-    pub(crate) fn for_thread_spawn(
-        session: Arc<Session>,
-        session_source: Option<&SessionSource>,
-    ) -> Option<Self> {
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        })) = session_source
-        else {
-            return None;
-        };
-        session
-            .terminal_result_delivery_in_flight
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        Some(Self {
-            session,
-            parent_thread_id: *parent_thread_id,
-        })
-    }
-}
-
-impl Drop for TerminalResultDeliveryGuard {
-    fn drop(&mut self) {
-        let previous = self
-            .session
-            .terminal_result_delivery_in_flight
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-        if previous == 1
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
-            let agent_control = self.session.services.agent_control.clone();
-            let parent_thread_id = self.parent_thread_id;
-            runtime.spawn(async move {
-                agent_control
-                    .schedule_pending_manager_completion_batch_flush(parent_thread_id)
-                    .await;
-            });
-        }
-    }
-}
-
-use self::execution::AgentExecutionLimiter;
+pub(crate) use self::LocalAgentControl as AgentControl;
 pub use self::handoff::HandoffAdmissionGuard;
 pub use self::handoff::HandoffGuard;
-use self::residency::V2Residency;
+pub(crate) use self::runtime::LocalAgentRuntime;
+pub(crate) use self::team::TerminalResultDeliveryGuard;
 pub(crate) use self::worker_limit::TeamWorkerLease;
-use self::worker_limit::TeamWorkerLimiter;
-use crate::agent::eta_reminders::EtaReminderController;
-pub(crate) use crate::agent::types::SpawnAgentForkMode;
+
 pub(crate) use crate::agent::types::SpawnAgentOptions;
 
 mod activity;
+mod api;
 mod budget;
 mod completion;
 mod delivery;
+mod eta;
 mod execution;
 mod handoff;
 mod inspection;
 mod interrupt;
 mod legacy;
 mod residency;
+mod resume;
+mod runtime;
 mod sender_context;
 mod service_tier;
 mod spawn;
+mod spawn_guard;
 mod target;
+mod team;
 mod usage_policy;
 mod user_authorization;
+mod watch;
 mod worker_handoff;
 mod worker_limit;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
-/// Outcome of pruning idle agents in the current session tree.
-///
-/// A subtree is reported as closed when its root was closed successfully or was already gone.
-/// Other close failures are retained with their thread ID so callers can surface actionable
-/// diagnostics without turning a partially successful prune into a hard failure.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PruneIdleAgentsReport {
-    pub(crate) closed: Vec<ThreadId>,
-    pub(crate) failed: Vec<(ThreadId, String)>,
-}
-
-/// Control-plane handle for multi-agent operations.
-/// `LocalAgentControl` is held by each session (via `SessionServices`). It provides capability to
-/// spawn new agents and the inter-agent communication layer.
-/// An `LocalAgentControl` instance is intended to be created at most once per root thread/session
-/// tree. That same `LocalAgentControl` is then shared with every sub-agent spawned from that root,
-/// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
+/// Per-session controller handle for a local agent tree.
+/// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
+/// Local startup preserves that state when creating or resuming children.
 #[derive(Clone)]
 pub(crate) struct LocalAgentControl {
     /// session_id is equal to the root thread's ID.
     session_id: SessionId,
-    /// Weak handle back to the global thread registry/state.
-    /// This is `Weak` to avoid reference cycles and shadow persistence of the form
-    /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
-    manager: Weak<ThreadManagerState>,
-    /// Captured at construction so delegates retain their manager's allocation policy.
-    thread_id_generator: ThreadIdGenerator,
-    state: Arc<AgentRegistry>,
-    v2_residency: Arc<V2Residency>,
-    agent_execution_limiter: Arc<AgentExecutionLimiter>,
-    team_worker_limiter: Arc<TeamWorkerLimiter>,
-    /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
-    rollout_budget: Arc<RolloutBudget>,
-    /// The user-selected root routing tier, shared by the entire agent tree.
-    root_service_tier: Arc<ArcSwapOption<String>>,
-    /// Retains the root's opt-in instruction provider even when the root is unloaded.
-    shared_thread_instructions_provider: Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
-    /// The complete root usage policy, shared by the entire agent tree.
-    root_usage_policy: Arc<ArcSwap<ThreadUsagePolicy>>,
-    /// Serializes root usage-toggle commits with descendant synchronization.
-    root_usage_auto_resume_update: Arc<Mutex<()>>,
-    /// Serializes settings events sent while the root usage toggle changes.
-    root_usage_auto_resume_propagation: Arc<Mutex<()>>,
-    /// Root-scoped process-local manual pause switch shared by every loaded descendant.
-    root_activity_paused: Arc<std::sync::atomic::AtomicBool>,
-    /// Serializes durable Team activity transitions across the loaded root tree.
-    ///
-    /// This is intentionally separate from `root_activity_pause_update`, which the Core
-    /// activity handlers hold while applying a pause or continue. App-server recovery can hold
-    /// this outer transition guard while it updates durable state and waits for those handlers.
-    root_activity_transition: Arc<Mutex<()>>,
-    /// Root-scoped process-local fence that rejects new work during daemon handoff.
-    pub(crate) handoff_admission_sealed: Arc<AtomicBool>,
-    /// Number of admissions that passed the handoff fence before it sealed.
-    pub(crate) handoff_admission_in_flight: Arc<AtomicU32>,
-    /// Number of terminal completion deliveries and watcher registrations in flight.
-    ///
-    /// The low 32 bits count short terminal delivery windows. Bits 32..62 count detached
-    /// completion watchers. Bit 63 closes both registration paths once the normal admission
-    /// drain has completed. Keeping these counters and the close bit in one atomic word prevents
-    /// a watcher or delivery callback from registering after the coordinator observed zero work.
-    pub(crate) handoff_delivery_state: Arc<AtomicU64>,
-    /// Set when a sealed completion could not be persisted durably.
-    pub(crate) handoff_delivery_failed: Arc<AtomicBool>,
-    /// Set when a durable inbound payload is incompatible or malformed.
-    pub(crate) handoff_inbound_unsupported: Arc<AtomicBool>,
-    /// Child threads whose active turn was deliberately stopped for handoff.
-    ///
-    /// Handoff uses the normal `ShutdownComplete` event to close a session after its writer is
-    /// durable. Detached V1 completion watchers also treat that event as a terminal Worker
-    /// result, so the marker lets them retire the watcher without manufacturing a completion
-    /// message for a turn that is expected to resume under the same turn ID.
-    pub(crate) handoff_suspended_threads: Arc<StdMutex<HashSet<ThreadId>>>,
-    /// Wakes the handoff coordinator after an admission or completion delivery finishes.
-    pub(crate) handoff_admission_notify: Arc<Notify>,
-    /// Serializes manual pause publication with child startup reconciliation.
-    root_activity_pause_update: Arc<Mutex<()>>,
-    /// Serializes descendant activity state propagation and preserves toggle order.
-    root_activity_pause_propagation: Arc<Mutex<()>>,
-    /// Wakes retained turns when the root activity pause is released.
-    root_activity_resume_notify: Arc<Notify>,
-    /// Serializes root tier commits with descendant synchronization.
-    root_service_tier_update: Arc<Mutex<()>>,
-    /// Serializes settings events sent while a root routing tier changes, preserving toggle order.
-    root_service_tier_propagation: Arc<Mutex<()>>,
-    /// One-shot freshness and overdue reminders shared by the root and all descendant sessions.
-    eta_reminders: Arc<EtaReminderController>,
+    pub(crate) runtime: LocalAgentRuntime,
 }
-
-// Keep the fork's concrete controller name available to the split control modules. The
-// backend-facing `AgentControl` trait lives in `agent::api` and is exported separately.
-pub(crate) use LocalAgentControl as AgentControl;
 
 impl Default for LocalAgentControl {
     fn default() -> Self {
@@ -265,40 +122,10 @@ impl LocalAgentControl {
         thread_id_generator: ThreadIdGenerator,
         rollout_budget: Option<RolloutBudgetConfig>,
     ) -> Self {
-        let control = Self {
+        Self {
             session_id: SessionId::default(),
-            manager,
-            thread_id_generator,
-            state: Arc::default(),
-            v2_residency: Arc::default(),
-            agent_execution_limiter: Arc::default(),
-            team_worker_limiter: Arc::default(),
-            rollout_budget: Arc::default(),
-            root_service_tier: Arc::new(ArcSwapOption::from(None)),
-            shared_thread_instructions_provider: Arc::default(),
-            root_usage_policy: Arc::new(ArcSwap::from_pointee(ThreadUsagePolicy::default())),
-            root_usage_auto_resume_update: Arc::new(Mutex::new(())),
-            root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
-            root_activity_paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            root_activity_transition: Arc::new(Mutex::new(())),
-            handoff_admission_sealed: Arc::new(AtomicBool::new(false)),
-            handoff_admission_in_flight: Arc::new(AtomicU32::new(0)),
-            handoff_delivery_state: Arc::new(AtomicU64::new(0)),
-            handoff_delivery_failed: Arc::new(AtomicBool::new(false)),
-            handoff_inbound_unsupported: Arc::new(AtomicBool::new(false)),
-            handoff_suspended_threads: Arc::new(StdMutex::new(HashSet::new())),
-            handoff_admission_notify: Arc::new(Notify::new()),
-            root_activity_pause_update: Arc::new(Mutex::new(())),
-            root_activity_pause_propagation: Arc::new(Mutex::new(())),
-            root_activity_resume_notify: Arc::new(Notify::new()),
-            root_service_tier_update: Arc::new(Mutex::new(())),
-            root_service_tier_propagation: Arc::new(Mutex::new(())),
-            eta_reminders: Arc::new(EtaReminderController::default()),
-        };
-        if let Some(rollout_budget) = rollout_budget {
-            control.rollout_budget.configure(rollout_budget);
+            runtime: LocalAgentRuntime::new(manager, thread_id_generator, rollout_budget),
         }
-        control
     }
 
     pub(crate) fn with_session_id(
@@ -308,8 +135,9 @@ impl LocalAgentControl {
         team_worker_max_concurrent: Option<usize>,
     ) -> Self {
         self.session_id = session_id;
-        self.agent_execution_limiter.initialize(max_threads);
-        self.team_worker_limiter
+        self.runtime.agent_execution_limiter.initialize(max_threads);
+        self.runtime
+            .team_worker_limiter
             .initialize(team_worker_max_concurrent);
         self
     }
@@ -319,13 +147,7 @@ impl LocalAgentControl {
     }
 
     pub(crate) fn generate_thread_id(&self) -> ThreadId {
-        (self.thread_id_generator)()
-    }
-
-    /// Expose the shared rollout budget to legacy fork operations that need to re-arm a reminder
-    /// after restoring a thread's history.
-    pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
-        self.rollout_budget.as_ref()
+        (self.runtime.thread_id_generator)()
     }
 
     pub(crate) fn root_thread_instructions_provider(
@@ -333,7 +155,7 @@ impl LocalAgentControl {
         root_thread_id: ThreadId,
         provider: Option<Arc<dyn ThreadInstructionsProvider>>,
     ) -> Option<Arc<dyn ThreadInstructionsProvider>> {
-        let provider = match self.manager.upgrade() {
+        let provider = match self.runtime.manager.upgrade() {
             Some(manager) => manager.shared_thread_instructions_provider(root_thread_id, provider),
             None => provider,
         };
@@ -342,6 +164,7 @@ impl LocalAgentControl {
             .filter(|provider| provider.share_with_subagents())
         {
             let _ = self
+                .runtime
                 .shared_thread_instructions_provider
                 .set(Arc::clone(provider));
         }
@@ -355,6 +178,7 @@ impl LocalAgentControl {
         input: Vec<UserInput>,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
+        let _admission = self.begin_handoff_admission()?;
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let result = match thread
@@ -395,9 +219,7 @@ impl LocalAgentControl {
         .await
     }
 
-    /// Delivers a terminal Worker result that was admitted while its parent owned the Lead role.
-    /// The process-local delivery kind lets the recipient discard a stale trigger if Team mode
-    /// is disabled before the queued operation reaches its session handler.
+    /// Delivers a terminal Worker result through the Lead's completion policy.
     pub(crate) async fn send_team_lead_completion(
         &self,
         agent_id: ThreadId,
@@ -414,8 +236,6 @@ impl LocalAgentControl {
             if thread.session.is_team_lead().await
                 && config.effective_team_lead_work_policy() == TeamLeadWorkPolicy::ManagerOnly
             {
-                // Successful Worker results wait at the batch boundary. Bound the envelope before
-                // it reaches persistence fallback or the Lead progress buffer.
                 communication.trigger_turn = false;
                 communication.content = crate::session::truncate_message(&communication.content);
             }
@@ -434,35 +254,29 @@ impl LocalAgentControl {
         &self,
         agent_id: ThreadId,
         communication: InterAgentCommunication,
-        agent_communication_context: AgentCommunicationContext,
+        context: AgentCommunicationContext,
         start_options: TurnStartOptions,
         team_lead_completion: bool,
     ) -> CodexResult<String> {
-        // Queue-only mailbox mail is process-local. Persist a sealed fallback before returning so
-        // a late completion can be claimed by the replacement daemon without replaying a turn.
-        let source_thread_id = agent_communication_context.sender_thread_id();
+        let source_thread_id = context.sender_thread_id();
         let _admission = match self.begin_handoff_admission() {
             Ok(admission) => admission,
             Err(err) => {
                 let _handoff_delivery = self.begin_handoff_terminal_delivery();
                 let state = self.upgrade().ok();
                 let state_db = if let Some(state) = state.as_ref() {
-                    if let Some(state_db) = state.state_db().await {
-                        Some(state_db)
-                    } else {
-                        // Preserve the test/custom-store path where a loaded target owns the
-                        // database even though the manager store is not LocalThreadStore.
-                        state
+                    match state.state_db().await {
+                        Some(state_db) => Some(state_db),
+                        None => state
                             .get_thread(agent_id)
                             .await
                             .ok()
-                            .and_then(|thread| thread.session.state_db())
+                            .and_then(|thread| thread.session.state_db()),
                     }
                 } else {
                     None
                 };
-                let mut persisted = false;
-                if let Some(state_db) = state_db {
+                let persisted = if let Some(state_db) = state_db {
                     match crate::session::persist_handoff_inter_agent_communication(
                         &state_db,
                         agent_id,
@@ -474,12 +288,12 @@ impl LocalAgentControl {
                     .await
                     {
                         Ok(message_id) => {
-                            persisted = true;
                             tracing::info!(
                                 agent_id = %agent_id,
                                 %message_id,
                                 "persisted inter-agent message after handoff admission was sealed"
                             );
+                            true
                         }
                         Err(persist_error) => {
                             tracing::warn!(
@@ -487,6 +301,7 @@ impl LocalAgentControl {
                                 error = %persist_error,
                                 "failed to persist inter-agent message after handoff admission was sealed"
                             );
+                            false
                         }
                     }
                 } else {
@@ -494,38 +309,31 @@ impl LocalAgentControl {
                         agent_id = %agent_id,
                         "state database unavailable for inter-agent handoff fallback"
                     );
-                }
+                    false
+                };
                 if !persisted {
-                    // Retain this result on the old owner only for a reversible abort. The failure
-                    // bit makes the coordinator keep the old owner and publish NeedsAttention
-                    // instead of treating this callback as transferable.
                     self.mark_handoff_delivery_failed();
                     if let Some(state) = state
                         && let Ok(thread) = state.get_thread(agent_id).await
                     {
                         if team_lead_completion && !communication.trigger_turn {
                             let session = Arc::clone(&thread.session);
-                            let _team_lead_turn_admission =
+                            let team_lead_turn_admission =
                                 session.team_lead_turn_admission.lock().await;
                             if session.is_team_lead().await {
                                 let config = session.get_config().await;
                                 if config.effective_team_lead_work_policy()
                                     == TeamLeadWorkPolicy::ManagerOnly
                                 {
-                                    // Preserve the completion in the same bounded batch as normal
-                                    // delivery. Its flush waits for a reversible handoff seal to
-                                    // reopen admission.
                                     let generation = session
                                         .input_queue
                                         .enqueue_team_lead_completion(communication)
                                         .await;
-                                    drop(_team_lead_turn_admission);
+                                    drop(team_lead_turn_admission);
                                     session
                                         .schedule_manager_completion_batch_flush(generation)
                                         .await;
                                 } else {
-                                    // A completion classified under manager-only may reach this
-                                    // fallback after the Lead switched back to prompt-guided.
                                     let mut communication = communication;
                                     communication.trigger_turn = true;
                                     session
@@ -535,7 +343,7 @@ impl LocalAgentControl {
                                             start_options,
                                         )
                                         .await;
-                                    drop(_team_lead_turn_admission);
+                                    drop(team_lead_turn_admission);
                                     let agent_control = self.clone();
                                     tokio::spawn(async move {
                                         let admission = loop {
@@ -584,7 +392,6 @@ impl LocalAgentControl {
             }
         };
         let state = self.upgrade()?;
-
         let _team_worker_lease = if communication.trigger_turn {
             let thread = state.get_thread(agent_id).await?;
             self.ensure_execution_capacity_for_turn_start(&thread)
@@ -594,12 +401,11 @@ impl LocalAgentControl {
         } else {
             None
         };
-
         self.send_inter_agent_communication_after_capacity_check(
             agent_id,
             &state,
             communication,
-            agent_communication_context,
+            context,
             start_options,
             team_lead_completion,
         )
@@ -762,7 +568,7 @@ impl LocalAgentControl {
         {
             let _ = state.remove_thread(&agent_id).await;
             self.forget_v2_residency(agent_id);
-            self.state.release_spawned_thread(agent_id);
+            self.runtime.registry.release_spawned_thread(agent_id);
         }
         result
     }
@@ -779,220 +585,25 @@ impl LocalAgentControl {
         thread.agent_status().await
     }
 
-    /// Counts direct Worker children that can still perform work for a parent session.
-    /// Terminal children remain active until their parent result callback has been delivered.
-    pub(crate) async fn active_direct_worker_count(&self, parent_thread_id: ThreadId) -> usize {
-        let Ok(state) = self.upgrade() else {
-            return 0;
-        };
-        let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
-            return 0;
-        };
-        let mut active = 0;
-        for (thread_id, _) in children {
-            let Ok(thread) = state.get_thread(thread_id).await else {
-                continue;
-            };
-            let status = thread.agent_status().await;
-            let terminal_delivery_in_flight = is_final(&status)
-                && thread
-                    .session
-                    .terminal_result_delivery_in_flight
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    > 0;
-            if matches!(status, AgentStatus::PendingInit | AgentStatus::Running)
-                || terminal_delivery_in_flight
-            {
-                active += 1;
-            }
-        }
-        active
-    }
-
-    /// Rearms a pending manager-only completion batch after a child finishes delivering its
-    /// terminal result. A prior quiet-window flush may have observed that delivery in flight.
-    pub(crate) async fn schedule_pending_manager_completion_batch_flush(
-        &self,
-        parent_thread_id: ThreadId,
-    ) {
-        let Ok(state) = self.upgrade() else {
-            return;
-        };
-        let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
-            return;
-        };
-        if let Some(generation) = parent_thread
-            .session
-            .input_queue
-            .pending_manager_completion_generation()
-            .await
-        {
-            parent_thread
-                .session
-                .schedule_manager_completion_batch_flush(generation)
-                .await;
-        }
-    }
-
-    /// Subscribes to status changes for direct Workers that can still perform work. The boolean
-    /// reports a child that was already terminal or disappeared while the watchers were built.
-    pub(crate) async fn direct_worker_status_watchers(
-        &self,
-        parent_thread_id: ThreadId,
-    ) -> (Vec<watch::Receiver<AgentStatus>>, bool) {
-        let Ok(children) = self.open_thread_spawn_children(parent_thread_id).await else {
-            return (Vec::new(), true);
-        };
-        let mut watchers = Vec::new();
-        let mut status_changed = false;
-        for (thread_id, _) in children {
-            let status = self.get_status(thread_id).await;
-            if is_final(&status) || matches!(status, AgentStatus::Interrupted) {
-                status_changed = true;
-                continue;
-            }
-            match self.subscribe_status(thread_id).await {
-                Ok(receiver) => watchers.push(receiver),
-                Err(_) => status_changed = true,
-            }
-        }
-        (watchers, status_changed)
-    }
-
-    /// Returns whether a target thread currently has the Lead assignment. This is used by the
-    /// communication path to classify root-directed Worker progress without changing non-team
-    /// delivery semantics.
-    pub(crate) async fn parent_is_team_lead(&self, thread_id: ThreadId) -> bool {
-        let Ok(state) = self.upgrade() else {
-            return false;
-        };
-        let Ok(thread) = state.get_thread(thread_id).await else {
-            return false;
-        };
-        let config = thread.session.get_config().await;
-        let source = thread.session.session_source().await;
-        config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker
-            && crate::session::team::effective_role_for_session_source(&config, &source)
-                == Some(codex_config::TeamRole::Lead)
-    }
-
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,
         current_parent_thread_id: Option<ThreadId>,
     ) {
         if current_parent_thread_id.is_none() {
-            self.state.register_root_thread(current_thread_id);
+            self.runtime
+                .registry
+                .register_root_thread(current_thread_id);
         }
     }
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
-        self.state.agent_metadata_for_thread(agent_id)
-    }
-
-    /// Arm one-shot ETA reminders for changed tasks. The controller is shared by the entire root
-    /// tree, so a Worker mutation replaces the previous owner/timer generation atomically.
-    pub(crate) async fn schedule_eta_reminders(
-        &self,
-        state_db: codex_rollout::StateDbHandle,
-        root_thread_id: ThreadId,
-        tasks: &[codex_state::TaskEstimate],
-        freshness_after: std::time::Duration,
-    ) {
-        if tasks.is_empty() {
-            return;
-        }
-        self.eta_reminders
-            .schedule(
-                self.clone(),
-                state_db,
-                root_thread_id,
-                tasks,
-                freshness_after,
-            )
-            .await;
-    }
-
-    pub(crate) async fn lock_eta_reminders(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        self.eta_reminders.lock_dispatch().await
-    }
-
-    pub(crate) async fn schedule_eta_reminders_locked(
-        &self,
-        state_db: codex_rollout::StateDbHandle,
-        root_thread_id: ThreadId,
-        tasks: &[codex_state::TaskEstimate],
-        freshness_after: std::time::Duration,
-    ) {
-        if tasks.is_empty() {
-            return;
-        }
-        self.eta_reminders
-            .schedule_locked(
-                self.clone(),
-                state_db,
-                root_thread_id,
-                tasks,
-                freshness_after,
-            )
-            .await;
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn eta_reminder_state_for_tests(
-        &self,
-        task_id: &str,
-    ) -> Option<(bool, bool, bool, bool)> {
-        self.eta_reminders.state_for_tests(task_id).await
-    }
-
-    pub(crate) async fn reconfigure_eta_reminders_locked(
-        &self,
-        state_db: codex_rollout::StateDbHandle,
-        root_thread_id: ThreadId,
-        freshness_after: std::time::Duration,
-        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        self.eta_reminders
-            .reconfigure_locked(self.clone(), state_db, root_thread_id, freshness_after)
-            .await;
-    }
-
-    pub(crate) async fn cancel_eta_reminders(&self) {
-        self.eta_reminders.cancel_all().await;
-    }
-
-    pub(crate) async fn suspend_eta_reminders(&self) {
-        self.eta_reminders.suspend_all().await;
-    }
-
-    pub(crate) async fn cancel_eta_reminders_locked(
-        &self,
-        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        self.eta_reminders.cancel_all_locked().await;
-    }
-
-    pub(crate) async fn cancel_eta_reminders_for_owner(&self, owner_thread_id: ThreadId) {
-        self.eta_reminders.cancel_owner(owner_thread_id).await;
-    }
-
-    pub(crate) async fn suspend_eta_reminders_for_owner(&self, owner_thread_id: ThreadId) {
-        self.eta_reminders.suspend_owner(owner_thread_id).await;
-    }
-
-    pub(crate) async fn cancel_eta_reminders_for_owner_locked(
-        &self,
-        owner_thread_id: ThreadId,
-        _eta_dispatch: &tokio::sync::OwnedMutexGuard<()>,
-    ) {
-        self.eta_reminders
-            .cancel_owner_locked(owner_thread_id)
-            .await;
+        self.runtime.registry.agent_metadata_for_thread(agent_id)
     }
 
     pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {
-        self.state
+        self.runtime
+            .registry
             .agent_metadata_for_thread(agent_id)
             .ok_or_else(|| CodexErr::ThreadNotFound(agent_id))
     }
@@ -1004,26 +615,6 @@ impl LocalAgentControl {
         let mut thread_ids = vec![agent_id];
         thread_ids.extend(self.live_thread_spawn_descendants(agent_id).await?);
         Ok(thread_ids)
-    }
-
-    pub(crate) async fn get_agent_config_snapshot(
-        &self,
-        agent_id: ThreadId,
-    ) -> Option<ThreadConfigSnapshot> {
-        match self.inspect_agent(agent_id).await.ok()? {
-            crate::agent::api::AgentInfo::Loaded { config, .. } => Some(*config),
-            crate::agent::api::AgentInfo::Unloaded(_) => None,
-        }
-    }
-
-    /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
-    pub(crate) async fn subscribe_status(
-        &self,
-        agent_id: ThreadId,
-    ) -> CodexResult<watch::Receiver<AgentStatus>> {
-        let state = self.upgrade()?;
-        let thread = state.get_thread(agent_id).await?;
-        Ok(thread.subscribe_status())
     }
 
     pub(crate) async fn format_environment_context_subagents(
@@ -1050,7 +641,8 @@ impl LocalAgentControl {
         }
 
         let Some(parent_path) = self
-            .state
+            .runtime
+            .registry
             .agent_metadata_for_thread(parent_thread_id)
             .and_then(|metadata| metadata.agent_path)
         else {
@@ -1058,7 +650,8 @@ impl LocalAgentControl {
         };
         let parent_prefix = format!("{parent_path}/");
         let mut agent_paths = self
-            .state
+            .runtime
+            .registry
             .live_agents()
             .into_iter()
             .filter_map(|metadata| metadata.agent_path)
@@ -1111,7 +704,7 @@ impl LocalAgentControl {
             })
             .transpose()?;
 
-        let mut live_agents = self.state.live_agents();
+        let mut live_agents = self.runtime.registry.live_agents();
         live_agents.sort_by(|left, right| {
             left.agent_path
                 .as_deref()
@@ -1130,7 +723,7 @@ impl LocalAgentControl {
         if resolved_prefix
             .as_ref()
             .is_none_or(|prefix| agent_matches_prefix(Some(&root_path), prefix))
-            && let Some(root_thread_id) = self.state.agent_id_for_path(&root_path)
+            && let Some(root_thread_id) = self.runtime.registry.agent_id_for_path(&root_path)
             && let Ok(root_thread) = state.get_thread(root_thread_id).await
         {
             agents.push(LiveAgent {
@@ -1166,566 +759,6 @@ impl LocalAgentControl {
         }
 
         Ok(agents)
-    }
-
-    pub(crate) async fn prune_idle_agents(
-        &self,
-        current_thread_id: ThreadId,
-    ) -> CodexResult<PruneIdleAgentsReport> {
-        let _admission = self.begin_handoff_admission()?;
-        let mut children_by_parent = self.live_thread_spawn_children().await?;
-        for children in children_by_parent.values_mut() {
-            children.sort_by_key(|left| left.0.to_string());
-        }
-        let mut parent_by_child = HashMap::new();
-        for (parent_thread_id, children) in &children_by_parent {
-            for (child_thread_id, _) in children {
-                parent_by_child.insert(*child_thread_id, *parent_thread_id);
-            }
-        }
-
-        let mut session_root_thread_id = current_thread_id;
-        let mut visited_ancestors = HashSet::new();
-        while let Some(parent_thread_id) = parent_by_child.get(&session_root_thread_id).copied() {
-            if !visited_ancestors.insert(parent_thread_id) {
-                break;
-            }
-            session_root_thread_id = parent_thread_id;
-        }
-
-        let mut session_thread_ids = HashSet::from([session_root_thread_id]);
-        session_thread_ids.extend(collect_descendants(
-            session_root_thread_id,
-            &children_by_parent,
-        ));
-
-        let mut thread_spawn_depths = HashMap::new();
-        let mut depth_queue = VecDeque::from([(session_root_thread_id, 0usize)]);
-        while let Some((thread_id, depth)) = depth_queue.pop_front() {
-            if thread_spawn_depths.insert(thread_id, depth).is_some() {
-                continue;
-            }
-            if let Some(children) = children_by_parent.get(&thread_id) {
-                for (child_thread_id, _) in children {
-                    depth_queue.push_back((*child_thread_id, depth.saturating_add(1)));
-                }
-            }
-        }
-
-        let mut live_agents = self.state.live_agents();
-        let mut live_agent_ids = HashSet::new();
-        live_agents.retain(|metadata| {
-            metadata
-                .agent_id
-                .is_some_and(|thread_id| live_agent_ids.insert(thread_id))
-        });
-        for children in children_by_parent.values() {
-            for (thread_id, metadata) in children {
-                if !session_thread_ids.contains(thread_id) || !live_agent_ids.insert(*thread_id) {
-                    continue;
-                }
-                let mut metadata = metadata.clone();
-                metadata.agent_id = Some(*thread_id);
-                live_agents.push(metadata);
-            }
-        }
-        live_agents.sort_by(|left, right| {
-            let left_depth = left
-                .agent_id
-                .and_then(|thread_id| thread_spawn_depths.get(&thread_id).copied())
-                .unwrap_or(usize::MAX);
-            let right_depth = right
-                .agent_id
-                .and_then(|thread_id| thread_spawn_depths.get(&thread_id).copied())
-                .unwrap_or(usize::MAX);
-            left_depth
-                .cmp(&right_depth)
-                .then_with(|| {
-                    left.agent_path
-                        .as_deref()
-                        .unwrap_or_default()
-                        .cmp(right.agent_path.as_deref().unwrap_or_default())
-                })
-                .then_with(|| {
-                    left.agent_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_default()
-                        .cmp(&right.agent_id.map(|id| id.to_string()).unwrap_or_default())
-                })
-        });
-
-        let protected = HashSet::from([current_thread_id]);
-        let mut handled = HashSet::new();
-        let mut report = PruneIdleAgentsReport::default();
-
-        for metadata in live_agents {
-            let Some(thread_id) = metadata.agent_id else {
-                continue;
-            };
-            if handled.contains(&thread_id) {
-                continue;
-            }
-
-            let descendants = collect_descendants(thread_id, &children_by_parent);
-            if std::iter::once(thread_id)
-                .chain(descendants.iter().copied())
-                .any(|candidate| protected.contains(&candidate))
-            {
-                continue;
-            }
-
-            let mut subtree_contains_active_work = false;
-            for candidate in std::iter::once(thread_id).chain(descendants.iter().copied()) {
-                if matches!(
-                    self.get_status(candidate).await,
-                    AgentStatus::PendingInit | AgentStatus::Running
-                ) {
-                    subtree_contains_active_work = true;
-                    break;
-                }
-            }
-            if subtree_contains_active_work {
-                continue;
-            }
-
-            let mut subtree = vec![thread_id];
-            subtree.extend(descendants);
-            let unhandled_subtree = subtree
-                .into_iter()
-                .filter(|candidate| !handled.contains(candidate))
-                .collect::<Vec<_>>();
-            match self.close_agent(thread_id).await {
-                Ok(_) => {
-                    handled.extend(unhandled_subtree.iter().copied());
-                    report.closed.extend(unhandled_subtree);
-                }
-                Err(err) => {
-                    if matches!(
-                        err.details(),
-                        CodexErrorDetails::ThreadNotFound(_) | CodexErrorDetails::InternalAgentDied
-                    ) {
-                        handled.extend(unhandled_subtree.iter().copied());
-                        report.closed.extend(unhandled_subtree);
-                    } else {
-                        handled.insert(thread_id);
-                        report.failed.push((thread_id, err.to_string()));
-                    }
-                }
-            }
-        }
-
-        report.closed.sort_by_key(std::string::ToString::to_string);
-        report
-            .failed
-            .sort_by_key(|(thread_id, _)| thread_id.to_string());
-        Ok(report)
-    }
-
-    /// Starts a detached watcher for sub-agents spawned from another thread.
-    ///
-    /// This is only enabled for `SubAgentSource::ThreadSpawn`, where a parent thread exists and
-    /// can receive completion notifications.
-    async fn maybe_start_completion_watcher(
-        &self,
-        child_thread_id: ThreadId,
-        session_source: Option<SessionSource>,
-        child_reference: String,
-        child_agent_path: Option<AgentPath>,
-        terminal_delivery_guard: Option<TerminalResultDeliveryGuard>,
-    ) {
-        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        })) = session_source
-        else {
-            return;
-        };
-        // Capture the parent's current role while the spawn admission is still held. The parent
-        // can be evicted before the detached watcher reaches terminal delivery; its durable
-        // fallback must retain whether the result should wake a Team Lead.
-        let parent_team_lead_hint = self.parent_is_team_lead(parent_thread_id).await;
-        let Some(watcher_registration) = self.begin_handoff_completion_watcher() else {
-            // A watcher created after registration closed has no safe old-mailbox owner. Keep the
-            // handoff fail-closed instead of starting an untracked callback task.
-            if self.handoff_admission_sealed() {
-                self.mark_handoff_delivery_failed();
-            }
-            return;
-        };
-        let control = self.clone();
-        tokio::spawn(async move {
-            let _watcher_registration = watcher_registration;
-            let _terminal_delivery_guard = terminal_delivery_guard;
-            let status = match control.subscribe_status(child_thread_id).await {
-                Ok(mut status_rx) => {
-                    let mut status = status_rx.borrow().clone();
-                    while !is_final(&status) {
-                        if status_rx.changed().await.is_err() {
-                            status = control.get_status(child_thread_id).await;
-                            break;
-                        }
-                        status = status_rx.borrow().clone();
-                    }
-                    status
-                }
-                Err(_) => control.get_status(child_thread_id).await,
-            };
-            if !is_final(&status) {
-                return;
-            }
-
-            // Handoff suspension emits `ShutdownComplete` to close the session after its
-            // writer is durable. That status is not a completed Worker result: consume the
-            // per-thread marker and retire this watcher without waking or replaying the parent.
-            // A natural shutdown has no marker and follows the normal delivery path below.
-            if control.take_handoff_suspended(child_thread_id)
-                && matches!(status, AgentStatus::Shutdown)
-            {
-                return;
-            }
-
-            // Register only the terminal delivery window. The coordinator waits for this short
-            // obligation without waiting for the worker's entire lifetime.
-            let _handoff_delivery = control.begin_handoff_delivery();
-            let Ok(state) = control.upgrade() else {
-                if control.handoff_admission_sealed() {
-                    control.mark_handoff_delivery_failed();
-                }
-                return;
-            };
-            let state_db = state.state_db().await;
-            let child_thread = state.get_thread(child_thread_id).await.ok();
-            let child_uses_multi_agent_v2 = match child_thread.as_ref() {
-                Some(child_thread) => {
-                    child_thread.multi_agent_version() == Some(MultiAgentVersion::V2)
-                }
-                None => true,
-            };
-            if child_agent_path.is_some() && child_uses_multi_agent_v2 {
-                let Some(child_agent_path) = child_agent_path.clone() else {
-                    return;
-                };
-                let Some(parent_agent_path) = child_agent_path
-                    .as_str()
-                    .rsplit_once('/')
-                    .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
-                else {
-                    return;
-                };
-                let Some(message) = format_inter_agent_completion_message(
-                    parent_agent_path.clone(),
-                    child_agent_path.clone(),
-                    &status,
-                ) else {
-                    return;
-                };
-                let trigger_turn = match state.get_thread(parent_thread_id).await {
-                    Ok(parent_thread) => parent_thread.session.is_team_lead().await,
-                    Err(_) => parent_team_lead_hint,
-                };
-                let communication = InterAgentCommunication::new(
-                    child_agent_path,
-                    parent_agent_path,
-                    Vec::new(),
-                    message,
-                    trigger_turn,
-                );
-                let context =
-                    AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
-                let _ = if trigger_turn {
-                    control
-                        .send_team_lead_completion(
-                            parent_thread_id,
-                            communication,
-                            context,
-                            TurnStartOptions::default(),
-                            &status,
-                        )
-                        .await
-                } else {
-                    control
-                        .send_inter_agent_communication(
-                            parent_thread_id,
-                            communication,
-                            context,
-                            TurnStartOptions::default(),
-                        )
-                        .await
-                };
-                return;
-            }
-            let parent_thread = match state.get_thread(parent_thread_id).await {
-                Ok(parent_thread) => parent_thread,
-                Err(error) => {
-                    if let Err(persist_error) = Self::persist_legacy_completion_to_state_db(
-                        state_db.as_ref(),
-                        parent_thread_id,
-                        child_thread_id,
-                        &child_reference,
-                        child_agent_path.as_ref(),
-                        &status,
-                        parent_team_lead_hint,
-                    )
-                    .await
-                    {
-                        if control.handoff_admission_sealed() {
-                            control.mark_handoff_delivery_failed();
-                        }
-                        tracing::warn!(
-                            parent_thread_id = %parent_thread_id,
-                            child_thread_id = %child_thread_id,
-                            %error,
-                            %persist_error,
-                            "unable to retain legacy completion for an unloaded parent"
-                        );
-                    }
-                    return;
-                }
-            };
-            if parent_thread.session.is_team_lead().await {
-                if matches!(status, AgentStatus::Completed(_))
-                    && parent_thread
-                        .session
-                        .get_config()
-                        .await
-                        .effective_team_lead_work_policy()
-                        == TeamLeadWorkPolicy::ManagerOnly
-                    && let Some(child_agent_path) = child_agent_path.clone()
-                    && let Some(parent_agent_path) = child_agent_path
-                        .as_str()
-                        .rsplit_once('/')
-                        .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
-                    && let Some(message) = format_inter_agent_completion_message(
-                        parent_agent_path.clone(),
-                        child_agent_path.clone(),
-                        &status,
-                    )
-                {
-                    let communication = InterAgentCommunication::new(
-                        child_agent_path,
-                        parent_agent_path,
-                        Vec::new(),
-                        message,
-                        /*trigger_turn*/ true,
-                    );
-                    let context = AgentCommunicationContext::new(
-                        AgentCommunicationKind::Result,
-                        child_thread_id,
-                    );
-                    let _ = control
-                        .send_team_lead_completion(
-                            parent_thread_id,
-                            communication,
-                            context,
-                            TurnStartOptions::default(),
-                            &status,
-                        )
-                        .await;
-                    return;
-                }
-                // Legacy V1 workers report completion through a context fragment rather than an
-                // InterAgentCommunication. A parked Team Lead still needs an actionable wake for
-                // that terminal result, so route it through the same bounded wake path used by
-                // V2 completion and deadline events.
-                if !parent_thread.session.is_team_lead().await {
-                    return;
-                }
-                // The legacy completion path mutates the parent's rollout before waking its
-                // Lead. Keep that fragment, cancellation, and wake as one admitted handoff
-                // operation so a sealing coordinator cannot close the writer between them.
-                let Ok(handoff_admission) = parent_thread
-                    .session
-                    .services
-                    .agent_control
-                    .begin_handoff_admission()
-                else {
-                    Self::retain_legacy_completion_after_handoff(
-                        &parent_thread,
-                        child_thread_id,
-                        &child_reference,
-                        child_agent_path.as_ref(),
-                        &status,
-                        /*trigger_turn*/ true,
-                    )
-                    .await;
-                    return;
-                };
-                parent_thread
-                    .inject_fragment_without_turn(
-                        SubagentNotification::new(child_reference.as_str(), status.clone()),
-                        &handoff_admission,
-                    )
-                    .await;
-                parent_thread.session.cancel_lead_oversight().await;
-                parent_thread
-                    .session
-                    .enqueue_lead_wakeup_with_admission(&format!(
-                        "Worker {child_reference} completed with status {status:?}; review the result."
-                    ))
-                    .await;
-                drop(handoff_admission);
-                parent_thread
-                    .session
-                    .maybe_start_turn_for_pending_work()
-                    .await;
-                return;
-            }
-            let Ok(handoff_admission) = parent_thread
-                .session
-                .services
-                .agent_control
-                .begin_handoff_admission()
-            else {
-                Self::retain_legacy_completion_after_handoff(
-                    &parent_thread,
-                    child_thread_id,
-                    &child_reference,
-                    child_agent_path.as_ref(),
-                    &status,
-                    /*trigger_turn*/ false,
-                )
-                .await;
-                return;
-            };
-            parent_thread
-                .inject_fragment_without_turn(
-                    SubagentNotification::new(child_reference.as_str(), status),
-                    &handoff_admission,
-                )
-                .await;
-        });
-    }
-
-    async fn persist_legacy_completion_to_state_db(
-        state_db: Option<&codex_rollout::state_db::StateDbHandle>,
-        target_thread_id: ThreadId,
-        child_thread_id: ThreadId,
-        child_reference: &str,
-        child_agent_path: Option<&AgentPath>,
-        status: &AgentStatus,
-        trigger_turn: bool,
-    ) -> anyhow::Result<String> {
-        let Some(state_db) = state_db else {
-            anyhow::bail!("state database unavailable for legacy completion");
-        };
-        let author = child_agent_path
-            .cloned()
-            .or_else(|| AgentPath::try_from(child_reference).ok())
-            .unwrap_or_else(AgentPath::root);
-        let recipient = author
-            .as_str()
-            .rsplit_once('/')
-            .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
-            .unwrap_or_else(AgentPath::root);
-        let communication = InterAgentCommunication::new(
-            author,
-            recipient,
-            Vec::new(),
-            format!(
-                "Worker {child_reference} completed with status {status:?}; review the result."
-            ),
-            trigger_turn,
-        );
-        crate::session::persist_handoff_inter_agent_communication(
-            state_db,
-            target_thread_id,
-            Some(child_thread_id),
-            &communication,
-            &TurnStartOptions::default(),
-            trigger_turn,
-        )
-        .await
-    }
-
-    /// Retains a V1 completion after the parent handoff fence already won.
-    ///
-    /// V1 normally writes a context fragment directly to the parent rollout. Persist a bounded
-    /// inter-agent envelope first so a replacement daemon can deliver it without replaying a
-    /// synthetic turn; the in-memory mailbox remains an abort-only fallback when durable state is
-    /// unavailable.
-    async fn retain_legacy_completion_after_handoff(
-        parent_thread: &Arc<CodexThread>,
-        child_thread_id: ThreadId,
-        child_reference: &str,
-        child_agent_path: Option<&AgentPath>,
-        status: &AgentStatus,
-        trigger_turn: bool,
-    ) {
-        let author = child_agent_path
-            .cloned()
-            .or_else(|| AgentPath::try_from(child_reference).ok())
-            .unwrap_or_else(AgentPath::root);
-        let recipient = author
-            .as_str()
-            .rsplit_once('/')
-            .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
-            .unwrap_or_else(AgentPath::root);
-        let communication = InterAgentCommunication::new(
-            author,
-            recipient,
-            Vec::new(),
-            format!(
-                "Worker {child_reference} completed with status {status:?}; review the result."
-            ),
-            trigger_turn,
-        );
-        let start_options = TurnStartOptions::default();
-        if let Some(state_db) = parent_thread.session.state_db() {
-            match crate::session::persist_handoff_inter_agent_communication(
-                &state_db,
-                parent_thread.session.thread_id(),
-                Some(child_thread_id),
-                &communication,
-                &start_options,
-                trigger_turn,
-            )
-            .await
-            {
-                Ok(message_id) => {
-                    tracing::info!(
-                        parent_thread_id = %parent_thread.session.thread_id(),
-                        child_thread_id = %child_thread_id,
-                        %message_id,
-                        "persisted legacy completion after handoff admission was sealed"
-                    );
-                    return;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        parent_thread_id = %parent_thread.session.thread_id(),
-                        child_thread_id = %child_thread_id,
-                        %error,
-                        "failed to persist legacy completion after handoff admission was sealed"
-                    );
-                }
-            }
-        } else {
-            tracing::warn!(
-                parent_thread_id = %parent_thread.session.thread_id(),
-                child_thread_id = %child_thread_id,
-                "state database unavailable for legacy completion handoff fallback"
-            );
-        }
-        // Keep the process-local fallback only for a reversible abort. Mark the shared tree
-        // immediately so a coordinator cannot publish a transferable receipt while this callback
-        // has no durable replacement path.
-        parent_thread
-            .session
-            .services
-            .agent_control
-            .mark_handoff_delivery_failed();
-        if trigger_turn {
-            parent_thread
-                .session
-                .input_queue
-                .enqueue_team_lead_mailbox_communication(communication, start_options)
-                .await;
-        } else {
-            parent_thread
-                .session
-                .input_queue
-                .enqueue_mailbox_communication(communication, start_options)
-                .await;
-        }
     }
 
     fn prepare_agent_metadata(
@@ -1765,7 +798,7 @@ impl LocalAgentControl {
         preferred_agent_nickname: Option<String>,
     ) -> CodexResult<(SessionSource, AgentMetadata)> {
         if depth == 1 {
-            self.state.register_root_thread(parent_thread_id);
+            self.runtime.registry.register_root_thread(parent_thread_id);
         }
         let agent_metadata = self.prepare_agent_metadata(
             reservation,
@@ -1785,7 +818,8 @@ impl LocalAgentControl {
     }
 
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
-        self.manager
+        self.runtime
+            .manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
@@ -1857,7 +891,8 @@ impl LocalAgentControl {
                 .or_default()
                 .push((
                     child_thread_id,
-                    self.state
+                    self.runtime
+                        .registry
                         .agent_metadata_for_thread(child_thread_id)
                         .unwrap_or(AgentMetadata {
                             agent_id: Some(child_thread_id),
@@ -1952,32 +987,6 @@ fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> b
     })
 }
 
-fn collect_descendants(
-    root_thread_id: ThreadId,
-    children_by_parent: &HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>,
-) -> Vec<ThreadId> {
-    let mut descendants = Vec::new();
-    let mut stack = children_by_parent
-        .get(&root_thread_id)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(child_thread_id, _)| child_thread_id)
-        .rev()
-        .collect::<Vec<_>>();
-
-    while let Some(thread_id) = stack.pop() {
-        descendants.push(thread_id);
-        if let Some(children) = children_by_parent.get(&thread_id) {
-            for (child_thread_id, _) in children.iter().rev() {
-                stack.push(*child_thread_id);
-            }
-        }
-    }
-
-    descendants
-}
-
 pub(crate) fn render_input_preview(input: &[UserInput]) -> String {
     input
         .iter()
@@ -2007,7 +1016,6 @@ fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
         _ => None,
     }
 }
-
 #[cfg(test)]
 #[path = "control_tests.rs"]
 mod tests;

@@ -8,6 +8,9 @@ use super::types::MemoryOperation;
 use super::types::MemoryScope;
 use super::types::MemorySignal;
 use crate::agent::AgentStatus;
+use crate::agent::api::AgentControl as AgentControlApi;
+use crate::agent::api::AgentInput;
+use crate::agent::api::SpawnRequest;
 use crate::config::Config;
 use crate::session::session::Session;
 use anyhow::Context;
@@ -21,6 +24,7 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::truncate_text;
 use codex_utils_template::Template;
+use futures::StreamExt;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -86,19 +90,22 @@ pub(super) async fn classify_with_model(
     )?;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryExtraction);
     let agent_control = session.services.agent_control.clone();
-    let thread_id = agent_control
-        .spawn_agent_with_metadata(
-            agent_config,
-            vec![UserInput::Text {
+    let (agent, _) = AgentControlApi::spawn(
+        &agent_control,
+        SpawnRequest {
+            caller: session.thread_id(),
+            config: agent_config,
+            input: AgentInput::UserInput(vec![UserInput::Text {
                 text: prompt,
                 text_elements: vec![],
-            }],
-            Some(source),
-            crate::agent::control::SpawnAgentOptions::default(),
-        )
-        .await
-        .map(|agent| agent.thread_id)
-        .context("spawn orchestrator-memory classification agent")?;
+            }]),
+            source,
+            options: crate::agent::control::SpawnAgentOptions::default(),
+        },
+    )
+    .await
+    .context("spawn orchestrator-memory classification agent")?;
+    let thread_id = agent.thread_id;
 
     let final_status = wait_for_final_status(&agent_control, thread_id).await;
     if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
@@ -248,22 +255,21 @@ async fn wait_for_final_status(
     agent_control: &crate::agent::AgentControl,
     thread_id: codex_protocol::ThreadId,
 ) -> AgentStatus {
-    let Ok(mut rx) = agent_control.subscribe_status(thread_id).await else {
+    let Ok(mut updates) = agent_control.subscribe_status(thread_id).await else {
         return AgentStatus::Errored(
             "failed subscribing to orchestrator memory classification agent".to_string(),
         );
     };
 
     let wait = async {
-        loop {
-            let status = rx.borrow().clone();
-            if crate::agent::status::is_final(&status) {
-                return status;
-            }
-            if rx.changed().await.is_err() {
-                return AgentStatus::Errored("status channel closed".to_string());
+        while let Some(Ok(snapshot)) = updates.next().await {
+            if let Some(status) = snapshot.status()
+                && crate::agent::status::is_final(status)
+            {
+                return status.clone();
             }
         }
+        AgentStatus::Errored("status channel closed".to_string())
     };
 
     match tokio::time::timeout(Duration::from_secs(CLASSIFICATION_TIMEOUT_SECONDS), wait).await {

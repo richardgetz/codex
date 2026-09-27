@@ -3458,7 +3458,7 @@ async fn prompt_mode_skips_waiting_when_mcp_approvals_are_disabled() {
         plugin_id: None,
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: None,
-        mcp_app_resource_uri: None,
+        mcp_app_ui: None,
         codex_apps_meta: None,
         openai_file_input_optional_fields: None,
     };

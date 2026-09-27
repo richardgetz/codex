@@ -85,7 +85,11 @@ async fn local_compaction_respects_tool_metadata_state(
     }
     let cell = CellId::new("local-compaction-cell".to_string());
     let nested_call = ExecutedToolCall::new("nested_tool".to_string(), json!({}));
-    let recorder = &session.services.executed_tool_calls;
+    let recorder = session
+        .services
+        .executed_tool_calls
+        .as_ref()
+        .expect("metadata-enabled test config creates an executed-call recorder");
     recorder.start_cell(&cell, "exec");
     recorder.record_tool_call(
         &ToolCall {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::LocalAgentControl;
 use crate::agent::types::SpawnAgentOptions;
 use crate::config::RolloutBudgetConfig;
 use crate::config::test_config;
@@ -118,11 +119,13 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
     // lookups. Tokio's fair RwLock makes this ordering deterministic.
     let fork = manager.fork_thread_from_history(
         ForkSnapshot::Interrupted,
-        StartThreadOptions {
-            environments: Some(Vec::new()),
-            ..StartThreadOptions::new(config)
-        },
+        config,
         history,
+        /*thread_source*/ None,
+        /*parent_trace*/ None,
+        ClientMcpExtensions::default(),
+        /*reserved_thread_id*/ None,
+        /*inherited_usage_policy*/ None,
     );
     tokio::pin!(fork);
     {
@@ -227,6 +230,7 @@ async fn thread_analytics_opt_out_overrides_shared_client() {
             }
             services.analytics_events_client.track_app_used(
                 codex_analytics::TrackEventsContext {
+                    turn_metadata: None,
                     model_slug: "test-model".to_string(),
                     turn_id: format!("test-turn-{thread_id}"),
                     thread_id,
@@ -384,13 +388,13 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
                 text: "child task".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 parent_thread_id: Some(root.thread_id),
                 ..Default::default()
@@ -776,7 +780,7 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
         config: Config,
         path: std::path::PathBuf,
     ) {
-        let _future = manager.fork_thread(usize::MAX, crate::StartThreadOptions::new(config), path);
+        let _future = manager.fork_thread(usize::MAX, config, path, None, None);
     }
 
     let _: fn(&ThreadManager, Config, std::path::PathBuf) = assert_legacy_snapshot_callsite;
@@ -829,7 +833,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let step_context = StepContext::for_test(turn_context);
     let mut items = session
-        .build_initial_context_with_world_state(&step_context, &world_state)
+        .build_initial_context_with_world_state(step_context.turn.as_ref(), &world_state)
         .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
@@ -1438,7 +1442,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
     let reviewer_context = reviewer
         .thread
         .session
-        .build_initial_context_with_world_state(&reviewer_step, &reviewer_world_state)
+        .build_initial_context_with_world_state(reviewer_step.turn.as_ref(), &reviewer_world_state)
         .await;
     assert!(
         !serde_json::to_string(&reviewer_context)
@@ -1997,8 +2001,10 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            crate::StartThreadOptions::new(config),
+            config,
             rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("fork source thread");
@@ -2428,8 +2434,10 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            crate::StartThreadOptions::new(config),
+            config,
             rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("fork from rollout path");
@@ -2950,8 +2958,10 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            crate::StartThreadOptions::new(config.clone()),
+            config.clone(),
             source_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("fork interrupted snapshot");
@@ -3076,8 +3086,10 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            crate::StartThreadOptions::new(config.clone()),
+            config.clone(),
             source_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("fork interrupted snapshot");
@@ -3163,8 +3175,10 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            crate::StartThreadOptions::new(config.clone()),
+            config.clone(),
             source_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("fork interrupted snapshot");
@@ -3202,8 +3216,10 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let reforked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            crate::StartThreadOptions::new(config.clone()),
+            config.clone(),
             forked_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await
         .expect("re-fork interrupted snapshot");

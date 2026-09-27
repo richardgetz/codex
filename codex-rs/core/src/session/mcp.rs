@@ -1145,7 +1145,7 @@ async fn review_guardian_mcp_elicitation(
     let Some(mcp_config) = session.services.mcp_runtime.current_config() else {
         return Ok(None);
     };
-    let step_settings = Arc::clone(&turn_context.next_step_input.load().settings);
+    let step_settings = turn_context.next_step_settings.load_full();
 
     // User approval skips ordinary CUA checks, not separate sensitive requests.
     let user_cua_execution = step_settings.approvals_reviewer() == ApprovalsReviewer::User
@@ -1257,7 +1257,7 @@ async fn review_guardian_mcp_elicitation(
     let guardian_request = if strict_auto_review {
         let connector_id = elicitation_connector_id(&request.elicitation);
         let trusted_guardian_request = if request.server_name == CODEX_APPS_MCP_SERVER_NAME {
-            let Some((call_id, invocation, metadata)) = trusted_mcp_app_call.as_ref() else {
+            let Some((call_id, _invocation, _metadata)) = trusted_mcp_app_call.as_ref() else {
                 return Ok(None);
             };
             let Some((Some(invocation), metadata)) =

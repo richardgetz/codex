@@ -20,6 +20,10 @@ release or merge rules.
 
 ## Unreleased
 
+- The checked-in aggregate Python v2 protocol module may exceed the blob-size
+  threshold after upstream schema refreshes. The exact generated path is
+  allowlisted; other changed blobs remain subject to the existing limit.
+
 - Cross-process handoff journals retain metadata-only `pendingMailbox`
   observations per affected thread, including source, count, oldest age, and
   later resolution time where a preflight can confirm the queue has drained.
@@ -44,6 +48,24 @@ release or merge rules.
   stack budget while keeping Tokio worker stacks at 16 MiB, preventing the
   fork's large merged async dispatch path from aborting during `just codex`
   startup.
+
+- Stable refresh `rust-v0.157.1` preserves shipped migration versions and
+  checksums, retaining the fork's `0056_rick_git_info_clears.sql`,
+  `0057_upstream_threads_originator.sql`, and `0059`–`0064` migration sequence.
+  The colliding upstream creator identity and Guardian metadata cleanup
+  migrations are appended as `0065` and `0066`.
+
+- Fork operations that start from rollout, loaded history, or prepared history
+  preserve explicit per-thread startup options such as environment selection,
+  thread instruction providers, MCP extensions, and thread extensions. The
+  selected fork history replaces only the options' initial history; an
+  explicitly inherited thread-settings snapshot remains authoritative even
+  when it clears previously disabled plugins.
+
+- Plain-name skill selection keeps the stable authority priority of executor,
+  cloud, custom resource, then host. The upstream Orchestrator-to-Cloud source
+  rename retains the former Orchestrator priority, so executor-owned skills
+  still win host name collisions.
 
 - Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
   recovery contract, account and launcher ownership, pause/continue and ETA
@@ -810,6 +832,8 @@ release or merge rules.
   - App-server: `thread/start`, `thread/resume`, and `thread/fork` accept
     `userPreferencesMemoryPolicy`; loaded threads can be changed live with
     `thread/userPreferencesMemoryPolicy/set`.
+  - Python SDK sync and async `thread_start`, `thread_resume`, and `thread_fork`
+    wrappers accept and forward both memory policy options.
   - Startup copy migration is available with
     `migrate_from_orchestrator_memory = true`.
   - `disable_orchestrator_memory_after_migration = true` disables the effective
@@ -983,6 +1007,10 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify `.github/blob-size-allowlist.txt` retains only the exact exception for
+  `sdk/python/src/openai_codex/generated/v2_all.py` among Python SDK paths while
+  the generated aggregate remains required; do not widen the blob-size policy.
+
 - Verify upstream handoff journal refreshes preserve metadata-only
   `pendingMailbox` observations with affected thread ID, source, count, oldest
   age, observation/resolution timestamps, and backward-compatible loading of
@@ -1012,6 +1040,17 @@ release or merge rules.
   Smoke `just codex` through the loaded model screen to catch startup stack
   regressions.
 
+- Verify upstream fork API changes preserve caller-supplied `StartThreadOptions`
+  for rollout, loaded-history, and prepared-history forks, including
+  environment selections, thread instruction providers, client MCP extensions,
+  thread extensions, and reserved IDs. Confirm selected history replaces only
+  `initial_history`, and an explicitly inherited thread-settings snapshot can
+  clear plugin selections without falling back to rollout metadata.
+
+- Verify Python SDK sync and async `thread_start`, `thread_resume`, and
+  `thread_fork` wrappers expose and serialize both `memory_policy` and
+  `user_preferences_memory_policy` using their protocol field names.
+
 - Verify upstream refreshes preserve the main-checkout, single-owner,
   serialized Cargo workflow, source-only worker worktrees, integrated-source
   freeze with exact-revision handoff, and preservation of active
@@ -1031,6 +1070,14 @@ release or merge rules.
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
   Apple Silicon releases) and migration-number policy remain intact.
+- Verify upstream migration collisions preserve every shipped stable filename,
+  SQL body, and applied checksum. For `rust-v0.157.1`, keep migration `0056`
+  Git-clear markers and `0057` thread-originator intact, plus fork migrations
+  `0059`–`0064`; apply upstream creator identity and Guardian cleanup at `0065`
+  and `0066`, with no duplicate SQL objects.
+- Verify plain-name skill mentions preserve executor, cloud, custom-resource,
+  and host priority after upstream changes the source kind from Orchestrator to
+  Cloud; executor-owned skills must still win host-name collisions.
 - Verify implicit local-daemon startup performs one bounded handshake that is
   reused for picker and direct-ID resume, preserves embedded startup when no
   socket exists, and fails closed when an existing endpoint is stale or rejects

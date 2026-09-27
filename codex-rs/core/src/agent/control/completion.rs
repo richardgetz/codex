@@ -95,24 +95,35 @@ impl LocalAgentControl {
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = trace.is_enabled().then(|| message.clone());
+        let parent_is_team_lead = self.parent_is_team_lead(parent_thread_id).await;
         let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            parent_is_team_lead,
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
-        if let Err(err) = self
-            .send_inter_agent_communication(
+        let result = if parent_is_team_lead {
+            self.send_team_lead_completion(
+                parent_thread_id,
+                communication,
+                context,
+                TurnStartOptions::default(),
+                &status,
+            )
+            .await
+        } else {
+            self.send_inter_agent_communication(
                 parent_thread_id,
                 communication,
                 context,
                 TurnStartOptions::default(),
             )
             .await
-        {
+        };
+        if let Err(err) = result {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
             return;
         }

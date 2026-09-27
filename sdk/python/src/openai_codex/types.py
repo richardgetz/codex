@@ -10,6 +10,7 @@ from .generated.v2_all import (
     CancelLoginAccountResponse,
     CancelLoginAccountStatus,
     GetAccountResponse,
+    MemoryAccessPolicy,
     ModelListResponse,
     Personality,
     PlanType,
@@ -37,6 +38,8 @@ from .generated.v2_all import (
     TurnInterruptResponse,
     TurnStatus,
     TurnSteerResponse,
+    UserPreferencesMemoryBucket,
+    UserPreferencesMemoryBucketPolicy,
 )
 from .models import InitializeResponse, JsonObject, Notification
 
@@ -50,6 +53,7 @@ __all__ = [
     "GetAccountResponse",
     "InitializeResponse",
     "JsonObject",
+    "MemoryAccessPolicy",
     "ModelListResponse",
     "Notification",
     "Personality",
@@ -78,4 +82,6 @@ __all__ = [
     "TurnInterruptResponse",
     "TurnStatus",
     "TurnSteerResponse",
+    "UserPreferencesMemoryBucket",
+    "UserPreferencesMemoryBucketPolicy",
 ]

@@ -249,7 +249,9 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_type: self.windows_sandbox_type,
+            windows_sandbox_type: self
+                .original_config_do_not_use
+                .windows_sandbox_type_from_config(),
             use_legacy_landlock: self.use_legacy_landlock,
             exec_policy: None,
             mcp_policy: None,
@@ -503,7 +505,7 @@ impl SessionConfiguration {
     ) -> ConstraintResult<()> {
         self.step_settings
             .validate(&self.step_settings_constraints(environments))?;
-        super::environment::validate_environment_selections(environments)
+        super::environment::validate_environment_configs(environments)
     }
 
     pub(super) fn step_settings_constraints(
@@ -711,7 +713,7 @@ impl SessionConfiguration {
             .map_or(current_environments, |environments| {
                 environments.environments.as_slice()
             });
-        super::environment::validate_environment_selections(next_environments)?;
+        super::environment::validate_environment_configs(next_environments)?;
         let mut step_settings_update = updates.step_settings.clone();
         if let Some(team_snapshot) = updates.team_snapshot.as_ref() {
             let mut config = (*next_configuration.original_config_do_not_use).clone();
@@ -1133,6 +1135,11 @@ impl Session {
         CodexResponsesMetadata {
             window_number: Some(window_number),
             context_window_id: Some(context_window_id),
+            mcp_attribution: self
+                .services
+                .executed_tool_calls
+                .as_ref()
+                .map(|executed_tool_calls| executed_tool_calls.mcp_attribution_snapshot()),
             analytics_enabled: Some(self.services.analytics_events_client.is_enabled()),
             history_ingest_requested: turn_context
                 .config
@@ -1224,25 +1231,29 @@ impl Session {
             ForkPersistence::Referenced { history_base, .. } => {
                 history_base.map(|position| position.end_ordinal_exclusive)
             }
-            ForkPersistence::Copied { .. } => match &initial_history {
-                InitialHistory::Resumed(resumed) => {
-                    // Both local and CCA thread stores place the resumed thread's
-                    // canonical SessionMeta first. Never inspect inherited metadata:
-                    // an ancestor's history_base describes a different fork boundary.
-                    resumed.history.first().and_then(|item| match item {
-                        RolloutItem::SessionMeta(meta)
-                            if meta.meta.id == resumed.conversation_id =>
-                        {
-                            codex_rollout::forked_from_ordinal_exclusive(
-                                &meta.meta,
-                                resumed.rollout_path.as_deref(),
-                            )
-                        }
-                        _ => None,
-                    })
+            ForkPersistence::Copied { .. } | ForkPersistence::CopiedDeferred { .. } => {
+                match &initial_history {
+                    InitialHistory::Resumed(resumed) => {
+                        // Both local and CCA thread stores place the resumed thread's
+                        // canonical SessionMeta first. Never inspect inherited metadata:
+                        // an ancestor's history_base describes a different fork boundary.
+                        resumed.history.first().and_then(|item| match item {
+                            RolloutItem::SessionMeta(meta)
+                                if meta.meta.id == resumed.conversation_id =>
+                            {
+                                codex_rollout::forked_from_ordinal_exclusive(
+                                    &meta.meta,
+                                    resumed.rollout_path.as_deref(),
+                                )
+                            }
+                            _ => None,
+                        })
+                    }
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        None
+                    }
                 }
-                InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
-            },
+            }
         }
         .filter(|_| forked_from_id.is_some());
         let parent_thread_id = session_configuration
@@ -1297,6 +1308,10 @@ impl Session {
                 ForkPersistence::Copied {
                     inherited_usage_policy: Some(inherited_usage_policy),
                     ..
+                }
+                | ForkPersistence::CopiedDeferred {
+                    inherited_usage_policy: Some(inherited_usage_policy),
+                    ..
                 } => {
                     // A copied fork may resume a source history whose settings event belongs to
                     // the source thread. Apply the trusted inherited policy unless the child
@@ -1312,6 +1327,10 @@ impl Session {
                     session_configuration.usage_policy = *inherited_usage_policy;
                 }
                 ForkPersistence::Copied {
+                    inherited_usage_policy: None,
+                    ..
+                }
+                | ForkPersistence::CopiedDeferred {
                     inherited_usage_policy: None,
                     ..
                 } => {}
@@ -1521,6 +1540,8 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
+        let persistence_auth = futures::FutureExt::shared(auth_manager.auth());
+        let mcp_auth = persistence_auth.clone();
         let thread_persistence_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None)))
@@ -1533,7 +1554,10 @@ impl Session {
                 let guard = managed_guard.as_deref_mut().unwrap_or(&mut local_guard);
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        let auth = persistence_auth.await;
                         let params = CreateThreadParams {
+                            creator_user_id: auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id),
+                            creator_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
                             session_id,
                             thread_id,
                             extra_config: config.extra_config.clone(),
@@ -1554,7 +1578,8 @@ impl Session {
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
                             history_base: match &fork_persistence {
-                                ForkPersistence::Copied { .. } => None,
+                                ForkPersistence::Copied { .. }
+                                | ForkPersistence::CopiedDeferred { .. } => None,
                                 ForkPersistence::Referenced { history_base, .. } => *history_base,
                             },
                             subagent_history_start_ordinal: None,
@@ -1572,7 +1597,11 @@ impl Session {
                             },
                         };
                         if is_paginated_subagent
-                            && matches!(&fork_persistence, ForkPersistence::Copied { .. })
+                            && matches!(
+                                &fork_persistence,
+                                ForkPersistence::Copied { .. }
+                                    | ForkPersistence::CopiedDeferred { .. }
+                            )
                             && let InitialHistory::Forked(items) = &initial_history
                         {
                             LiveThread::create_with_inherited_model_context(
@@ -1639,7 +1668,6 @@ impl Session {
         ));
 
         let mut mcp_auth_changes = auth_manager.auth_change_receiver();
-        let auth_manager_clone = Arc::clone(&auth_manager);
         let plugins_manager_for_prewarm = Arc::clone(&plugins_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1654,7 +1682,7 @@ impl Session {
             .map(|cwd| cwd.to_path_buf())
             .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth().await;
+            let auth = mcp_auth.await;
             if config_for_mcp.features.plugin_recommendations_enabled() {
                 let plugins_config = config_for_mcp.plugins_config_input();
                 let auth_for_prewarm = auth.clone();
@@ -1964,15 +1992,15 @@ impl Session {
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
-                session_configuration.inferred_environment_config(),
+                ThreadEnvironmentDefaults::new(
+                    session_configuration.inferred_environment_config(),
+                    session_configuration.windows_sandbox_type,
+                ),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
-            turn_environments.update_selections(
-                environment_selections,
-                &session_configuration.inferred_environment_config(),
-            );
+            turn_environments.update_selections(environment_selections);
             if let Some(root) = session_configuration.session_tmp_agent_root.as_ref() {
                 turn_environments.add_local_writable_root(root);
             }
@@ -1990,12 +2018,18 @@ impl Session {
                 "session_init.plugin_skill_warmup",
                 otel.name = "session_init.plugin_skill_warmup",
             ));
-            let thread_name_lookup =
-                thread_title_from_thread_store(live_thread.as_ref(), &thread_store, thread_id)
-                    .instrument(info_span!(
-                        "session_init.thread_name_lookup",
-                        otel.name = "session_init.thread_name_lookup",
-                    ));
+            let thread_name_lookup = async {
+                if config.ephemeral && matches!(&initial_history, InitialHistory::Forked(_)) {
+                    None
+                } else {
+                    thread_title_from_thread_store(live_thread.as_ref(), &thread_store, thread_id)
+                        .await
+                }
+            }
+            .instrument(info_span!(
+                "session_init.thread_name_lookup",
+                otel.name = "session_init.thread_name_lookup",
+            ));
             let (instruction_refresh, plugin_skill_errors, thread_name) = tokio::join!(
                 agents_md_manager.refresh(config.as_ref(), &resolved_environments),
                 plugin_skill_warmup,
@@ -2085,7 +2119,7 @@ impl Session {
                         spec,
                         current_exec_policy.as_ref(),
                         config.permissions.permission_profile(),
-                        config.permissions.windows_sandbox_type,
+                        config.effective_local_windows_sandbox_type(),
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,
@@ -2179,6 +2213,8 @@ impl Session {
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
             let extension_metrics =
                 extension_metrics::from_session_telemetry(session_telemetry.clone());
+            let workspace_routing = thread_extension_data
+                .get_or_init(|| config.workspace_routing_context());
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -2245,6 +2281,7 @@ impl Session {
                 selected_capability_roots,
                 mcp_thread_init,
                 client_mcp_extensions,
+                local_agent_runtime: agent_control.runtime.clone(),
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,
@@ -2278,7 +2315,7 @@ impl Session {
                         .enabled(Feature::ConcurrentReasoningSummaries),
                     attestation_provider,
                     config.http_client_factory(),
-                    config.workspace_routing_context(),
+                    workspace_routing.as_ref().clone(),
                 )
                 .with_restored_history(matches!(
                     &initial_history,

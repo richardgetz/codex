@@ -18,7 +18,10 @@ import type { ThreadUsagePolicy } from "./ThreadUsagePolicy";
 export type ThreadSettings = {/**
  * Saved list of disabled plugin IDs. Does not yet filter plugin capabilities.
  */
-disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, activePermissionProfile: ActivePermissionProfile | null, model: string, modelProvider: string, serviceTier: string | null, effort: ReasoningEffort | null, summary: ReasoningSummary | null, collaborationMode: CollaborationMode, personality: Personality | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
+disabledPluginIds: Array<string>, cwd: AbsolutePathBuf, approvalPolicy: AskForApproval, approvalsReviewer: ApprovalsReviewer, sandboxPolicy: SandboxPolicy, activePermissionProfile: ActivePermissionProfile | null, model: string, modelProvider: string, serviceTier: string | null, effort: ReasoningEffort | null, summary: ReasoningSummary | null, collaborationMode: CollaborationMode, /**
+ * @deprecated Reports the saved setting; `friendly` and `pragmatic` no longer select a style.
+ */
+personality: Personality | null, memoryPolicy: MemoryAccessPolicy, userPreferencesMemoryPolicy: UserPreferencesMemoryBucketPolicy, /**
  * Current per-thread usage and automatic-resume policy.
  */
 usagePolicy: ThreadUsagePolicy, /**

@@ -9,8 +9,10 @@ use crate::config::test_config;
 use crate::context::ContextualUserFragment;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::guardian::assessment::guardian_output_schema;
 use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
+use crate::session::tests::update_selected_settings_for_test;
 use crate::session::tests::update_turn_settings_for_test;
 use crate::session::turn_context::TurnContext;
 use crate::test_support;
@@ -301,7 +303,9 @@ fn response_item_contains_message_text(item: &ResponseItem, needle: &str) -> boo
     };
     content.iter().any(|item| match item {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => text.contains(needle),
-        ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
+        ContentItem::InputImage { .. }
+        | ContentItem::InputAudio { .. }
+        | ContentItem::EncryptedContent { .. } => false,
     })
 }
 
@@ -1452,6 +1456,7 @@ fn guardian_exec_command_uses_executor_cwd_convention(
         justification: None,
         tty: false,
         proposed_execpolicy_amendment: None,
+        allow_browser: false,
     }
     .into_guardian_request(Some(cwd_convention))
     .expect("Guardian request should render executor cwd");
@@ -1808,6 +1813,14 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
     let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
     Arc::make_mut(&mut Arc::get_mut(&mut turn).expect("unshared turn").config)
         .guardian_policy_config = configured_policy.map(str::to_owned);
+    update_turn_settings_for_test(
+        Arc::get_mut(&mut turn).expect("unshared turn"),
+        |settings| {
+            update_selected_settings_for_test(settings, |selected| {
+                selected.personality = Some(codex_protocol::config_types::Personality::Friendly);
+            })
+        },
+    );
     let mut captured = GuardianReviewContext::from(&turn);
     let parent = Arc::make_mut(&mut captured.model_info);
     parent.slug = "captured-parent".to_string();
@@ -1818,7 +1831,6 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
             "policy_template": "captured template: {{ tenant_policy_config }}",
         },
     }))?);
-    captured.personality = Some(codex_protocol::config_types::Personality::Friendly);
 
     Arc::get_mut(&mut session)
         .expect("unshared session")
@@ -1838,8 +1850,16 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
         .as_mut()
         .unwrap()
         .policy = Some("changed action policy".to_string());
-    let mut different_personality = changed_policy.clone();
-    different_personality.personality = Some(codex_protocol::config_types::Personality::Pragmatic);
+    let mut pragmatic_turn = session.new_default_turn().await;
+    let pragmatic_turn_mut = Arc::get_mut(&mut pragmatic_turn).expect("unshared turn");
+    pragmatic_turn_mut.config = Arc::clone(&turn.config);
+    update_turn_settings_for_test(pragmatic_turn_mut, |settings| {
+        update_selected_settings_for_test(settings, |selected| {
+            selected.personality = Some(codex_protocol::config_types::Personality::Pragmatic);
+        })
+    });
+    let mut different_personality = GuardianReviewContext::from(&pragmatic_turn);
+    different_personality.model_info = Arc::clone(&captured.model_info);
     for (index, context) in [captured, changed_policy, different_personality]
         .into_iter()
         .enumerate()
@@ -2402,7 +2422,23 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let mut reviewer_model = session
+        .services
+        .models_manager
+        .get_model_info("codex-auto-review", &turn.config.to_models_manager_config())
+        .await;
+    reviewer_model.comp_hash = Some("test-checkpoint".to_owned());
+    let auth_manager = Arc::clone(&session.services.auth_manager);
+    Arc::get_mut(&mut session)
+        .expect("unshared session")
+        .services
+        .models_manager = Arc::new(StaticModelsManager::new(
+        Some(auth_manager),
+        ModelsResponse {
+            models: vec![reviewer_model],
+        },
+    ));
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be unique");
     update_turn_settings_for_test(turn_mut, |settings| {
         Arc::make_mut(&mut settings.model_info).auto_review_model_override =
@@ -2516,8 +2552,9 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         1,
         "follow-up reminder should be persisted for guardian forks"
     );
+    let (window_number, window_ids) = session.advance_auto_compact_window().await;
     session
-        .replace_history(
+        .replace_compacted_history(
             vec![
                 ResponseItem::Compaction {
                     id: Some(codex_protocol::ResponseItemId::from_server(
@@ -2544,8 +2581,20 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
                 },
-            ],
+            ]
+            .into_iter()
+            .map(codex_history::ResponseItemEnvelope::new)
+            .collect(),
             /*reference_context_item*/ None,
+            /*world_state_baseline*/ None,
+            crate::compact::CompactedHistoryMetadata {
+                message: String::new(),
+                window_number,
+                window_ids,
+                compaction_response_id: None,
+                compaction_model_hash: Some("test-checkpoint".to_owned()),
+                reviewer_compaction_hash: Some("test-checkpoint".to_owned()),
+            },
         )
         .await;
     let third_request = GuardianApprovalRequest::ExecCommand {
@@ -3666,7 +3715,8 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         gate_tx
             .send(())
             .expect("second guardian review gate should still be open");
-        assert_eq!(second_review.await?, ReviewDecision::Approved);
+        // The later user input revokes the in-flight trunk review's authorization version.
+        assert_eq!(second_review.await?, ReviewDecision::Abort);
         let feedback = codex_feedback::guardian_review_failures(&[session.thread_id()])
             .attachment
             .expect("failed ephemeral review survives cleanup and subsequent allowed reviews");
@@ -3930,6 +3980,7 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
         Some(
             GuardianPolicyInstructions::new(
                 defaults.policy,
+                "",
                 defaults.policy_template,
                 guardian_output_contract_prompt(),
             )
@@ -4049,6 +4100,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         Some(
             GuardianPolicyInstructions::new(
                 "Use the workspace-managed guardian policy.",
+                "",
                 ResolvedModelMessages::bundled()
                     .auto_review()
                     .policy_template,

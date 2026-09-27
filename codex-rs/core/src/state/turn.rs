@@ -20,7 +20,6 @@ use tokio::sync::oneshot;
 use super::TurnTokenUsage;
 use crate::agent::control::TeamWorkerLease;
 use crate::agent::types::AgentExecutionGuard;
-use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::session::TurnInput;
 use crate::session::TurnInputQueue;
 use crate::session::step_context::StepContext;

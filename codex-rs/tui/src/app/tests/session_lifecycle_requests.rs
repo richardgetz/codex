@@ -276,6 +276,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
         /*log_db*/ None,
         state_db,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Default::default(),
     )
     .await?;
     let codex_home = config.codex_home.display().to_string();
@@ -664,7 +665,7 @@ pub(super) fn recorded_params(requests: &RecordedRequests, method: &str) -> Vec<
         .collect()
 }
 
-async fn make_history_test_app() -> Result<(App, tempfile::TempDir)> {
+async fn make_history_test_app() -> Result<(Box<App>, tempfile::TempDir)> {
     let mut app = make_test_app().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
@@ -961,16 +962,18 @@ async fn archive_current_thread_reports_success_only_after_archiving() -> Result
         .expect("create rollout"),
     )?;
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
 
     app.active_thread_id = Some(ThreadId::new());
     assert_matches!(
-        app.archive_current_thread(&mut app_server).await,
+        app.archive_current_thread(&mut tui, &mut app_server)
+            .await?,
         AppRunControl::Continue
     );
 
     app.active_thread_id = Some(thread_id);
     assert_matches!(
-        app.archive_current_thread(&mut app_server).await,
+        app.archive_current_thread(&mut tui, &mut app_server).await?,
         AppRunControl::Exit(ExitReason::Archived(archived_id)) if archived_id == thread_id
     );
 

@@ -1,3 +1,4 @@
+use crate::agent::types::ResolvedMultiAgentV2UsageHints;
 use crate::config::MultiAgentV2Config;
 use crate::context::MultiAgentRoleInstructions;
 use crate::session::step_context::StepContext;
@@ -59,12 +60,6 @@ All agents share the same directory. In detail:
 - All agents use the same current working directory.
 - As a result, edits made by one agent are immediately visible to all other agents.
 "#;
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ResolvedMultiAgentV2UsageHints {
-    pub(crate) root: Option<MultiAgentRoleInstructions>,
-    pub(crate) subagent: Option<MultiAgentRoleInstructions>,
-}
 
 pub(super) fn usage_hint_text(step_context: &StepContext) -> Option<MultiAgentRoleInstructions> {
     let turn_context = step_context.turn.as_ref();

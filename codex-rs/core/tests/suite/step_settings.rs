@@ -35,6 +35,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ApprovalMessages;
+use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ConfirmationPolicies;
@@ -256,6 +257,18 @@ async fn submit_turn_settings(
     Ok(tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), outcome).await??)
 }
 
+async fn apply_turn_settings(
+    thread: &CodexThread,
+    turn_id: &str,
+    update: TurnSettingsUpdate,
+) -> Result<()> {
+    assert_eq!(
+        submit_turn_settings(thread, turn_id, update).await?,
+        TurnSettingsUpdateOutcome::Applied
+    );
+    Ok(())
+}
+
 fn request_settings(request: &ResponsesRequest) -> Value {
     let body = request.body_json();
     json!({
@@ -451,7 +464,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
         requests[2].function_call_output("call-a")
     );
 
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused_request.turn_id,
         TurnSettingsUpdate {
@@ -477,6 +490,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                     model: Some(model.to_string()),
                     ..Default::default()
                 },
+                usage_policy_update: None,
             })
             .await?;
         test.submit_text_turn("review previous diagnostics").await?;
@@ -574,8 +588,10 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
             .thread_manager
             .fork_thread(
                 ForkSnapshot::Interrupted,
-                StartThreadOptions::new(replay_config),
+                replay_config,
                 rollout_path.clone(),
+                /*thread_source*/ None,
+                /*parent_trace*/ None,
             )
             .await?
             .thread;
@@ -587,6 +603,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                         model: Some(model.to_string()),
                         ..Default::default()
                     },
+                    usage_policy_update: None,
                 })
                 .await?;
             thread
@@ -707,8 +724,10 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
         .thread_manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            StartThreadOptions::new(replay_config),
+            replay_config,
             rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
         )
         .await?
         .thread;
@@ -1511,7 +1530,7 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1527,7 +1546,7 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
     })
     .await;
     assert_eq!(paused.call_id, "pause-b");
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1687,7 +1706,7 @@ async fn captured_model_enables_and_executes_code_mode() -> Result<()> {
         )
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2180,6 +2199,16 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             "additionalProperties": false,
         })
     };
+    let wait_parameters = |model: &str| {
+        json!({
+            "type": "object",
+            "properties": {
+                "cell_id": {"type": "string", "description": format!("Cell on {model}.")},
+            },
+            "required": ["cell_id"],
+            "additionalProperties": false,
+        })
+    };
     let server = start_mock_server().await;
     let response_mock = mount_sse_sequence(
         &server,
@@ -2196,12 +2225,16 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
             config.multi_agent_v2.expose_spawn_agent_model_overrides = false;
+            config.multi_agent_v2.non_code_mode_only = true;
+            config.code_mode.disable_in_process_fallback = true;
             for model in &mut config
                 .model_catalog
                 .as_mut()
                 .expect("controlled model catalog")
                 .models
             {
+                model.tool_mode = Some(ToolMode::CodeMode);
+                model.use_responses_lite = false;
                 model
                     .experimental_supported_tools
                     .push("send_user_message_async".to_string());
@@ -2227,6 +2260,17 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                         wait_agent: tool_message("wait_agent"),
                         interrupt_agent: tool_message("interrupt_agent"),
                         list_agents: tool_message("list_agents"),
+                    }),
+                    code_mode: Some(CodeModeToolMessages {
+                        exec: Some(ToolMessage {
+                            description: Some(format!("Exec description for {}.", model.slug)),
+                            ..Default::default()
+                        }),
+                        wait: Some(ToolMessage {
+                            description: Some(format!("Wait description for {}.", model.slug)),
+                            parameters: Some(wait_parameters(&model.slug).to_string()),
+                        }),
+                        ..Default::default()
                     }),
                 });
             }
@@ -2260,12 +2304,10 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             .iter()
             .map(|request| {
                 let body = request.body_json();
-                let tool = body["tools"]
-                    .as_array()
-                    .expect("request tools")
-                    .iter()
-                    .find(|tool| tool["name"] == "request_user_input_async")
-                    .expect("async message tool");
+                let tool = |name: &str| {
+                    body["tools"].as_array().expect("request tools")
+                        .iter().find(|tool| tool["name"] == name).expect(name)
+                };
                 let multi_agent_messages = MULTI_AGENT_TOOLS.map(|name| {
                     let tool = namespace_child_tool(&body, "collaboration", name).expect(name);
                     (name.to_string(), json!({
@@ -2275,8 +2317,11 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                 }).into_iter().collect::<serde_json::Map<String, Value>>();
                 json!({
                     "model": body["model"],
-                    "async_description": tool["description"],
+                    "async_description": tool("request_user_input_async")["description"],
                     "multi_agent_messages": multi_agent_messages,
+                    "exec_description": tool("exec")["description"],
+                    "wait_description": tool("wait")["description"],
+                    "wait_parameters": tool("wait")["parameters"],
                 })
             })
             .collect::<Vec<_>>(),
@@ -2291,6 +2336,9 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     })))
                     .into_iter()
                     .collect::<serde_json::Map<String, Value>>(),
+                "exec_description": format!("Exec description for {model}."),
+                "wait_description": format!("Wait description for {model}."),
+                "wait_parameters": wait_parameters(model),
             }))
             .to_vec(),
     );
@@ -2632,7 +2680,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2648,7 +2696,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
     })
     .await;
     assert_eq!(paused.call_id, "pause-b");
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2786,7 +2834,7 @@ async fn captured_step_controls_mcp_output_limit(supports_images: bool) -> Resul
         .await?;
     wait_for_mcp_server(&test.codex, "calendar").await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2925,7 +2973,7 @@ async fn captured_step_settings_and_history_reach_extension_executor(
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -3026,7 +3074,7 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
         .await?;
     wait_for_mcp_server(&test.codex, "resources").await?;
     let paused = start_paused_turn(&test.codex).await?;
-    apply_turn_settings(
+    submit_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {

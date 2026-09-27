@@ -30,6 +30,10 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 
+#[cfg(test)]
+use codex_prompts::ResolvedModelMessages;
+
+#[cfg(test)]
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::step_context::StepContext;
@@ -190,11 +194,6 @@ impl From<&Arc<TurnContext>> for GuardianReviewContext {
     }
 }
 
-pub use assessment::GuardianAssessment;
-pub use assessment::guardian_output_schema;
-pub use assessment::parse_guardian_assessment;
-pub use reviewer_config::build_guardian_review_session_config;
-
 #[derive(Debug, Default)]
 pub(crate) struct GuardianRejectionCircuitBreaker {
     turns: std::collections::HashMap<String, GuardianRejectionCircuitBreakerTurn>,
@@ -296,19 +295,21 @@ use review::run_guardian_review_session_with_retry as run_guardian_review_sessio
 
 #[cfg(test)]
 fn build_guardian_review_session_config_for_test(
-    parent_config: &Config,
+    parent_config: Config,
     live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
     active_model: &str,
     reasoning_effort: Option<ReasoningEffort>,
-    model_messages: Option<&codex_protocol::openai_models::ModelMessages>,
+    reasoning_summary: ReasoningSummary,
+    personality: Option<codex_protocol::config_types::Personality>,
+    model_messages: ResolvedModelMessages<'_>,
 ) -> anyhow::Result<Config> {
     reviewer_config::build_guardian_review_session_config(
         parent_config,
         live_network_config,
         active_model,
         reasoning_effort,
-        ReasoningSummary::default(),
-        None,
+        reasoning_summary,
+        personality,
         model_messages,
     )
 }

@@ -554,7 +554,7 @@ def generate_v2_all(schema_dir: Path) -> None:
                 "--output-model-type",
                 "pydantic_v2.BaseModel",
                 "--target-python-version",
-                "3.11",
+                "3.10",
                 "--use-standard-collections",
                 "--enum-field-as-literal",
                 "one",
@@ -576,7 +576,10 @@ def generate_v2_all(schema_dir: Path) -> None:
             cwd=sdk_root(),
         )
     _preserve_inline_image_class_names(out_path)
-    _require_nullable_chatgpt_account_email(out_path)
+    _require_nullable_field(out_path, "ChatgptAccount", r"email: str \| None")
+    _require_nullable_field(
+        out_path, "McpResourceReadTarget", r"link_id: Annotated\[\n(?:        .*\n)+    \]"
+    )
     _preserve_reasoning_effort_enum(out_path)
     _preserve_thread_source_enum(out_path)
     _preserve_plan_type_enum(out_path)
@@ -584,7 +587,7 @@ def generate_v2_all(schema_dir: Path) -> None:
 
 
 def _preserve_inline_image_class_names(out_path: Path) -> None:
-    """Keep the public class names used before ImageReference was introduced."""
+    """Keep stable class names unless the schema now defines them as union wrappers."""
     source = out_path.read_text()
     stable_names = {
         "UrlUserInput": "ImageUserInput",
@@ -594,6 +597,8 @@ def _preserve_inline_image_class_names(out_path: Path) -> None:
     for generated_name, stable_name in stable_names.items():
         if source.count(f"class {generated_name}(") != 1:
             raise RuntimeError(f"Generated SDK is missing a unique {generated_name} class")
+        if re.search(rf"^class {re.escape(stable_name)}\(", source, flags=re.MULTILINE):
+            continue
         if re.search(rf"\b{re.escape(stable_name)}\b", source):
             raise RuntimeError(f"Generated SDK already defines {stable_name}")
         source = re.sub(rf"\b{re.escape(generated_name)}\b", stable_name, source)
@@ -601,27 +606,27 @@ def _preserve_inline_image_class_names(out_path: Path) -> None:
     out_path.write_text(source)
 
 
-def _require_nullable_chatgpt_account_email(out_path: Path) -> None:
-    """Preserve required-but-nullable email semantics in the generated SDK model."""
+def _require_nullable_field(out_path: Path, class_name: str, field_pattern: str) -> None:
+    """Preserve required-but-nullable fields across codegen output changes."""
     source = out_path.read_text()
-    class_start = source.find("class ChatgptAccount(BaseModel):")
+    class_start = source.find(f"class {class_name}(BaseModel):")
     if class_start == -1:
-        raise RuntimeError("Generated SDK is missing ChatgptAccount")
+        raise RuntimeError(f"Generated SDK is missing {class_name}")
     class_end = source.find("\n\nclass ", class_start)
     if class_end == -1:
         class_end = len(source)
 
-    class_source = source[class_start:class_end]
-    nullable_with_default = "    email: str | None = None"
-    if class_source.count(nullable_with_default) != 1:
-        raise RuntimeError(
-            "Generated ChatgptAccount email did not have the expected nullable shape"
-        )
-    class_source = class_source.replace(
-        nullable_with_default,
-        "    email: str | None",
-        1,
+    class_source, count = re.subn(
+        rf"(^    {field_pattern}) = None$",
+        r"\1",
+        source[class_start:class_end],
+        flags=re.MULTILINE,
     )
+    if count > 1 or (
+        count == 0
+        and re.search(rf"^    {field_pattern}$", class_source, flags=re.MULTILINE) is None
+    ):
+        raise RuntimeError(f"Generated {class_name} field did not have the expected nullable shape")
     out_path.write_text(source[:class_start] + class_source + source[class_end:])
 
 
@@ -690,9 +695,13 @@ def _preserve_thread_source_enum(out_path: Path) -> None:
 def _preserve_plan_type_enum(out_path: Path) -> None:
     """Keep the public plan constants while accepting values from newer runtimes."""
     source = out_path.read_text()
-    class_start = source.find("class PlanType(Enum):")
-    if class_start == -1:
+    declaration = re.search(r"^class PlanType\(([^)]+)\):$", source, flags=re.MULTILINE)
+    if declaration is None:
         raise RuntimeError("Generated SDK is missing PlanType")
+    if declaration.group(1) not in {"Enum", "str, Enum"}:
+        raise RuntimeError("Generated SDK uses an unsupported PlanType base class")
+
+    class_start = declaration.start()
     class_end = source.find("\n\nclass ", class_start)
     if class_end == -1:
         class_end = len(source)
@@ -888,6 +897,7 @@ PUBLIC_METHOD_FIELDS = {
         "cwd",
         "developer_instructions",
         "ephemeral",
+        "memory_policy",
         "model",
         "model_provider",
         "personality",
@@ -896,6 +906,7 @@ PUBLIC_METHOD_FIELDS = {
         "service_tier",
         "session_start_source",
         "thread_source",
+        "user_preferences_memory_policy",
     ),
     "ThreadListParams": (
         "archived",
@@ -916,11 +927,13 @@ PUBLIC_METHOD_FIELDS = {
         "cwd",
         "developer_instructions",
         "exclude_turns",
+        "memory_policy",
         "model",
         "model_provider",
         "personality",
         "sandbox",
         "service_tier",
+        "user_preferences_memory_policy",
     ),
     "ThreadForkParams": (
         "base_instructions",
@@ -929,11 +942,13 @@ PUBLIC_METHOD_FIELDS = {
         "developer_instructions",
         "ephemeral",
         "exclude_turns",
+        "memory_policy",
         "model",
         "model_provider",
         "sandbox",
         "service_tier",
         "thread_source",
+        "user_preferences_memory_policy",
     ),
     "TurnStartParams": (
         "cwd",

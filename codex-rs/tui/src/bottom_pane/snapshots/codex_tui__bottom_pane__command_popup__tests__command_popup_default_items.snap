@@ -40,7 +40,8 @@ expression: commands
 /spend - show daily estimated API spend and token trends
 /mic - control realtime voice, microphone, and speaker devices
 /voice - enable realtime voice, select voices, or tune client-side effects/profiles
-/daemon - Manage the local background server.
+/daemon - Manage the local background server
+/daemon - Manage the local background server
 /warnings - view retained warnings and diagnostic details
 /cd - change the current working directory
 /pwd - show the current working directory

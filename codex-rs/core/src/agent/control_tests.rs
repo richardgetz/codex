@@ -2,9 +2,13 @@ use super::*;
 use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
+use crate::agent::LocalAgentControl;
 use crate::agent::agent_status_from_event;
+use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInfo;
+use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
+use crate::agent::api::SpawnRequest;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
 use crate::agent::types::LiveAgent;
@@ -14,7 +18,6 @@ use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
-use crate::codex_thread::CodexThreadSettingsOverrides;
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
@@ -23,7 +26,10 @@ use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::SessionSettingsUpdate;
+use crate::session::step_context::StepContext;
+use crate::thread_manager::ForkSnapshot;
 use crate::thread_manager::StartThreadOptions;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
@@ -46,15 +52,17 @@ use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::MemoryAccessPolicy;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
-use codex_protocol::config_types::UserPreferencesMemoryBucketPolicy;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::mcp::McpAttribution;
+use codex_protocol::mcp::McpAttributionErrorReason;
+use codex_protocol::mcp::McpAttributionSource;
+use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
@@ -74,18 +82,13 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
-use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TokenUsageAttribution;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_state::TaskEstimateAction;
-use codex_state::TaskEstimateMutation;
-use codex_state::TaskEstimateRange;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::InMemoryThreadStore;
 use codex_thread_store::LocalThreadStore;
@@ -94,6 +97,7 @@ use codex_thread_store::PersistContext;
 use codex_thread_store::ThreadStore;
 use codex_utils_path_uri::PathUri;
 use core_test_support::responses::strip_response_item_ids;
+use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use std::sync::RwLock;
 use tempfile::TempDir;
@@ -102,6 +106,30 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
+
+impl LocalAgentControl {
+    /// Create a child fixture through the production spawn entry point.
+    pub(crate) async fn spawn_agent_with_metadata(
+        &self,
+        config: Config,
+        initial_input: Vec<UserInput>,
+        source: SessionSource,
+        options: SpawnAgentOptions,
+    ) -> CodexResult<LiveAgent> {
+        let caller = source
+            .parent_thread_id()
+            .expect("child fixture has a parent");
+        self.spawn(SpawnRequest {
+            caller,
+            config,
+            input: AgentInput::UserInput(initial_input),
+            source,
+            options,
+        })
+        .await
+        .map(|(agent, _)| agent)
+    }
+}
 
 async fn test_config_with_cli_overrides(
     mut cli_overrides: Vec<(String, TomlValue)>,
@@ -122,16 +150,6 @@ async fn test_config_with_cli_overrides(
 
 async fn test_config() -> (TempDir, Config) {
     test_config_with_cli_overrides(Vec::new()).await
-}
-
-async fn test_sqlite_config() -> (TempDir, Config) {
-    let (home, mut config) = test_config().await;
-    config
-        .features
-        .enable(Feature::Sqlite)
-        .expect("enable SQLite for ETA test harness");
-    config.sqlite = codex_state::SqliteConfig::new_for_testing(config.codex_home.clone());
-    (home, config)
 }
 
 fn text_input(text: &str) -> Vec<UserInput> {
@@ -194,7 +212,13 @@ fn register_session_root_skips_threads_with_explicit_parent() {
 
     control.register_session_root(ThreadId::new(), Some(ThreadId::new()));
 
-    assert_eq!(control.state.agent_id_for_path(&AgentPath::root()), None);
+    assert_eq!(
+        control
+            .runtime
+            .registry
+            .agent_id_for_path(&AgentPath::root()),
+        None
+    );
 }
 
 fn spawn_agent_call(call_id: &str) -> ResponseItem {
@@ -223,31 +247,8 @@ impl AgentControlHarness {
         Self::new_with_config(home, config).await
     }
 
-    async fn new_with_sqlite() -> Self {
-        let (home, config) = test_sqlite_config().await;
-        Self::new_with_config_and_state_db(home, config).await
-    }
-
     async fn new_with_config(home: TempDir, config: Config) -> Self {
         let state_db = init_state_db(&config).await;
-        Self::from_parts(home, config, state_db)
-    }
-
-    async fn new_with_config_and_state_db(home: TempDir, config: Config) -> Self {
-        let state_db = codex_rollout::state_db::try_init(&config)
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "initialize test state database at {}: {err:#}",
-                    config.sqlite.home().display()
-                )
-            });
-        // Initialize SQLite while the runtime uses wall-clock time. ETA tests pause the clock
-        // below so scheduling assertions remain deterministic without blocking DB startup.
-        Self::from_parts(home, config, Some(state_db))
-    }
-
-    fn from_parts(home: TempDir, config: Config, state_db: Option<StateDbHandle>) -> Self {
         let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
             CodexAuth::from_api_key("dummy"),
             config.model_provider.clone(),
@@ -296,13 +297,13 @@ impl AgentControlHarness {
             .spawn_agent_with_metadata(
                 self.config.clone(),
                 text_input("child task"),
-                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth: 1,
                     agent_path: None,
                     agent_nickname: None,
                     agent_role: None,
-                })),
+                }),
                 options,
             )
             .await
@@ -408,54 +409,6 @@ async fn wait_for_recorded_user_message(thread: &CodexThread, needle: &str) {
     .expect("timed out waiting for user message recording");
 }
 
-async fn wait_for_captured_eta_reminders(
-    manager: &ThreadManager,
-    thread_id: ThreadId,
-    task_id: &str,
-    expected_count: usize,
-) {
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let count = manager
-                .captured_ops()
-                .into_iter()
-                .filter(|(captured_thread_id, op)| {
-                    *captured_thread_id == thread_id
-                        && matches!(
-                            op,
-                            Op::InterAgentCommunication { communication, .. }
-                                if communication.content.contains(task_id)
-                        )
-                })
-                .count();
-            if count >= expected_count {
-                return;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("timed out waiting for ETA reminder delivery");
-}
-
-async fn wait_for_thread_settings_event(thread: &CodexThread) -> ThreadSettingsSnapshot {
-    timeout(Duration::from_secs(5), async {
-        loop {
-            let event = thread
-                .next_event()
-                .await
-                .expect("event stream should stay open");
-            if let EventMsg::ThreadSettingsApplied(event) = event.msg
-                && event.thread_id == Some(thread.id())
-            {
-                return event.thread_settings;
-            }
-        }
-    })
-    .await
-    .expect("timed out waiting for service tier settings event")
-}
-
 fn history_contains_assistant_inter_agent_communication<'a>(
     history_items: impl IntoIterator<Item = &'a ResponseItem>,
     expected: &InterAgentCommunication,
@@ -520,6 +473,48 @@ async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str
         .expect("test thread rollout should flush");
 }
 
+/// Builds a request entirely in process; it does not install a transport or send anything.
+/// The destination filtering behavior is covered separately in `client_tests`.
+async fn mcp_attribution_in_constructed_request(thread: &CodexThread) -> McpAttribution {
+    let turn_context = thread.session.new_default_turn().await;
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
+    let prompt = crate::session::turn::build_prompt(
+        thread
+            .session
+            .clone_history()
+            .await
+            .for_prompt(&step_context.settings.model_info.input_modalities),
+        &step_context,
+        thread.session.get_prompt_base_instructions().await,
+    );
+    let metadata = thread
+        .session
+        .responses_metadata(&step_context, CodexResponsesRequestKind::Turn)
+        .await;
+    let request = thread
+        .session
+        .services
+        .model_client
+        .build_responses_request(
+            &prompt,
+            &step_context.settings.model_info,
+            /*effort*/ None,
+            ReasoningSummary::None,
+            /*service_tier*/ None,
+            &metadata,
+            /*include_internal*/ true,
+        )
+        .expect("construct request");
+    serde_json::from_str(
+        request
+            .client_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("mcp_attribution"))
+            .expect("request MCP attribution"),
+    )
+    .expect("valid request MCP attribution")
+}
+
 async fn wait_for_live_thread_spawn_children(
     control: &LocalAgentControl,
     parent_thread_id: ThreadId,
@@ -546,546 +541,6 @@ async fn wait_for_live_thread_spawn_children(
     })
     .await
     .expect("expected persisted child tree");
-}
-
-async fn send_agent_event(thread: &Arc<CodexThread>, msg: EventMsg) {
-    let turn = thread.session.new_default_turn().await;
-    thread.session.send_event(turn.as_ref(), msg).await;
-}
-
-async fn start_unregistered_thread_spawn_child(
-    harness: &AgentControlHarness,
-    parent_thread_id: ThreadId,
-    depth: i32,
-) -> (ThreadId, Arc<CodexThread>) {
-    start_unregistered_thread_spawn_child_with_control(harness, parent_thread_id, depth, None).await
-}
-
-async fn start_unregistered_thread_spawn_child_with_control(
-    harness: &AgentControlHarness,
-    parent_thread_id: ThreadId,
-    depth: i32,
-    agent_control: Option<AgentControl>,
-) -> (ThreadId, Arc<CodexThread>) {
-    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-        parent_thread_id,
-        depth,
-        agent_path: None,
-        agent_nickname: None,
-        agent_role: Some("explorer".to_string()),
-    });
-    let environments = Some(vec![TurnEnvironmentSelection {
-        environment_id: "local".to_string(),
-        cwd: PathUri::from_abs_path(&harness.config.cwd),
-        workspace_roots: vec![PathUri::from_abs_path(&harness.config.cwd)],
-        config: EnvironmentConfigState::FromThread,
-    }]);
-    let child_thread = match agent_control {
-        Some(agent_control) => {
-            harness
-                .manager
-                .start_thread_with_agent_control_for_tests(
-                    crate::thread_manager::StartThreadOptions {
-                        config: harness.config.clone(),
-                        allow_provider_model_fallback: false,
-                        initial_history: InitialHistory::New,
-                        history_mode: None,
-                        session_source: Some(session_source),
-                        thread_source: Some(ThreadSource::Subagent),
-                        dynamic_tools: Vec::new(),
-                        metrics_service_name: None,
-                        parent_trace: None,
-                        environments,
-                        inherited_environments: None,
-                        user_instructions: None,
-                        thread_extension_init: Default::default(),
-                        client_mcp_extensions: Default::default(),
-                        reserved_thread_id: None,
-                    },
-                    agent_control,
-                    parent_thread_id,
-                )
-                .await
-        }
-        None => {
-            harness
-                .manager
-                .start_thread(crate::thread_manager::StartThreadOptions {
-                    config: harness.config.clone(),
-                    allow_provider_model_fallback: false,
-                    initial_history: InitialHistory::New,
-                    history_mode: None,
-                    session_source: Some(session_source),
-                    thread_source: Some(ThreadSource::Subagent),
-                    dynamic_tools: Vec::new(),
-                    metrics_service_name: None,
-                    parent_trace: None,
-                    environments,
-                    inherited_environments: None,
-                    user_instructions: None,
-                    thread_extension_init: Default::default(),
-                    client_mcp_extensions: Default::default(),
-                    reserved_thread_id: None,
-                })
-                .await
-        }
-    }
-    .expect("unregistered child spawn should succeed");
-    let child_thread_id = child_thread.thread_id;
-    assert!(
-        harness
-            .control
-            .state
-            .agent_metadata_for_thread(child_thread_id)
-            .is_none(),
-        "test setup should leave child out of AgentRegistry"
-    );
-    wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[child_thread_id])
-        .await;
-    (child_thread_id, child_thread.thread)
-}
-
-#[tokio::test]
-async fn terminal_delivery_rearms_pending_manager_completion_batch() {
-    let (home, mut config) = test_config().await;
-    let profile = codex_config::TeamModelProfile {
-        model: "gpt-5.5".to_string(),
-        reasoning_effort: codex_protocol::openai_models::ReasoningEffort::Medium,
-    };
-    config.team.profiles = Some(codex_config::TeamModelProfiles {
-        lead: profile.clone(),
-        worker: profile,
-        lead_work_policy: codex_config::TeamLeadWorkPolicy::ManagerOnly,
-        lead_dynamic_handoff: codex_config::DEFAULT_TEAM_LEAD_DYNAMIC_HANDOFF,
-        lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
-        lead_oversight_timeout_minutes: codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
-    });
-    config.team_mode = codex_protocol::protocol::TeamMode::LeadWorker;
-    let harness = AgentControlHarness::new_with_config(home, config).await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    assert!(parent_thread.session.is_team_lead().await);
-    let (_child_thread_id, child) =
-        start_unregistered_thread_spawn_child(&harness, parent_thread_id, 1).await;
-    let terminal_delivery_guard = TerminalResultDeliveryGuard::for_thread_spawn(
-        Arc::clone(&child.session),
-        Some(&child.session_source),
-    )
-    .expect("ThreadSpawn child should retain its terminal callback until delivery");
-    child
-        .io
-        .agent_status
-        .send_replace(AgentStatus::Completed(Some("done".to_string())));
-    assert_eq!(
-        harness
-            .control
-            .active_direct_worker_count(parent_thread_id)
-            .await,
-        1,
-        "a terminal Worker remains active while its completion callback is in flight"
-    );
-    *parent_thread.session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
-
-    let generation = parent_thread
-        .session
-        .input_queue
-        .enqueue_team_lead_completion(InterAgentCommunication::new(
-            AgentPath::try_from("/root/worker").expect("agent path"),
-            AgentPath::root(),
-            Vec::new(),
-            "completion awaiting terminal delivery".to_string(),
-            /*trigger_turn*/ false,
-        ))
-        .await;
-    tokio::time::pause();
-    parent_thread
-        .session
-        .schedule_manager_completion_batch_flush(generation)
-        .await;
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_millis(151)).await;
-    tokio::task::yield_now().await;
-    assert_eq!(
-        parent_thread
-            .session
-            .input_queue
-            .pending_manager_completion_generation()
-            .await,
-        Some(generation),
-        "the initial quiet-window flush must wait for terminal result delivery"
-    );
-    assert!(
-        !parent_thread
-            .session
-            .input_queue
-            .has_trigger_turn_mailbox_items()
-            .await
-    );
-
-    drop(terminal_delivery_guard);
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_millis(151)).await;
-    tokio::task::yield_now().await;
-    tokio::time::resume();
-
-    timeout(Duration::from_secs(1), async {
-        while !parent_thread
-            .session
-            .input_queue
-            .has_trigger_turn_mailbox_items()
-            .await
-        {
-            sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("terminal delivery should rearm the pending completion batch");
-    assert_eq!(
-        parent_thread
-            .session
-            .input_queue
-            .pending_manager_completion_generation()
-            .await,
-        None
-    );
-}
-
-#[tokio::test]
-async fn root_service_tier_propagates_to_loaded_nested_subagents() {
-    let harness = AgentControlHarness::new().await;
-    let (root_thread_id, root_thread) = harness.start_thread().await;
-    let root_control = root_thread.session.services.agent_control.clone();
-    let (child_thread_id, child_thread) =
-        start_unregistered_thread_spawn_child(&harness, root_thread_id, 1).await;
-    let (grandchild_thread_id, grandchild_thread) =
-        start_unregistered_thread_spawn_child(&harness, child_thread_id, 2).await;
-
-    let captured_child_turn = child_thread.session.new_default_turn().await;
-    let captured_child_service_tier = captured_child_turn.config.service_tier.clone();
-    assert_eq!(
-        child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .service_tier,
-        None
-    );
-    assert_eq!(
-        grandchild_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .service_tier,
-        None
-    );
-
-    root_control.set_root_service_tier(Some("priority".to_string()));
-    root_control.propagate_root_service_tier().await;
-
-    assert_eq!(
-        child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .service_tier
-            .as_deref(),
-        Some("priority"),
-        "propagation should update the child snapshot before notification delivery"
-    );
-
-    let child_settings_event = wait_for_thread_settings_event(&child_thread).await;
-    let grandchild_settings_event = wait_for_thread_settings_event(&grandchild_thread).await;
-    assert_eq!(
-        child_settings_event.service_tier.as_deref(),
-        Some("priority")
-    );
-    assert_eq!(
-        grandchild_settings_event.service_tier.as_deref(),
-        Some("priority")
-    );
-    assert_eq!(
-        child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .service_tier
-            .as_deref(),
-        Some("priority")
-    );
-    assert_eq!(
-        grandchild_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .service_tier
-            .as_deref(),
-        Some("priority")
-    );
-    assert_eq!(
-        captured_child_turn.config.service_tier, captured_child_service_tier,
-        "an already-created turn keeps its captured service tier"
-    );
-
-    root_control.set_root_service_tier(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()));
-    root_control.propagate_root_service_tier().await;
-    let child_settings_event = wait_for_thread_settings_event(&child_thread).await;
-    let grandchild_settings_event = wait_for_thread_settings_event(&grandchild_thread).await;
-    assert_eq!(
-        child_settings_event.service_tier.as_deref(),
-        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE)
-    );
-    assert_eq!(
-        grandchild_settings_event.service_tier.as_deref(),
-        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE)
-    );
-
-    let report = harness
-        .manager
-        .shutdown_all_threads_bounded(Duration::from_secs(5))
-        .await;
-    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
-    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
-    assert!(
-        harness
-            .manager
-            .get_thread(grandchild_thread_id)
-            .await
-            .is_err(),
-        "nested child should be shut down with the tree"
-    );
-}
-
-#[tokio::test]
-async fn root_usage_auto_resume_propagates_and_nudges_loaded_subtree() {
-    let harness = AgentControlHarness::new().await;
-    let (root_thread_id, root_thread) = harness.start_thread().await;
-    let root_control = root_thread.session.services.agent_control.clone();
-    root_control.set_root_usage_auto_resume(false);
-    let (child_thread_id, child_thread) =
-        start_unregistered_thread_spawn_child(&harness, root_thread_id, 1).await;
-    let (grandchild_thread_id, grandchild_thread) =
-        start_unregistered_thread_spawn_child(&harness, child_thread_id, 2).await;
-
-    assert!(
-        !child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-    assert!(
-        !grandchild_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-
-    root_control.set_root_usage_auto_resume(true);
-    root_control.propagate_root_usage_auto_resume().await;
-
-    assert!(
-        child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-    assert!(
-        grandchild_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-    assert!(
-        wait_for_thread_settings_event(&child_thread)
-            .await
-            .usage_policy
-            .auto_resume
-    );
-    assert!(
-        wait_for_thread_settings_event(&grandchild_thread)
-            .await
-            .usage_policy
-            .auto_resume
-    );
-
-    // Children created after the live root toggle inherit the latest setting, even when their
-    // parent was already running before the toggle.
-    let (future_thread_id, future_thread) = start_unregistered_thread_spawn_child_with_control(
-        &harness,
-        grandchild_thread_id,
-        3,
-        Some(root_control.clone()),
-    )
-    .await;
-    assert!(
-        future_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-
-    // A root `/continue` request reaches the root and every loaded descendant. Each parked
-    // session still coalesces repeated requests into one Notify permit.
-    child_thread.session.set_usage_resume_waiting(true);
-    assert_eq!(
-        root_control
-            .request_usage_resume_for_subtree(root_thread_id)
-            .await,
-        1
-    );
-    assert_eq!(
-        root_control
-            .request_usage_resume_for_subtree(root_thread_id)
-            .await,
-        1
-    );
-    timeout(
-        Duration::from_secs(1),
-        child_thread.session.wait_for_usage_resume_check(),
-    )
-    .await
-    .expect("usage nudge should wake the child");
-    assert!(
-        timeout(
-            Duration::from_millis(50),
-            child_thread.session.wait_for_usage_resume_check(),
-        )
-        .await
-        .is_err(),
-        "repeated nudges should not queue a second permit"
-    );
-    child_thread.session.set_usage_resume_waiting(false);
-
-    root_control.set_root_usage_auto_resume(false);
-    root_control.propagate_root_usage_auto_resume().await;
-    assert!(
-        !child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-    assert!(
-        !grandchild_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-    assert!(
-        !future_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-
-    let (_post_off_thread_id, post_off_thread) =
-        start_unregistered_thread_spawn_child_with_control(
-            &harness,
-            future_thread_id,
-            4,
-            Some(root_control.clone()),
-        )
-        .await;
-    assert!(
-        !post_off_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy
-            .auto_resume
-    );
-
-    let report = harness
-        .manager
-        .shutdown_all_threads_bounded(Duration::from_secs(5))
-        .await;
-    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
-    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
-}
-
-#[tokio::test]
-async fn spawned_child_persists_inherited_usage_policy_before_first_turn() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let usage_policy = ThreadUsagePolicy {
-        auto_resume: true,
-        minimum_remaining_percent: Some(25),
-    };
-    parent_thread
-        .restore_thread_settings(CodexThreadSettingsOverrides {
-            usage_policy: Some(usage_policy),
-            ..Default::default()
-        })
-        .await
-        .expect("parent usage policy should persist");
-
-    let child = harness
-        .control
-        .spawn_agent_with_metadata(
-            harness.config.clone(),
-            text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: None,
-            })),
-            SpawnAgentOptions {
-                parent_thread_id: Some(parent_thread_id),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("child spawn should succeed");
-    let child_thread = harness
-        .manager
-        .get_thread(child.thread_id)
-        .await
-        .expect("child thread should be registered");
-    child_thread
-        .session
-        .flush_rollout()
-        .await
-        .expect("child rollout should flush");
-    let stored_child = child_thread
-        .read_thread(
-            /*include_archived*/ true, /*include_history*/ true,
-        )
-        .await
-        .expect("child rollout should be readable");
-    let history = stored_child
-        .history
-        .expect("child history should be loaded");
-    let persisted_policy = history.items.into_iter().find_map(|item| match item {
-        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-            if event.thread_id == Some(child.thread_id) =>
-        {
-            Some(event.thread_settings.usage_policy)
-        }
-        _ => None,
-    });
-    assert_eq!(persisted_policy, Some(usage_policy));
-
-    let report = harness
-        .manager
-        .shutdown_all_threads_bounded(Duration::from_secs(5))
-        .await;
-    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
-    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
 }
 
 async fn assert_thread_not_loaded(manager: &ThreadManager, thread_id: ThreadId) {
@@ -1269,7 +724,8 @@ async fn subscribe_status_errors_for_missing_thread() {
         .control
         .subscribe_status(thread_id)
         .await
-        .expect_err("subscribe_status should fail for missing thread");
+        .err()
+        .expect("subscribe_status should fail for missing thread");
     assert_matches!(
         err.details(),
         CodexErrorDetails::ThreadNotFound(id) if *id == thread_id
@@ -1285,15 +741,25 @@ async fn subscribe_status_updates_on_shutdown() {
         .subscribe_status(thread_id)
         .await
         .expect("subscribe_status should succeed");
-    assert_eq!(status_rx.borrow().clone(), AgentStatus::PendingInit);
-
     let _ = thread
         .submit(Op::Shutdown {})
         .await
         .expect("shutdown should submit");
+    thread.wait_until_terminated().await;
 
-    let _ = status_rx.changed().await;
-    assert_eq!(status_rx.borrow().clone(), AgentStatus::Shutdown);
+    // The update arrives before the first poll, without replacing the initial snapshot.
+    let initial = status_rx
+        .next()
+        .await
+        .expect("initial snapshot")
+        .expect("snapshot");
+    assert_eq!(initial.status(), Some(&AgentStatus::PendingInit));
+    let shutdown = status_rx
+        .next()
+        .await
+        .expect("shutdown snapshot")
+        .expect("snapshot");
+    assert_eq!(shutdown.status(), Some(&AgentStatus::Shutdown));
 }
 
 #[tokio::test]
@@ -1379,1058 +845,6 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 }
 
 #[tokio::test]
-async fn eta_reminder_delivers_overdue_and_freshness_events_once_each() {
-    let harness = AgentControlHarness::new_with_sqlite().await;
-    let (root_thread_id, root_thread) = harness.start_thread().await;
-    // Use the loaded root's shared control so pause/continue reaches the controller that owns
-    // the Worker reminder timers.
-    let root_control = root_thread.session.services.agent_control.clone();
-    let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
-    let worker_thread_id = root_control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("worker task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root_thread_id,
-                depth: 1,
-                agent_path: Some(worker_path),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("worker spawn should succeed");
-    let state_db = harness
-        .state_db
-        .clone()
-        .expect("test harness should have a state database");
-    let now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-owner-overdue".to_string()),
-                title: Some("Overdue reminder".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(1),
-                    upper_seconds: Some(1),
-                }),
-                reason: None,
-                owner_thread_id: Some(worker_thread_id),
-            }],
-            now,
-        )
-        .await
-        .expect("create ETA task");
-    let result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Start,
-                task_id: Some("eta-owner-overdue".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: None,
-                reason: None,
-                owner_thread_id: None,
-            }],
-            now,
-        )
-        .await
-        .expect("start ETA task");
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-pending-dependency".to_string()),
-                title: Some("Waiting dependency".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: Some(vec!["eta-owner-overdue".to_string()]),
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(5),
-                    upper_seconds: Some(10),
-                }),
-                reason: None,
-                owner_thread_id: Some(worker_thread_id),
-            }],
-            now,
-        )
-        .await
-        .expect("create pending dependency ETA task");
-    root_control
-        .schedule_eta_reminders(
-            state_db,
-            root_thread_id,
-            &result.changed_tasks,
-            Duration::from_secs(3),
-        )
-        .await;
-
-    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
-    // armed so fake-time advances do not stall connection acquisition in the state runtime.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(1)).await;
-    tokio::task::yield_now().await;
-    tokio::time::advance(Duration::from_secs(2)).await;
-    // Let the timer callback complete its SQLite snapshot, owner admission, and captured
-    // delivery on wall-clock time before inspecting the manager's operation log.
-    tokio::time::resume();
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        worker_thread_id,
-        "eta-owner-overdue",
-        /*expected_count*/ 2,
-    )
-    .await;
-    tokio::time::pause();
-    let reminder_messages = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter_map(|(thread_id, op)| {
-            (thread_id == worker_thread_id)
-                .then_some(op)
-                .and_then(|op| {
-                    let Op::InterAgentCommunication { communication, .. } = op else {
-                        return None;
-                    };
-                    communication
-                        .content
-                        .contains("Task: eta-owner-overdue")
-                        .then_some(communication.content)
-                })
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(reminder_messages.len(), 2);
-    assert!(
-        reminder_messages
-            .iter()
-            .any(|message| message.contains("ETA reminder (overdue)"))
-    );
-    assert!(
-        reminder_messages
-            .iter()
-            .any(|message| message.contains("ETA reminder (freshness)"))
-    );
-
-    // Both trigger latches survive an explicit pause and resume; no overdue or freshness
-    // reminder is emitted again for the unchanged task revision.
-    root_control.pause_activity_for_subtree().await;
-    tokio::time::advance(Duration::from_secs(30)).await;
-    tokio::task::yield_now().await;
-    tokio::time::resume();
-    root_control.continue_activity_for_subtree().await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(30)).await;
-    tokio::task::yield_now().await;
-    let reminder_count = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(thread_id, op)| {
-            *thread_id == worker_thread_id
-                && matches!(
-                    op,
-                    Op::InterAgentCommunication { communication, .. }
-                        if communication.content.contains("Task: eta-owner-overdue")
-                )
-        })
-        .count();
-    assert_eq!(reminder_count, 2);
-    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication, .. }
-                if communication.content.contains("eta-pending-dependency")
-        )
-    }));
-}
-
-#[tokio::test]
-async fn eta_worker_config_does_not_replace_root_policy_or_rearm_deadline() {
-    let (home, mut config) = test_sqlite_config().await;
-    config.eta.freshness_minimum_minutes = 1;
-    let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
-    let (root_thread_id, root_thread) = harness.start_thread().await;
-    // Spawn through the loaded root's control so root reconfiguration fences the same controller
-    // that owns the Worker's reminder timers.
-    let root_control = root_thread.session.services.agent_control.clone();
-    let worker_config = {
-        let mut config = config.clone();
-        config.eta.freshness_minimum_minutes = 10;
-        config
-    };
-    let worker_thread_id = root_control
-        .spawn_agent(
-            worker_config.clone(),
-            text_input("worker task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root_thread_id,
-                depth: 1,
-                agent_path: Some(
-                    AgentPath::root()
-                        .join("eta_policy_worker")
-                        .expect("worker path"),
-                ),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("worker spawn should succeed");
-    let state_db = harness
-        .state_db
-        .clone()
-        .expect("test harness should have a state database");
-    let worker_thread = harness
-        .manager
-        .get_thread(worker_thread_id)
-        .await
-        .expect("worker should remain loaded");
-    worker_thread.refresh_runtime_config(worker_config).await;
-    assert_eq!(
-        state_db
-            .eta_freshness_minimum_seconds(root_thread_id)
-            .await
-            .expect("read root freshness policy after worker start"),
-        Some(60)
-    );
-
-    let now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-root-policy".to_string()),
-                title: Some("Root policy deadline".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(1),
-                    upper_seconds: None,
-                }),
-                reason: None,
-                owner_thread_id: Some(worker_thread_id),
-            }],
-            now,
-        )
-        .await
-        .expect("create root policy task");
-    let result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Start,
-                task_id: Some("eta-root-policy".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: None,
-                reason: None,
-                owner_thread_id: None,
-            }],
-            now,
-        )
-        .await
-        .expect("start root policy task");
-    worker_thread
-        .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
-        .await;
-    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
-    // armed so fake-time advances do not stall connection acquisition in the state runtime.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(59)).await;
-    tokio::task::yield_now().await;
-    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication, .. }
-                if communication.content.contains("eta-root-policy")
-        )
-    }));
-
-    let mut updated_root_config = config;
-    updated_root_config.eta.freshness_minimum_minutes = 2;
-    // Reconfiguration persists the root policy and reads it back through SQLite. Let that
-    // operation finish on wall-clock time before resuming deterministic timer advancement.
-    tokio::time::resume();
-    root_thread
-        .refresh_runtime_config(updated_root_config)
-        .await;
-    assert_eq!(
-        state_db
-            .eta_freshness_minimum_seconds(root_thread_id)
-            .await
-            .expect("read updated root freshness policy"),
-        Some(120)
-    );
-    tokio::time::pause();
-    // Tokio resumes from the 59-second virtual clock position reached before the wall-clock
-    // reconfiguration above. Advance the full 120-second timer delay from that position and
-    // keep the final second as the delivery boundary assertion.
-    tokio::time::advance(Duration::from_secs(119)).await;
-    tokio::task::yield_now().await;
-    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication, .. }
-                if communication.content.contains("eta-root-policy")
-        )
-    }));
-    tokio::time::advance(Duration::from_secs(1)).await;
-    // Let the timer callback complete its SQLite snapshot, owner admission, and captured
-    // delivery on wall-clock time before inspecting the manager's operation log.
-    tokio::time::resume();
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        worker_thread_id,
-        "eta-root-policy",
-        /*expected_count*/ 1,
-    )
-    .await;
-    let reminder_count = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(_, op)| {
-            matches!(
-                op,
-                Op::InterAgentCommunication { communication, .. }
-                    if communication.content.contains("eta-root-policy")
-            )
-        })
-        .count();
-    assert_eq!(reminder_count, 1);
-}
-
-#[tokio::test]
-async fn eta_reconfigure_preserves_delivered_trigger_state() {
-    let (home, mut config) = test_sqlite_config().await;
-    config.eta.freshness_minimum_minutes = 1;
-    let harness = AgentControlHarness::new_with_config_and_state_db(home, config.clone()).await;
-    let (root_thread_id, root_thread) = harness.start_thread().await;
-    // Spawn through the loaded root's control so pause/continue reaches the same ETA controller
-    // that owns the Worker's timers.
-    let root_control = root_thread.session.services.agent_control.clone();
-    let worker_thread_id = root_control
-        .spawn_agent(
-            config.clone(),
-            text_input("worker task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root_thread_id,
-                depth: 1,
-                agent_path: Some(
-                    AgentPath::root()
-                        .join("eta_reconfigure_worker")
-                        .expect("worker path"),
-                ),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("worker spawn should succeed");
-    let state_db = harness
-        .state_db
-        .clone()
-        .expect("test harness should have a state database");
-    let now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-reconfigure-latch".to_string()),
-                title: Some("Reconfigure latch reminder".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(1),
-                    upper_seconds: None,
-                }),
-                reason: None,
-                owner_thread_id: Some(worker_thread_id),
-            }],
-            now,
-        )
-        .await
-        .expect("create ETA task");
-    let result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Start,
-                task_id: Some("eta-reconfigure-latch".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: None,
-                reason: None,
-                owner_thread_id: None,
-            }],
-            now,
-        )
-        .await
-        .expect("start ETA task");
-    let worker_thread = harness
-        .manager
-        .get_thread(worker_thread_id)
-        .await
-        .expect("worker should remain loaded");
-    worker_thread
-        .schedule_eta_reminders(root_thread_id, &result.changed_tasks)
-        .await;
-
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(60)).await;
-    tokio::time::resume();
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        worker_thread_id,
-        "eta-reconfigure-latch",
-        /*expected_count*/ 1,
-    )
-    .await;
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-reconfigure-latch")
-            .await,
-        Some((true, false, false, false))
-    );
-
-    // A delivered freshness reminder stays latched across an explicit pause and resume. The
-    // pause invalidates timer handles without discarding the durable task identity or sent state.
-    tokio::time::pause();
-    root_control.pause_activity_for_subtree().await;
-    tokio::time::advance(Duration::from_secs(120)).await;
-    tokio::task::yield_now().await;
-    let reminder_count = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(_, op)| {
-            matches!(
-                op,
-                Op::InterAgentCommunication { communication, .. }
-                    if communication.content.contains("eta-reconfigure-latch")
-            )
-        })
-        .count();
-    assert_eq!(reminder_count, 1);
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-reconfigure-latch")
-            .await,
-        Some((true, false, false, false))
-    );
-    tokio::time::resume();
-    root_control.continue_activity_for_subtree().await;
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(120)).await;
-    tokio::task::yield_now().await;
-    let reminder_count = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(_, op)| {
-            matches!(
-                op,
-                Op::InterAgentCommunication { communication, .. }
-                    if communication.content.contains("eta-reconfigure-latch")
-            )
-        })
-        .count();
-    assert_eq!(reminder_count, 1);
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-reconfigure-latch")
-            .await,
-        Some((true, false, false, false))
-    );
-
-    // An unsent reminder is rearmed by resume and remains suppressed for the entire paused
-    // interval. Use a separate task so the delivered latch above cannot satisfy this assertion.
-    tokio::time::resume();
-    let pending_now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-pause-pending".to_string()),
-                title: Some("Pause pending reminder".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(1),
-                    upper_seconds: None,
-                }),
-                reason: None,
-                owner_thread_id: Some(worker_thread_id),
-            }],
-            pending_now,
-        )
-        .await
-        .expect("create pause-pending ETA task");
-    let pending_result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Start,
-                task_id: Some("eta-pause-pending".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: None,
-                reason: None,
-                owner_thread_id: None,
-            }],
-            pending_now,
-        )
-        .await
-        .expect("start pause-pending ETA task");
-    worker_thread
-        .schedule_eta_reminders(root_thread_id, &pending_result.changed_tasks)
-        .await;
-    tokio::time::pause();
-    root_control.pause_activity_for_subtree().await;
-    tokio::time::advance(Duration::from_secs(120)).await;
-    tokio::task::yield_now().await;
-    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication, .. }
-                if communication.content.contains("eta-pause-pending")
-        )
-    }));
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-pause-pending")
-            .await,
-        Some((false, false, false, false))
-    );
-    tokio::time::resume();
-    root_control.continue_activity_for_subtree().await;
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-pause-pending")
-            .await,
-        Some((false, false, true, false))
-    );
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(60)).await;
-    tokio::time::resume();
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        worker_thread_id,
-        "eta-pause-pending",
-        /*expected_count*/ 1,
-    )
-    .await;
-
-    let mut updated_config = config;
-    updated_config.eta.freshness_minimum_minutes = 2;
-    root_thread.refresh_runtime_config(updated_config).await;
-    assert_eq!(
-        state_db
-            .eta_freshness_minimum_seconds(root_thread_id)
-            .await
-            .expect("read updated root freshness policy"),
-        Some(120)
-    );
-    // The task revision is unchanged, so policy reconfiguration must retain the delivered
-    // freshness latch and avoid arming a replacement timer.
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-reconfigure-latch")
-            .await,
-        Some((true, false, false, false))
-    );
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(120)).await;
-    tokio::time::resume();
-    let reminder_count = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(_, op)| {
-            matches!(
-                op,
-                Op::InterAgentCommunication { communication, .. }
-                    if communication.content.contains("eta-reconfigure-latch")
-            )
-        })
-        .count();
-    assert_eq!(reminder_count, 1);
-
-    let revised = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Revise,
-                task_id: Some("eta-reconfigure-latch".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(2),
-                    upper_seconds: None,
-                }),
-                reason: Some("meaningful revision".to_string()),
-                owner_thread_id: None,
-            }],
-            chrono::Utc::now(),
-        )
-        .await
-        .expect("revise ETA task");
-    worker_thread
-        .schedule_eta_reminders(root_thread_id, &revised.changed_tasks)
-        .await;
-    assert_eq!(
-        root_control
-            .eta_reminder_state_for_tests("eta-reconfigure-latch")
-            .await,
-        Some((false, false, true, false))
-    );
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(120)).await;
-    tokio::time::resume();
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        worker_thread_id,
-        "eta-reconfigure-latch",
-        /*expected_count*/ 2,
-    )
-    .await;
-    let reminder_count = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .filter(|(_, op)| {
-            matches!(
-                op,
-                Op::InterAgentCommunication { communication, .. }
-                    if communication.content.contains("eta-reconfigure-latch")
-            )
-        })
-        .count();
-    assert_eq!(reminder_count, 2);
-}
-
-#[tokio::test]
-async fn eta_reminder_routes_nested_owner_without_lead_relay() {
-    let harness = AgentControlHarness::new_with_sqlite().await;
-    let (root_thread_id, _root_thread) = harness.start_thread().await;
-    let worker_path = AgentPath::root().join("eta_worker").expect("worker path");
-    let worker_thread_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("worker task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root_thread_id,
-                depth: 1,
-                agent_path: Some(worker_path.clone()),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("worker spawn should succeed");
-    let nested_path = worker_path.join("nested").expect("nested path");
-    let nested_thread_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("nested worker task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: worker_thread_id,
-                depth: 2,
-                agent_path: Some(nested_path),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("nested worker spawn should succeed");
-    let state_db = harness
-        .state_db
-        .clone()
-        .expect("test harness should have a state database");
-    let now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[
-                TaskEstimateMutation {
-                    action: TaskEstimateAction::Create,
-                    task_id: Some("eta-root-owner".to_string()),
-                    title: Some("Lead-owned reminder".to_string()),
-                    parent_task_id: None,
-                    depends_on_task_ids: None,
-                    estimate: Some(TaskEstimateRange {
-                        lower_seconds: Some(1),
-                        upper_seconds: Some(1),
-                    }),
-                    reason: None,
-                    owner_thread_id: Some(root_thread_id),
-                },
-                TaskEstimateMutation {
-                    action: TaskEstimateAction::Create,
-                    task_id: Some("eta-nested-owner".to_string()),
-                    title: Some("Nested worker reminder".to_string()),
-                    parent_task_id: None,
-                    depends_on_task_ids: None,
-                    estimate: Some(TaskEstimateRange {
-                        lower_seconds: Some(1),
-                        upper_seconds: Some(1),
-                    }),
-                    reason: None,
-                    owner_thread_id: Some(nested_thread_id),
-                },
-            ],
-            now,
-        )
-        .await
-        .expect("create owner-routed tasks");
-    let result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[
-                TaskEstimateMutation {
-                    action: TaskEstimateAction::Start,
-                    task_id: Some("eta-root-owner".to_string()),
-                    title: None,
-                    parent_task_id: None,
-                    depends_on_task_ids: None,
-                    estimate: None,
-                    reason: None,
-                    owner_thread_id: None,
-                },
-                TaskEstimateMutation {
-                    action: TaskEstimateAction::Start,
-                    task_id: Some("eta-nested-owner".to_string()),
-                    title: None,
-                    parent_task_id: None,
-                    depends_on_task_ids: None,
-                    estimate: None,
-                    reason: None,
-                    owner_thread_id: None,
-                },
-            ],
-            now,
-        )
-        .await
-        .expect("start owner-routed tasks");
-    harness
-        .control
-        .schedule_eta_reminders(
-            state_db,
-            root_thread_id,
-            &result.changed_tasks,
-            Duration::from_secs(3),
-        )
-        .await;
-
-    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
-    // armed so fake-time advances do not stall connection acquisition in the state runtime.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(1)).await;
-    tokio::time::resume();
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        root_thread_id,
-        "eta-root-owner",
-        /*expected_count*/ 1,
-    )
-    .await;
-    wait_for_captured_eta_reminders(
-        &harness.manager,
-        nested_thread_id,
-        "eta-nested-owner",
-        /*expected_count*/ 1,
-    )
-    .await;
-    let messages_for = |thread_id, task_id: &str| {
-        harness
-            .manager
-            .captured_ops()
-            .into_iter()
-            .filter(|(captured_thread_id, op)| {
-                *captured_thread_id == thread_id
-                    && matches!(
-                        op,
-                        Op::InterAgentCommunication { communication, .. }
-                            if communication.content.contains(task_id)
-                    )
-            })
-            .count()
-    };
-    assert_eq!(messages_for(root_thread_id, "eta-root-owner"), 1);
-    assert_eq!(messages_for(nested_thread_id, "eta-nested-owner"), 1);
-    assert_eq!(messages_for(root_thread_id, "eta-nested-owner"), 0);
-    assert_eq!(messages_for(nested_thread_id, "eta-root-owner"), 0);
-}
-
-#[tokio::test]
-async fn eta_reminder_is_suppressed_after_owner_close() {
-    let harness = AgentControlHarness::new_with_sqlite().await;
-    let (root_thread_id, _root_thread) = harness.start_thread().await;
-    let worker_thread_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("worker task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root_thread_id,
-                depth: 1,
-                agent_path: Some(AgentPath::root().join("eta_worker").expect("worker path")),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("worker spawn should succeed");
-    let state_db = harness
-        .state_db
-        .clone()
-        .expect("test harness should have a state database");
-    let now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-closed-owner".to_string()),
-                title: Some("Closed owner reminder".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(1),
-                    upper_seconds: Some(1),
-                }),
-                reason: None,
-                owner_thread_id: Some(worker_thread_id),
-            }],
-            now,
-        )
-        .await
-        .expect("create closed-owner task");
-    let result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Start,
-                task_id: Some("eta-closed-owner".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: None,
-                reason: None,
-                owner_thread_id: None,
-            }],
-            now,
-        )
-        .await
-        .expect("start closed-owner task");
-    harness
-        .control
-        .schedule_eta_reminders(
-            state_db,
-            root_thread_id,
-            &result.changed_tasks,
-            Duration::from_secs(3),
-        )
-        .await;
-    harness
-        .control
-        .close_agent(worker_thread_id)
-        .await
-        .expect("close owner");
-
-    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
-    // armed so fake-time advances do not stall connection acquisition in the state runtime.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(5)).await;
-    tokio::task::yield_now().await;
-    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication, .. }
-                if communication.content.contains("eta-closed-owner")
-        )
-    }));
-}
-
-#[tokio::test]
-async fn eta_reminder_is_suppressed_after_owner_runtime_removal() {
-    let harness = AgentControlHarness::new_with_sqlite().await;
-    let (root_thread_id, _root_thread) = harness.start_thread().await;
-    let state_db = harness
-        .state_db
-        .clone()
-        .expect("test harness should have a state database");
-    let now = chrono::Utc::now();
-    state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Create,
-                task_id: Some("eta-removed-runtime".to_string()),
-                title: Some("Removed runtime reminder".to_string()),
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: Some(TaskEstimateRange {
-                    lower_seconds: Some(1),
-                    upper_seconds: Some(1),
-                }),
-                reason: None,
-                owner_thread_id: Some(root_thread_id),
-            }],
-            now,
-        )
-        .await
-        .expect("create removed-runtime task");
-    let result = state_db
-        .apply_task_estimate_mutations(
-            root_thread_id,
-            root_thread_id,
-            &[TaskEstimateMutation {
-                action: TaskEstimateAction::Start,
-                task_id: Some("eta-removed-runtime".to_string()),
-                title: None,
-                parent_task_id: None,
-                depends_on_task_ids: None,
-                estimate: None,
-                reason: None,
-                owner_thread_id: None,
-            }],
-            now,
-        )
-        .await
-        .expect("start removed-runtime task");
-    harness
-        .control
-        .schedule_eta_reminders(
-            state_db,
-            root_thread_id,
-            &result.changed_tasks,
-            Duration::from_secs(3),
-        )
-        .await;
-    harness
-        .manager
-        .remove_thread(&root_thread_id)
-        .await
-        .expect("remove owner runtime");
-
-    // Keep all SQLite-backed fixture setup on wall-clock time. Pause only once the timers are
-    // armed so fake-time advances do not stall connection acquisition in the state runtime.
-    tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(5)).await;
-    tokio::task::yield_now().await;
-    assert!(!harness.manager.captured_ops().into_iter().any(|(_, op)| {
-        matches!(
-            op,
-            Op::InterAgentCommunication { communication, .. }
-                if communication.content.contains("eta-removed-runtime")
-        )
-    }));
-}
-
-#[tokio::test]
-async fn send_inter_agent_communication_requeues_when_handoff_is_sealed() {
-    let harness = AgentControlHarness::new().await;
-    let (thread_id, thread) = harness.start_thread().await;
-    thread.ensure_rollout_materialized().await;
-    thread
-        .flush_rollout()
-        .await
-        .expect("target thread rollout should flush");
-    let state_db = harness
-        .state_db
-        .as_ref()
-        .expect("test harness should have a state database");
-    assert!(
-        state_db
-            .get_thread(thread_id)
-            .await
-            .expect("read target thread metadata")
-            .is_some(),
-        "target thread metadata must exist before durable handoff"
-    );
-    let communication = InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::try_from("/root/worker").expect("agent path"),
-        Vec::new(),
-        "retain this result".to_string(),
-        /*trigger_turn*/ false,
-    );
-    // Seal the same root control used to submit the completion. The thread's control is a
-    // per-tree handle, while the harness control is the sender for this direct-delivery test.
-    let _sender_handoff = harness
-        .control
-        .begin_handoff()
-        .expect("seal sender handoff");
-    // Keep the target tree sealed as well so its inbound poller cannot consume the persisted
-    // fallback before this test claims the durable envelope.
-    let _target_handoff = thread.begin_handoff().expect("seal target handoff");
-
-    let error = harness
-        .control
-        .send_inter_agent_communication(
-            thread_id,
-            communication.clone(),
-            AgentCommunicationContext::new(AgentCommunicationKind::Result, ThreadId::new()),
-            Default::default(),
-        )
-        .await
-        .expect_err("sealed handoff should reject direct submission");
-    assert!(matches!(
-        error.details(),
-        CodexErrorDetails::InvalidRequest(_)
-    ));
-
-    let messages = state_db
-        .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
-        .await
-        .expect("sealed communication should remain durably pending");
-    let message = messages
-        .first()
-        .expect("sealed communication should have a durable envelope");
-    let payload: serde_json::Value =
-        serde_json::from_str(&message.payload_json).expect("durable envelope should be JSON");
-    assert_eq!(payload["type"], "interAgentCommunication");
-    assert_eq!(payload["schema_version"], 1);
-    assert_eq!(payload["team_lead_completion"], false);
-    let persisted_communication: InterAgentCommunication =
-        serde_json::from_value(payload["communication"].clone())
-            .expect("durable envelope should preserve the communication");
-    assert_eq!(persisted_communication, communication);
-}
-
-#[tokio::test]
 async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
     check_v2_agent_reload(V2ReloadRoute::Sender).await;
 }
@@ -2464,7 +878,7 @@ async fn spawn_v2_reload_test_child(
         .spawn_agent_with_metadata(
             config,
             text_input("hello child"),
-            Some(source),
+            source,
             SpawnAgentOptions {
                 parent_thread_id: Some(parent.session.thread_id),
                 ..Default::default()
@@ -3269,17 +1683,6 @@ async fn ephemeral_spawn_does_not_persist_agent_graph_edge() {
 async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
-    let usage_policy = ThreadUsagePolicy {
-        auto_resume: true,
-        minimum_remaining_percent: Some(25),
-    };
-    parent_thread
-        .restore_thread_settings(CodexThreadSettingsOverrides {
-            usage_policy: Some(usage_policy),
-            ..Default::default()
-        })
-        .await
-        .expect("parent usage policy should persist");
     parent_thread
         .inject_response_items(vec![user_message("paginated parent context")])
         .await
@@ -3321,6 +1724,10 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
                 ThreadSettingsAppliedEvent {
                     thread_id: Some(parent_thread_id),
                     thread_settings: ThreadSettingsSnapshot {
+                        memory_policy: Default::default(),
+                        user_preferences_memory_policy: Default::default(),
+                        usage_policy: Default::default(),
+                        team: None,
                         disabled_plugin_ids: Vec::new(),
                         model: "parent-only-model".to_string(),
                         model_provider_id: "parent-only-provider".to_string(),
@@ -3334,11 +1741,6 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
                         reasoning_effort: None,
                         reasoning_summary: None,
                         personality: None,
-                        memory_policy: MemoryAccessPolicy::default(),
-                        user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy::default(
-                        ),
-                        usage_policy: ThreadUsagePolicy::default(),
-                        team: None,
                         collaboration_mode: CollaborationMode {
                             mode: ModeKind::Default,
                             settings: Settings {
@@ -3368,15 +1770,6 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         .get_thread(child_thread_id)
         .await
         .expect("child thread should be registered");
-    assert_eq!(
-        child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy,
-        usage_policy,
-        "paginated child should inherit the live parent usage policy"
-    );
     assert!(
         history_contains_text(
             child_thread.session.clone_history().await.raw_items(),
@@ -3441,39 +1834,15 @@ async fn spawn_agent_fork_from_paginated_parent_uses_model_context_prefix() {
         "copied model context should be persisted once"
     );
     assert!(
-        !copied_prefix.iter().any(|line| matches!(
-            &line.item,
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(_))
-        )),
-        "copied presentation records should not enter the child rollout"
-    );
-    let copied_settings = copied_prefix
-        .iter()
-        .find_map(|line| match &line.item {
-            RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event)) => Some(event),
-            _ => None,
-        })
-        .expect("the child should persist one child-owned settings snapshot");
-    assert_eq!(
-        copied_settings.thread_settings,
-        child_thread.session.thread_settings_snapshot().await
-    );
-    assert_ne!(
-        copied_settings.thread_settings.model, "parent-only-model",
-        "the synthetic parent settings marker must not be copied into the child prefix"
-    );
-    assert_eq!(
-        copied_prefix
-            .iter()
-            .filter(|line| {
-                matches!(
-                    &line.item,
-                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(_))
+        !copied_prefix.iter().any(|line| {
+            matches!(
+                &line.item,
+                RolloutItem::EventMsg(
+                    EventMsg::ItemCompleted(_) | EventMsg::ThreadSettingsApplied(_)
                 )
-            })
-            .count(),
-        1,
-        "the child should persist one child-owned settings snapshot"
+            )
+        }),
+        "copied non-structural presentation and metadata records should not enter the child rollout"
     );
 
     let _ = harness
@@ -3546,7 +1915,7 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
 #[test_case::test_case(true; "thread context enabled")]
 #[test_case::test_case(false; "thread context disabled")]
 #[tokio::test]
-async fn spawn_agent_fork_drops_inherited_token_usage_state(thread_context_enabled: bool) {
+async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context_enabled: bool) {
     let mut harness = AgentControlHarness::new().await;
     let _ = harness.config.features.disable(Feature::MultiAgentV2);
     harness
@@ -3555,6 +1924,15 @@ async fn spawn_agent_fork_drops_inherited_token_usage_state(thread_context_enabl
         .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
         .expect("test context mode");
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
+    let parent_resume_metadata = codex_history::CompactionResumeMetadata {
+        multi_agent_version: Some(MultiAgentVersion::V2),
+        last_started_turn_id: Some("parent-turn".into()),
+        previous_turn_settings: Some(codex_history::PreviousTurnSettings {
+            model: "parent-model".into(),
+            comp_hash: None,
+            realtime_active: None,
+        }),
+    };
     let parent_usage = TokenUsage {
         total_tokens: 120,
         ..TokenUsage::default()
@@ -3582,12 +1960,13 @@ async fn spawn_agent_fork_drops_inherited_token_usage_state(thread_context_enabl
                 retained_context: None,
                 guardian_history: None,
                 mcp_resource_origins: None,
-                window_number: None,
+                window_number: Some(1),
                 first_window_id: None,
                 previous_window_id: None,
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: Some(parent_record.clone()),
+                resume_metadata: Some(parent_resume_metadata.clone()),
             }),
             RolloutItem::TokenUsageRecord(parent_record),
             rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
@@ -3664,39 +2043,52 @@ async fn spawn_agent_fork_drops_inherited_token_usage_state(thread_context_enabl
         }),
         "child rollout should not inherit parent token usage checkpoints"
     );
-    let child_record = lines.iter().rev().find_map(|line| match &line.item {
-        RolloutItem::TokenUsageRecord(record) => Some(record),
-        _ => None,
-    });
-    let child_record = child_record.cloned();
-    assert!(
-        child_record
-            .as_ref()
-            .and_then(|record| record.completed_at_ms)
-            .is_some_and(|completed_at_ms| completed_at_ms > 0),
-        "observed response usage should carry a positive completion timestamp"
+    let inherited_resume_metadata = lines
+        .iter()
+        .find_map(|line| match &line.item {
+            RolloutItem::Compacted(item) => item.resume_metadata.as_ref(),
+            _ => None,
+        })
+        .expect("inherited checkpoint");
+    assert_eq!(
+        inherited_resume_metadata,
+        &codex_history::CompactionResumeMetadata {
+            multi_agent_version: Some(MultiAgentVersion::V1),
+            ..parent_resume_metadata
+        }
     );
-    let expected_child_record = TokenUsageRecord {
-        thread_id: child_thread_id,
-        parent_thread_id: Some(parent_thread_id),
-        turn_id: turn_context.sub_id.clone(),
-        session_id: child_thread.session.session_id(),
-        root_turn_id: turn_context.sub_id.clone(),
-        response_id: "child-response".to_string(),
-        usage: child_usage.clone(),
-        turn_token_usage: child_usage.clone(),
-        thread_token_usage: child_usage.clone(),
-        attribution: TokenUsageAttribution {
-            model: Some(turn_context.model_info().slug.clone()),
-            model_provider: Some(turn_context.config.model_provider_id.clone()),
-            service_tier: None,
-            context_length: Some(child_usage.context_length().to_string()),
-        },
-        completed_at_ms: child_record
-            .as_ref()
-            .and_then(|record| record.completed_at_ms),
-    };
-    assert_eq!(child_record, Some(expected_child_record));
+    let child_record = lines
+        .iter()
+        .rev()
+        .find_map(|line| match &line.item {
+            RolloutItem::TokenUsageRecord(record) => Some(record),
+            _ => None,
+        })
+        .expect("child response usage record");
+    assert!(child_record.completed_at_ms.is_some());
+    let mut child_record_without_timestamp = child_record.clone();
+    child_record_without_timestamp.completed_at_ms = None;
+    assert_eq!(
+        child_record_without_timestamp,
+        TokenUsageRecord {
+            thread_id: child_thread_id,
+            parent_thread_id: Some(parent_thread_id),
+            turn_id: turn_context.sub_id.clone(),
+            session_id: child_thread.session.session_id(),
+            root_turn_id: turn_context.sub_id.clone(),
+            response_id: "child-response".to_string(),
+            usage: child_usage.clone(),
+            turn_token_usage: child_usage.clone(),
+            thread_token_usage: child_usage,
+            attribution: codex_protocol::protocol::TokenUsageAttribution {
+                model: Some(turn_context.model_info().slug.clone()),
+                model_provider: Some(turn_context.config.model_provider_id.clone()),
+                service_tier: None,
+                context_length: Some(child_record.usage.context_length().to_string()),
+            },
+            completed_at_ms: None,
+        }
+    );
 }
 
 #[tokio::test]
@@ -3730,6 +2122,7 @@ async fn spawn_agent_numeric_fork_from_compacted_paginated_parent_clamps_to_prov
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: None,
+                resume_metadata: None,
             }),
             rollout_response_item(ResponseItem::Message {
                 id: None,
@@ -3848,8 +2241,7 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     parent_thread
         .session
         .record_conversation_items(
-            turn_context.as_ref(),
-            turn_context.model_info(),
+            turn_context.as_ref(), turn_context.model_info(),
             &[
                 ResponseItem::Message {
                     id: None,
@@ -3950,13 +2342,13 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .spawn_agent_with_metadata(
             child_config,
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -4075,13 +2467,13 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .spawn_agent_with_metadata(
             no_hint_child_config,
             text_input("child task without hints"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -4290,6 +2682,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: None,
+                resume_metadata: None,
             }),
             RolloutItem::RetainedContext(answer_event),
             RolloutItem::ResponseItem(delivery),
@@ -4312,13 +2705,13 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
         .spawn_agent_with_metadata(
             child_config,
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -4495,6 +2888,7 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: None,
+                resume_metadata: None,
             }),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
             rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
@@ -4515,13 +2909,13 @@ async fn spawn_agent_full_fork_restores_instructions_after_compaction_discards_p
         .spawn_agent_with_metadata(
             child_config,
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -4652,6 +3046,15 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: None,
+                resume_metadata: Some(codex_history::CompactionResumeMetadata {
+                    multi_agent_version: Some(MultiAgentVersion::V2),
+                    last_started_turn_id: None,
+                    previous_turn_settings: Some(codex_history::PreviousTurnSettings {
+                        model: "parent-model".into(),
+                        comp_hash: None,
+                        realtime_active: None,
+                    }),
+                }),
             }),
         ];
         if let Some(instructions) = parent_developer_instructions {
@@ -4699,13 +3102,13 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             .spawn_agent_with_metadata(
                 child_config,
                 text_input("child task"),
-                Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id,
                     depth: 1,
                     agent_path: None,
                     agent_nickname: None,
                     agent_role: None,
-                })),
+                }),
                 SpawnAgentOptions {
                     fork_parent_spawn_call_id: Some(parent_spawn_call_id.to_string()),
                     fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -4720,6 +3123,27 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
             .get_thread(child_thread_id)
             .await
             .expect("child thread should be registered");
+        child_thread
+            .flush_rollout()
+            .await
+            .expect("flush child checkpoint");
+        let (items, _, _) = codex_rollout::RolloutRecorder::load_rollout_items(
+            &child_thread.rollout_path().expect("child rollout"),
+        )
+        .await
+        .expect("read child checkpoint");
+        let inherited_state = items.into_iter().find_map(|item| match item {
+            RolloutItem::Compacted(item) => item.resume_metadata,
+            _ => None,
+        });
+        assert_eq!(
+            inherited_state,
+            Some(codex_history::CompactionResumeMetadata {
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                last_started_turn_id: None,
+                previous_turn_settings: None,
+            })
+        );
         while child_thread
             .session
             .reference_context_item()
@@ -4765,6 +3189,133 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
     }
 }
 
+#[test_case::test_case(false; "complete")]
+#[test_case::test_case(true; "error_reason")]
+#[tokio::test]
+async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
+    record_invalid_source: bool,
+) {
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::ExecutedToolCallMetadata)
+        .expect("enable MCP attribution recording");
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (source_thread_id, source_thread) = harness.start_thread().await;
+    let turn_context = source_thread.session.new_default_turn().await;
+    source_thread
+        .session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &[user_message("source turn")],
+        )
+        .await;
+    let source = McpAttributionSource {
+        connector_id: None,
+        plugin_id: Some("messages@openai-bundled".to_string()),
+        server_name: "messages".to_string(),
+        tool_name: "search".to_string(),
+        first_turn_id: turn_context.sub_id.clone(),
+    };
+    source_thread
+        .session
+        .services
+        .executed_tool_calls
+        .as_ref()
+        .expect("MCP attribution recorder is enabled")
+        .record_mcp_source(source.clone());
+    if record_invalid_source {
+        source_thread
+            .session
+            .services
+            .executed_tool_calls
+            .as_ref()
+            .expect("MCP attribution recorder is enabled")
+            .record_mcp_source(McpAttributionSource {
+                tool_name: String::new(),
+                ..source.clone()
+            });
+    }
+    source_thread
+        .session
+        .record_conversation_items(
+            turn_context.as_ref(),
+            turn_context.model_info(),
+            &[assistant_message("source result", /*phase*/ None)],
+        )
+        .await;
+    source_thread.ensure_rollout_materialized().await;
+    source_thread
+        .flush_rollout()
+        .await
+        .expect("flush source rollout");
+    let rollout_path = source_thread.rollout_path().expect("source rollout path");
+    source_thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown source thread");
+    assert!(
+        harness
+            .manager
+            .remove_thread(&source_thread_id)
+            .await
+            .is_some()
+    );
+    drop(source_thread);
+
+    let forked = harness
+        .manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            harness.config.clone(),
+            rollout_path.clone(),
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork unloaded source thread");
+    let resumed = harness
+        .manager
+        .resume_thread_from_rollout(
+            harness.config.clone(),
+            rollout_path,
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await
+        .expect("resume source thread");
+    let expected = McpAttribution {
+        status: if record_invalid_source {
+            McpAttributionStatus::AttributionError
+        } else {
+            McpAttributionStatus::Complete
+        },
+        error_reason: record_invalid_source.then_some(McpAttributionErrorReason::SourceInvalid),
+        sources: vec![source],
+    };
+    assert_eq!(
+        mcp_attribution_in_constructed_request(&forked.thread).await,
+        expected
+    );
+    assert_eq!(
+        mcp_attribution_in_constructed_request(&resumed.thread).await,
+        expected
+    );
+
+    forked
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown forked thread");
+    resumed
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed thread");
+}
+
 #[tokio::test]
 async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
     let harness = AgentControlHarness::new().await;
@@ -4788,13 +3339,13 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         .spawn_agent_with_metadata(
             harness.config.clone(),
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
@@ -4829,24 +3380,44 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
 
 #[tokio::test]
 async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
-    let harness = AgentControlHarness::new().await;
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::ExecutedToolCallMetadata)
+        .expect("enable MCP attribution recording");
+    let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let usage_policy = ThreadUsagePolicy {
-        auto_resume: true,
-        minimum_remaining_percent: Some(25),
+    let old_turn_context = parent_thread.session.new_default_turn().await;
+    parent_thread
+        .session
+        .record_conversation_items(
+            old_turn_context.as_ref(),
+            old_turn_context.model_info(),
+            &[user_message("old parent context")],
+        )
+        .await;
+    let source = McpAttributionSource {
+        connector_id: None,
+        plugin_id: None,
+        server_name: "example".to_string(),
+        tool_name: "search".to_string(),
+        first_turn_id: old_turn_context.sub_id.clone(),
     };
     parent_thread
-        .restore_thread_settings(CodexThreadSettingsOverrides {
-            usage_policy: Some(usage_policy),
-            ..Default::default()
-        })
-        .await
-        .expect("parent usage policy should persist");
-
+        .session
+        .services
+        .executed_tool_calls
+        .as_ref()
+        .expect("MCP attribution recorder is enabled")
+        .record_mcp_source(source.clone());
     parent_thread
-        .inject_response_items(vec![user_message("old parent context")])
-        .await
-        .expect("inject old parent context");
+        .session
+        .record_conversation_items(
+            old_turn_context.as_ref(),
+            old_turn_context.model_info(),
+            &[assistant_message("old MCP result", /*phase*/ None)],
+        )
+        .await;
     let queued_communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::try_from("/root/worker").expect("agent path"),
@@ -4915,13 +3486,13 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .spawn_agent_with_metadata(
             harness.config.clone(),
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
@@ -4939,19 +3510,13 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .expect("child thread should be registered");
     let history = child_thread.session.clone_history().await;
 
-    assert_eq!(
-        child_thread
-            .session
-            .thread_settings_snapshot()
-            .await
-            .usage_policy,
-        usage_policy,
-        "last-N forked child should inherit the live parent usage policy"
-    );
-
     assert!(
         !history_contains_text(history.raw_items(), "old parent context"),
         "forked child history should drop parent context outside the requested last-N turn window"
+    );
+    assert!(
+        !history_contains_text(history.raw_items(), "old MCP result"),
+        "forked child history should drop the old result while retaining its attribution"
     );
     assert!(
         !history_contains_text(history.raw_items(), "queued message"),
@@ -4972,6 +3537,14 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             .await
             .is_none(),
         "last-N forked child should rebuild context after truncating the cached prefix"
+    );
+    assert_eq!(
+        mcp_attribution_in_constructed_request(&child_thread).await,
+        McpAttribution {
+            status: McpAttributionStatus::Complete,
+            error_reason: None,
+            sources: vec![source],
+        }
     );
 
     let _ = harness
@@ -5054,13 +3627,13 @@ async fn spawn_agent_fork_last_n_turns_drops_parent_startup_prefix_when_under_li
         .spawn_agent_with_metadata(
             harness.config.clone(),
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
@@ -5190,13 +3763,13 @@ async fn spawn_agent_fork_last_n_turns_strips_parent_usage_hints() {
         .spawn_agent_with_metadata(
             child_config,
             text_input("child task"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
@@ -5648,7 +4221,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
             })),
             tester_path.to_string(),
             Some(tester_path.clone()),
-            None,
+            /*terminal_delivery_guard*/ None,
         )
         .await;
     let tester_turn = tester_thread.session.new_default_turn().await;
@@ -5718,105 +4291,6 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
 }
 
 #[tokio::test]
-async fn memory_subagent_completion_does_not_notify_parent() {
-    let harness = AgentControlHarness::new().await;
-    let (_parent_thread_id, _parent_thread) = harness.start_thread().await;
-    let (memory_thread_id, memory_thread) = harness.start_thread().await;
-    let captured_before = harness.manager.captured_ops().len();
-
-    harness
-        .control
-        .maybe_start_completion_watcher(
-            memory_thread_id,
-            Some(SessionSource::SubAgent(SubAgentSource::MemoryExtraction)),
-            "memory".to_string(),
-            Some(AgentPath::morpheus()),
-            None,
-        )
-        .await;
-    let memory_turn = memory_thread.session.new_default_turn().await;
-    memory_thread
-        .session
-        .send_event(
-            memory_turn.as_ref(),
-            EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: memory_turn.sub_id.clone(),
-                started_at: None,
-                last_agent_message: Some("memory write complete".to_string()),
-                error: None,
-                completed_at: None,
-                duration_ms: None,
-                time_to_first_token_ms: None,
-            }),
-        )
-        .await;
-
-    sleep(Duration::from_millis(100)).await;
-
-    assert_eq!(harness.manager.captured_ops().len(), captured_before);
-}
-
-#[tokio::test]
-async fn completion_watcher_ignores_handoff_shutdown() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let (child_thread_id, child_thread) = harness.start_thread().await;
-
-    harness
-        .control
-        .maybe_start_completion_watcher(
-            child_thread_id,
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-            child_thread_id.to_string(),
-            /*child_agent_path*/ None,
-            None,
-        )
-        .await;
-    harness.control.mark_handoff_suspended(child_thread_id);
-    send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
-
-    sleep(Duration::from_millis(100)).await;
-
-    assert!(!has_subagent_notification(
-        parent_thread.session.clone_history().await.raw_items(),
-    ));
-    assert!(!harness.control.take_handoff_suspended(child_thread_id));
-}
-
-#[tokio::test]
-async fn completion_watcher_forwards_natural_shutdown() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, parent_thread) = harness.start_thread().await;
-    let (child_thread_id, child_thread) = harness.start_thread().await;
-
-    harness
-        .control
-        .maybe_start_completion_watcher(
-            child_thread_id,
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: None,
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-            child_thread_id.to_string(),
-            /*child_agent_path*/ None,
-            None,
-        )
-        .await;
-    send_agent_event(&child_thread, EventMsg::ShutdownComplete).await;
-
-    assert!(wait_for_subagent_notification(&parent_thread).await);
-}
-
-#[tokio::test]
 async fn completion_watcher_notifies_parent_when_child_is_missing() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
@@ -5835,7 +4309,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
             })),
             child_thread_id.to_string(),
             /*child_agent_path*/ None,
-            None,
+            /*terminal_delivery_guard*/ None,
         )
         .await;
 
@@ -5943,13 +4417,13 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
         .spawn_agent_with_metadata(
             harness.config.clone(),
             text_input("hello forked child"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: parent.thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
-            })),
+            }),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some("spawn-call-last-n".to_string()),
                 fork_mode: Some(SpawnAgentForkMode::LastNTurns(1)),
@@ -6076,11 +4550,7 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .flush_rollout()
         .await
         .expect("flush child rollout");
-    let mut status_rx = harness
-        .control
-        .subscribe_status(child_thread_id)
-        .await
-        .expect("status subscription should succeed");
+    let mut status_rx = child_thread.subscribe_status();
     if matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
         timeout(Duration::from_secs(5), async {
             loop {
@@ -6553,384 +5023,6 @@ async fn shutdown_agent_tree_closes_live_descendants() {
     let mut shutdown_ids = shutdown_ids;
     shutdown_ids.sort_by_key(std::string::ToString::to_string);
     assert_eq!(shutdown_ids, expected_shutdown_ids);
-}
-
-#[tokio::test]
-async fn prune_idle_agents_closes_only_idle_subtrees_in_current_session() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
-
-    let idle_child_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("idle child"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: Some(AgentPath::root().join("idle").expect("idle path")),
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-        )
-        .await
-        .expect("idle child spawn should succeed");
-    let running_child_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("running child"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: Some(AgentPath::root().join("running").expect("running path")),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("running child spawn should succeed");
-    let idle_parent_path = AgentPath::root()
-        .join("idle_parent")
-        .expect("idle parent path");
-    let idle_parent_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("idle parent"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: Some(idle_parent_path.clone()),
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-        )
-        .await
-        .expect("idle parent spawn should succeed");
-    let running_grandchild_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("running grandchild"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: idle_parent_id,
-                depth: 2,
-                agent_path: Some(
-                    idle_parent_path
-                        .join("running_grandchild")
-                        .expect("running grandchild path"),
-                ),
-                agent_nickname: None,
-                agent_role: Some("worker".to_string()),
-            })),
-        )
-        .await
-        .expect("running grandchild spawn should succeed");
-
-    wait_for_live_thread_spawn_children(
-        &harness.control,
-        parent_thread_id,
-        &[idle_child_id, running_child_id, idle_parent_id],
-    )
-    .await;
-    wait_for_live_thread_spawn_children(&harness.control, idle_parent_id, &[running_grandchild_id])
-        .await;
-
-    let idle_child = harness
-        .manager
-        .get_thread(idle_child_id)
-        .await
-        .expect("idle child should exist");
-    send_agent_event(
-        &idle_child,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "idle-child".to_string(),
-            started_at: None,
-            last_agent_message: Some("done".to_string()),
-            error: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    )
-    .await;
-    let running_child = harness
-        .manager
-        .get_thread(running_child_id)
-        .await
-        .expect("running child should exist");
-    send_agent_event(
-        &running_child,
-        EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "running-child".to_string(),
-            trace_id: None,
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    )
-    .await;
-    let idle_parent = harness
-        .manager
-        .get_thread(idle_parent_id)
-        .await
-        .expect("idle parent should exist");
-    send_agent_event(
-        &idle_parent,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "idle-parent".to_string(),
-            started_at: None,
-            last_agent_message: Some("done".to_string()),
-            error: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    )
-    .await;
-    let running_grandchild = harness
-        .manager
-        .get_thread(running_grandchild_id)
-        .await
-        .expect("running grandchild should exist");
-    send_agent_event(
-        &running_grandchild,
-        EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "running-grandchild".to_string(),
-            trace_id: None,
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    )
-    .await;
-
-    let report = harness
-        .control
-        .prune_idle_agents(parent_thread_id)
-        .await
-        .expect("idle prune should succeed");
-
-    assert_eq!(
-        report,
-        PruneIdleAgentsReport {
-            closed: vec![idle_child_id],
-            failed: Vec::new(),
-        }
-    );
-    assert_eq!(
-        harness.control.get_status(idle_child_id).await,
-        AgentStatus::NotFound
-    );
-    assert_ne!(
-        harness.control.get_status(running_child_id).await,
-        AgentStatus::NotFound
-    );
-    assert_ne!(
-        harness.control.get_status(idle_parent_id).await,
-        AgentStatus::NotFound
-    );
-    assert_ne!(
-        harness.control.get_status(running_grandchild_id).await,
-        AgentStatus::NotFound
-    );
-}
-
-#[tokio::test]
-async fn prune_idle_agents_closes_unregistered_thread_spawn_children() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
-    let (child_thread_id, child_thread) =
-        start_unregistered_thread_spawn_child(&harness, parent_thread_id, /*depth*/ 1).await;
-    send_agent_event(
-        &child_thread,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "unregistered-child".to_string(),
-            started_at: None,
-            last_agent_message: Some("done".to_string()),
-            error: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    )
-    .await;
-
-    let report = harness
-        .control
-        .prune_idle_agents(parent_thread_id)
-        .await
-        .expect("idle prune should succeed");
-
-    assert_eq!(
-        report,
-        PruneIdleAgentsReport {
-            closed: vec![child_thread_id],
-            failed: Vec::new(),
-        }
-    );
-    assert_eq!(
-        harness.control.get_status(child_thread_id).await,
-        AgentStatus::NotFound
-    );
-    let shutdown_sent = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .any(|(thread_id, op)| thread_id == child_thread_id && matches!(op, Op::Shutdown));
-    assert!(shutdown_sent);
-}
-
-#[tokio::test]
-async fn prune_idle_agents_preserves_running_unregistered_thread_spawn_children() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
-    let (child_thread_id, child_thread) =
-        start_unregistered_thread_spawn_child(&harness, parent_thread_id, /*depth*/ 1).await;
-    send_agent_event(
-        &child_thread,
-        EventMsg::TurnStarted(TurnStartedEvent {
-            turn_id: "running-unregistered-child".to_string(),
-            trace_id: None,
-            started_at: None,
-            model_context_window: None,
-            collaboration_mode_kind: ModeKind::Default,
-        }),
-    )
-    .await;
-
-    let report = harness
-        .control
-        .prune_idle_agents(parent_thread_id)
-        .await
-        .expect("idle prune should succeed");
-
-    assert_eq!(report, PruneIdleAgentsReport::default());
-    assert_ne!(
-        harness.control.get_status(child_thread_id).await,
-        AgentStatus::NotFound
-    );
-    let shutdown_sent = harness
-        .manager
-        .captured_ops()
-        .into_iter()
-        .any(|(thread_id, op)| thread_id == child_thread_id && matches!(op, Op::Shutdown));
-    assert!(!shutdown_sent);
-}
-
-#[tokio::test]
-async fn prune_idle_agents_ignores_unregistered_thread_spawn_children_from_other_sessions() {
-    let harness = AgentControlHarness::new().await;
-    let (current_parent_thread_id, _current_parent_thread) = harness.start_thread().await;
-    let (other_parent_thread_id, _other_parent_thread) = harness.start_thread().await;
-    let (other_child_thread_id, other_child_thread) =
-        start_unregistered_thread_spawn_child(&harness, other_parent_thread_id, /*depth*/ 1).await;
-    send_agent_event(
-        &other_child_thread,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "other-session-child".to_string(),
-            started_at: None,
-            last_agent_message: Some("done".to_string()),
-            error: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    )
-    .await;
-
-    let report = harness
-        .control
-        .prune_idle_agents(current_parent_thread_id)
-        .await
-        .expect("idle prune should succeed");
-
-    assert_eq!(report, PruneIdleAgentsReport::default());
-    assert_ne!(
-        harness.control.get_status(other_child_thread_id).await,
-        AgentStatus::NotFound
-    );
-}
-
-#[tokio::test]
-async fn prune_idle_agents_reports_unregistered_descendants_once() {
-    let harness = AgentControlHarness::new().await;
-    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
-
-    let idle_parent_id = harness
-        .control
-        .spawn_agent(
-            harness.config.clone(),
-            text_input("idle parent"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                depth: 1,
-                agent_path: Some(AgentPath::root().join("idle_parent").expect("idle path")),
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-        )
-        .await
-        .expect("idle parent spawn should succeed");
-    let (unregistered_child_id, unregistered_child_thread) =
-        start_unregistered_thread_spawn_child(&harness, idle_parent_id, /*depth*/ 2).await;
-
-    let idle_parent_thread = harness
-        .manager
-        .get_thread(idle_parent_id)
-        .await
-        .expect("idle parent should exist");
-    send_agent_event(
-        &idle_parent_thread,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "idle-parent".to_string(),
-            started_at: None,
-            last_agent_message: Some("done".to_string()),
-            error: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    )
-    .await;
-    send_agent_event(
-        &unregistered_child_thread,
-        EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: "unregistered-grandchild".to_string(),
-            started_at: None,
-            last_agent_message: Some("done".to_string()),
-            error: None,
-            completed_at: None,
-            duration_ms: None,
-            time_to_first_token_ms: None,
-        }),
-    )
-    .await;
-
-    let report = harness
-        .control
-        .prune_idle_agents(parent_thread_id)
-        .await
-        .expect("idle prune should succeed");
-
-    let mut expected_closed = vec![idle_parent_id, unregistered_child_id];
-    expected_closed.sort_by_key(std::string::ToString::to_string);
-    assert_eq!(
-        report,
-        PruneIdleAgentsReport {
-            closed: expected_closed,
-            failed: Vec::new(),
-        }
-    );
-    assert_eq!(
-        harness.control.get_status(idle_parent_id).await,
-        AgentStatus::NotFound
-    );
-    assert_eq!(
-        harness.control.get_status(unregistered_child_id).await,
-        AgentStatus::NotFound
-    );
 }
 
 #[tokio::test]

@@ -84,6 +84,21 @@ pub(crate) struct RestorablePermissionSelection {
     pub approvals_reviewer: ApprovalsReviewer,
 }
 
+/// Global voice controls always apply to the one call's owner.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum VoiceControl {
+    Toggle,
+    Stop,
+    Mute,
+}
+
+/// Confirmed server lifecycle operations available from the agents dashboard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentsOverviewAction {
+    Archive,
+    Delete,
+}
+
 /// Whether a managed checkout starts fresh or preserves the current conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ManagedWorktreeMode {
@@ -117,13 +132,6 @@ pub(crate) struct ManagedWorktreeCreated {
         ),
         String,
     >,
-}
-
-/// Confirmed server lifecycle operations available from the agents dashboard.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AgentsOverviewAction {
-    Archive,
-    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1227,6 +1235,16 @@ pub(crate) enum AppEvent {
 
     /// Move visible completed voice captions into history in one app event.
     CommitRealtimeTranscriptHistory,
+
+    VoiceControl {
+        thread_id: Option<ThreadId>,
+        control: VoiceControl,
+    },
+    RealtimeConversationStateChanged,
+    BackgroundVoiceError {
+        thread_id: ThreadId,
+        message: String,
+    },
 
     /// Insert an asynchronous result only while its originating thread remains displayed.
     InsertHistoryCellForThread {

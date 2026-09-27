@@ -283,11 +283,18 @@ async fn missing_code_mode_wait_traces_only_the_wait_tool_call() -> anyhow::Resu
         session.thread_id,
         Arc::new(MissingCellCodeModeSessionProvider),
         &turn.config.code_mode,
-        session.services.executed_tool_calls.clone(),
+        session
+            .services
+            .executed_tool_calls
+            .as_deref()
+            .cloned()
+            .unwrap_or_default(),
     );
     attach_test_trace(&mut session, &turn, temp.path())?;
 
-    let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler));
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(CodeModeWaitHandler::new(
+        /*description_override*/ None, /*parameters_override*/ None,
+    )));
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 

@@ -18,7 +18,13 @@ from openai_codex.api import (
     TextInput,
 )
 from openai_codex.client import _params_dict
-from openai_codex.generated.v2_all import TurnCompletedNotification, TurnStartParams
+from openai_codex.generated.v2_all import (
+    MemoryAccessPolicy,
+    TurnCompletedNotification,
+    TurnStartParams,
+    UserPreferencesMemoryBucket,
+    UserPreferencesMemoryBucketPolicy,
+)
 from openai_codex.models import InitializeResponse, Notification
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -167,6 +173,57 @@ def test_include_turns_preserves_omission_and_inverts_explicit_values(
                 "threadId": "thread-1",
                 **expected,
             }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("api_type", [Codex, AsyncCodex])
+def test_thread_lifecycle_forwards_memory_policies(api_type) -> None:
+    """Thread start, resume, and fork preserve both per-thread memory policies."""
+
+    async def scenario() -> None:
+        async_api = api_type is AsyncCodex
+        rpc = AsyncMock if async_api else Mock
+        thread_response = SimpleNamespace(thread=SimpleNamespace(id="thread-2"))
+        client = SimpleNamespace(
+            thread_start=rpc(return_value=thread_response),
+            thread_resume=rpc(return_value=thread_response),
+            thread_fork=rpc(return_value=thread_response),
+        )
+        codex = api_type.__new__(api_type)
+        codex._client = client
+        codex._initialized = True
+        memory_policy = MemoryAccessPolicy(read=False, write=True)
+        user_preferences_memory_policy = UserPreferencesMemoryBucketPolicy(
+            read_buckets=[UserPreferencesMemoryBucket.durable_preference],
+            write_buckets=[UserPreferencesMemoryBucket.ongoing_threads],
+        )
+        expected = {
+            "memoryPolicy": {"read": False, "write": True},
+            "userPreferencesMemoryPolicy": {
+                "readBuckets": ["durable_preference"],
+                "writeBuckets": ["ongoing_threads"],
+            },
+        }
+
+        for method in ("thread_start", "thread_resume", "thread_fork"):
+            operation = getattr(codex, method)
+            options = {
+                "memory_policy": memory_policy,
+                "user_preferences_memory_policy": user_preferences_memory_policy,
+            }
+            thread = (
+                operation(**options)
+                if method == "thread_start"
+                else operation("thread-1", **options)
+            )
+            if async_api:
+                thread = await thread
+            assert thread.id == "thread-2"
+
+            params = getattr(client, method).call_args.args[-1]
+            serialized = _params_dict(params)
+            assert {key: serialized[key] for key in expected} == expected
 
     asyncio.run(scenario())
 

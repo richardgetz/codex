@@ -40,11 +40,14 @@ from openai_codex.types import (
     CancelLoginAccountStatus,
     GetAccountResponse,
     InitializeResponse,
+    MemoryAccessPolicy,
     Personality,
     ThreadItem,
     ThreadTokenUsage,
     TurnError,
     TurnStatus,
+    UserPreferencesMemoryBucket,
+    UserPreferencesMemoryBucketPolicy,
 )
 ```
 
@@ -67,10 +70,10 @@ Properties/methods:
 - `login_chatgpt_device_code() -> DeviceCodeLoginHandle`
 - `account(*, refresh_token: bool = False) -> GetAccountResponse`
 - `logout() -> None`
-- `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None) -> Thread`
+- `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, memory_policy: MemoryAccessPolicy | None = None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None, user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None) -> Thread`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> ThreadListResponse`
-- `thread_resume(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, include_turns: bool | None = None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None, service_tier=None) -> Thread`
-- `thread_fork(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, include_turns: bool | None = None, model=None, model_provider=None, sandbox: Sandbox | None = None, service_tier=None) -> Thread`
+- `thread_resume(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, include_turns: bool | None = None, memory_policy: MemoryAccessPolicy | None = None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None) -> Thread`
+- `thread_fork(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, include_turns: bool | None = None, memory_policy: MemoryAccessPolicy | None = None, model=None, model_provider=None, sandbox: Sandbox | None = None, service_tier=None, user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None) -> Thread`
 - `thread_archive(thread_id: str) -> ThreadArchiveResponse`
 - `thread_unarchive(thread_id: str) -> Thread`
 - `models(*, include_hidden: bool = False) -> ModelListResponse`
@@ -135,10 +138,10 @@ Properties/methods:
 - `login_chatgpt_device_code() -> Awaitable[AsyncDeviceCodeLoginHandle]`
 - `account(*, refresh_token: bool = False) -> Awaitable[GetAccountResponse]`
 - `logout() -> Awaitable[None]`
-- `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None) -> Awaitable[AsyncThread]`
+- `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, memory_policy: MemoryAccessPolicy | None = None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None, user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None) -> Awaitable[AsyncThread]`
 - `thread_list(*, archived=None, cursor=None, cwd=None, limit=None, model_providers=None, sort_key=None, source_kinds=None) -> Awaitable[ThreadListResponse]`
-- `thread_resume(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, include_turns: bool | None = None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None, service_tier=None) -> Awaitable[AsyncThread]`
-- `thread_fork(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, include_turns: bool | None = None, model=None, model_provider=None, sandbox: Sandbox | None = None, service_tier=None) -> Awaitable[AsyncThread]`
+- `thread_resume(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, include_turns: bool | None = None, memory_policy: MemoryAccessPolicy | None = None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None) -> Awaitable[AsyncThread]`
+- `thread_fork(thread_id: str, *, approval_mode=None, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, include_turns: bool | None = None, memory_policy: MemoryAccessPolicy | None = None, model=None, model_provider=None, sandbox: Sandbox | None = None, service_tier=None, user_preferences_memory_policy: UserPreferencesMemoryBucketPolicy | None = None) -> Awaitable[AsyncThread]`
 - `thread_archive(thread_id: str) -> Awaitable[ThreadArchiveResponse]`
 - `thread_unarchive(thread_id: str) -> Awaitable[AsyncThread]`
 - `models(*, include_hidden: bool = False) -> Awaitable[ModelListResponse]`

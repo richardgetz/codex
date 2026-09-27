@@ -155,6 +155,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         }),
         parent_turn_id: Some("parent-turn".to_string()),
         root_turn_id: Some("root-turn".to_string()),
+        residency_guard: None,
     };
     tx_ops.send(submission).await.unwrap();
     drop(tx_ops);
@@ -203,6 +204,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
             parent_environments,
             cancel_token,
             SubAgentSource::Review,
+            codex_extension_api::SessionIsolation::Inherit,
             /*initial_history*/ None,
             crate::session::GitEnrichmentPolicy::Fresh,
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
@@ -329,6 +331,7 @@ async fn delegate_isolation_does_not_depend_on_attribution() {
             parent_ctx.initial_environments.clone(),
             CancellationToken::new(),
             subagent_source,
+            codex_extension_api::SessionIsolation::Inherit,
             /*initial_history*/ None,
             crate::session::GitEnrichmentPolicy::Fresh,
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
@@ -372,6 +375,7 @@ async fn run_codex_thread_interactive_rejects_approval_policy_that_can_prompt() 
         parent_environments,
         CancellationToken::new(),
         SubAgentSource::Review,
+        codex_extension_api::SessionIsolation::Inherit,
         /*initial_history*/ None,
         crate::session::GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

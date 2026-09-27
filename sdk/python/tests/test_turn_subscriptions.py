@@ -153,6 +153,25 @@ def test_events_or_failure_before_turn_start_returns(monkeypatch, async_api, low
     assert client._router._turn_states == {}
 
 
+def test_async_turn_handle_closes_subscription_if_initialization_fails(monkeypatch):
+    codex = AsyncCodex()
+    client = codex._client._sync
+    subscription = client._subscribe_turn_notifications("turn-1")
+    handle = AsyncTurnHandle(codex, "thread-1", "turn-1", _subscription=subscription)
+
+    async def fail_initialization():
+        raise RuntimeError("initialization failed")
+
+    monkeypatch.setattr(codex, "_ensure_initialized", fail_initialization)
+
+    async def scenario():
+        with pytest.raises(RuntimeError, match="initialization failed"):
+            await handle.stream().__anext__()
+
+    asyncio.run(scenario())
+    assert client._router._turn_states == {}
+
+
 def test_pending_join_starts_at_request_while_original_handle_finishes():
     client = CodexClient()
     original = TurnHandle(client, "thread-1", "turn-1")

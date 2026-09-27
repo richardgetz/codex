@@ -64,7 +64,9 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
                 total_tokens: 123,
                 ..Default::default()
             },
-            Some(32_000),
+            /*service_tier*/ None,
+            /*model_context_window*/ Some(32_000),
+            /*model*/ None,
         );
     }
     let expected = session.clone_history().await;

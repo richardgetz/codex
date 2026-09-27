@@ -589,6 +589,7 @@ impl App {
         session.set_output_muted(true);
         let params = ThreadRealtimeStartParams {
             thread_id: thread_id.to_string(),
+            backend_reasoning_status: false,
             client_managed_handoffs: Some(true),
             delegation_ack_filler: None,
             flush_transcript_tail_on_session_end: Some(false),

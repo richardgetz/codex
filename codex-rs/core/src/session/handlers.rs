@@ -1,3 +1,4 @@
+use super::Submission;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
@@ -7,7 +8,6 @@ use crate::session::lead_idle::lead_progress_communication;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::AgentPath;
-use codex_protocol::protocol::Submission;
 use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
@@ -1208,8 +1208,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .remove::<NodeReplReviewEvidence>();
     sess.services
         .agent_control
-        .rollout_budget()
-        .rearm_reminder(sess.thread_id());
+        .rearm_budget_reminder(sess.thread_id());
     sess.recompute_token_usage(turn_context.as_ref()).await;
 
     sess.persist_rollout_items(&[RolloutItem::EventMsg(rollback_msg.clone())])
@@ -1928,6 +1927,11 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(());
                     false
                 }
+                Op::InterruptIfNoPendingInput { turn_id, reply } => {
+                    sess.interrupt_turn_if_no_pending_input(&turn_id, reply)
+                        .await;
+                    false
+                }
                 Op::CleanBackgroundTerminals => {
                     clean_background_terminals(&sess).await;
                     false
@@ -2214,6 +2218,7 @@ pub(super) async fn submission_loop(
         if manager_completion_delivery_ack {
             sess.acknowledge_manager_completion_delivery(&sub.id).await;
         }
+        drop(sub.residency_guard);
         if should_exit {
             shutdown_received = true;
             break;
