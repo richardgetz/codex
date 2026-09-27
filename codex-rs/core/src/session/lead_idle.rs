@@ -185,9 +185,16 @@ impl Session {
 
     /// Cancels any outstanding Lead oversight deadline. Explicit user input, actionable worker
     /// mail, interruption, and team disablement all invalidate the parked generation.
-    pub(crate) async fn cancel_lead_oversight(&self) {
-        self.lead_idle_controller.cancel().await;
-        self.input_queue.clear_lead_oversight_mailbox().await;
+    #[track_caller]
+    pub(crate) fn cancel_lead_oversight(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        let caller = std::panic::Location::caller();
+        async move {
+            tracing::debug!(caller = %caller, "canceled Lead oversight deadline");
+            self.lead_idle_controller.cancel().await;
+            self.input_queue.clear_lead_oversight_mailbox().await;
+        }
     }
 
     /// Arms the Lead oversight interval when direct Workers remain active. Ordinary progress does
