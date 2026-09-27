@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/team-wait-deadline-result-diagnostic"
+  change_type: "test"
+  scope: "codex-core Team oversight deadline integration"
+  summary: "Verify the second policy-updated wait remains pending until oversight and report its result on timeout."
+  decision: "During the pre-deadline quiet window, assert no output for the second wait call has reached a model request. If the deadline warning is missing, report the observed second-wait result so an early review return can be distinguished from a timer that did not fire."
+  constraints:
+    - "Preserve the configured one-minute oversight interval and the same-turn policy switch."
+    - "Do not change production scheduling."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
