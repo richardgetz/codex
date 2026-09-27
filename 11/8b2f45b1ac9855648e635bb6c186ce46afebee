@@ -1,0 +1,19 @@
+intent:
+  id: intent/2026-09-26/stable-refresh-environment-fixtures#118b2f45b1
+  change_type: test
+  scope: codex-core stable refresh
+  summary: Correct the current snapshot wrapper access and expected profile root type in core tests.
+  decision: Treat TurnContext.initial_environments as the TurnEnvironmentSnapshot and compare profile roots through their ProfileWorkspaceRoot representation.
+  constraints:
+    - Keep rollout reconstruction, world-state, process-manager, and profile-root assertions aligned with current type ownership.
+    - Do not change runtime environment selection or sandbox behavior.
+    - Validate with the focused codex-core library test.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/session/rollout_reconstruction_tests.rs
+    - codex-rs/core/src/session/tests.rs
+    - codex-rs/core/src/unified_exec/process_manager_tests.rs
+  requested_by: stable refresh Rust validation assignment
+  recorded_by:
+    agent: Codex
+    model: gpt-6
