@@ -74,6 +74,7 @@ EXPECTED_TYPES_EXPORTS = [
     "GetAccountResponse",
     "InitializeResponse",
     "JsonObject",
+    "MemoryAccessPolicy",
     "ModelListResponse",
     "Notification",
     "Personality",
@@ -102,6 +103,8 @@ EXPECTED_TYPES_EXPORTS = [
     "TurnInterruptResponse",
     "TurnStatus",
     "TurnSteerResponse",
+    "UserPreferencesMemoryBucket",
+    "UserPreferencesMemoryBucketPolicy",
 ]
 
 
