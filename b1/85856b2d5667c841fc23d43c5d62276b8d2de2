@@ -1,5 +1,5 @@
 intent:
-  id: "intent/2026-09-27/manager-action-wake-timeout"
+  id: "intent/2026-09-27/manager-action-wake-timeout#b185856b2d"
   change_type: "test"
   scope: "codex-core Team ManagerOnly integration fixture"
   summary: "Give the delayed action-wake fixture enough time to capture its Lead request."
