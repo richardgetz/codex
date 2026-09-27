@@ -540,6 +540,9 @@ const MANAGER_BATCH_SECOND_GATE_CALL_ID: &str = "manager-batch-second-gate";
 const MANAGER_BATCH_ROOT_WAIT_CALL_ID: &str = "manager-batch-root-wait";
 const MANAGER_BATCH_ACTION_CALL_ID: &str = "manager-batch-action";
 const MANAGER_BATCH_GATE_ID: &str = "manager-batch-gate";
+const MANAGER_BATCH_ACTION_RELEASE_GATE_ID: &str = "manager-batch-action-release-gate";
+const MANAGER_BATCH_ACTION_RELEASE_CALL_ID: &str = "manager-batch-action-release";
+const MANAGER_BATCH_ACTION_RELEASE_PROMPT: &str = "release the second manager batch worker";
 const MANAGER_BATCH_ACTION_MESSAGE: &str = "second worker asks for immediate review";
 const MANAGER_BATCH_FIRST_RESULT: &str = "first manager batch result marker";
 const MANAGER_BATCH_SECOND_RESULT: &str = "second manager batch result marker";
@@ -568,8 +571,15 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     }))?;
     let second_gate_args = serde_json::to_string(&json!({
         "barrier": {
-            "id": format!("{MANAGER_BATCH_GATE_ID}-second"),
-            "participants": 1,
+            "id": MANAGER_BATCH_ACTION_RELEASE_GATE_ID,
+            "participants": 2,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let action_release_gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": MANAGER_BATCH_ACTION_RELEASE_GATE_ID,
+            "participants": 2,
             "timeout_ms": 10_000,
         },
     }))?;
@@ -765,6 +775,39 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
+    let helper_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_ACTION_RELEASE_PROMPT)
+                && request_has_model(request, INITIAL_MODEL)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-helper-release-gate"),
+            ev_function_call(
+                MANAGER_BATCH_ACTION_RELEASE_CALL_ID,
+                "test_sync_tool",
+                &action_release_gate_args,
+            ),
+            ev_completed("manager-batch-helper-release-gate"),
+        ]),
+    )
+    .await;
+    let helper_after_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ACTION_RELEASE_CALL_ID,
+                )
+        },
+        sse(vec![
+            ev_response_created("manager-batch-helper-released"),
+            ev_assistant_message("manager-batch-helper-message", "Worker release gate opened"),
+            ev_completed("manager-batch-helper-released"),
+        ]),
+    )
+    .await;
 
     let test = test_codex()
         .with_model_info_override(LEAD_MODEL, |model_info| {
@@ -794,6 +837,15 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                 .expect("team profiles")
                 .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
         })
+        .build_with_auto_env(&server)
+        .await?;
+    let helper = test_codex()
+        .with_model_info_override(INITIAL_MODEL, |model_info| {
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
         .build_with_auto_env(&server)
         .await?;
 
@@ -850,6 +902,39 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
+    .await;
+
+    // Worker 2 waits on a process-shared test barrier after sending its action. Release it only
+    // after the Lead's action wake has been observed, so its completion cannot race into the same
+    // request and make the two wake paths indistinguishable.
+    helper
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: MANAGER_BATCH_ACTION_RELEASE_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &helper_gate,
+        |request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_ACTION_RELEASE_PROMPT)
+        },
+        "manager batch Worker release gate",
+    )
+    .await;
+    wait_for_event(&helper.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_captured_request(
+        &helper_after_gate,
+        |request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ACTION_RELEASE_CALL_ID)
+        },
+        "manager batch helper completion",
+    )
     .await;
 
     wait_for_captured_request(
