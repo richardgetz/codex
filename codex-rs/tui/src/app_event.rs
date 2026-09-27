@@ -134,13 +134,6 @@ pub(crate) struct ManagedWorktreeCreated {
     >,
 }
 
-/// Confirmed server lifecycle operations available from the agents dashboard.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AgentsOverviewAction {
-    Archive,
-    Delete,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadGoalSetMode {
     ConfirmIfExists,

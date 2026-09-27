@@ -1425,6 +1425,23 @@ impl App {
                 let is_continuous_policy_update =
                     matches!(&op, AppCommand::SetScratchpadContinuousPolicy { .. });
                 let is_activity_continue = matches!(&op, AppCommand::ContinueUsage);
+                let is_realtime_stop = matches!(&op, AppCommand::RealtimeConversationStop { .. });
+                let realtime_stop_thread_id = match &op {
+                    AppCommand::RealtimeConversationStop { thread_id } => Some(*thread_id),
+                    _ => None,
+                };
+                let realtime_speech_delivery_id = match &op {
+                    AppCommand::RealtimeConversationSpeech { delivery_id, .. } => {
+                        Some(*delivery_id)
+                    }
+                    _ => None,
+                };
+                let is_realtime_conversation = matches!(
+                    &op,
+                    AppCommand::RealtimeConversationStart { .. }
+                        | AppCommand::RealtimeConversationStop { .. }
+                        | AppCommand::RealtimeConversationSpeech { .. }
+                );
                 if is_user_turn {
                     let screen_size = tui.terminal.last_known_screen_size;
                     self.handle_draw_pre_render(tui, screen_size)?;
