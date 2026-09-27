@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-27/manager-action-wake-timeout"
+  change_type: "test"
+  scope: "codex-core Team ManagerOnly integration fixture"
+  summary: "Give the delayed action-wake fixture enough time to capture its Lead request."
+  decision: "Set only the action-only captured-request wait to seven seconds so it no longer expires at the exact two-second mock response delay."
+  constraints:
+    - "Keep the Worker response delay and synchronization barrier unchanged."
+    - "Do not change runtime behavior."
+    - "Leave Rust validation to the integration build owner."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
