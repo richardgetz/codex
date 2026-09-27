@@ -917,7 +917,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     wait_for_captured_request(
         &helper_gate,
         |request| {
-            request_has_model(request, INITIAL_MODEL)
+            response_request_has_model(request, INITIAL_MODEL)
                 && request.body_contains_text(MANAGER_BATCH_ACTION_RELEASE_PROMPT)
         },
         "manager batch Worker release gate",
@@ -930,8 +930,11 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     wait_for_captured_request(
         &helper_after_gate,
         |request| {
-            request_has_model(request, INITIAL_MODEL)
-                && request_has_function_call_output(request, MANAGER_BATCH_ACTION_RELEASE_CALL_ID)
+            response_request_has_model(request, INITIAL_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ACTION_RELEASE_CALL_ID,
+                )
         },
         "manager batch helper completion",
     )
