@@ -1,0 +1,19 @@
+intent:
+  id: intent/2026-09-26/stable-refresh-core-test-api#f9bbff3b1d
+  change_type: test
+  scope: codex-core
+  summary: Update core test fixtures and selected suite callers to compile against the merged v0.157.1 APIs while keeping recorder and usage-attribution behavior explicit.
+  decision: Adapt fixtures to current signatures; preserve optional recorder semantics, terminal attribution fields, and async turn-settings submission behavior.
+  constraints:
+    - No production behavior or public API changes.
+    - Keep validation scoped to the affected core targets.
+  intent_priority: may
+  code_locations:
+    - codex-rs/core/src/agent/control_tests.rs
+    - codex-rs/core/src/session/tests.rs
+    - codex-rs/core/src/thread_manager_tests.rs
+    - codex-rs/core/tests/suite/step_settings.rs
+  requested_by: "@rickgetz"
+  recorded_by:
+    agent: Codex
+    model: gpt-6
