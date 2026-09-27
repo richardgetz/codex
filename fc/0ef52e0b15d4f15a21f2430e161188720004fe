@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-27/team-wait-fixture-captured-activity"
+  change_type: "test"
+  scope: "codex-core Team wait integration fixtures"
+  summary: "Make the action and oversight tests match the actual captured activity."
+  decision: "Allow an immediate Worker action wake to carry the already-buffered first completion while requiring the second completion to remain absent; require both successful completions in the later batch. Match the oversight response only when the deadline notice is present, and test that this notice is absent while the second wait is parked."
+  constraints:
+    - "Preserve the existing oversight interval and same-turn policy update sequence."
+    - "Do not change production scheduling or tool behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+    - "codex-rs/core/tests/suite/team_idle.rs::team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
