@@ -1,0 +1,16 @@
+intent:
+  id: "intent/2026-09-27/team-response-capture-accessors"
+  change_type: "test"
+  scope: "codex-core Team wait integration"
+  summary: "Use the structured captured-request helpers in the parked-wait assertion."
+  decision: "Match the premature-status route against captured ResponsesRequest values using their model, function-output, and text accessors."
+  constraints:
+    - "Keep the assertion aligned with the mock route predicate."
+    - "Do not change production behavior."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex"
+    model: "gpt-6"
