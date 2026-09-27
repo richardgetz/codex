@@ -1,0 +1,18 @@
+intent:
+  id: "intent/2026-09-27/align-team-wait-captures#fd57840671"
+  change_type: "test"
+  scope: "codex-core Team wait integration fixtures"
+  summary: "Make test request predicates match the exact routed action and policy-wake responses."
+  decision: "Add the route's negative completion-marker conditions to action capture and require the policy-change wait output before expecting the second wait call; use the helper's captured post-tool request as the completion proof."
+  constraints:
+    - "Test-only fixture changes; no runtime behavior changes."
+    - "Keep action and deadline behavior assertions intact."
+  intent_priority: "should"
+  code_locations:
+    - "codex-rs/core/tests/suite/team_idle.rs::manager_only_batches_successful_worker_completions_and_wakes_for_action"
+    - "codex-rs/core/tests/suite/team_idle.rs::team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline"
+    - "codex-rs/core/tests/suite/team_manager_only.rs::live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn"
+  requested_by: "Rick"
+  recorded_by:
+    agent: "Codex Worker"
+    model: "gpt-6"
