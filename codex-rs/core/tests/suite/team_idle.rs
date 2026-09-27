@@ -1504,27 +1504,37 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
 
     let mut second_wait_started = false;
     let mut policy_update_applied = false;
+    let mut seen_settings_event_ids = Vec::new();
+    let mut seen_wait_call_ids = Vec::new();
     while !(second_wait_started && policy_update_applied) {
         let event = tokio::time::timeout(Duration::from_secs(10), test.codex.next_event())
             .await
-            .expect("timed out waiting for policy and wait transitions")
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out waiting for policy and wait transitions: expected settings event id {policy_update_id:?}, saw {seen_settings_event_ids:?}; expected wait call {DEADLINE_POLICY_WAIT_CALL_ID:?}, saw {seen_wait_call_ids:?}"
+                )
+            })
             .expect("event stream should remain open");
         let event_id = event.id;
         let event_msg = event.msg;
-        if event_id == policy_update_id {
-            match &event_msg {
-                EventMsg::ThreadSettingsApplied(_) => policy_update_applied = true,
-                EventMsg::Error(error) => panic!("policy update failed: {}", error.message),
-                _ => {}
+        if matches!(&event_msg, EventMsg::ThreadSettingsApplied(_)) {
+            seen_settings_event_ids.push(format!("{event_id:?}"));
+            if event_id == policy_update_id {
+                policy_update_applied = true;
             }
         }
-        match event_msg {
-            EventMsg::ItemStarted(item)
-                if matches!(&item.item, TurnItem::CollabAgentToolCall(call) if call.id == DEADLINE_POLICY_WAIT_CALL_ID) =>
-            {
+        if event_id == policy_update_id {
+            if let EventMsg::Error(error) = &event_msg {
+                panic!("policy update failed: {}", error.message);
+            }
+        }
+        if let EventMsg::ItemStarted(item) = &event_msg
+            && let TurnItem::CollabAgentToolCall(call) = &item.item
+        {
+            seen_wait_call_ids.push(call.id.clone());
+            if call.id == DEADLINE_POLICY_WAIT_CALL_ID {
                 second_wait_started = true;
             }
-            _ => {}
         }
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
