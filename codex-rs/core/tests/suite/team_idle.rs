@@ -697,7 +697,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
             }
             root_wait
                 && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
-                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         },
         sse(vec![
@@ -933,10 +933,10 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                     MANAGER_BATCH_ROOT_WAIT_CALL_ID,
                 )
                 && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
-                && !request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
+                && request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
                 && !request.body_contains_text(MANAGER_BATCH_SECOND_RESULT)
         },
-        "immediate manager-only action wake",
+        "immediate manager-only action wake with the buffered first result",
         Duration::from_secs(/*secs*/ 7),
         &action_route_diagnostics,
     )
@@ -947,8 +947,8 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     .await;
 
     // Worker 2 waits on a process-shared test barrier after sending its action. Release it only
-    // after the Lead's action wake has been observed, so its completion cannot race into the same
-    // request and make the two wake paths indistinguishable.
+    // after the Lead's action wake has been observed. The already-buffered first result may ride
+    // with that immediate action wake; Worker 2's completion should arrive in a later batch.
     helper
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -1011,7 +1011,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         .filter(|request| {
             request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
                 && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
-                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         })
         .count();
@@ -1024,7 +1024,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         .iter()
         .filter(|request| {
             body_contains(request, MANAGER_BATCH_FIRST_RESULT)
-                || body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+                && body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1411,6 +1411,7 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
+                && body_contains(request, "oversight deadline has elapsed")
         },
         sse(vec![
             ev_response_created("team-idle-deadline-root-3"),
@@ -1601,7 +1602,10 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(
-        root_after_deadline.requests().is_empty(),
+        root_after_deadline
+            .requests()
+            .iter()
+            .all(|request| !request.body_contains_text("oversight deadline has elapsed")),
         "the next wait must park after its request observes the committed policy"
     );
 
