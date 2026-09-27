@@ -100,8 +100,6 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::openai_models::ModelInstructionsVariables;
-use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -6883,7 +6881,7 @@ async fn session_configuration_apply_rebinds_symbolic_profile_to_updated_workspa
     assert_eq!(
         updated.permission_profile_state.profile_workspace_roots(),
         &[codex_protocol::models::ProfileWorkspaceRoot::from(
-            profile_root.clone(),
+            profile_root,
         )]
     );
 }
