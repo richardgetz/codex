@@ -1,0 +1,21 @@
+intent:
+  id: team-live-policy-admission-2026-09-27
+  change_type: fix
+  scope: Team Lead live policy admission and passive-poll classification
+  summary: Recheck the sampled Team Lead policy at final tool admission so stale calls are rejected and previously admitted work continues. Classify only recognized passive status checks, using per-sample observations.
+  decision: Serialize policy commits with tool admission, return a normal reassessment response for stale calls, and record passive-poll observations only after admission.
+  constraints:
+    - Keep prompt_guided as the default policy.
+    - Preserve tool calls and commands admitted before a policy change.
+    - Do not restrict the Lead's general tool access.
+    - Leave integrated Rust validation to the designated build owner.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/session/thread_settings.rs
+    - codex-rs/core/src/tools/parallel.rs
+    - codex-rs/core/src/tools/lead_passive_poll.rs
+    - codex-rs/core/tests/suite/team_manager_only.rs
+  requested_by: Rick
+  recorded_by: Codex Worker
+  agent: codex
+  model: gpt-6
