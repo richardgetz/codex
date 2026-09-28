@@ -1,0 +1,18 @@
+intent:
+  id: team-passive-status-classifier-hardening-2026-09-28
+  change_type: fix
+  scope: Team passive-poll status classification
+  summary: Recognize only the two observed read-only GitHub run status commands, reject shell substitutions and other commands, and track only clock.sleep durations accepted by SleepHandler.
+  decision: Require exact gh run view command layouts, a shell-quoted safe jq filter or exact job-log pipeline, numeric identifiers, and a 30-second-to-12-hour sleep range.
+  constraints:
+    - Keep unrecognized commands substantive.
+    - Do not expand Lead tool restrictions.
+    - Leave Rust validation to the integration owner.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/tools/lead_passive_poll.rs
+    - codex-rs/core/src/tools/lead_passive_poll_tests.rs
+  requested_by: Rick
+  recorded_by: Codex Worker
+  agent: codex
+  model: gpt-6
