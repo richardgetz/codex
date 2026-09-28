@@ -2,6 +2,13 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 
+// Keep aligned with SleepHandler's accepted maximum in handlers/sleep.rs.
+const MAX_TRACKED_SLEEP_DURATION_MS: u64 = 12 * 60 * 60 * 1000;
+
+#[cfg(test)]
+#[path = "lead_passive_poll_tests.rs"]
+mod tests;
+
 pub(crate) fn observe_lead_passive_poll_dispatch(
     turn_context: &TurnContext,
     call: &ToolCall,
@@ -80,26 +87,83 @@ fn long_clock_sleep_duration_ms(call: &ToolCall) -> Option<u64> {
     };
     let value = serde_json::from_str::<serde_json::Value>(arguments).ok()?;
     let duration_ms = value.get("duration_ms")?.as_u64()?;
-    (duration_ms >= 30_000).then_some(duration_ms)
+    (30_000..=MAX_TRACKED_SLEEP_DURATION_MS)
+        .contains(&duration_ms)
+        .then_some(duration_ms)
 }
 
 fn is_read_only_gh_run_view(command: &str) -> bool {
+    if command.chars().any(char::is_control) {
+        return false;
+    }
     let Some(tokens) = shlex::split(command) else {
         return false;
     };
-    if tokens.len() < 4 || tokens[0] != "gh" || tokens[1] != "run" || tokens[2] != "view" {
+    match tokens.as_slice() {
+        [gh, run, view, run_id, json, jobs, jq, filter]
+            if gh == "gh"
+                && run == "run"
+                && view == "view"
+                && is_numeric_id(run_id)
+                && json == "--json"
+                && jobs == "jobs"
+                && jq == "--jq"
+                && is_safe_jq_filter(filter)
+                && is_quoted_jq_filter_command(command, run_id, filter) =>
+        {
+            true
+        }
+        [gh, run, view, job, job_id, log, pipe, tail, count]
+            if gh == "gh"
+                && run == "run"
+                && view == "view"
+                && job == "--job"
+                && is_numeric_id(job_id)
+                && log == "--log"
+                && pipe == "|"
+                && tail == "tail"
+                && count == "-30"
+                && command == format!("gh run view --job {job_id} --log | tail -30").as_str() =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_numeric_id(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn is_safe_jq_filter(filter: &str) -> bool {
+    !filter.is_empty()
+        && filter.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || character == ' '
+                || matches!(
+                    character,
+                    '_' | '.' | '[' | ']' | '{' | '}' | '(' | ')' | '?' | ':' | ',' | '|'
+                        | '=' | '+' | '-' | '*' | '/' | '"' | '\''
+                )
+        })
+}
+
+fn is_quoted_jq_filter_command(command: &str, run_id: &str, filter: &str) -> bool {
+    let prefix = format!("gh run view {run_id} --json jobs --jq ");
+    let Some(quoted_filter) = command.strip_prefix(&prefix) else {
+        return false;
+    };
+    let Some(quote) = quoted_filter.as_bytes().first().copied() else {
+        return false;
+    };
+    if !matches!(quote, b'\'' | b'"') || quoted_filter.as_bytes().last() != Some(&quote) {
         return false;
     }
-    let pipeline_index = tokens.iter().position(|token| token == "|");
-    if let Some(index) = pipeline_index
-        && (tokens.len() - index != 3
-            || tokens[index + 1] != "tail"
-            || tokens[index + 2] != "-30")
-    {
+    let Some(raw_filter) = quoted_filter.get(1..quoted_filter.len() - 1) else {
         return false;
-    }
-    let command_tokens = pipeline_index.map_or(tokens.as_slice(), |index| &tokens[..index]);
-    !command_tokens
-        .iter()
-        .any(|token| matches!(token.as_str(), ";" | "&&" | "||" | ">" | "<" | "--web"))
+    };
+    raw_filter == filter
+        && !raw_filter
+            .chars()
+            .any(|character| character == '\\' || character == quote as char)
 }
