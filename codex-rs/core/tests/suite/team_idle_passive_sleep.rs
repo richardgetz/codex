@@ -1,5 +1,5 @@
 use super::*;
-use codex_protocol::items::ExtensionItem;
+use codex_extension_items::ExtensionItem;
 
 const PASSIVE_ROOT_PROMPT: &str = "check worker status without polling while it runs";
 const PASSIVE_CHILD_TASK: &str = "stay active during the lead status check";
@@ -141,7 +141,7 @@ async fn run_passive_sleep_flow(policy: codex_config::TeamLeadWorkPolicy) -> Res
     )
     .await;
 
-    let builder = test_codex()
+    let mut builder = test_codex()
         .with_model_info_override(LEAD_MODEL, |model_info| {
             model_info.multi_agent_version = Some(MultiAgentVersion::V2);
         })
@@ -152,7 +152,7 @@ async fn run_passive_sleep_flow(policy: codex_config::TeamLeadWorkPolicy) -> Res
                 .push("test_sync_tool".to_string());
         })
         .with_model(INITIAL_MODEL)
-        .with_config(|config| {
+        .with_config(move |config| {
             config
                 .features
                 .enable(Feature::Collab)
@@ -202,7 +202,7 @@ async fn run_passive_sleep_flow(policy: codex_config::TeamLeadWorkPolicy) -> Res
     let TurnItem::Extension(ExtensionItem::Sleep(first_sleep)) = started.item else {
         unreachable!("event predicate only accepts sleep items");
     };
-    assert_eq!(first_sleep.duration_ms, 55_000);
+    pretty_assertions::assert_eq!(first_sleep.duration_ms, 55_000);
 
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(55)).await;

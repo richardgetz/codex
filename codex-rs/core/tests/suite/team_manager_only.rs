@@ -829,7 +829,7 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         "next model request after applying the policy update",
     )
     .await;
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         next_step
             .function_call_output_text(FIRST_TOOL_CALL_ID)
             .as_deref(),
@@ -1034,7 +1034,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         "manager-only call admitted from a current sample",
     )
     .await;
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         after_manager_only_fresh_call
             .function_call_output_text(MANAGER_ONLY_FRESH_CALL_ID)
             .as_deref(),
@@ -1091,7 +1091,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         "latest prompt-guided call dispatch",
     )
     .await;
-    assert_eq!(
+    pretty_assertions::assert_eq!(
         after_fresh_call
             .function_call_output_text(PROMPT_GUIDED_FRESH_CALL_ID)
             .as_deref(),
