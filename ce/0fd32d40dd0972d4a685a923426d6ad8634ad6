@@ -1,0 +1,21 @@
+intent:
+  id: team-passive-lead-sleep-parking-2026-09-28
+  change_type: fix
+  scope: Team Lead passive sleep polling
+  summary: Park repeated long Lead sleeps after a later-sample Worker status probe on actionable activity or the configured oversight deadline.
+  decision: Keep ordinary Lead tools and first local sleeps available; detect the specific passive status-poll sequence in Core and use bounded event/deadline parking.
+  constraints:
+    - Preserve prompt_guided as the default and support both Lead work policies.
+    - Preserve the configured oversight interval and existing Worker, tool, and external work.
+    - Only recognized status tools and allowlisted gh run view reads count as passive probes.
+    - Unknown shell commands remain substantive; do not claim arbitrary command detection.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/session/lead_passive_poll.rs
+    - codex-rs/core/src/tools/handlers/sleep.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/passive_wait.rs
+    - codex-rs/core/tests/suite/team_idle_passive_sleep.rs
+  requested_by: Rick
+  recorded_by: Codex Worker
+  agent: codex
+  model: gpt-6
