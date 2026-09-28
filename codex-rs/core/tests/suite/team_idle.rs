@@ -1617,11 +1617,10 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         {
             observed_deadline_warnings.push(warning.message.clone());
         }
-        if event_id == policy_update_id {
-            if let EventMsg::Error(error) = &event_msg {
+        if event_id == policy_update_id
+            && let EventMsg::Error(error) = &event_msg {
                 panic!("policy update failed: {}", error.message);
             }
-        }
         if let EventMsg::ItemStarted(item) = &event_msg
             && let TurnItem::CollabAgentToolCall(call) = &item.item
         {

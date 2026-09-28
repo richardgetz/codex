@@ -64,8 +64,8 @@ fn lead_passive_poll_observation(
     if is_list_agents || is_worker_capacity {
         return LeadPassivePollObservation::StatusProbe;
     }
-    if call.tool_name.is_default_namespace() && call.tool_name.name == "exec_command" {
-        if let ToolPayload::Function { arguments } = &call.payload
+    if call.tool_name.is_default_namespace() && call.tool_name.name == "exec_command"
+        && let ToolPayload::Function { arguments } = &call.payload
             && serde_json::from_str::<serde_json::Value>(arguments)
                 .ok()
                 .and_then(|value| value.get("cmd")?.as_str().map(str::to_string))
@@ -74,7 +74,6 @@ fn lead_passive_poll_observation(
         {
             return LeadPassivePollObservation::StatusProbe;
         }
-    }
     LeadPassivePollObservation::SubstantiveWork
 }
 
