@@ -20,6 +20,11 @@ release or merge rules.
 
 ## Unreleased
 
+- `app-server daemon apply --codex-bin PATH` lets installers apply selected launchers safely: unconfigured
+  daemons skip, stopped daemons defer, and running daemons use checkpoint/recovery. Startup retries
+  pending work with RPC causes and versions; legacy PID records use an app-server version probe, and
+  startup fails closed if it cannot compare a running launcher. Unresolved receipts pin their launcher.
+
 - The checked-in aggregate Python v2 protocol module may exceed the blob-size
   threshold after upstream schema refreshes. The exact generated path is
   allowlisted; other changed blobs remain subject to the existing limit.
@@ -1141,8 +1146,10 @@ release or merge rules.
   freshness policy at one read timestamp, freezes overdue rows with
   `isStale`, leaves terminal ranges frozen, projects nested summaries using the
   same remaining-range semantics, and preserves portable cwd wire values.
-- Verify daemon apply/recover remain restricted to explicitly configured launchers;
-  standalone updater lifecycle and automatic updates remain unchanged.
+- Verify target-aware apply skips unconfigured daemons, defers stopped targets, and safely hands off
+  running daemons; conflicts preserve settings/receipts. Startup retries pending applies and mismatches,
+  uses the server version for a legacy PID record without launch metadata, and fails closed when it
+  cannot establish a version comparison.
 - Verify remote TUI reload forwarding preserves `slashCommand/execute` args and
   request IDs, suppresses duplicate mutating requests while one handoff is
   pending, and queries `/reload status` after reconnect before clearing the

@@ -234,6 +234,7 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
         ServerNotification::ThreadRealtimeTranscriptDone(
             codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
                 thread_id: thread_id.to_string(),
+                submission_id: String::new(),
                 role: "assistant".into(),
                 text: "[ANALYSIS] is the marker you asked about.".into(),
             },

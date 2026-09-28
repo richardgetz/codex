@@ -1,8 +1,11 @@
 use std::future::pending;
 use std::path::PathBuf;
 
+use crate::Daemon;
+use crate::apply_receipt::ApplyStatus;
 use crate::settings::DaemonSettings;
 use anyhow::anyhow;
+use pretty_assertions::assert_eq;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
@@ -22,6 +25,252 @@ fn apply_requires_an_explicit_launcher() {
 
     let error = ensure_apply_launcher(&settings).expect_err("standalone apply must be rejected");
     assert!(error.to_string().contains("bootstrap --codex-bin PATH"));
+}
+
+fn test_daemon(home: &std::path::Path) -> Daemon {
+    Daemon {
+        socket_path: home.join("app-server-control.sock"),
+        pid_file: home.join("daemon.pid"),
+        update_pid_file: home.join("daemon-updater.pid"),
+        operation_lock_file: home.join("daemon.lock"),
+        settings_file: home.join("settings.json"),
+        apply_receipt_file: home.join("apply-receipt.json"),
+        managed_codex_bin: home.join("standalone-codex"),
+    }
+}
+
+#[test]
+fn launcher_update_uses_server_version_for_legacy_running_pid_records() {
+    let managed_codex_bin = PathBuf::from("/codex/selected");
+    assert_eq!(
+        super::launcher_update_required(
+            &managed_codex_bin,
+            /*managed_backend_is_running*/ true,
+            /*running_managed_codex_version*/ None,
+            Some("0.156.1-rick.2".to_string()),
+            Some("0.157.1-rick.2".to_string()),
+        )
+        .expect("the running app-server version identifies the old launcher"),
+        true,
+    );
+    assert_eq!(
+        super::launcher_update_required(
+            &managed_codex_bin,
+            /*managed_backend_is_running*/ true,
+            /*running_managed_codex_version*/ None,
+            Some("0.157.1-rick.2".to_string()),
+            Some("0.157.1-rick.2".to_string()),
+        )
+        .expect("matching versions need no apply"),
+        false,
+    );
+    assert_eq!(
+        super::launcher_update_required(
+            &managed_codex_bin,
+            /*managed_backend_is_running*/ false,
+            /*running_managed_codex_version*/ None,
+            /*running_app_server_version*/ None,
+            /*managed_codex_version*/ None,
+        )
+        .expect("a stopped daemon needs no startup reconciliation"),
+        false,
+    );
+    let error = super::launcher_update_required(
+        &managed_codex_bin,
+        /*managed_backend_is_running*/ true,
+        /*running_managed_codex_version*/ None,
+        /*running_app_server_version*/ None,
+        Some("0.157.1-rick.2".to_string()),
+    )
+    .expect_err("an unverified running version must fail closed");
+    assert!(error.to_string().contains("/codex/selected"));
+}
+
+#[tokio::test]
+async fn target_apply_skips_when_no_daemon_is_configured() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let daemon = test_daemon(directory.path());
+    let output = daemon
+        .apply_to_target(directory.path().join("new-codex"))
+        .await
+        .expect("unconfigured daemon is a clean skip");
+
+    assert_eq!(output.status, ApplyStatus::NotConfigured);
+    assert_eq!(output.managed_codex_path, None);
+    assert!(
+        daemon
+            .reconcile_launcher_update()
+            .await
+            .expect("default standalone selection needs no local reconciliation")
+            .is_none()
+    );
+    assert!(!daemon.settings_file.exists());
+    assert!(!daemon.pid_file.exists());
+    let pinned = directory.path().join("pinned-codex");
+    let requested = directory.path().join("requested-codex");
+    tokio::fs::write(&pinned, "pinned")
+        .await
+        .expect("pinned launcher");
+    tokio::fs::write(&requested, "requested")
+        .await
+        .expect("requested launcher");
+    let mut attempt = test_attempt();
+    attempt.managed_codex_path = pinned.clone();
+    attempt.phase = ApplyPhase::Recovering;
+    attempt
+        .save(&daemon.apply_receipt_file)
+        .await
+        .expect("save unresolved receipt");
+
+    let output = daemon
+        .apply_to_target(requested.clone())
+        .await
+        .expect("unresolved receipt should be reported");
+
+    assert_eq!(output.status, ApplyStatus::NeedsAttention);
+    assert!(output.error.as_deref().is_some_and(|error| {
+        error.contains(&pinned.display().to_string())
+            && error.contains(&requested.display().to_string())
+    }));
+    assert!(!daemon.settings_file.exists());
+    assert_eq!(
+        ApplyAttemptReceipt::load(&daemon.apply_receipt_file)
+            .await
+            .expect("load receipt")
+            .expect("receipt"),
+        attempt
+    );
+}
+
+#[tokio::test]
+async fn target_apply_persists_selected_launcher_without_starting_stopped_daemon() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let daemon = test_daemon(directory.path());
+    let previous = directory.path().join("previous-codex");
+    let target = directory.path().join("updated-codex");
+    tokio::fs::write(&previous, "previous")
+        .await
+        .expect("previous launcher");
+    tokio::fs::write(&target, "updated")
+        .await
+        .expect("selected launcher");
+    tokio::fs::write(
+        &daemon.settings_file,
+        serde_json::json!({
+            "remoteControlEnabled": true,
+            "shutdownGraceSeconds": 45,
+            "updater": {"autoUpdateEnabled": false, "updateIntervalMinutes": 17},
+            "managedCodexPath": previous,
+            "futureSetting": "preserved"
+        })
+        .to_string(),
+    )
+    .await
+    .expect("configured settings");
+
+    let output = daemon
+        .apply_to_target(target.clone())
+        .await
+        .expect("stopped daemon should defer target activation");
+
+    assert_eq!(output.status, ApplyStatus::Deferred);
+    assert_eq!(output.managed_codex_path, Some(target.clone()));
+    let wire_output = serde_json::to_value(&output).expect("serialize deferred result");
+    assert_eq!(wire_output["status"], "deferred");
+    assert_eq!(wire_output["handoffId"], serde_json::Value::Null);
+    assert_eq!(
+        wire_output["managedCodexPath"],
+        target.to_string_lossy().as_ref()
+    );
+    assert!(!daemon.pid_file.exists());
+    assert!(!daemon.apply_receipt_file.exists());
+    let settings = DaemonSettings::load(&daemon.settings_file)
+        .await
+        .expect("reloaded settings");
+    assert_eq!(
+        settings,
+        DaemonSettings {
+            remote_control_enabled: true,
+            auto_update_enabled: false,
+            update_interval_minutes: 17,
+            shutdown_grace_seconds: 45,
+            managed_codex_path: Some(target),
+            ..DaemonSettings::default()
+        }
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(
+            &tokio::fs::read(&daemon.settings_file)
+                .await
+                .expect("read settings")
+        )
+        .expect("parse settings")["futureSetting"],
+        "preserved"
+    );
+}
+
+#[tokio::test]
+async fn target_apply_keeps_any_unresolved_receipt_when_a_different_target_is_requested() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let daemon = test_daemon(directory.path());
+    let pinned = directory.path().join("pinned-codex");
+    let requested = directory.path().join("requested-codex");
+    tokio::fs::write(&pinned, "pinned")
+        .await
+        .expect("pinned launcher");
+    tokio::fs::write(&requested, "requested")
+        .await
+        .expect("requested launcher");
+    DaemonSettings {
+        managed_codex_path: Some(pinned.clone()),
+        ..DaemonSettings::default()
+    }
+    .save(&daemon.settings_file)
+    .await
+    .expect("save settings");
+    let mut attempt = test_attempt();
+    attempt.managed_codex_path = pinned.clone();
+    attempt.handoff.state = "needsAttention".to_string();
+    attempt.handoff.quarantined = true;
+    attempt.handoff.nodes = vec![serde_json::json!({
+        "threadId": "thread-1",
+        "rootThreadId": "thread-1",
+        "state": "suspended",
+        "wasRunning": true
+    })];
+    attempt.phase = ApplyPhase::NeedsAttention;
+    attempt.stop_started = Some(true);
+    attempt.stop_completed = Some(true);
+    assert!(!attempt.blocks_new_apply());
+    attempt
+        .save(&daemon.apply_receipt_file)
+        .await
+        .expect("save unresolved receipt");
+
+    let output = daemon
+        .apply_to_target(requested.clone())
+        .await
+        .expect("conflicting target should be a reported blocker");
+
+    assert_eq!(output.status, ApplyStatus::NeedsAttention);
+    assert!(output.error.as_deref().is_some_and(|error| {
+        error.contains(&pinned.display().to_string())
+            && error.contains(&requested.display().to_string())
+    }));
+    assert_eq!(
+        DaemonSettings::load(&daemon.settings_file)
+            .await
+            .expect("reload settings")
+            .managed_codex_path,
+        Some(pinned)
+    );
+    assert_eq!(
+        ApplyAttemptReceipt::load(&daemon.apply_receipt_file)
+            .await
+            .expect("load receipt")
+            .expect("receipt"),
+        attempt,
+    );
 }
 
 fn test_attempt() -> ApplyAttemptReceipt {

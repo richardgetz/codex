@@ -107,6 +107,15 @@ pub struct BootstrapOptions {
     pub managed_codex_path: Option<PathBuf>,
 }
 
+/// Options for safely applying an update to a configured local app-server daemon.
+#[derive(Debug, Clone, Default)]
+pub struct ApplyOptions {
+    /// Optional absolute launcher path selected by the package manager after installing Codex.
+    ///
+    /// When omitted, apply uses the launcher's path already stored in daemon settings.
+    pub managed_codex_path: Option<PathBuf>,
+}
+
 /// Passively probes an existing app-server socket and returns its reported
 /// app-server version.
 pub async fn probe_app_server_version(socket_path: &Path) -> Result<String> {
@@ -250,11 +259,23 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
     Box::pin(Daemon::from_environment()?.run(command)).await
 }
 
-pub async fn apply() -> Result<ApplyOutput> {
+pub async fn apply(options: ApplyOptions) -> Result<ApplyOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    Daemon::from_environment()?.apply().await
+    Daemon::from_environment()?.apply(options).await
+}
+
+/// Reconciles a configured launcher update or an interrupted daemon apply during local startup.
+///
+/// Returns `None` when no explicitly configured launcher needs reconciliation.
+pub async fn reconcile_launcher_update() -> Result<Option<ApplyOutput>> {
+    ensure_supported_platform()?;
+    #[cfg(windows)]
+    backend::windows::ensure_not_elevated()?;
+    Daemon::from_environment()?
+        .reconcile_launcher_update()
+        .await
 }
 
 pub async fn recover() -> Result<ApplyOutput> {
@@ -833,7 +854,7 @@ impl Daemon {
 
     async fn bootstrap_locked(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
         let previous_settings = self.load_settings().await?;
-        let mut settings = DaemonSettings {
+        let settings = DaemonSettings {
             remote_control_enabled: options.remote_control_enabled,
             managed_codex_path: options
                 .managed_codex_path
@@ -1562,6 +1583,7 @@ mod tests {
             update_pid_file: state.join(super::LEGACY_UPDATE_PID_FILE_NAME),
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
+            apply_receipt_file: state.join("apply-receipt.json"),
             managed_codex_bin: super::managed_codex_bin(home.path()),
         };
         let lock = daemon.acquire_operation_lock().await.expect("lock");

@@ -126,7 +126,7 @@ impl PidBackend {
             .args(
                 self.command_args_with_managed_flag(use_managed_daemon_flag)
                     .iter()
-                    .map(|arg| arg.as_ref()),
+                    .map(std::convert::AsRef::as_ref),
             )
             .stdin(Stdio::null())
             .stdout(Stdio::null())

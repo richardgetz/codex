@@ -2,14 +2,18 @@
 
 use std::future::Future;
 use std::path::Path;
+use std::path::PathBuf;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 
+use crate::ApplyOptions;
 use crate::Daemon;
 use crate::apply_receipt::ApplyAttemptReceipt;
 use crate::apply_receipt::ApplyOutput;
 use crate::apply_receipt::ApplyPhase;
+use crate::apply_receipt::ApplyStatus;
 use crate::apply_receipt::HandoffReceipt;
 use crate::apply_receipt::HandoffRpcError;
 use crate::apply_receipt::ensure_transferable_handoff;
@@ -49,9 +53,42 @@ fn ensure_apply_launcher(settings: &DaemonSettings) -> Result<()> {
     Ok(())
 }
 
+fn launcher_update_required(
+    managed_codex_bin: &Path,
+    managed_backend_is_running: bool,
+    running_managed_codex_version: Option<String>,
+    running_app_server_version: Option<String>,
+    managed_codex_version: Option<String>,
+) -> Result<bool> {
+    if !managed_backend_is_running {
+        return Ok(false);
+    }
+    let running_version = running_managed_codex_version
+        .or(running_app_server_version)
+        .ok_or_else(|| {
+            anyhow!(
+                "cannot safely reconcile selected launcher {} because the running daemon version is unavailable",
+                managed_codex_bin.display()
+            )
+        })?;
+    let managed_codex_version = managed_codex_version.ok_or_else(|| {
+        anyhow!(
+            "cannot safely reconcile selected launcher {} because its installed version is unavailable",
+            managed_codex_bin.display()
+        )
+    })?;
+    Ok(running_version != managed_codex_version)
+}
+
 impl Daemon {
-    pub(crate) async fn apply(&self) -> Result<ApplyOutput> {
+    pub(crate) async fn apply(&self, options: ApplyOptions) -> Result<ApplyOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
+        if let Some(managed_codex_path) = options.managed_codex_path {
+            return self.apply_to_target(managed_codex_path).await;
+        }
+        let settings = self.load_settings().await?;
+        ensure_apply_launcher(&settings)?;
+        let managed_codex_bin = self.configured_managed_codex_bin(&settings).to_path_buf();
         if let Some(receipt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?
             && receipt.blocks_new_apply()
         {
@@ -65,7 +102,106 @@ impl Daemon {
                 self.running_managed_codex_version_best_effort().await,
             ));
         }
-        self.apply_fresh().await
+        self.apply_fresh(settings, &managed_codex_bin).await
+    }
+
+    async fn apply_to_target(&self, target: PathBuf) -> Result<ApplyOutput> {
+        anyhow::ensure!(
+            target.is_absolute(),
+            "selected Codex launcher path must be absolute: {}",
+            target.display()
+        );
+        let mut settings = self.load_settings().await?;
+        let receipt = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?;
+        if settings.managed_codex_path.is_none() {
+            if let Some(receipt) = receipt.as_ref().filter(|receipt| !receipt.is_resolved()) {
+                let error = format!(
+                    "cannot select launcher {} while handoff {} is unresolved and no managed launcher is configured; recovery is pinned to {}",
+                    target.display(),
+                    receipt.handoff.handoff_id,
+                    receipt.managed_codex_path.display()
+                );
+                let mut output = receipt.output_with_running_version(
+                    &self.socket_path,
+                    client::probe(&self.socket_path)
+                        .await
+                        .ok()
+                        .map(|info| info.app_server_version),
+                    Some(error),
+                    self.running_managed_codex_version_best_effort().await,
+                );
+                output.status = ApplyStatus::NeedsAttention;
+                return Ok(output);
+            }
+            return Ok(ApplyOutput::without_handoff(
+                ApplyStatus::NotConfigured,
+                None,
+                None,
+                &self.socket_path,
+                None,
+            ));
+        }
+        self.ensure_managed_codex_bin(&target)?;
+
+        if let Some(receipt) = receipt.filter(|receipt| !receipt.is_resolved()) {
+            if receipt.managed_codex_path != target {
+                let error = format!(
+                    "cannot select launcher {} while handoff {} is unresolved; recovery is pinned to {}",
+                    target.display(),
+                    receipt.handoff.handoff_id,
+                    receipt.managed_codex_path.display()
+                );
+                let mut output = receipt.output_with_running_version(
+                    &self.socket_path,
+                    client::probe(&self.socket_path)
+                        .await
+                        .ok()
+                        .map(|info| info.app_server_version),
+                    Some(error),
+                    self.running_managed_codex_version_best_effort().await,
+                );
+                output.status = ApplyStatus::NeedsAttention;
+                return Ok(output);
+            }
+            if receipt.blocks_new_apply() {
+                if settings.managed_codex_path.as_deref() != Some(target.as_path()) {
+                    settings.managed_codex_path = Some(target);
+                    settings.save(&self.settings_file).await?;
+                }
+                return Ok(receipt.output_with_running_version(
+                    &self.socket_path,
+                    client::probe(&self.socket_path)
+                        .await
+                        .ok()
+                        .map(|info| info.app_server_version),
+                    /*error*/ None,
+                    self.running_managed_codex_version_best_effort().await,
+                ));
+            }
+        }
+
+        if self.running_backend_instance(&settings).await?.is_none() {
+            if client::probe(&self.socket_path).await.is_ok() {
+                return Err(anyhow!(
+                    "app server is running but is not managed by codex app-server daemon"
+                ));
+            }
+            settings.managed_codex_path = Some(target.clone());
+            settings.save(&self.settings_file).await?;
+            return Ok(ApplyOutput::without_handoff(
+                ApplyStatus::Deferred,
+                Some(target.clone()),
+                self.managed_codex_version_best_effort(&target).await,
+                &self.socket_path,
+                None,
+            ));
+        }
+
+        settings.managed_codex_path = Some(target.clone());
+        // Persist the selected launcher before the handoff begins. A pre-transfer blocker
+        // leaves the current process alive, while later reloads continue to select this target.
+        settings.save(&self.settings_file).await?;
+        self.apply_fresh(settings, &target).await
     }
 
     pub(crate) async fn recover(&self) -> Result<ApplyOutput> {
@@ -78,6 +214,13 @@ impl Daemon {
 
     async fn recover_with_resolution(&self, resolution: Option<&str>) -> Result<ApplyOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
+        self.recover_with_resolution_locked(resolution).await
+    }
+
+    async fn recover_with_resolution_locked(
+        &self,
+        resolution: Option<&str>,
+    ) -> Result<ApplyOutput> {
         let Some(mut attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await? else {
             return Err(anyhow!("no pending app-server handoff receipt to recover"));
         };
@@ -314,6 +457,67 @@ impl Daemon {
             .await
     }
 
+    pub(crate) async fn reconcile_launcher_update(&self) -> Result<Option<ApplyOutput>> {
+        let _operation_lock = self.acquire_operation_lock().await?;
+        let settings = self.load_settings().await?;
+        let Some(managed_codex_bin) = settings.managed_codex_path.clone() else {
+            return Ok(None);
+        };
+        self.ensure_managed_codex_bin(&managed_codex_bin)?;
+
+        if let Some(attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?
+            && !attempt.is_resolved()
+        {
+            if attempt.phase == ApplyPhase::NeedsAttention && !attempt.blocks_new_apply() {
+                return self
+                    .apply_fresh(settings, &managed_codex_bin)
+                    .await
+                    .map(Some);
+            }
+            if attempt.blocks_new_apply() {
+                let output = self.recover_with_resolution_locked(None).await?;
+                if output.status != ApplyStatus::Applied {
+                    return Ok(Some(output));
+                }
+            }
+        }
+
+        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
+        let managed_backend_is_running = self.running_backend_instance(&settings).await?.is_some();
+        let running_app_server_version = if managed_backend_is_running
+            && running_managed_codex_version.is_none()
+        {
+            Some(
+                client::probe(&self.socket_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "cannot safely compare selected launcher {} because its active daemon PID record has no launch version and the app-server version probe failed",
+                            managed_codex_bin.display()
+                        )
+                    })?
+                    .app_server_version,
+            )
+        } else {
+            None
+        };
+        let installed_version = self
+            .managed_codex_version_best_effort(&managed_codex_bin)
+            .await;
+        if !launcher_update_required(
+            &managed_codex_bin,
+            managed_backend_is_running,
+            running_managed_codex_version,
+            running_app_server_version,
+            installed_version,
+        )? {
+            return Ok(None);
+        }
+        self.apply_fresh(settings, &managed_codex_bin)
+            .await
+            .map(Some)
+    }
+
     pub(crate) async fn apply_status(&self) -> Result<ApplyOutput> {
         let Some(attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await? else {
             return Err(anyhow!("no app-server handoff receipt has been recorded"));
@@ -362,10 +566,12 @@ impl Daemon {
         }
     }
 
-    async fn apply_fresh(&self) -> Result<ApplyOutput> {
-        let settings = self.load_settings().await?;
+    async fn apply_fresh(
+        &self,
+        settings: DaemonSettings,
+        managed_codex_bin: &Path,
+    ) -> Result<ApplyOutput> {
         ensure_apply_launcher(&settings)?;
-        let managed_codex_bin = self.configured_managed_codex_bin(&settings);
         self.ensure_managed_codex_bin(managed_codex_bin)?;
         let Some(backend) = self.running_backend_instance(&settings).await? else {
             if client::probe(&self.socket_path).await.is_ok() {

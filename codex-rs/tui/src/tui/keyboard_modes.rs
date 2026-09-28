@@ -452,6 +452,7 @@ impl Command for DisableModifyOtherKeys {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tmux::parse_tmux_bool;
     use super::DisableModifyOtherKeys;
     use super::EnableModifyOtherKeys;
     use super::ResetKeyboardEnhancementFlags;
@@ -461,7 +462,6 @@ mod tests {
     use super::keyboard_enhancement_disabled_for;
     use super::keyboard_enhancement_flags;
     use super::parse_bool_env;
-    use super::parse_tmux_bool;
     use super::should_enable_all_keys;
     use super::tmux_session_detected;
     use super::tmux_should_enable_modify_other_keys_for;

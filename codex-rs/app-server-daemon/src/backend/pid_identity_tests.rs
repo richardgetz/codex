@@ -73,6 +73,7 @@ async fn promotes_timestamp_only_macos_record() {
         process_start_time: "unused legacy text".into(),
         process_identity: Some(serde_json::from_value(legacy).unwrap()),
         executable_identity: None,
+        launch_identity: None,
     };
     std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let backend = PidBackend::new(

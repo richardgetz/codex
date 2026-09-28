@@ -17,18 +17,23 @@ pub enum ApplyStatus {
     Applied,
     InProgress,
     NeedsAttention,
+    /// The daemon is configured, but is stopped. The selected launcher was saved for its next
+    /// start without starting a server as a side effect of applying an update.
+    Deferred,
+    /// No managed daemon has been configured in this CODEX_HOME.
+    NotConfigured,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApplyOutput {
     pub status: ApplyStatus,
-    pub handoff_id: String,
-    pub state: String,
-    pub runtime_version: String,
-    pub created_at: i64,
+    pub handoff_id: Option<String>,
+    pub state: Option<String>,
+    pub runtime_version: Option<String>,
+    pub created_at: Option<i64>,
     pub nodes: Vec<serde_json::Value>,
-    pub managed_codex_path: PathBuf,
+    pub managed_codex_path: Option<PathBuf>,
     pub managed_codex_version: Option<String>,
     pub running_managed_codex_version: Option<String>,
     pub socket_path: PathBuf,
@@ -250,12 +255,12 @@ impl ApplyAttemptReceipt {
                     ApplyStatus::InProgress
                 }
             },
-            handoff_id: self.handoff.handoff_id.clone(),
-            state: self.handoff.state.clone(),
-            runtime_version: self.handoff.runtime_version.clone(),
-            created_at: self.handoff.created_at,
+            handoff_id: Some(self.handoff.handoff_id.clone()),
+            state: Some(self.handoff.state.clone()),
+            runtime_version: Some(self.handoff.runtime_version.clone()),
+            created_at: Some(self.handoff.created_at),
             nodes: self.handoff.nodes.clone(),
-            managed_codex_path: self.managed_codex_path.clone(),
+            managed_codex_path: Some(self.managed_codex_path.clone()),
             managed_codex_version: self.managed_codex_version.clone(),
             running_managed_codex_version,
             socket_path: socket_path.to_path_buf(),
@@ -268,6 +273,34 @@ impl ApplyAttemptReceipt {
                 && self.handoff.can_quarantine()
                 && self.blocks_new_apply(),
             error: error.or_else(|| self.failure.clone()),
+        }
+    }
+}
+
+impl ApplyOutput {
+    pub(crate) fn without_handoff(
+        status: ApplyStatus,
+        managed_codex_path: Option<PathBuf>,
+        managed_codex_version: Option<String>,
+        socket_path: &Path,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            status,
+            handoff_id: None,
+            state: None,
+            runtime_version: None,
+            created_at: None,
+            nodes: Vec::new(),
+            managed_codex_path,
+            managed_codex_version,
+            running_managed_codex_version: None,
+            socket_path: socket_path.to_path_buf(),
+            app_server_version: None,
+            quarantined: false,
+            can_retry: false,
+            can_quarantine: false,
+            error,
         }
     }
 }
