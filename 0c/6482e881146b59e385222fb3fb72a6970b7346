@@ -1,0 +1,21 @@
+intent:
+  id: "intent/2026-09-28/team-passive-state-preserved-across-model-context#61c1a44069"
+  change_type: fix
+  scope: Team Lead passive polling
+  summary: Preserve turn-local passive polling state across context refresh and review construction.
+  decision: Share the passive poll state and sample counter across TurnContext model refreshes, initialize Review contexts with a fresh per-turn state, and complete the newly added wait-state imports and Debug implementation.
+  constraints:
+    - Keep one monotonic sample sequence and poll history per Lead turn.
+    - Preserve current Team policy admission, worker execution, and oversight deadline behavior.
+    - Do not change general sleep or command execution behavior.
+  intent_priority: should
+  code_locations:
+    - codex-rs/core/src/session/turn_context.rs
+    - codex-rs/core/src/session/review.rs
+    - codex-rs/core/src/session/lead_passive_poll.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs
+    - codex-rs/core/src/tools/handlers/multi_agents_v2/passive_wait.rs
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: Codex
+    model: gpt-6
