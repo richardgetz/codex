@@ -33,12 +33,54 @@ pub(super) async fn check(
     config: &Config,
     managed_daemon: bool,
 ) -> io::Result<Option<String>> {
-    let issue = match startup
-        .run_until(daemon_startup::compatibility_warning(target, config))
-        .await?
-    {
-        Ok(warning) => return Ok(warning),
-        Err(issue) => issue,
+    let update_issue = if managed_daemon {
+        match startup
+            .run_until(codex_app_server_daemon::reconcile_launcher_update())
+            .await?
+        {
+            Ok(Some(output)) if output.status != codex_app_server_daemon::ApplyStatus::Applied => {
+                Some(daemon_startup::launcher_update_issue(&output))
+            }
+            Err(error) => {
+                let identity = codex_app_server_daemon::run(
+                    codex_app_server_daemon::LifecycleCommand::Version,
+                )
+                .await
+                .ok()
+                .map(|output| {
+                    format!(
+                        "; selected launcher {} version {}, running launcher version {}, app-server version {}",
+                        output.managed_codex_path.display(),
+                        output.managed_codex_version.as_deref().unwrap_or("unknown"),
+                        output
+                            .running_managed_codex_version
+                            .as_deref()
+                            .unwrap_or("unknown"),
+                        output.app_server_version.as_deref().unwrap_or("unknown")
+                    )
+                })
+                .unwrap_or_default();
+                Some(CompatibilityError {
+                    reason: format!(
+                        "safe local daemon update reconciliation failed: {error:#}{identity}; selected launcher updates remain unapplied"
+                    ),
+                    restart_features: None,
+                })
+            }
+            Ok(Some(_)) | Ok(None) => None,
+        }
+    } else {
+        None
+    };
+    let issue = match update_issue {
+        Some(issue) => issue,
+        None => match startup
+            .run_until(daemon_startup::compatibility_warning(target, config))
+            .await?
+        {
+            Ok(warning) => return Ok(warning),
+            Err(issue) => issue,
+        },
     };
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
         return Err(io::Error::other(issue));

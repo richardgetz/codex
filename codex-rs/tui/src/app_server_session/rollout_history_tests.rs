@@ -326,6 +326,8 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
         let mut app_server = crate::start_app_server_for_picker(
             &startup_config,
             &crate::AppServerTarget::Embedded,
+            Vec::new(),
+            codex_config::LoaderOverrides::without_managed_config_for_tests(),
             state_db,
             std::sync::Arc::new(crate::EnvironmentManager::default_for_tests()),
         )

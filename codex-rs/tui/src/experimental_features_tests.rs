@@ -108,12 +108,15 @@ async fn experimental_features_rpc_paginates_thread_config_and_bounds_bad_server
             );
         } else {
             let error = result.unwrap_err();
+            if scenario == "error" {
+                assert!(!error.contains("private wire content"));
+            }
             assert_eq!(
                 error,
                 match scenario {
                     "cycle" => "Experimental feature pagination repeated a cursor",
                     "limit" => "Experimental feature discovery exceeded 10 pages",
-                    "error" => "Experimental feature request failed",
+                    "error" => "experimentalFeature/list failed: method not found (code -32601)",
                     "timeout" => "Experimental feature discovery timed out",
                     _ => unreachable!(),
                 }
@@ -130,10 +133,11 @@ async fn experimental_features_rpc_paginates_thread_config_and_bounds_bad_server
                     "tui-experimental-features",
                     tx,
                 );
-                assert_eq!(
-                    rx.await.unwrap(),
-                    Err("Experimental feature request failed".to_string())
-                );
+                let error = rx
+                    .await
+                    .unwrap()
+                    .expect_err("the request id remains reserved");
+                assert!(error.starts_with("experimentalFeature/list "));
             }
         }
         client.shutdown().await.unwrap();

@@ -551,6 +551,7 @@ async fn queued_voice_caption_after_switch_returns_once_to_its_source_thread() {
         ServerNotification::ThreadRealtimeClosed(
             codex_app_server_protocol::ThreadRealtimeClosedNotification {
                 thread_id: source.to_string(),
+                submission_id: String::new(),
                 reason: Some("requested".into()),
             },
         ),
@@ -1346,6 +1347,7 @@ async fn switching_threads_retains_undelivered_voice_answer_after_replay_evictio
         ServerNotification::ThreadRealtimeClosed(
             codex_app_server_protocol::ThreadRealtimeClosedNotification {
                 thread_id: original.to_string(),
+                submission_id: String::new(),
                 reason: Some("requested".into()),
             },
         ),

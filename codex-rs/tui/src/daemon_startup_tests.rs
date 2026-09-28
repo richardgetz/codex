@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
+use codex_app_server_daemon::ApplyOutput;
+use codex_app_server_daemon::ApplyStatus;
 use codex_app_server_protocol::JSONRPCMessage;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -104,6 +106,34 @@ fn monorepo_wrapper_overrides_are_eligible_and_select_only_server_features() {
             ("mcp_oauth_refresh_coordination".to_string(), true),
         ])
     );
+}
+
+#[test]
+fn blocked_launcher_update_reports_selected_and_running_versions_with_recovery() {
+    let issue = daemon_startup::launcher_update_issue(&ApplyOutput {
+        status: ApplyStatus::NeedsAttention,
+        handoff_id: Some("handoff-1".to_string()),
+        state: Some("needsAttention".to_string()),
+        runtime_version: Some("0.156.1".to_string()),
+        created_at: Some(1),
+        nodes: Vec::new(),
+        managed_codex_path: Some("/opt/homebrew/bin/codex-rick".into()),
+        managed_codex_version: Some("0.157.1-rick.2".to_string()),
+        running_managed_codex_version: Some("0.156.1-rick.2".to_string()),
+        socket_path: "/tmp/codex.sock".into(),
+        app_server_version: Some("0.156.1".to_string()),
+        quarantined: false,
+        can_retry: false,
+        can_quarantine: false,
+        error: Some("handoff blocked".to_string()),
+    });
+
+    assert!(issue.reason.contains("/opt/homebrew/bin/codex-rick"));
+    assert!(issue.reason.contains("0.157.1-rick.2"));
+    assert!(issue.reason.contains("0.156.1-rick.2"));
+    assert!(issue.reason.contains("handoff blocked"));
+    assert!(issue.reason.contains("daemon recover"));
+    assert_eq!(issue.restart_features, None);
 }
 
 #[test]
@@ -229,7 +259,9 @@ async fn daemon_feature_compatibility_respects_required_and_optional_attachment(
                 "conflicting client" => {
                     "This session requires api_key_model_discovery to be disabled"
                 }
-                "unsupported RPC" => "Experimental feature request failed",
+                "unsupported RPC" => {
+                    "experimentalFeature/list failed: method not found (code -32601)"
+                }
                 _ => unreachable!(),
             };
             if allow_embedded_fallback {
@@ -446,6 +478,7 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume() -> c
         &mut state_db,
         Arc::new(EnvironmentManager::default_for_tests()),
         Some(prepared.app_server),
+        codex_app_server_client::EmbeddedNetworkPolicy::default(),
     )
     .await?;
     drop(app_server);

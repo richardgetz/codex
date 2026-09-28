@@ -3,6 +3,7 @@
 //! Readback describes configured enablement; reserved IDs bound unanswered requests.
 
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
@@ -43,7 +44,7 @@ pub(crate) fn fetch(
                         },
                     )
                     .await
-                    .map_err(|_| "Experimental feature request failed".to_string())?;
+                    .map_err(summarize_request_error)?;
                 if response.data.len() > 100 {
                     return Err("Experimental feature page exceeds requested limit".to_string());
                 }
@@ -71,6 +72,43 @@ pub(crate) fn fetch(
             }
         }
     });
+}
+
+fn summarize_request_error(error: TypedRequestError) -> String {
+    let sanitize = |detail: &str| {
+        detail
+            .chars()
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .take(256)
+            .collect::<String>()
+    };
+    match error {
+        TypedRequestError::Transport { method, source } => {
+            format!(
+                "{method} transport error: {}",
+                sanitize(&source.to_string())
+            )
+        }
+        TypedRequestError::Server { method, source } => {
+            format!(
+                "{method} failed: {} (code {})",
+                sanitize(&source.message),
+                source.code
+            )
+        }
+        TypedRequestError::Deserialize { method, source } => {
+            format!(
+                "{method} response decode error: {}",
+                sanitize(&source.to_string())
+            )
+        }
+    }
 }
 
 /// Configured readback, deliberately separate from running-task feature state.

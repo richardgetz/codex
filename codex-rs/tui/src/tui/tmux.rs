@@ -79,7 +79,7 @@ fn read_options(pane: Option<&str>, mut run: impl FnMut(&[&str]) -> Option<Vec<u
     options
 }
 
-fn parse_tmux_bool(value: &str) -> Option<bool> {
+pub(super) fn parse_tmux_bool(value: &str) -> Option<bool> {
     if value.eq_ignore_ascii_case("on")
         || value.eq_ignore_ascii_case("always")
         || value.eq_ignore_ascii_case("true")

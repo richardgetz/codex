@@ -20,6 +20,10 @@ fn daemon_recovery_requires_explicit_restart_and_defaults_to_cancel() {
         reason: "code-mode host fallback policy requires embedded mode".to_string(),
         restart_features: None,
     };
+    let launcher_update = CompatibilityError {
+        reason: "safe daemon update returned NeedsAttention; selected launcher /opt/homebrew/bin/codex-rick (installed version 0.157.1-rick.2) is running as version 0.156.1-rick.2 (app-server version 0.156.1). handoff blocked. If a handoff is pending, run `codex app-server daemon recover`, then retry `codex app-server daemon apply --codex-bin <selected absolute path>`".to_string(),
+        restart_features: None,
+    };
     for (issue, managed, snapshot) in [
         (&issue, true, "daemon_recovery_menu"),
         (&issue, false, "unmanaged_daemon_recovery_menu"),
@@ -27,6 +31,11 @@ fn daemon_recovery_requires_explicit_restart_and_defaults_to_cancel() {
             &non_restartable,
             true,
             "non_restartable_daemon_recovery_menu",
+        ),
+        (
+            &launcher_update,
+            true,
+            "launcher_update_failure_recovery_menu",
         ),
     ] {
         let mut view = recovery_view(issue, managed, &RuntimeKeymap::defaults());

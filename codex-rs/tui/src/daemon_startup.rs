@@ -4,6 +4,7 @@
 
 use super::*;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 const SERVER_FEATURES: [Feature; 4] = [
     Feature::ApiKeyModelDiscovery,
@@ -175,12 +176,73 @@ pub(super) async fn compatibility_warning(
     .await;
     match check {
         Ok(()) => Ok(None),
-        Err(reason) if *allow_embedded_fallback => Ok(Some(format!(
-            "Running without the shared background server: {reason}."
-        ))),
-        Err(reason) => Err(CompatibilityError {
-            reason,
-            restart_features,
-        }),
+        Err(reason) => {
+            let daemon_identity = if matches!(
+                target,
+                AppServerTarget::LocalDaemon {
+                    endpoint: RemoteAppServerEndpoint::UnixSocket { .. },
+                    ..
+                }
+            ) {
+                codex_app_server_daemon::run(codex_app_server_daemon::LifecycleCommand::Version)
+                    .await
+                    .ok()
+                    .map(|output| {
+                        format!(
+                            "; daemon launcher {} is installed at version {}, while the running launcher version is {} (app-server version {})",
+                            output.managed_codex_path.display(),
+                            output.managed_codex_version.as_deref().unwrap_or("unknown"),
+                            output
+                                .running_managed_codex_version
+                                .as_deref()
+                                .unwrap_or("unknown"),
+                            output.app_server_version.as_deref().unwrap_or("unknown")
+                        )
+                    })
+            } else {
+                None
+            };
+            let reason = match daemon_identity {
+                Some(identity) => format!("{reason}{identity}"),
+                None => reason,
+            };
+            if *allow_embedded_fallback {
+                Ok(Some(format!(
+                    "Running without the shared background server: {reason}."
+                )))
+            } else {
+                Err(CompatibilityError {
+                    reason,
+                    restart_features,
+                })
+            }
+        }
+    }
+}
+
+pub(super) fn launcher_update_issue(
+    output: &codex_app_server_daemon::ApplyOutput,
+) -> CompatibilityError {
+    let launcher = output
+        .managed_codex_path
+        .as_deref()
+        .unwrap_or_else(|| Path::new("unknown"));
+    let error = output
+        .error
+        .as_deref()
+        .unwrap_or("daemon update reconciliation did not complete");
+    CompatibilityError {
+        reason: format!(
+            "safe daemon update returned {:?}; selected launcher {} (installed version {}) is running as version {} (app-server version {}). {error}. If a handoff is pending, run `codex app-server daemon recover`, then retry `codex app-server daemon apply --codex-bin <selected absolute path>`",
+            output.status,
+            launcher.display(),
+            output.managed_codex_version.as_deref().unwrap_or("unknown"),
+            output
+                .running_managed_codex_version
+                .as_deref()
+                .unwrap_or("unknown"),
+            output.app_server_version.as_deref().unwrap_or("unknown")
+        ),
+        restart_features: None,
     }
 }
