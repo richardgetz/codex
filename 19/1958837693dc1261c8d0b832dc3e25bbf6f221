@@ -1,0 +1,26 @@
+intent:
+  id: "intent/2026-09-28/team-lead-live-policy-and-passive-poll#191958837693"
+  change_type: "fix"
+  scope: "Team Lead wait and policy lifecycle"
+  summary: "Apply active work-policy changes at the next safe sample and park passive Lead polling."
+  decision: "Keep Lead wait paths event-driven under either work policy; preserve prompt_guided as default and normal tool access; refresh effective policy before each model sample; reject stale unadmitted tool calls; let already-admitted work finish; retain the configured oversight deadline; park repeated long sleeps after a later-sample recognized status probe."
+  constraints:
+    - "Keep prompt_guided default and manager_only opt-in."
+    - "Do not cancel or replay model, tool, Worker, or external work already running."
+    - "Preserve the configured oversight deadline across policy changes and passive waits."
+    - "Do not strip normal Lead tools or suppress useful independent work."
+    - "Only recognized list_agents, worker_capacity, and allowlisted gh run view commands count as status probes; unknown shell commands remain substantive."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/core/src/session/lead_idle.rs"
+    - "codex-rs/core/src/session/lead_passive_poll.rs"
+    - "codex-rs/core/src/session/world_state.rs"
+    - "codex-rs/core/src/session/thread_settings.rs"
+    - "codex-rs/core/src/tools/handlers/sleep.rs"
+    - "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs"
+    - "codex-rs/core/src/tools/parallel.rs"
+    - "codex-rs/core/templates/fork/delta_inventory.md"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "Codex"
+    model: "gpt-6"
