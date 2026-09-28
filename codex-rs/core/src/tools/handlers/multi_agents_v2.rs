@@ -41,6 +41,7 @@ mod followup_task;
 mod interrupt_agent;
 mod list_agents;
 mod message_tool;
+pub(crate) mod passive_wait;
 mod send_message;
 mod spawn;
 pub(crate) mod wait;

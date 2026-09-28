@@ -21,6 +21,8 @@ use codex_protocol::protocol::TurnContextItem;
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    /// Monotonic ID for the sampled request; all of its tool calls share this value.
+    pub(crate) passive_poll_sample_id: u64,
     /// One immutable settings version captured before request preparation.
     pub(crate) settings: Arc<ResolvedStepSettings>,
     /// Lead work policy advertised by this sampling request's latest WorldState.

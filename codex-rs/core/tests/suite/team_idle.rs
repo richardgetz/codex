@@ -7,6 +7,9 @@ use std::sync::Mutex;
 use tracing::Level;
 use tracing_test::internal::MockWriter;
 
+#[path = "team_idle_passive_sleep.rs"]
+mod passive_sleep;
+
 const IDLE_ROOT_PROMPT: &str = "park the lead while the worker runs";
 const IDLE_CHILD_TASK: &str = "send routine progress while working";
 const IDLE_PROGRESS_CALL_ID: &str = "team-idle-progress";

@@ -25,13 +25,16 @@ use tokio::time::sleep_until;
 
 const MAX_OVERSIGHT_MESSAGE_BYTES: usize = 1_024;
 
-/// Distinguishes a new parking interval from an explicit wait inside the current Lead turn.
-/// Explicit waits may reuse an existing interval but must not rearm a deadline that already woke
-/// the Lead until the turn has completed.
+/// Distinguishes an established idle interval from waits issued inside the current Lead turn.
+/// Explicit waits may reuse an existing interval but cannot rearm one that already woke the Lead.
+/// A detected passive sleep/status loop can arm a fresh bounded interval to stop model polling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum LeadIdleArmMode {
     CompletedLeadTurn,
     ExplicitWait,
+    /// A Lead has repeated a sleep after checking passive Worker status. This wait may establish
+    /// a fresh bounded oversight interval if the previous one has already fired.
+    PassivePoll,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -105,7 +108,7 @@ impl LeadIdleController {
         deadline_unix_secs: i64,
         session: Weak<Session>,
         mode: LeadIdleArmMode,
-    ) -> Option<LeadIdleDeadline> {
+    ) -> Option<(LeadIdleDeadline, bool)> {
         let mut state = self.state.lock().await;
         if let Some(deadline) = state.deadline {
             tracing::debug!(
@@ -114,10 +117,13 @@ impl LeadIdleController {
                 deadline_unix_secs = state.deadline_unix_secs,
                 "reused Lead oversight deadline"
             );
-            return Some(LeadIdleDeadline {
-                instant: deadline,
-                unix_secs: state.deadline_unix_secs.unwrap_or(deadline_unix_secs),
-            });
+            return Some((
+                LeadIdleDeadline {
+                    instant: deadline,
+                    unix_secs: state.deadline_unix_secs.unwrap_or(deadline_unix_secs),
+                },
+                false,
+            ));
         }
         if mode == LeadIdleArmMode::ExplicitWait && !state.rearm_allowed {
             tracing::debug!(
@@ -150,10 +156,13 @@ impl LeadIdleController {
             }
         });
         state.timer = Some(timer);
-        Some(LeadIdleDeadline {
-            instant: deadline,
-            unix_secs: deadline_unix_secs,
-        })
+        Some((
+            LeadIdleDeadline {
+                instant: deadline,
+                unix_secs: deadline_unix_secs,
+            },
+            true,
+        ))
     }
 
     async fn claim_deadline(&self, generation: u64) -> bool {
@@ -261,12 +270,14 @@ impl Session {
             .unwrap_or_default();
         let deadline_unix_secs =
             now_unix_secs.saturating_add(i64::try_from(timeout_secs).unwrap_or(i64::MAX));
-        let deadline = self
+        let (deadline, newly_armed) = self
             .lead_idle_controller
             .arm(timeout, deadline_unix_secs, session, mode)
             .await?;
         if mode == LeadIdleArmMode::CompletedLeadTurn && self.active_turn.lock().await.is_some() {
-            self.cancel_lead_oversight().await;
+            if newly_armed {
+                self.cancel_lead_oversight().await;
+            }
             return None;
         }
         Some((active_workers, deadline))

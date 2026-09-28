@@ -79,6 +79,7 @@ pub(crate) enum InputQueueActivity {
     Mailbox,
     Steer,
     TeamPolicyChanged,
+    ActivityPaused,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -442,6 +443,11 @@ impl InputQueue {
     pub(crate) fn notify_team_policy_changed(&self) {
         self.activity_tx
             .send_replace(InputQueueActivity::TeamPolicyChanged);
+    }
+
+    pub(crate) fn notify_activity_paused(&self) {
+        self.activity_tx
+            .send_replace(InputQueueActivity::ActivityPaused);
     }
 
     pub(crate) async fn enqueue_mailbox_communication(

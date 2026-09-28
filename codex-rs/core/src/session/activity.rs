@@ -114,6 +114,7 @@ impl Session {
             // explicit pause boundary and are rearmed only after the root resumes. Preserve
             // delivered trigger latches so an unchanged task cannot be nudged twice after resume.
             self.cancel_lead_oversight().await;
+            self.input_queue.notify_activity_paused();
             if is_non_root_agent {
                 self.suspend_eta_reminders_for_owner().await;
             } else {

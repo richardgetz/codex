@@ -280,8 +280,11 @@ mod inject;
 mod submission;
 pub(crate) use submission::Submission;
 mod input_queue;
+mod lead_passive_poll;
+pub(crate) use lead_passive_poll::LeadPassivePollState;
 mod lead_idle;
 pub(crate) use lead_idle::LeadIdleArmMode;
+pub(crate) use lead_idle::LeadIdleDeadline;
 pub(crate) use lead_idle::format_lead_wait_message;
 pub(crate) use lead_idle::truncate_message;
 mod mcp;
@@ -2892,7 +2895,7 @@ impl Session {
                 root_usage_policy_changed,
             )
         };
-        if lead_work_policy_changed {
+        if lead_work_policy_changed || disables_team {
             self.input_queue.notify_team_policy_changed();
         }
         if usage_policy_changed {
@@ -5412,11 +5415,13 @@ impl Session {
         .or_cancel(cancellation_token)
         .await??;
         let initial_team_lead_work_policy = turn_context.config.effective_team_lead_work_policy();
+        let passive_poll_sample_id = turn_context.next_passive_poll_sample_id();
         Ok(Arc::new(StepContext {
             settings,
             team_lead_work_policy: arc_swap::ArcSwap::from_pointee(
                 initial_team_lead_work_policy,
             ),
+            passive_poll_sample_id,
             token_budget,
             session_telemetry,
             turn: turn_context,

@@ -1,7 +1,5 @@
 use super::*;
 use crate::session::InputQueueActivity;
-use crate::session::LeadIdleArmMode;
-use crate::session::format_lead_wait_message;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
@@ -9,6 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::timeout_at;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -189,6 +188,7 @@ impl Handler {
                         InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
                         InputQueueActivity::Steer => WaitOutcome::Steered,
                         InputQueueActivity::TeamPolicyChanged => WaitOutcome::TeamPolicyChanged,
+                        InputQueueActivity::ActivityPaused => WaitOutcome::Paused,
                     }
                 } else if policy_changed_at_entry {
                     policy_changed_at_entry = false;
@@ -200,10 +200,11 @@ impl Handler {
                 } else if lead_wait_requires_assessment {
                     WaitOutcome::LeadReviewRequired
                 } else {
-                    wait_for_activity(&mut activity_rx, None, wait_deadline).await
+                    wait_for_activity(&mut activity_rx, None, Some(wait_deadline), None).await
                 };
                 if outcome != WaitOutcome::TeamPolicyChanged
                     || !is_team_lead
+                    || !session.is_team_lead().await
                     || session
                         .get_config()
                         .await
@@ -284,6 +285,11 @@ impl WaitAgentResult {
             WaitOutcome::TeamPolicyChanged => {
                 "The Lead work policy changed during this wait; reassess the current instructions and continue the task as needed."
             }
+            WaitOutcome::Paused => "Wait paused by Team activity control.",
+            WaitOutcome::Cancelled => "Wait cancelled.",
+            WaitOutcome::SubstantiveWork => {
+                "Independent Lead work started; review it before waiting again."
+            }
         };
         let message = match requested_timeout_ms {
             Some(requested_timeout_ms) if requested_timeout_ms < timeout_ms => format!(
@@ -317,37 +323,53 @@ impl ToolOutput for WaitAgentResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WaitOutcome {
+pub(crate) enum WaitOutcome {
     MailboxActivity,
     Steered,
     TimedOut,
     NoActiveWorkers,
     LeadReviewRequired,
     TeamPolicyChanged,
+    Paused,
+    Cancelled,
+    SubstantiveWork,
 }
 
-async fn wait_for_activity(
+pub(super) fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
+    match activity {
+        InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+        InputQueueActivity::Steer => WaitOutcome::Steered,
+        InputQueueActivity::TeamPolicyChanged => WaitOutcome::TeamPolicyChanged,
+        InputQueueActivity::ActivityPaused => WaitOutcome::Paused,
+    }
+}
+
+pub(super) async fn wait_for_activity(
     activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
     pending_activity: Option<InputQueueActivity>,
-    deadline: Instant,
+    deadline: Option<Instant>,
+    cancellation_token: Option<&CancellationToken>,
 ) -> WaitOutcome {
     if let Some(activity) = pending_activity {
-        return match activity {
-            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-            InputQueueActivity::Steer => WaitOutcome::Steered,
-            InputQueueActivity::TeamPolicyChanged => WaitOutcome::TeamPolicyChanged,
-        };
+        return wait_outcome_for_activity(activity);
     }
     // Worker completion/failure paths publish actionable parent activity after applying the
     // configured completion policy. Polling level-triggered child status here can replay an old
     // terminal value on every subsequent wait, and can bypass the ManagerOnly completion batch.
-    match timeout_at(deadline, activity_rx.changed()).await {
-        Ok(Ok(())) => match *activity_rx.borrow_and_update() {
-            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-            InputQueueActivity::Steer => WaitOutcome::Steered,
-            InputQueueActivity::TeamPolicyChanged => WaitOutcome::TeamPolicyChanged,
+    let activity = async {
+        match deadline {
+            Some(deadline) => match timeout_at(deadline, activity_rx.changed()).await {
+                Ok(Ok(())) => Some(*activity_rx.borrow_and_update()),
+                Ok(Err(_)) | Err(_) => None,
+            },
+            None => activity_rx.changed().await.ok().map(|()| *activity_rx.borrow_and_update()),
         }
-        Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
+    };
+    tokio::pin!(activity);
+    tokio::select! {
+        biased;
+        _ = async { if let Some(token) = cancellation_token { token.cancelled().await } }, if cancellation_token.is_some() => WaitOutcome::Cancelled,
+        activity = &mut activity => activity.map(wait_outcome_for_activity).unwrap_or(WaitOutcome::TimedOut),
     }
 }
 

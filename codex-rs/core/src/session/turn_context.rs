@@ -45,6 +45,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tracing::instrument;
 
@@ -380,6 +381,11 @@ pub struct TurnContext {
     pub(crate) model_verification_emitted: AtomicBool,
     /// Effective cyber treatment for this turn, including any child-agent inheritance.
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
+    /// Tracks a Lead's passive sleep/status polling pattern for this turn. The state is shared
+    /// across model samples and nested Code Mode tool dispatches.
+    pub(crate) lead_passive_poll: LeadPassivePollState,
+    /// Allocates a monotonic identifier for each sampled model request in this turn.
+    pub(crate) next_passive_poll_sample_id: AtomicU64,
 }
 
 /// Selects which preparation is needed when building a turn context.
@@ -400,6 +406,11 @@ enum TurnContextBuildMode {
 }
 
 impl TurnContext {
+    pub(crate) fn next_passive_poll_sample_id(&self) -> u64 {
+        self.next_passive_poll_sample_id
+            .fetch_add(1, Ordering::Relaxed)
+    }
+
     /// Captures current model metadata without preparing a step.
     pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
         Arc::clone(&self.next_step_settings.load().model_info)
@@ -1290,6 +1301,8 @@ impl Session {
             server_model_warning_emitted: AtomicBool::new(false),
             model_verification_emitted: AtomicBool::new(false),
             cyber_access_program: None,
+            lead_passive_poll: LeadPassivePollState::default(),
+            next_passive_poll_sample_id: AtomicU64::new(0),
         }
     }
 
