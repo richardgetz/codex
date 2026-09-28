@@ -82,6 +82,36 @@ fn latest_team_role_instructions(request: &ResponsesRequest) -> Option<String> {
         .find(|text| text.contains("<team_role_instructions>"))
 }
 
+async fn wait_for_pause_gate_before_function_call(thread: &CodexThread, call_id: &str) {
+    let event = wait_for_event(thread, |event| {
+        matches!(
+            event,
+            EventMsg::RawResponseItem(raw)
+                if matches!(
+                    &raw.item,
+                    codex_protocol::models::ResponseItem::FunctionCall { call_id: observed, .. }
+                        if observed.as_str() == call_id
+                )
+        ) || matches!(
+            event,
+            EventMsg::ThreadActivityUpdated(state)
+                if state.pause_state == codex_protocol::protocol::ThreadPauseState::Pausing
+                    && state.in_flight_operations > 0
+        )
+    })
+    .await;
+    let pause_won_race = matches!(
+        &event,
+        EventMsg::ThreadActivityUpdated(state)
+            if state.pause_state == codex_protocol::protocol::ThreadPauseState::Pausing
+                && state.in_flight_operations > 0
+    );
+    assert!(
+        pause_won_race,
+        "the target function call arrived before the pause gate: {event:?}"
+    );
+}
+
 async fn wait_for_completed_agent_message(thread: &codex_core::CodexThread, expected: &str) {
     let expected_status =
         codex_protocol::protocol::AgentStatus::Completed(Some(expected.to_string()));
@@ -731,6 +761,25 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         !initial_instructions.contains("Lead work policy: manager_only"),
         "the Lead starts in the configured prompt-guided policy: {initial_instructions}"
     );
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RawResponseItem(raw)
+                if matches!(
+                    &raw.item,
+                    codex_protocol::models::ResponseItem::FunctionCall { call_id, .. }
+                        if call_id.as_str() == FIRST_TOOL_CALL_ID
+                )
+        )
+    })
+    .await;
+    wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ThreadActivityUpdated(state) if state.in_flight_operations > 0
+        )
+    })
+    .await;
     submit_thread_settings(
         &test.codex,
         lead_work_policy_update(TeamLeadWorkPolicy::ManagerOnly),
@@ -780,12 +829,276 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         "next model request after applying the policy update",
     )
     .await;
+    assert_eq!(
+        next_step
+            .function_call_output_text(FIRST_TOOL_CALL_ID)
+            .as_deref(),
+        Some("ok"),
+        "the tool admitted before the policy update should complete normally"
+    );
     let team_instructions = latest_team_role_instructions(&next_step)
         .expect("next request should contain the updated Lead instructions");
     assert!(
         team_instructions.contains("Lead work policy: manager_only"),
         "the active turn should use its latest committed Lead policy: {team_instructions}"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_sample() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    const PROMPT: &str = "exercise live policy admission in both directions";
+    const PROMPT_GUIDED_STALE_CALL_ID: &str = "live-policy-stale-prompt-guided-call";
+    const MANAGER_ONLY_FRESH_CALL_ID: &str = "live-policy-fresh-manager-only-call";
+    const MANAGER_ONLY_STALE_CALL_ID: &str = "live-policy-stale-manager-only-call";
+    const PROMPT_GUIDED_FRESH_CALL_ID: &str = "live-policy-fresh-prompt-guided-call";
+    let delayed_response = Duration::from_secs(/*secs*/ 5);
+    let initial_request = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, PROMPT)
+                && request_has_model(request, LEAD_MODEL)
+                && !request_has_function_call_output(request, PROMPT_GUIDED_STALE_CALL_ID)
+        },
+        sse_response(sse(vec![
+            ev_response_created("live-policy-stale-prompt-guided-response"),
+            ev_function_call(
+                PROMPT_GUIDED_STALE_CALL_ID,
+                "test_sync_tool",
+                "{}",
+            ),
+            ev_completed("live-policy-stale-prompt-guided-response"),
+        ]))
+        .set_delay(delayed_response),
+    )
+    .await;
+    let manager_only_sample = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, PROMPT_GUIDED_STALE_CALL_ID)
+                && !request_has_function_call_output(request, MANAGER_ONLY_FRESH_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-manager-only-fresh-response"),
+            ev_function_call(
+                MANAGER_ONLY_FRESH_CALL_ID,
+                "test_sync_tool",
+                "{}",
+            ),
+            ev_completed("live-policy-manager-only-fresh-response"),
+        ]),
+    )
+    .await;
+    let manager_only_fresh_followup = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_ONLY_FRESH_CALL_ID)
+                && !request_has_function_call_output(request, MANAGER_ONLY_STALE_CALL_ID)
+        },
+        sse_response(sse(vec![
+            ev_response_created("live-policy-stale-manager-only-response"),
+            ev_function_call(
+                MANAGER_ONLY_STALE_CALL_ID,
+                "test_sync_tool",
+                "{}",
+            ),
+            ev_completed("live-policy-stale-manager-only-response"),
+        ]))
+        .set_delay(delayed_response),
+    )
+    .await;
+    let prompt_guided_step = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_ONLY_STALE_CALL_ID)
+                && !request_has_function_call_output(request, PROMPT_GUIDED_FRESH_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("live-policy-fresh-prompt-guided-response"),
+            ev_function_call(
+                PROMPT_GUIDED_FRESH_CALL_ID,
+                "test_sync_tool",
+                "{}",
+            ),
+            ev_completed("live-policy-fresh-prompt-guided-response"),
+        ]),
+    )
+    .await;
+    let final_response = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, PROMPT_GUIDED_FRESH_CALL_ID)
+        },
+        sse(vec![
+            ev_assistant_message("live-policy-admission-done", "latest policy was applied"),
+            ev_completed("live-policy-admission-done"),
+        ]),
+    )
+    .await;
+    let test = test_codex()
+        .with_model_info_override(LEAD_MODEL, |model_info| {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.multi_agent_version = Some(MultiAgentVersion::V2);
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("UnifiedExec feature");
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("Collab feature");
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("MultiAgentV2 feature");
+            configure_team(config, TeamMode::LeadWorker);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let first_sample = wait_for_captured_request(
+        &initial_request,
+        |request| {
+            request.body_contains_text(PROMPT) && response_request_has_model(request, LEAD_MODEL)
+        },
+        "initial prompt-guided sample",
+    )
+    .await;
+    let first_instructions =
+        latest_team_role_instructions(&first_sample).expect("Lead instructions in first sample");
+    assert!(
+        !first_instructions.contains("Lead work policy: manager_only"),
+        "first sample should be prompt-guided: {first_instructions}"
+    );
+    test.codex.pause_activity_with_ack(/*trace*/ None).await?;
+    wait_for_pause_gate_before_function_call(&test.codex, PROMPT_GUIDED_STALE_CALL_ID).await;
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::ManagerOnly),
+    )
+    .await?;
+    test.codex.continue_activity_with_ack().await?;
+
+    let after_prompt_guided_stale_call = wait_for_captured_request_with_timeout(
+        &manager_only_sample,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    PROMPT_GUIDED_STALE_CALL_ID,
+                )
+        },
+        "reassessment after a stale prompt-guided call",
+        Duration::from_secs(/*secs*/ 10),
+    )
+    .await;
+    let stale_prompt_guided_output = after_prompt_guided_stale_call
+        .function_call_output_text(PROMPT_GUIDED_STALE_CALL_ID)
+        .expect("stale prompt-guided call output");
+    assert!(
+        stale_prompt_guided_output.contains("policy changed after this tool call was sampled"),
+        "stale prompt-guided call should be rejected before dispatch: {stale_prompt_guided_output}"
+    );
+    let manager_only_instructions = latest_team_role_instructions(&after_prompt_guided_stale_call)
+        .expect("Lead instructions in manager-only sample");
+    assert!(
+        manager_only_instructions.contains("Lead work policy: manager_only"),
+        "reassessment should advertise manager-only: {manager_only_instructions}"
+    );
+
+    let after_manager_only_fresh_call = wait_for_captured_request(
+        &manager_only_fresh_followup,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, MANAGER_ONLY_FRESH_CALL_ID)
+        },
+        "manager-only call admitted from a current sample",
+    )
+    .await;
+    assert_eq!(
+        after_manager_only_fresh_call
+            .function_call_output_text(MANAGER_ONLY_FRESH_CALL_ID)
+            .as_deref(),
+        Some("ok"),
+        "a manager-only call sampled under the current policy should be admitted"
+    );
+    let manager_only_fresh_instructions =
+        latest_team_role_instructions(&after_manager_only_fresh_call)
+            .expect("Lead instructions in the fresh manager-only sample");
+    assert!(
+        manager_only_fresh_instructions.contains("Lead work policy: manager_only"),
+        "fresh manager-only call should follow current instructions: {manager_only_fresh_instructions}"
+    );
+
+    test.codex.pause_activity_with_ack(/*trace*/ None).await?;
+    wait_for_pause_gate_before_function_call(&test.codex, MANAGER_ONLY_STALE_CALL_ID).await;
+    submit_thread_settings(
+        &test.codex,
+        lead_work_policy_update(TeamLeadWorkPolicy::PromptGuided),
+    )
+    .await?;
+    test.codex.continue_activity_with_ack().await?;
+
+    let after_manager_only_stale_call = wait_for_captured_request_with_timeout(
+        &prompt_guided_step,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, MANAGER_ONLY_STALE_CALL_ID)
+        },
+        "reassessment after a stale manager-only call",
+        Duration::from_secs(/*secs*/ 10),
+    )
+    .await;
+    let stale_manager_only_output = after_manager_only_stale_call
+        .function_call_output_text(MANAGER_ONLY_STALE_CALL_ID)
+        .expect("stale manager-only call output");
+    assert!(
+        stale_manager_only_output.contains("policy changed after this tool call was sampled"),
+        "stale manager-only call should be rejected before dispatch: {stale_manager_only_output}"
+    );
+    let prompt_guided_instructions = latest_team_role_instructions(&after_manager_only_stale_call)
+        .expect("Lead instructions in prompt-guided sample after toggle");
+    assert!(
+        !prompt_guided_instructions.contains("Lead work policy: manager_only"),
+        "reassessment should advertise prompt-guided: {prompt_guided_instructions}"
+    );
+
+    let after_fresh_call = wait_for_captured_request(
+        &final_response,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, PROMPT_GUIDED_FRESH_CALL_ID)
+        },
+        "latest prompt-guided call dispatch",
+    )
+    .await;
+    assert_eq!(
+        after_fresh_call
+            .function_call_output_text(PROMPT_GUIDED_FRESH_CALL_ID)
+            .as_deref(),
+        Some("ok"),
+        "a call sampled under the latest policy should be admitted"
+    );
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     Ok(())
 }
 

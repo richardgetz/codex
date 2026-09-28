@@ -16,10 +16,12 @@ use tracing::trace_span;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::session::team::effective_role_for_session_source;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolPayload;
+use crate::tools::lead_passive_poll::observe_lead_passive_poll_dispatch;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolActivityKind;
@@ -27,9 +29,11 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
+use codex_config::TeamRole as ConfigTeamRole;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::TeamMode;
 
 struct ToolCallTimingGuard {
     started_at: Instant,
@@ -102,6 +106,12 @@ impl ToolCallRuntime {
         source: ToolCallSource,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
+        let sampled_team_lead_work_policy = *self.step_context.team_lead_work_policy.load_full();
+        let is_team_lead = self.step_context.turn.config.team_mode == TeamMode::LeadWorker
+            && effective_role_for_session_source(
+                &self.step_context.turn.config,
+                &self.step_context.turn.session_source,
+            ) == Some(ConfigTeamRole::Lead);
         if self
             .step_context
             .turn
@@ -198,6 +208,22 @@ impl ToolCallRuntime {
                 {
                     return Err(FunctionCallError::Fatal(err.to_string()));
                 }
+                if is_team_lead {
+                    // This is the linearization point for Team Lead tool admission. A policy
+                    // commit before it rejects a stale sampled call; a commit after it leaves
+                    // this admitted operation intact, even if pause admission delays its start.
+                    let _team_lead_turn_admission = session.team_lead_turn_admission.lock().await;
+                    let current_team_lead_work_policy = session
+                        .get_config()
+                        .await
+                        .effective_team_lead_work_policy();
+                    if current_team_lead_work_policy != sampled_team_lead_work_policy {
+                        return Err(FunctionCallError::RespondToModel(
+                            "The Team Lead work policy changed after this tool call was sampled. No tool action was started; reassess the latest policy before continuing."
+                                .to_string(),
+                        ));
+                    }
+                }
                 let _activity_operation = match activity_operation_kind {
                     ToolActivityKind::Execution => Some(
                         session
@@ -207,6 +233,11 @@ impl ToolCallRuntime {
                     ),
                     ToolActivityKind::Quiescent => None,
                 };
+                observe_lead_passive_poll_dispatch(
+                    turn.as_ref(),
+                    &dispatch_call,
+                    step_context.passive_poll_sample_id,
+                );
                 // Admission through both the parallel-execution gate and the activity gate marks
                 // the end of dispatch waiting and the start of handler execution.
                 if let Some(execution_started_at) = execution_started_at {

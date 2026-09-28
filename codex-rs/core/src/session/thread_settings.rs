@@ -172,6 +172,9 @@ async fn apply_update_with_policy(
         // Invalidate the continuation before its accepted settings snapshot can be delivered.
         session.state.lock().await.last_started_turn_id = None;
     }
+    // `update_settings` returns after the shared Team admission boundary is released. The
+    // Applied event therefore acknowledges that later tool calls will observe the committed
+    // policy; operations admitted before the commit remain in flight.
     emit_applied(
         session,
         submission_id,

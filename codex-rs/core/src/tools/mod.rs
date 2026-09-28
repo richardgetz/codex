@@ -9,6 +9,7 @@ mod executed_tool_calls;
 pub(crate) mod handlers;
 pub(crate) mod hook_names;
 pub(crate) mod hosted_spec;
+mod lead_passive_poll;
 pub(crate) mod lifecycle;
 mod manager_only;
 mod multi_agent_tool;
