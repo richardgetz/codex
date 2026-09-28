@@ -69,10 +69,7 @@ impl Handler {
         }
         let is_team_lead = session.is_team_lead().await;
         let lead_policy_changed_at_entry = is_team_lead
-            && session
-                .get_config()
-                .await
-                .effective_team_lead_work_policy()
+            && session.get_config().await.effective_team_lead_work_policy()
                 != sampled_lead_work_policy;
         let mut active_workers = if is_team_lead {
             Some(
@@ -137,10 +134,7 @@ impl Handler {
         // by this comparison; a later commit is delivered through the activity watch.
         let lead_policy_changed = lead_policy_changed_at_entry
             || (is_team_lead
-                && session
-                    .get_config()
-                    .await
-                    .effective_team_lead_work_policy()
+                && session.get_config().await.effective_team_lead_work_policy()
                     != sampled_lead_work_policy);
 
         session
@@ -207,10 +201,7 @@ impl Handler {
                 if outcome != WaitOutcome::TeamPolicyChanged
                     || !is_team_lead
                     || !session.is_team_lead().await
-                    || session
-                        .get_config()
-                        .await
-                        .effective_team_lead_work_policy()
+                    || session.get_config().await.effective_team_lead_work_policy()
                         != sampled_lead_work_policy
                 {
                     break outcome;
@@ -364,7 +355,11 @@ pub(super) async fn wait_for_activity(
                 Ok(Ok(())) => Some(*activity_rx.borrow_and_update()),
                 Ok(Err(_)) | Err(_) => None,
             },
-            None => activity_rx.changed().await.ok().map(|()| *activity_rx.borrow_and_update()),
+            None => activity_rx
+                .changed()
+                .await
+                .ok()
+                .map(|()| *activity_rx.borrow_and_update()),
         }
     };
     tokio::pin!(activity);

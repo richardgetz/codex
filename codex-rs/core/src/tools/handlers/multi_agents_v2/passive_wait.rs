@@ -1,4 +1,6 @@
-use super::wait::{WaitOutcome, wait_for_activity, wait_outcome_for_activity};
+use super::wait::WaitOutcome;
+use super::wait::wait_for_activity;
+use super::wait::wait_outcome_for_activity;
 use crate::session::LeadIdleArmMode;
 use crate::session::LeadIdleDeadline;
 use crate::session::format_lead_wait_message;
@@ -61,11 +63,8 @@ pub(crate) async fn wait_for_lead_passive_poll(
     let deadline_is_current = session
         .lead_oversight_deadline_is_current(deadline.instant)
         .await;
-    let mut policy_changed = session
-        .get_config()
-        .await
-        .effective_team_lead_work_policy()
-        != sampled_policy;
+    let mut policy_changed =
+        session.get_config().await.effective_team_lead_work_policy() != sampled_policy;
 
     if deadline_is_current && session.lead_idle_notifications_enabled().await {
         session
@@ -118,10 +117,7 @@ pub(crate) async fn wait_for_lead_passive_poll(
             return outcome;
         }
         let live_team_lead = session.is_team_lead().await;
-        let live_policy = session
-            .get_config()
-            .await
-            .effective_team_lead_work_policy();
+        let live_policy = session.get_config().await.effective_team_lead_work_policy();
         if !live_team_lead || live_policy != sampled_policy {
             return WaitOutcome::TeamPolicyChanged;
         }

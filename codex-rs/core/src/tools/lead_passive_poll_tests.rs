@@ -1,6 +1,6 @@
 use super::LeadPassivePollObservation;
-use super::long_clock_sleep_duration_ms;
 use super::lead_passive_poll_observation;
+use super::long_clock_sleep_duration_ms;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
 use codex_tools::ToolName;
@@ -128,7 +128,10 @@ fn only_observed_read_only_gh_run_commands_are_status_probes() {
 #[test]
 fn only_valid_long_clock_sleeps_are_tracked() {
     assert_eq!(long_clock_sleep_duration_ms(&clock_sleep(29_999)), None);
-    assert_eq!(long_clock_sleep_duration_ms(&clock_sleep(30_000)), Some(30_000));
+    assert_eq!(
+        long_clock_sleep_duration_ms(&clock_sleep(30_000)),
+        Some(30_000)
+    );
     assert_eq!(
         long_clock_sleep_duration_ms(&clock_sleep(43_200_000)),
         Some(43_200_000)

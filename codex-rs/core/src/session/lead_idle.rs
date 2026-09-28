@@ -364,7 +364,10 @@ impl Session {
             .active_direct_worker_count(self.thread_id)
             .await;
         if active_workers == 0 {
-            tracing::debug!(generation, "suppressed Lead oversight wake because no direct Workers remain");
+            tracing::debug!(
+                generation,
+                "suppressed Lead oversight wake because no direct Workers remain"
+            );
             return;
         }
         if !self
@@ -372,10 +375,17 @@ impl Session {
             .generation_is_current(generation)
             .await
         {
-            tracing::debug!(generation, "suppressed Lead oversight wake after generation changed");
+            tracing::debug!(
+                generation,
+                "suppressed Lead oversight wake after generation changed"
+            );
             return;
         }
-        tracing::debug!(generation, active_workers, "Lead oversight deadline reached");
+        tracing::debug!(
+            generation,
+            active_workers,
+            "Lead oversight deadline reached"
+        );
         self.emit_lead_idle_event(format!(
             "Lead oversight deadline reached; waking for review while {active_workers} direct Worker(s) remain active.",
         ))
@@ -467,7 +477,10 @@ impl Session {
     /// so a cancelled timer cannot enqueue a stale trigger after the cleanup.
     async fn enqueue_lead_oversight_wakeup(&self, generation: u64, message: &str) -> bool {
         let Ok(_handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
-            tracing::debug!(generation, "suppressed Lead oversight wake because handoff admission is closed");
+            tracing::debug!(
+                generation,
+                "suppressed Lead oversight wake because handoff admission is closed"
+            );
             return false;
         };
         // Keep synthetic trigger insertion in the same boundary as Team Off cleanup and other
@@ -500,7 +513,10 @@ impl Session {
             .active_direct_worker_count(self.thread_id)
             .await;
         if active_workers == 0 {
-            tracing::debug!(generation, "suppressed Lead oversight wake at admission because no direct Workers remain");
+            tracing::debug!(
+                generation,
+                "suppressed Lead oversight wake at admission because no direct Workers remain"
+            );
             return false;
         }
         if let Some(summary) = self.input_queue.take_team_progress_summary().await {

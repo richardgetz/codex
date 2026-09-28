@@ -700,7 +700,10 @@ async fn live_lead_work_policy_update_reaches_the_next_step_of_an_active_turn() 
         },
         sse(vec![
             ev_response_created("live-policy-helper-first-tool-complete"),
-            ev_assistant_message("live-policy-helper-first-tool-message", "first tool released"),
+            ev_assistant_message(
+                "live-policy-helper-first-tool-message",
+                "first tool released",
+            ),
             ev_completed("live-policy-helper-first-tool-complete"),
         ]),
     )
@@ -865,11 +868,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         },
         sse_response(sse(vec![
             ev_response_created("live-policy-stale-prompt-guided-response"),
-            ev_function_call(
-                PROMPT_GUIDED_STALE_CALL_ID,
-                "test_sync_tool",
-                "{}",
-            ),
+            ev_function_call(PROMPT_GUIDED_STALE_CALL_ID, "test_sync_tool", "{}"),
             ev_completed("live-policy-stale-prompt-guided-response"),
         ]))
         .set_delay(delayed_response),
@@ -884,11 +883,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         },
         sse(vec![
             ev_response_created("live-policy-manager-only-fresh-response"),
-            ev_function_call(
-                MANAGER_ONLY_FRESH_CALL_ID,
-                "test_sync_tool",
-                "{}",
-            ),
+            ev_function_call(MANAGER_ONLY_FRESH_CALL_ID, "test_sync_tool", "{}"),
             ev_completed("live-policy-manager-only-fresh-response"),
         ]),
     )
@@ -902,11 +897,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         },
         sse_response(sse(vec![
             ev_response_created("live-policy-stale-manager-only-response"),
-            ev_function_call(
-                MANAGER_ONLY_STALE_CALL_ID,
-                "test_sync_tool",
-                "{}",
-            ),
+            ev_function_call(MANAGER_ONLY_STALE_CALL_ID, "test_sync_tool", "{}"),
             ev_completed("live-policy-stale-manager-only-response"),
         ]))
         .set_delay(delayed_response),
@@ -921,11 +912,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         },
         sse(vec![
             ev_response_created("live-policy-fresh-prompt-guided-response"),
-            ev_function_call(
-                PROMPT_GUIDED_FRESH_CALL_ID,
-                "test_sync_tool",
-                "{}",
-            ),
+            ev_function_call(PROMPT_GUIDED_FRESH_CALL_ID, "test_sync_tool", "{}"),
             ev_completed("live-policy-fresh-prompt-guided-response"),
         ]),
     )
@@ -1002,10 +989,7 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         &manager_only_sample,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
-                && response_request_has_function_call_output(
-                    request,
-                    PROMPT_GUIDED_STALE_CALL_ID,
-                )
+                && response_request_has_function_call_output(request, PROMPT_GUIDED_STALE_CALL_ID)
         },
         "reassessment after a stale prompt-guided call",
         Duration::from_secs(/*secs*/ 10),
@@ -1098,10 +1082,12 @@ async fn live_policy_changes_reject_stale_calls_and_admit_calls_from_latest_samp
         Some("ok"),
         "a call sampled under the latest policy should be admitted"
     );
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
     Ok(())
 }
-
 
 const POLICY_SWITCH_ROOT_PROMPT: &str = "delegate both workers before changing Lead policy";
 const POLICY_SWITCH_FIRST_TASK: &str = "policy switch first worker task";

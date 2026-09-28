@@ -213,10 +213,8 @@ impl ToolCallRuntime {
                     // commit before it rejects a stale sampled call; a commit after it leaves
                     // this admitted operation intact, even if pause admission delays its start.
                     let _team_lead_turn_admission = session.team_lead_turn_admission.lock().await;
-                    let current_team_lead_work_policy = session
-                        .get_config()
-                        .await
-                        .effective_team_lead_work_policy();
+                    let current_team_lead_work_policy =
+                        session.get_config().await.effective_team_lead_work_policy();
                     if current_team_lead_work_policy != sampled_team_lead_work_policy {
                         return Err(FunctionCallError::RespondToModel(
                             "The Team Lead work policy changed after this tool call was sampled. No tool action was started; reassess the latest policy before continuing."

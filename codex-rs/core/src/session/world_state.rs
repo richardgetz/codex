@@ -139,9 +139,11 @@ impl Session {
         // Other turn settings stay captured for this turn. Team execution ownership is the
         // exception: successful settings updates apply immediately to subsequent model steps.
         let current_config = self.get_config().await;
-        step_context.team_lead_work_policy.store(std::sync::Arc::new(
-            current_config.effective_team_lead_work_policy(),
-        ));
+        step_context
+            .team_lead_work_policy
+            .store(std::sync::Arc::new(
+                current_config.effective_team_lead_work_policy(),
+            ));
         let team_policy =
             super::team::world_state_policy(&current_config, &turn_context.session_source);
         world_state.add_section(ModelInstructionsState::new(

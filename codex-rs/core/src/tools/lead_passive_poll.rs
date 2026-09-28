@@ -25,9 +25,7 @@ pub(crate) fn observe_lead_passive_poll_dispatch(
     ) {
         LeadPassivePollObservation::Transparent => {}
         LeadPassivePollObservation::StatusProbe => state.observed_status_probe(sample_id),
-        LeadPassivePollObservation::SubstantiveWork => {
-            state.observed_substantive_work(sample_id)
-        }
+        LeadPassivePollObservation::SubstantiveWork => state.observed_substantive_work(sample_id),
     }
 }
 
@@ -55,25 +53,25 @@ fn lead_passive_poll_observation(
     }
     let is_list_agents = call.tool_name.name == "list_agents"
         && (call.tool_name.is_default_namespace()
-            || configured_v2_namespace.is_some_and(|namespace| {
-                call.tool_name.namespace.as_deref() == Some(namespace)
-            }));
+            || configured_v2_namespace
+                .is_some_and(|namespace| call.tool_name.namespace.as_deref() == Some(namespace)));
     let is_worker_capacity = call.tool_name.name == "worker_capacity"
         && (call.tool_name.is_default_namespace()
             || call.tool_name.namespace.as_deref() == Some("multi_agent_v1"));
     if is_list_agents || is_worker_capacity {
         return LeadPassivePollObservation::StatusProbe;
     }
-    if call.tool_name.is_default_namespace() && call.tool_name.name == "exec_command"
+    if call.tool_name.is_default_namespace()
+        && call.tool_name.name == "exec_command"
         && let ToolPayload::Function { arguments } = &call.payload
-            && serde_json::from_str::<serde_json::Value>(arguments)
-                .ok()
-                .and_then(|value| value.get("cmd")?.as_str().map(str::to_string))
-                .as_deref()
-                .is_some_and(is_read_only_gh_run_view)
-        {
-            return LeadPassivePollObservation::StatusProbe;
-        }
+        && serde_json::from_str::<serde_json::Value>(arguments)
+            .ok()
+            .and_then(|value| value.get("cmd")?.as_str().map(str::to_string))
+            .as_deref()
+            .is_some_and(is_read_only_gh_run_view)
+    {
+        return LeadPassivePollObservation::StatusProbe;
+    }
     LeadPassivePollObservation::SubstantiveWork
 }
 
@@ -141,8 +139,24 @@ fn is_safe_jq_filter(filter: &str) -> bool {
                 || character == ' '
                 || matches!(
                     character,
-                    '_' | '.' | '[' | ']' | '{' | '}' | '(' | ')' | '?' | ':' | ',' | '|'
-                        | '=' | '+' | '-' | '*' | '/' | '"' | '\''
+                    '_' | '.'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '('
+                        | ')'
+                        | '?'
+                        | ':'
+                        | ','
+                        | '|'
+                        | '='
+                        | '+'
+                        | '-'
+                        | '*'
+                        | '/'
+                        | '"'
+                        | '\''
                 )
         })
 }

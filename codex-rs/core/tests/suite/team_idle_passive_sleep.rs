@@ -15,7 +15,8 @@ async fn lead_parks_repeated_sleep_after_worker_status_until_configured_oversigh
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn manager_only_lead_parks_repeated_sleep_after_worker_status_until_configured_oversight() -> Result<()> {
+async fn manager_only_lead_parks_repeated_sleep_after_worker_status_until_configured_oversight()
+-> Result<()> {
     run_passive_sleep_flow(codex_config::TeamLeadWorkPolicy::ManagerOnly).await
 }
 
@@ -236,13 +237,9 @@ async fn run_passive_sleep_flow(policy: codex_config::TeamLeadWorkPolicy) -> Res
     tokio::time::advance(Duration::from_secs(59)).await;
     tokio::task::yield_now().await;
     assert!(
-        root_after_deadline
-            .requests()
-            .iter()
-            .all(|request| !response_request_has_function_call_output(
-                request,
-                PASSIVE_SECOND_SLEEP_CALL_ID
-            )),
+        root_after_deadline.requests().iter().all(|request| {
+            !response_request_has_function_call_output(request, PASSIVE_SECOND_SLEEP_CALL_ID)
+        }),
         "the passive poll must remain parked before the configured deadline"
     );
     tokio::time::advance(Duration::from_secs(1)).await;

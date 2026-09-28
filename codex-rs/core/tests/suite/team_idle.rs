@@ -839,10 +839,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, INITIAL_MODEL)
-                && request_has_function_call_output(
-                    request,
-                    MANAGER_BATCH_ACTION_RELEASE_CALL_ID,
-                )
+                && request_has_function_call_output(request, MANAGER_BATCH_ACTION_RELEASE_CALL_ID)
         },
         sse(vec![
             ev_response_created("manager-batch-helper-released"),
@@ -1618,9 +1615,10 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             observed_deadline_warnings.push(warning.message.clone());
         }
         if event_id == policy_update_id
-            && let EventMsg::Error(error) = &event_msg {
-                panic!("policy update failed: {}", error.message);
-            }
+            && let EventMsg::Error(error) = &event_msg
+        {
+            panic!("policy update failed: {}", error.message);
+        }
         if let EventMsg::ItemStarted(item) = &event_msg
             && let TurnItem::CollabAgentToolCall(call) = &item.item
         {
@@ -1632,16 +1630,10 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
     }
     tokio::time::sleep(Duration::from_millis(250)).await;
     assert!(
-        root_after_deadline
-            .requests()
-            .iter()
-            .all(|request| {
-                !request.body_contains_text("oversight deadline has elapsed")
-                    && !response_request_has_function_call_output(
-                        request,
-                        DEADLINE_POLICY_WAIT_CALL_ID,
-                    )
-            }),
+        root_after_deadline.requests().iter().all(|request| {
+            !request.body_contains_text("oversight deadline has elapsed")
+                && !response_request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
+        }),
         "the next wait must remain parked after its request observes the committed policy"
     );
 

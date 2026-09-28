@@ -106,9 +106,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             if !is_team_lead {
                 turn.lead_passive_poll.reset();
             }
-            let passive_park = turn
-                .lead_passive_poll
-                .take_sleep_park_decision(&call_id);
+            let passive_park = turn.lead_passive_poll.take_sleep_park_decision(&call_id);
             if let Some((substantive_work_rx, substantive_work_generation)) = passive_park {
                 let active_workers = session
                     .services
@@ -218,7 +216,9 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
     }
 }
 
-fn passive_wait_message(outcome: crate::tools::handlers::multi_agents_v2::wait::WaitOutcome) -> &'static str {
+fn passive_wait_message(
+    outcome: crate::tools::handlers::multi_agents_v2::wait::WaitOutcome,
+) -> &'static str {
     use crate::tools::handlers::multi_agents_v2::wait::WaitOutcome;
     match outcome {
         WaitOutcome::MailboxActivity => "Worker or coordination activity arrived; review it now.",
@@ -233,7 +233,9 @@ fn passive_wait_message(outcome: crate::tools::handlers::multi_agents_v2::wait::
         }
         WaitOutcome::Paused => "Wait paused by Team activity control.",
         WaitOutcome::Cancelled => "Wait cancelled.",
-        WaitOutcome::SubstantiveWork => "Independent Lead work started; reassess before waiting again.",
+        WaitOutcome::SubstantiveWork => {
+            "Independent Lead work started; reassess before waiting again."
+        }
     }
 }
 

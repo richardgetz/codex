@@ -21,9 +21,11 @@ fn same_sample_status_and_sleep_do_not_trigger_a_passive_park() {
 
     sleep_before_status.observed_status_probe(4);
     sleep_before_status.schedule_sleep("after-later-probe", 5);
-    assert!(sleep_before_status
-        .take_sleep_park_decision("after-later-probe")
-        .is_some());
+    assert!(
+        sleep_before_status
+            .take_sleep_park_decision("after-later-probe")
+            .is_some()
+    );
 }
 
 #[test]
