@@ -660,7 +660,15 @@ enum AppServerDaemonSubcommand {
     },
 
     /// Apply an installed Codex update after checkpointing every loaded app-server tree.
-    Apply,
+    Apply {
+        /// Select the locally configured launcher to use after applying the update.
+        #[arg(
+            long = "codex-bin",
+            value_name = "PATH",
+            value_parser = parse_absolute_launcher_path
+        )]
+        managed_codex_path: Option<AbsolutePathBuf>,
+    },
 
     /// Recover a previously checkpointed app-server tree after an interrupted apply.
     Recover {
@@ -1364,9 +1372,14 @@ async fn cli_main(
                             println!("{}", serde_json::to_string(&output)?);
                         }
                     }
-                    AppServerDaemonSubcommand::Apply => {
-                        print_app_server_apply_output(codex_app_server_daemon::apply().await?)
+                    AppServerDaemonSubcommand::Apply { managed_codex_path } => {
+                        let selected_target = managed_codex_path.is_some();
+                        let output =
+                            codex_app_server_daemon::apply(codex_app_server_daemon::ApplyOptions {
+                                managed_codex_path: managed_codex_path.map(PathBuf::from),
+                            })
                             .await?;
+                        print_app_server_apply_output(output, selected_target).await?;
                     }
                     AppServerDaemonSubcommand::Recover { quarantine } => {
                         let output = if quarantine {
@@ -1374,11 +1387,12 @@ async fn cli_main(
                         } else {
                             codex_app_server_daemon::recover().await?
                         };
-                        print_app_server_apply_output(output).await?;
+                        print_app_server_apply_output(output, /*fail_on_pending*/ false).await?;
                     }
                     AppServerDaemonSubcommand::ApplyStatus => {
                         print_app_server_apply_output(
                             codex_app_server_daemon::apply_status().await?,
+                            /*fail_on_pending*/ false,
                         )
                         .await?;
                     }
@@ -2469,7 +2483,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
             AppServerDaemonSubcommand::Update { .. } => "app-server daemon update",
-            AppServerDaemonSubcommand::Apply => "app-server daemon apply",
+            AppServerDaemonSubcommand::Apply { .. } => "app-server daemon apply",
             AppServerDaemonSubcommand::Recover { .. } => "app-server daemon recover",
             AppServerDaemonSubcommand::ApplyStatus => "app-server daemon apply-status",
             AppServerDaemonSubcommand::EnableRemoteControl => {
@@ -2499,8 +2513,19 @@ async fn print_app_server_daemon_output(command: AppServerLifecycleCommand) -> a
 
 async fn print_app_server_apply_output(
     output: codex_app_server_daemon::ApplyOutput,
+    fail_on_pending: bool,
 ) -> anyhow::Result<()> {
+    let pending = matches!(
+        output.status,
+        codex_app_server_daemon::ApplyStatus::InProgress
+            | codex_app_server_daemon::ApplyStatus::NeedsAttention
+    );
     println!("{}", serde_json::to_string(&output)?);
+    if fail_on_pending && pending {
+        anyhow::bail!(
+            "daemon apply is pending; inspect the JSON error and run `codex app-server daemon recover` or `apply-status`"
+        );
+    }
     Ok(())
 }
 
@@ -4880,7 +4905,28 @@ mod tests {
         assert!(matches!(
             app_server_from_args(["codex", "app-server", "daemon", "apply"].as_ref()).subcommand,
             Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
-                subcommand: AppServerDaemonSubcommand::Apply
+                subcommand: AppServerDaemonSubcommand::Apply {
+                    managed_codex_path: None
+                }
+            }))
+        ));
+        assert!(matches!(
+            app_server_from_args(
+                [
+                    "codex",
+                    "app-server",
+                    "daemon",
+                    "apply",
+                    "--codex-bin",
+                    "/opt/homebrew/bin/codex-rick"
+                ]
+                .as_ref()
+            )
+            .subcommand,
+            Some(AppServerSubcommand::Daemon(AppServerDaemonCommand {
+                subcommand: AppServerDaemonSubcommand::Apply {
+                    managed_codex_path: Some(_)
+                }
             }))
         ));
         assert!(matches!(

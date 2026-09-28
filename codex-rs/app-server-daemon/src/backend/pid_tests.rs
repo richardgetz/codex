@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::time::sleep;
 
 use codex_app_server_transport::APP_SERVER_DAEMON_MANAGED_ENV;
 use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
@@ -44,6 +45,7 @@ async fn running_launch_identity_returns_the_active_record_identity() {
         process_start_time: super::read_process_start_time(std::process::id())
             .await
             .expect("current process start time"),
+        process_identity: None,
         executable_identity: None,
         launch_identity: Some(identity.clone()),
     };
@@ -93,6 +95,7 @@ async fn running_launch_identity_cleans_stale_record_without_returning_identity(
     let record = PidRecord {
         pid: u32::MAX,
         process_start_time: "stale".to_string(),
+        process_identity: None,
         executable_identity: None,
         launch_identity: Some(LaunchIdentity {
             path: "/opt/homebrew/bin/codex-rick".into(),
@@ -126,6 +129,7 @@ fn pid_records_persist_launch_identity_with_process_metadata() {
     let record = PidRecord {
         pid: 42,
         process_start_time: "started-at".to_string(),
+        process_identity: None,
         executable_identity: None,
         launch_identity: Some(LaunchIdentity {
             path: "/opt/homebrew/bin/codex-rick".into(),

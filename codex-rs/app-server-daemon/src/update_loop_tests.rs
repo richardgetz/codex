@@ -80,6 +80,7 @@ async fn explicit_update_migrates_running_and_stopped_installations() {
                 .await
                 .unwrap(),
             &mut test_terminate(),
+            /*listener*/ &mut None,
             super::UpdateTrigger::Scheduled,
         )
         .await

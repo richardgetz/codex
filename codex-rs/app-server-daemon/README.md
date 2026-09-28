@@ -34,6 +34,7 @@ authoritative and report connection failures.
 codex app-server daemon start
 codex app-server daemon restart
 codex app-server daemon apply
+codex app-server daemon apply --codex-bin /opt/homebrew/bin/codex-rick
 codex app-server daemon recover
 codex app-server daemon recover --quarantine
 codex app-server daemon apply-status
@@ -59,6 +60,7 @@ quarantined receipt), while `canQuarantine` identifies unresolved receipts
 that may be sent through the durable pause-and-quarantine flow. A receipt
 whose replacement may have started remains fenced until exact recovery or
 explicit quarantine succeeds.
+Target-aware apply has null `handoffId` and `state` when deferred or unconfigured.
 
 ## Bootstrap flow
 
@@ -161,11 +163,21 @@ symlinks and shims can point to the newly installed version.
 
 ### Safe installed-version apply
 
-`apply` and `recover` currently require an explicitly configured launcher from
-`bootstrap --codex-bin PATH`. They reject the default standalone selection before
-preparing or stopping anything, because its detached updater can be installing at
-the same time. Standalone lifecycle and updater behavior remain available through
-`start`, `restart`, and the existing bootstrap flow.
+`apply` and `recover` need a configured launcher from `bootstrap --codex-bin PATH`.
+Installers can pass an absolute target to `apply --codex-bin PATH`. Unconfigured
+daemons return `notConfigured` unchanged; stopped configured daemons persist the
+target as `deferred` without starting. Running daemons validate the target before
+safe handoff; standalone remains ineligible while its updater may race.
+Conflicting unresolved receipts stay unchanged and return `needsAttention`.
+Target-aware `applied`, `deferred`, and `notConfigured` exit 0; `inProgress` and
+`needsAttention` emit JSON and exit nonzero. Standalone lifecycle and updater
+behavior remain available through `start`, `restart`, and bootstrap.
+
+At startup, launcher reconciliation uses the active daemon PID record's launch
+version when available. For legacy PID records without that metadata, it probes
+the active app-server version before deciding whether the selected launcher is
+current; if either version cannot be established, startup reports the specific
+reconciliation failure and does not continue with an unverified launcher.
 
 apply is the daemon-wide update button for a locally installed launcher. It asks
 the app-server coordinator to checkpoint every loaded root and child tree. The
@@ -186,6 +198,7 @@ codex app-server daemon apply-status
 apply always prepares all loaded roots because replacing the daemon would
 interrupt every tree. apply-status is read-only. These commands use the local
 Unix control socket and do not enable remote control or enroll a cloud service.
+TUI startup reconciles pending handoffs and launcher mismatches before feature checks, reporting RPC cause, selected path, versions, and recovery steps.
 
 ## Lifecycle semantics
 
