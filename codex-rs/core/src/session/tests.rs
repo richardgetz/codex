@@ -301,12 +301,16 @@ impl StepContext {
         });
         settings.service_tier = turn.config.service_tier.clone();
         Arc::new(Self {
+            passive_poll_sample_id: turn.next_passive_poll_sample_id(),
             token_budget: token_budget::resolve_token_budget(
                 turn.configured_token_budget.as_ref(),
                 turn.use_model_token_budget_defaults,
                 settings.model_info.as_ref(),
             ),
             settings: Arc::new(settings),
+            team_lead_work_policy: arc_swap::ArcSwap::from_pointee(
+                turn.config.effective_team_lead_work_policy(),
+            ),
             session_telemetry: turn.session_telemetry.clone(),
             turn: Arc::clone(&turn),
             environments,

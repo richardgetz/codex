@@ -53,8 +53,11 @@ impl Session {
         };
 
         let mut world_state = WorldState::default();
+        // Team policy belongs to the thread and can change while a turn is active. Read the
+        // current session config so the next model request sees an accepted live policy update.
+        let current_config = self.get_config().await;
         if let Some(team_policy) =
-            super::team::world_state_policy(&turn_context.config, &turn_context.session_source)
+            super::team::world_state_policy(&current_config, &turn_context.session_source)
         {
             world_state.add_section(team_policy);
         }
@@ -133,8 +136,16 @@ impl Session {
             String::new()
         };
         let mut world_state = WorldState::default();
+        // Other turn settings stay captured for this turn. Team execution ownership is the
+        // exception: successful settings updates apply immediately to subsequent model steps.
+        let current_config = self.get_config().await;
+        step_context
+            .team_lead_work_policy
+            .store(std::sync::Arc::new(
+                current_config.effective_team_lead_work_policy(),
+            ));
         let team_policy =
-            super::team::world_state_policy(&turn_context.config, &turn_context.session_source);
+            super::team::world_state_policy(&current_config, &turn_context.session_source);
         world_state.add_section(ModelInstructionsState::new(
             &step_model_info.slug,
             previous_model.as_deref(),

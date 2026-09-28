@@ -1,17 +1,15 @@
 use super::*;
-use crate::agent::status::is_final;
 use crate::session::InputQueueActivity;
 use crate::session::LeadIdleArmMode;
 use crate::session::format_lead_wait_message;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_spec::create_wait_agent_tool_v2;
 use codex_tools::ToolSpec;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::Instant;
 use tokio::time::timeout_at;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
 pub(crate) struct Handler {
@@ -49,6 +47,7 @@ impl Handler {
         let ToolInvocation {
             session,
             turn,
+            step_context,
             payload,
             call_id,
             cancellation_token,
@@ -59,6 +58,7 @@ impl Handler {
         let min_timeout_ms = turn.config.multi_agent_v2.min_wait_timeout_ms;
         let max_timeout_ms = turn.config.multi_agent_v2.max_wait_timeout_ms;
         let default_timeout_ms = turn.config.multi_agent_v2.default_wait_timeout_ms;
+        let sampled_lead_work_policy = *step_context.team_lead_work_policy.load_full();
         let requested_timeout_ms = args.timeout_ms;
         if let Some(ms) = requested_timeout_ms
             && ms > max_timeout_ms
@@ -68,6 +68,9 @@ impl Handler {
             )));
         }
         let is_team_lead = session.is_team_lead().await;
+        let lead_policy_changed_at_entry = is_team_lead
+            && session.get_config().await.effective_team_lead_work_policy()
+                != sampled_lead_work_policy;
         let mut active_workers = if is_team_lead {
             Some(
                 session
@@ -80,15 +83,6 @@ impl Handler {
             None
         };
         let mut lead_has_active_workers = active_workers.is_some_and(|count| count > 0);
-        let (worker_status_watchers, worker_status_changed) = if lead_has_active_workers {
-            session
-                .services
-                .agent_control
-                .direct_worker_status_watchers(session.thread_id)
-                .await
-        } else {
-            (Vec::new(), false)
-        };
         let lead_deadline = if lead_has_active_workers {
             session
                 .arm_lead_oversight(LeadIdleArmMode::ExplicitWait)
@@ -136,6 +130,12 @@ impl Handler {
             .input_queue
             .subscribe_activity(turn_state.as_deref())
             .await;
+        // Subscribe before reading live config. A policy commit before subscription is detected
+        // by this comparison; a later commit is delivered through the activity watch.
+        let lead_policy_changed = lead_policy_changed_at_entry
+            || (is_team_lead
+                && session.get_config().await.effective_team_lead_work_policy()
+                    != sampled_lead_work_policy);
 
         session
             .emit_turn_item_started(
@@ -170,32 +170,42 @@ impl Handler {
             } else {
                 false
             };
+        let wait_deadline = if let Some(deadline) = lead_deadline {
+            deadline.instant
+        } else {
+            Instant::now() + Duration::from_millis(timeout_ms as u64)
+        };
         let wait_outcome = async {
-            if is_team_lead && !lead_has_active_workers {
-                WaitOutcome::NoActiveWorkers
-            } else if worker_status_changed {
-                WaitOutcome::WorkerStatusChanged
-            } else if lead_wait_cancelled {
-                WaitOutcome::Steered
-            } else if lead_wait_requires_assessment {
-                WaitOutcome::LeadReviewRequired
-            } else if let Some(deadline) = lead_deadline {
-                wait_for_activity_or_worker_status(
-                    &mut activity_rx,
-                    pending_activity,
-                    deadline.instant,
-                    worker_status_watchers,
-                )
-                .await
-            } else {
-                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-                wait_for_activity_or_worker_status(
-                    &mut activity_rx,
-                    pending_activity,
-                    deadline,
-                    worker_status_watchers,
-                )
-                .await
+            let mut pending_activity = pending_activity;
+            let mut policy_changed_at_entry = lead_policy_changed;
+            loop {
+                let outcome = if let Some(activity) = pending_activity.take() {
+                    match activity {
+                        InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+                        InputQueueActivity::Steer => WaitOutcome::Steered,
+                        InputQueueActivity::TeamPolicyChanged => WaitOutcome::TeamPolicyChanged,
+                        InputQueueActivity::ActivityPaused => WaitOutcome::Paused,
+                    }
+                } else if policy_changed_at_entry {
+                    policy_changed_at_entry = false;
+                    WaitOutcome::TeamPolicyChanged
+                } else if is_team_lead && !lead_has_active_workers {
+                    WaitOutcome::NoActiveWorkers
+                } else if lead_wait_cancelled {
+                    WaitOutcome::Steered
+                } else if lead_wait_requires_assessment {
+                    WaitOutcome::LeadReviewRequired
+                } else {
+                    wait_for_activity(&mut activity_rx, None, Some(wait_deadline), None).await
+                };
+                if outcome != WaitOutcome::TeamPolicyChanged
+                    || !is_team_lead
+                    || !session.is_team_lead().await
+                    || session.get_config().await.effective_team_lead_work_policy()
+                        != sampled_lead_work_policy
+                {
+                    break outcome;
+                }
             }
         };
         tokio::pin!(wait_outcome);
@@ -265,8 +275,13 @@ impl WaitAgentResult {
             WaitOutcome::LeadReviewRequired => {
                 "Lead oversight already fired for this parking interval; complete the review before waiting again."
             }
-            WaitOutcome::WorkerStatusChanged => {
-                "A direct Worker changed status; inspect the latest result before waiting again."
+            WaitOutcome::TeamPolicyChanged => {
+                "The Lead work policy changed during this wait; reassess the current instructions and continue the task as needed."
+            }
+            WaitOutcome::Paused => "Wait paused by Team activity control.",
+            WaitOutcome::Cancelled => "Wait cancelled.",
+            WaitOutcome::SubstantiveWork => {
+                "Independent Lead work started; review it before waiting again."
             }
         };
         let message = match requested_timeout_ms {
@@ -301,68 +316,60 @@ impl ToolOutput for WaitAgentResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WaitOutcome {
+pub(crate) enum WaitOutcome {
     MailboxActivity,
     Steered,
     TimedOut,
     NoActiveWorkers,
     LeadReviewRequired,
-    WorkerStatusChanged,
+    TeamPolicyChanged,
+    Paused,
+    Cancelled,
+    SubstantiveWork,
 }
 
-async fn wait_for_activity_or_worker_status(
-    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
-    pending_activity: Option<InputQueueActivity>,
-    deadline: Instant,
-    worker_status_watchers: Vec<tokio::sync::watch::Receiver<AgentStatus>>,
-) -> WaitOutcome {
-    if let Some(activity) = pending_activity {
-        return match activity {
-            InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-            InputQueueActivity::Steer => WaitOutcome::Steered,
-        };
-    }
-    if worker_status_watchers.is_empty() {
-        return match timeout_at(deadline, activity_rx.changed()).await {
-            Ok(Ok(())) => match *activity_rx.borrow_and_update() {
-                InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-                InputQueueActivity::Steer => WaitOutcome::Steered,
-            },
-            Ok(Err(_)) | Err(_) => WaitOutcome::TimedOut,
-        };
-    }
-    let mut worker_statuses = FuturesUnordered::new();
-    for mut status_rx in worker_status_watchers {
-        worker_statuses.push(async move {
-            loop {
-                let res = {
-                    let status = status_rx.borrow();
-                    is_final(&status) || matches!(&*status, AgentStatus::Interrupted)
-                };
-                if res {
-                    return;
-                }
-                if status_rx.changed().await.is_err() {
-                    return;
-                }
-            }
-        });
-    }
-    match timeout_at(deadline, async {
-        tokio::select! {
-            activity = activity_rx.changed() => Some(match activity {
-                Ok(()) => match *activity_rx.borrow_and_update() {
-                    InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
-                    InputQueueActivity::Steer => WaitOutcome::Steered,
-                },
-                Err(_) => WaitOutcome::TimedOut,
-            }),
-            worker = worker_statuses.next() => worker.map(|()| WaitOutcome::WorkerStatusChanged),
-        }
-    })
-    .await
-    {
-        Ok(Some(outcome)) => outcome,
-        Ok(None) | Err(_) => WaitOutcome::TimedOut,
+pub(super) fn wait_outcome_for_activity(activity: InputQueueActivity) -> WaitOutcome {
+    match activity {
+        InputQueueActivity::Mailbox => WaitOutcome::MailboxActivity,
+        InputQueueActivity::Steer => WaitOutcome::Steered,
+        InputQueueActivity::TeamPolicyChanged => WaitOutcome::TeamPolicyChanged,
+        InputQueueActivity::ActivityPaused => WaitOutcome::Paused,
     }
 }
+
+pub(super) async fn wait_for_activity(
+    activity_rx: &mut tokio::sync::watch::Receiver<InputQueueActivity>,
+    pending_activity: Option<InputQueueActivity>,
+    deadline: Option<Instant>,
+    cancellation_token: Option<&CancellationToken>,
+) -> WaitOutcome {
+    if let Some(activity) = pending_activity {
+        return wait_outcome_for_activity(activity);
+    }
+    // Worker completion/failure paths publish actionable parent activity after applying the
+    // configured completion policy. Polling level-triggered child status here can replay an old
+    // terminal value on every subsequent wait, and can bypass the ManagerOnly completion batch.
+    let activity = async {
+        match deadline {
+            Some(deadline) => match timeout_at(deadline, activity_rx.changed()).await {
+                Ok(Ok(())) => Some(*activity_rx.borrow_and_update()),
+                Ok(Err(_)) | Err(_) => None,
+            },
+            None => activity_rx
+                .changed()
+                .await
+                .ok()
+                .map(|()| *activity_rx.borrow_and_update()),
+        }
+    };
+    tokio::pin!(activity);
+    tokio::select! {
+        biased;
+        _ = async { if let Some(token) = cancellation_token { token.cancelled().await } }, if cancellation_token.is_some() => WaitOutcome::Cancelled,
+        activity = &mut activity => activity.map(wait_outcome_for_activity).unwrap_or(WaitOutcome::TimedOut),
+    }
+}
+
+#[cfg(test)]
+#[path = "wait_tests.rs"]
+mod tests;

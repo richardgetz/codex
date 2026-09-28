@@ -136,8 +136,19 @@ release or merge rules.
   captured in thread snapshots so resume and fork preserve the selected mode,
   while legacy snapshots keep the default. An active Lead can also change its
   thread-owned policy independently through `/team work-policy` and
-  `thread/settings/update`; the selection takes effect on the next turn without
-  changing Team mode, role, profile assignments, or global defaults. TUI Team
+  `thread/settings/update`; the committed selection updates the next model step
+  in an active turn as well as later turns, without changing Team mode, role,
+  profile assignments, or global defaults. An explicit parked Lead wait wakes
+  for reassessment under the current policy while preserving the existing
+  oversight deadline and already-running Worker, tool, and external work. The
+  settings acknowledgement follows policy commit and wait notification. A
+  stale sampled tool call is returned for reassessment before its handler starts,
+  while already-admitted tool work continues. For either Lead policy, a repeated
+  long `clock.sleep` after a later-sample recognized status probe (`list_agents`,
+  `worker_capacity`, or allowlisted `gh run view`) parks on actionable activity
+  or the configured oversight deadline; the first sleep remains local. Substantive
+  work resets the pattern; unknown shell aliases are outside this guarantee.
+  TUI Team
   settings updates wait for a matching settings snapshot or the bounded
   confirmation timeout; stale snapshots cannot reject a pending update, and
   uncorrelated terminal errors stay visible without clearing any pending Team
@@ -1242,9 +1253,14 @@ release or merge rules.
   snapshots retain the default. Verify `thread/settings/update` changes only the
   active Lead thread's `leadWorkPolicy`, preserves Team mode, role, model and
   effort assignments, and balance, reports the selection in thread settings,
-  rejects non-Lead or inactive-Team updates, and takes effect on the next tool
-  plan in both directions. Verify the selection survives cold resume while
-  fresh threads retain configured defaults. Verify `manager_only` applies only
+  rejects non-Lead or inactive-Team updates, and applies before the next model
+  request and tool plan in the current turn in both directions. Verify a parked
+  explicit wait re-evaluates after policy commit, a setting update racing with
+  wait admission is observed, latest-toggle-wins, and already-running provider,
+  tool, Worker, and external operations finish without replay or cancellation.
+  The wake must not restart or extend the configured oversight deadline.
+  Verify the selection survives cold resume while fresh threads retain
+  configured defaults. Verify `manager_only` applies only
   to the Lead:
   it preserves human alignment, planning, delegation, coordination, and review;
   Workers own substantive execution across repositories independent of local
@@ -1289,6 +1305,13 @@ release or merge rules.
   handoff admission through turn start, rearms a pending batch after terminal
   result delivery, does not run before that delivery reaches the parent, and
   atomically arbitrates the buffered summary against explicit user-input drains.
+  Verify the active-turn policy switch rejects stale sampled tool calls before
+  handler side effects, the next sample carries the committed policy, already-
+  admitted operations continue, and an older applied snapshot cannot supersede
+  a newer policy selection. In either Lead policy, verify a repeated long sleep
+  after a later-sample recognized status probe parks until actionable activity
+  or the configured oversight deadline, while first/same-sample sleeps retain
+  normal duration and unknown shell commands stay substantive.
   Verify the TUI policy picker ignores mismatched settings snapshots until a
   matching snapshot or bounded timeout. Uncorrelated terminal settings errors
   remain visible and cannot clear any pending Team command. Verify every

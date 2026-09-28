@@ -2,6 +2,13 @@ use super::*;
 use codex_config::TeamLeadWorkPolicy;
 use codex_protocol::items::TurnItem;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tracing::Level;
+use tracing_test::internal::MockWriter;
+
+#[path = "team_idle_passive_sleep.rs"]
+mod passive_sleep;
 
 const IDLE_ROOT_PROMPT: &str = "park the lead while the worker runs";
 const IDLE_CHILD_TASK: &str = "send routine progress while working";
@@ -26,6 +33,7 @@ const DEADLINE_ROOT_PROMPT: &str = "park the lead until its oversight deadline";
 const DEADLINE_CHILD_TASK: &str = "keep the worker active through the oversight deadline";
 const DEADLINE_SPAWN_CALL_ID: &str = "team-idle-deadline-spawn";
 const DEADLINE_WAIT_CALL_ID: &str = "team-idle-deadline-wait";
+const DEADLINE_POLICY_WAIT_CALL_ID: &str = "team-idle-deadline-policy-wait";
 const DEADLINE_SLEEP_CALL_ID: &str = "team-idle-deadline-sleep";
 
 const HANDOFF_ROOT_PROMPT: &str = "wake the parent when the worker has nothing left to wait for";
@@ -539,9 +547,35 @@ const MANAGER_BATCH_SECOND_GATE_CALL_ID: &str = "manager-batch-second-gate";
 const MANAGER_BATCH_ROOT_WAIT_CALL_ID: &str = "manager-batch-root-wait";
 const MANAGER_BATCH_ACTION_CALL_ID: &str = "manager-batch-action";
 const MANAGER_BATCH_GATE_ID: &str = "manager-batch-gate";
+const MANAGER_BATCH_ACTION_RELEASE_GATE_ID: &str = "manager-batch-action-release-gate";
+const MANAGER_BATCH_ACTION_RELEASE_CALL_ID: &str = "manager-batch-action-release";
+const MANAGER_BATCH_ACTION_RELEASE_PROMPT: &str = "release the second manager batch worker";
 const MANAGER_BATCH_ACTION_MESSAGE: &str = "second worker asks for immediate review";
 const MANAGER_BATCH_FIRST_RESULT: &str = "first manager batch result marker";
 const MANAGER_BATCH_SECOND_RESULT: &str = "second manager batch result marker";
+
+async fn wait_for_captured_request_with_route_diagnostics(
+    response: &ResponseMock,
+    predicate: impl Fn(&ResponsesRequest) -> bool,
+    label: &str,
+    timeout: Duration,
+    route_diagnostics: &Mutex<Vec<String>>,
+) -> ResponsesRequest {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(request) = response
+            .requests()
+            .into_iter()
+            .find(|request| predicate(request))
+        {
+            return request;
+        }
+        if Instant::now() >= deadline {
+            panic!("{label} request was not captured; route observations: {route_diagnostics:#?}");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manager_only_batches_successful_worker_completions_and_wakes_for_action() -> Result<()> {
@@ -558,9 +592,23 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "task_name": "manager_batch_second",
         "fork_turns": "none",
     }))?;
-    let gate_args = serde_json::to_string(&json!({
+    let first_gate_args = serde_json::to_string(&json!({
         "barrier": {
-            "id": MANAGER_BATCH_GATE_ID,
+            "id": format!("{MANAGER_BATCH_GATE_ID}-first"),
+            "participants": 1,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let second_gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": MANAGER_BATCH_ACTION_RELEASE_GATE_ID,
+            "participants": 2,
+            "timeout_ms": 10_000,
+        },
+    }))?;
+    let action_release_gate_args = serde_json::to_string(&json!({
+        "barrier": {
+            "id": MANAGER_BATCH_ACTION_RELEASE_GATE_ID,
             "participants": 2,
             "timeout_ms": 10_000,
         },
@@ -570,6 +618,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         "message": MANAGER_BATCH_ACTION_MESSAGE,
     }))?;
     let root_wait_args = serde_json::to_string(&json!({ "timeout_ms": 1 }))?;
+    let action_route_diagnostics = Arc::new(Mutex::new(Vec::new()));
 
     let root_initial = mount_sse_once_match(
         &server,
@@ -616,13 +665,44 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
-    let root_after_action = mount_sse_once_match(
+    let _root_after_premature_worker_status = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
                 && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
-                && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && !body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
                 && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-root-premature-status"),
+            ev_assistant_message(
+                "manager-batch-root-premature-status-message",
+                "the wait woke before an actionable Worker result",
+            ),
+            ev_completed("manager-batch-root-premature-status"),
+        ]),
+    )
+    .await;
+    let action_diagnostics = Arc::clone(&action_route_diagnostics);
+    let root_after_action = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let root_wait = request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID);
+            if root_wait {
+                action_diagnostics.lock().unwrap().push(format!(
+                    "action={}, first_result={}, second_result={}, wait_completed={}, wait_interrupted={}",
+                    body_contains(request, MANAGER_BATCH_ACTION_MESSAGE),
+                    body_contains(request, MANAGER_BATCH_FIRST_RESULT),
+                    body_contains(request, MANAGER_BATCH_SECOND_RESULT),
+                    body_contains(request, "Wait completed."),
+                    body_contains(request, "Wait interrupted by new input."),
+                ));
+            }
+            root_wait
+                && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
+                && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         },
         sse(vec![
@@ -663,7 +743,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
             ev_function_call(
                 MANAGER_BATCH_FIRST_GATE_CALL_ID,
                 "test_sync_tool",
-                &gate_args,
+                &first_gate_args,
             ),
             ev_completed("manager-batch-first-worker-gate"),
         ]),
@@ -685,14 +765,14 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         ]),
     )
     .await;
-    let _second_worker_action = mount_sse_once_match(
+    let _second_worker_action = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
             body_contains(request, MANAGER_BATCH_SECOND_TASK)
                 && request_has_model(request, WORKER_MODEL)
                 && !request_has_function_call_output(request, MANAGER_BATCH_ACTION_CALL_ID)
         },
-        sse(vec![
+        sse_response(sse(vec![
             ev_response_created("manager-batch-second-worker-action"),
             ev_function_call(
                 MANAGER_BATCH_ACTION_CALL_ID,
@@ -700,7 +780,8 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                 &action_args,
             ),
             ev_completed("manager-batch-second-worker-action"),
-        ]),
+        ]))
+        .set_delay(Duration::from_secs(/*secs*/ 2)),
     )
     .await;
     let _second_worker_gate = mount_sse_once_match(
@@ -715,7 +796,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
             ev_function_call(
                 MANAGER_BATCH_SECOND_GATE_CALL_ID,
                 "test_sync_tool",
-                &gate_args,
+                &second_gate_args,
             ),
             ev_completed("manager-batch-second-worker-gate"),
         ]),
@@ -734,6 +815,36 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                 MANAGER_BATCH_SECOND_RESULT,
             ),
             ev_completed("manager-batch-second-worker-result"),
+        ]),
+    )
+    .await;
+    let helper_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            body_contains(request, MANAGER_BATCH_ACTION_RELEASE_PROMPT)
+                && request_has_model(request, INITIAL_MODEL)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-helper-release-gate"),
+            ev_function_call(
+                MANAGER_BATCH_ACTION_RELEASE_CALL_ID,
+                "test_sync_tool",
+                &action_release_gate_args,
+            ),
+            ev_completed("manager-batch-helper-release-gate"),
+        ]),
+    )
+    .await;
+    let helper_after_gate = mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_has_model(request, INITIAL_MODEL)
+                && request_has_function_call_output(request, MANAGER_BATCH_ACTION_RELEASE_CALL_ID)
+        },
+        sse(vec![
+            ev_response_created("manager-batch-helper-released"),
+            ev_assistant_message("manager-batch-helper-message", "Worker release gate opened"),
+            ev_completed("manager-batch-helper-released"),
         ]),
     )
     .await;
@@ -766,6 +877,15 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                 .expect("team profiles")
                 .lead_work_policy = TeamLeadWorkPolicy::ManagerOnly;
         })
+        .build_with_auto_env(&server)
+        .await?;
+    let helper = test_codex()
+        .with_model_info_override(INITIAL_MODEL, |model_info| {
+            model_info
+                .experimental_supported_tools
+                .push("test_sync_tool".to_string());
+        })
+        .with_model(INITIAL_MODEL)
         .build_with_auto_env(&server)
         .await?;
 
@@ -806,7 +926,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
     )
     .await;
 
-    wait_for_captured_request(
+    wait_for_captured_request_with_route_diagnostics(
         &root_after_action,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
@@ -815,13 +935,53 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
                     MANAGER_BATCH_ROOT_WAIT_CALL_ID,
                 )
                 && request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
+                && request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
+                && !request.body_contains_text(MANAGER_BATCH_SECOND_RESULT)
         },
-        "immediate manager-only action wake",
+        "immediate manager-only action wake with the buffered first result",
+        Duration::from_secs(/*secs*/ 7),
+        &action_route_diagnostics,
     )
     .await;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
+    .await;
+
+    // Worker 2 waits on a process-shared test barrier after sending its action. Release it only
+    // after the Lead's action wake has been observed. The already-buffered first result may ride
+    // with that immediate action wake; Worker 2's completion should arrive in a later batch.
+    helper
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: MANAGER_BATCH_ACTION_RELEASE_PROMPT.to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_captured_request(
+        &helper_gate,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && request.body_contains_text(MANAGER_BATCH_ACTION_RELEASE_PROMPT)
+        },
+        "manager batch Worker release gate",
+    )
+    .await;
+    wait_for_event(&helper.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    wait_for_captured_request(
+        &helper_after_gate,
+        |request| {
+            response_request_has_model(request, INITIAL_MODEL)
+                && response_request_has_function_call_output(
+                    request,
+                    MANAGER_BATCH_ACTION_RELEASE_CALL_ID,
+                )
+        },
+        "manager batch helper completion",
+    )
     .await;
 
     wait_for_captured_request(
@@ -853,7 +1013,7 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         .filter(|request| {
             request_has_function_call_output(request, MANAGER_BATCH_ROOT_WAIT_CALL_ID)
                 && body_contains(request, MANAGER_BATCH_ACTION_MESSAGE)
-                && !body_contains(request, MANAGER_BATCH_FIRST_RESULT)
+                && body_contains(request, MANAGER_BATCH_FIRST_RESULT)
                 && !body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         })
         .count();
@@ -866,13 +1026,34 @@ async fn manager_only_batches_successful_worker_completions_and_wakes_for_action
         .iter()
         .filter(|request| {
             body_contains(request, MANAGER_BATCH_FIRST_RESULT)
-                || body_contains(request, MANAGER_BATCH_SECOND_RESULT)
+                && body_contains(request, MANAGER_BATCH_SECOND_RESULT)
         })
         .collect::<Vec<_>>();
     assert_eq!(
         completion_wakes.len(),
         1,
         "both successful Worker completions should share one Lead wake"
+    );
+    assert_eq!(
+        lead_requests.len(),
+        4,
+        "a terminal status snapshot must not wake the Lead while another successful Worker is still running"
+    );
+    assert!(
+        _root_after_premature_worker_status
+            .requests()
+            .iter()
+            .all(|request| {
+                !(response_request_has_model(request, LEAD_MODEL)
+                    && response_request_has_function_call_output(
+                        request,
+                        MANAGER_BATCH_ROOT_WAIT_CALL_ID,
+                    )
+                    && !request.body_contains_text(MANAGER_BATCH_ACTION_MESSAGE)
+                    && !request.body_contains_text(MANAGER_BATCH_FIRST_RESULT)
+                    && !request.body_contains_text(MANAGER_BATCH_SECOND_RESULT))
+            }),
+        "the Lead should remain parked after the first Worker completes while the second is active"
     );
     assert!(body_contains(
         completion_wakes[0],
@@ -1156,9 +1337,17 @@ async fn manager_only_completion_batch_retries_after_temporary_handoff_seal() ->
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline() -> Result<()> {
     skip_if_no_network!(Ok(()));
+
+    let trace_output: &'static Mutex<Vec<u8>> = Box::leak(Box::new(Mutex::new(Vec::new())));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(Level::DEBUG)
+        .with_writer(MockWriter::new(trace_output))
+        .finish();
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
 
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
@@ -1207,11 +1396,43 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         ]),
     )
     .await;
+    let policy_route_diagnostics = Arc::new(Mutex::new(Vec::new()));
+    let policy_diagnostics = Arc::clone(&policy_route_diagnostics);
+    let root_after_policy_change = mount_sse_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let lead_wait = request_has_model(request, LEAD_MODEL)
+                && request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID);
+            if lead_wait {
+                policy_diagnostics.lock().unwrap().push(format!(
+                    "policy_change={}, interrupted={}, manager_only={}",
+                    body_contains(request, "Lead work policy changed during this wait"),
+                    body_contains(request, "Wait interrupted by new input."),
+                    body_contains(request, "Lead work policy: manager_only"),
+                ));
+            }
+            lead_wait
+                && (body_contains(request, "Lead work policy changed during this wait")
+                    || body_contains(request, "Wait interrupted by new input."))
+                && body_contains(request, "Lead work policy: manager_only")
+        },
+        sse(vec![
+            ev_response_created("team-idle-deadline-policy-change"),
+            ev_function_call_with_namespace(
+                DEADLINE_POLICY_WAIT_CALL_ID,
+                MULTI_AGENT_V2_NAMESPACE,
+                "wait_agent",
+                &wait_args,
+            ),
+            ev_completed("team-idle-deadline-policy-change"),
+        ]),
+    )
+    .await;
     let root_after_deadline = mount_sse_once_match(
         &server,
         |request: &wiremock::Request| {
             request_has_model(request, LEAD_MODEL)
-                && request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+                && request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
                 && body_contains(request, "oversight deadline has elapsed")
         },
         sse(vec![
@@ -1326,13 +1547,113 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
         "passive idle notice should be hidden by default: {passive_notice:?}"
     );
 
+    // Advance part of the current interval before changing policy. The second wait below must
+    // retain this deadline rather than start another oversight interval.
     tokio::time::pause();
-    tokio::time::advance(Duration::from_secs(61)).await;
+    tokio::time::advance(Duration::from_secs(40)).await;
     tokio::time::resume();
-    let deadline_warning = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::Warning(warning) if warning.message.contains("Lead oversight deadline reached"))
-    })
+
+    let policy_update_id = test
+        .codex
+        .submit(Op::ThreadSettings {
+            thread_settings: ThreadSettingsOverrides {
+                team: Some(ThreadTeamSettingsUpdate {
+                    mode: TeamMode::LeadWorker,
+                    lead_work_policy: Some(TeamLeadWorkPolicy::ManagerOnly),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            usage_policy_update: None,
+        })
+        .await?;
+    let policy_wake_request = wait_for_captured_request_with_route_diagnostics(
+        &root_after_policy_change,
+        |request| {
+            response_request_has_model(request, LEAD_MODEL)
+                && response_request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+                && (request.body_contains_text("Lead work policy changed during this wait")
+                    || request.body_contains_text("Wait interrupted by new input."))
+                && request.body_contains_text("Lead work policy: manager_only")
+        },
+        "Lead policy-change wake",
+        Duration::from_secs(/*secs*/ 2),
+        &policy_route_diagnostics,
+    )
     .await;
+    assert!(policy_wake_request.body_contains_text("Lead work policy: manager_only"));
+    assert!(
+        policy_wake_request.body_contains_text("Lead work policy changed during this wait")
+            || policy_wake_request.body_contains_text("Wait interrupted by new input.")
+    );
+
+    let mut second_wait_started = false;
+    let mut policy_update_applied = false;
+    let mut seen_settings_event_ids = Vec::new();
+    let mut seen_wait_call_ids = Vec::new();
+    let mut observed_deadline_warnings = Vec::new();
+    while !(second_wait_started && policy_update_applied) {
+        let event = tokio::time::timeout(Duration::from_secs(10), test.codex.next_event())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "timed out waiting for policy and wait transitions: expected settings event id {policy_update_id:?}, saw {seen_settings_event_ids:?}; expected wait call {DEADLINE_POLICY_WAIT_CALL_ID:?}, saw {seen_wait_call_ids:?}"
+                )
+            })
+            .expect("event stream should remain open");
+        let event_id = event.id;
+        let event_msg = event.msg;
+        if matches!(&event_msg, EventMsg::ThreadSettingsApplied(_)) {
+            seen_settings_event_ids.push(format!("{event_id:?}"));
+            if event_id == policy_update_id {
+                policy_update_applied = true;
+            }
+        }
+        if let EventMsg::Warning(warning) = &event_msg
+            && warning.message.contains("Lead oversight deadline reached")
+        {
+            observed_deadline_warnings.push(warning.message.clone());
+        }
+        if event_id == policy_update_id
+            && let EventMsg::Error(error) = &event_msg
+        {
+            panic!("policy update failed: {}", error.message);
+        }
+        if let EventMsg::ItemStarted(item) = &event_msg
+            && let TurnItem::CollabAgentToolCall(call) = &item.item
+        {
+            seen_wait_call_ids.push(call.id.clone());
+            if call.id == DEADLINE_POLICY_WAIT_CALL_ID {
+                second_wait_started = true;
+            }
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        root_after_deadline.requests().iter().all(|request| {
+            !request.body_contains_text("oversight deadline has elapsed")
+                && !response_request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
+        }),
+        "the next wait must remain parked after its request observes the committed policy"
+    );
+
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(21)).await;
+    tokio::time::resume();
+    let deadline_warning = tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::Warning(warning) if warning.message.contains("Lead oversight deadline reached"))
+        }),
+    )
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the original oversight deadline should wake the second wait; observed wait result: {:?}; warnings seen while waiting for the second wait: {observed_deadline_warnings:#?}; timer traces: {}",
+                root_after_deadline.function_call_output_text(DEADLINE_POLICY_WAIT_CALL_ID),
+                String::from_utf8_lossy(&trace_output.lock().unwrap())
+            )
+        });
     let EventMsg::Warning(deadline_warning) = deadline_warning else {
         unreachable!("deadline warning matcher should only return warnings")
     };
@@ -1341,15 +1662,16 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
             .message
             .contains("Lead oversight deadline reached")
     );
-    let _ = wait_for_captured_request(
+    let deadline_request = wait_for_captured_request(
         &root_after_deadline,
         |request| {
             response_request_has_model(request, LEAD_MODEL)
-                && response_request_has_function_call_output(request, DEADLINE_WAIT_CALL_ID)
+                && response_request_has_function_call_output(request, DEADLINE_POLICY_WAIT_CALL_ID)
         },
         "Lead oversight deadline wake",
     )
     .await;
+    assert!(deadline_request.body_contains_text("oversight deadline has elapsed"));
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })

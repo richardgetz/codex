@@ -83,6 +83,8 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             let ToolInvocation {
                 session,
                 turn,
+                step_context,
+                cancellation_token,
                 call_id,
                 payload,
                 ..
@@ -100,8 +102,62 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             }
 
             let started = Instant::now();
+            let is_team_lead = session.is_team_lead().await;
+            if !is_team_lead {
+                turn.lead_passive_poll.reset();
+            }
+            let passive_park = turn.lead_passive_poll.take_sleep_park_decision(&call_id);
+            if let Some((substantive_work_rx, substantive_work_generation)) = passive_park {
+                let active_workers = session
+                    .services
+                    .agent_control
+                    .active_direct_worker_count(session.thread_id)
+                    .await;
+                if active_workers == 0 {
+                    turn.lead_passive_poll.reset();
+                } else {
+                    let passive_wait_deadline = session
+                        .arm_lead_oversight(crate::session::LeadIdleArmMode::PassivePoll)
+                        .await
+                        .map(|(_, deadline)| deadline);
+                    let item = passive_wait_deadline.map(|deadline| {
+                        let duration_ms = deadline
+                            .instant
+                            .saturating_duration_since(tokio::time::Instant::now())
+                            .as_millis();
+                        let duration_ms = u64::try_from(duration_ms).unwrap_or(u64::MAX).max(1);
+                        TurnItem::Extension(ExtensionItem::Sleep(SleepItem {
+                            id: call_id.clone(),
+                            duration_ms,
+                        }))
+                    });
+                    if let Some(item) = &item {
+                        session.emit_turn_item_started(turn.as_ref(), item).await;
+                    }
+                    let outcome = crate::tools::handlers::multi_agents_v2::passive_wait::wait_for_lead_passive_poll(
+                        &session,
+                        &turn,
+                        &step_context,
+                        passive_wait_deadline,
+                        substantive_work_rx,
+                        substantive_work_generation,
+                        &cancellation_token,
+                    )
+                    .await;
+                    if let Some(item) = item {
+                        session.emit_turn_item_completed(turn.as_ref(), item).await;
+                    }
+                    let message = passive_wait_message(outcome);
+                    let wall_time_seconds = started.elapsed().as_secs_f64();
+                    return Ok(boxed_tool_output(FunctionToolOutput::from_text(
+                        format!("Wall time: {wall_time_seconds:.4} seconds\n{message}"),
+                        /*success*/ Some(true),
+                    )));
+                }
+            }
+
             let item = TurnItem::Extension(ExtensionItem::Sleep(SleepItem {
-                id: call_id,
+                id: call_id.clone(),
                 duration_ms: args.duration_ms,
             }));
             session.emit_turn_item_started(turn.as_ref(), &item).await;
@@ -157,6 +213,29 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                 /*success*/ Some(true),
             )))
         })
+    }
+}
+
+fn passive_wait_message(
+    outcome: crate::tools::handlers::multi_agents_v2::wait::WaitOutcome,
+) -> &'static str {
+    use crate::tools::handlers::multi_agents_v2::wait::WaitOutcome;
+    match outcome {
+        WaitOutcome::MailboxActivity => "Worker or coordination activity arrived; review it now.",
+        WaitOutcome::Steered => "Wait interrupted by new input.",
+        WaitOutcome::TimedOut => "Lead oversight deadline reached; review active Workers now.",
+        WaitOutcome::NoActiveWorkers => "No active Workers remain; wait ended.",
+        WaitOutcome::LeadReviewRequired => {
+            "Lead oversight already fired; complete the review before waiting again."
+        }
+        WaitOutcome::TeamPolicyChanged => {
+            "The Lead work policy changed during this wait; reassess the current instructions."
+        }
+        WaitOutcome::Paused => "Wait paused by Team activity control.",
+        WaitOutcome::Cancelled => "Wait cancelled.",
+        WaitOutcome::SubstantiveWork => {
+            "Independent Lead work started; reassess before waiting again."
+        }
     }
 }
 

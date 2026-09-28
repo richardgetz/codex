@@ -8,6 +8,8 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::turn_context::TurnContext;
 use crate::tools::router::ToolRouter;
+use arc_swap::ArcSwap;
+use codex_config::TeamLeadWorkPolicy;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
 use codex_mcp::McpBinding;
@@ -19,8 +21,13 @@ use codex_protocol::protocol::TurnContextItem;
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    /// Monotonic ID for the sampled request; all of its tool calls share this value.
+    pub(crate) passive_poll_sample_id: u64,
     /// One immutable settings version captured before request preparation.
     pub(crate) settings: Arc<ResolvedStepSettings>,
+    /// Lead work policy advertised by this sampling request's latest WorldState.
+    /// Unlike turn settings, this policy can change while the turn is active.
+    pub(crate) team_lead_work_policy: ArcSwap<TeamLeadWorkPolicy>,
     /// Frozen turn preferences resolved against this step's captured model.
     pub(crate) token_budget: Option<TokenBudgetConfig>,
     /// Telemetry context tagged with this sampling request's model.
