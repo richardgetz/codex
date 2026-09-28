@@ -12,7 +12,7 @@ pub(crate) struct LeadPassivePollState {
 #[path = "lead_passive_poll_tests.rs"]
 mod tests;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct LeadPassivePollProgress {
     last_long_sleep_sample_id: Option<u64>,
     last_status_probe_sample_id: Option<u64>,

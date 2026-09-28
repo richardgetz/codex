@@ -1,5 +1,4 @@
 use super::wait::{WaitOutcome, wait_for_activity, wait_outcome_for_activity};
-use crate::session::InputQueueActivity;
 use crate::session::LeadIdleArmMode;
 use crate::session::LeadIdleDeadline;
 use crate::session::format_lead_wait_message;
@@ -7,7 +6,6 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use std::sync::Arc;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 /// Parks a repeated Lead sleep on activity or an existing or newly armed oversight deadline.

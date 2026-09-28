@@ -285,8 +285,8 @@ pub(super) async fn spawn_review_thread(
         server_model_warning_emitted: AtomicBool::new(false),
         model_verification_emitted: AtomicBool::new(false),
         cyber_access_program: None,
-        lead_passive_poll: crate::session::LeadPassivePollState::default(),
-        next_passive_poll_sample_id: std::sync::atomic::AtomicU64::new(0),
+        lead_passive_poll: Arc::new(crate::session::LeadPassivePollState::default()),
+        next_passive_poll_sample_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
 
     // Seed the child task with the review prompt as the initial user message.

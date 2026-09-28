@@ -383,9 +383,9 @@ pub struct TurnContext {
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
     /// Tracks a Lead's passive sleep/status polling pattern for this turn. The state is shared
     /// across model samples and nested Code Mode tool dispatches.
-    pub(crate) lead_passive_poll: LeadPassivePollState,
+    pub(crate) lead_passive_poll: Arc<LeadPassivePollState>,
     /// Allocates a monotonic identifier for each sampled model request in this turn.
-    pub(crate) next_passive_poll_sample_id: AtomicU64,
+    pub(crate) next_passive_poll_sample_id: Arc<AtomicU64>,
 }
 
 /// Selects which preparation is needed when building a turn context.
@@ -838,6 +838,8 @@ impl TurnContext {
                 self.model_verification_emitted.load(Ordering::Relaxed),
             ),
             cyber_access_program: self.cyber_access_program,
+            lead_passive_poll: Arc::clone(&self.lead_passive_poll),
+            next_passive_poll_sample_id: Arc::clone(&self.next_passive_poll_sample_id),
         }
     }
 
@@ -1301,8 +1303,8 @@ impl Session {
             server_model_warning_emitted: AtomicBool::new(false),
             model_verification_emitted: AtomicBool::new(false),
             cyber_access_program: None,
-            lead_passive_poll: LeadPassivePollState::default(),
-            next_passive_poll_sample_id: AtomicU64::new(0),
+            lead_passive_poll: Arc::new(LeadPassivePollState::default()),
+            next_passive_poll_sample_id: Arc::new(AtomicU64::new(0)),
         }
     }
 
