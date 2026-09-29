@@ -1,0 +1,24 @@
+intent:
+  id: intent/2026-09-29/worker-question-reply#dcc257ac39
+  change_type: feat
+  scope: Team worker questions
+  summary: Add correlated parent-to-Worker questions and direct replies that reach the Lead independently of Worker completion.
+  decision: Use a first-class ask function and targetless reply function, derive the requester from ThreadSpawn parent metadata, and reuse V1 send_input plus V2 Action delivery. Track one pending question per Worker and forward only its final answer at the final-turn boundary before continuous loopback, after verifying the sampled Worker input contains the matching question ID.
+  constraints:
+    - Preserve V1 and V2 backend selection and lifecycle semantics.
+    - Keep V2 helper functions outside the reserved collaboration namespace.
+    - Bound pending question state and injected context.
+    - Do not forward unrelated Worker finals or couple the reply to terminal completion.
+  intent_priority: must
+  code_locations:
+    - codex-rs/core/src/tools/handlers/ask_worker_question.rs
+    - codex-rs/core/src/agent/control/worker_question.rs
+    - codex-rs/core/src/session/turn.rs
+    - codex-rs/core/src/context/worker_question.rs
+    - codex-rs/core/src/context/worker_question_tests.rs
+    - codex-rs/core/tests/suite/team_worker_question.rs
+    - codex-rs/core/templates/fork/delta_inventory.md
+  requested_by: "@rick"
+  recorded_by:
+    agent: Codex
+    model: GPT-6
