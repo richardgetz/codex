@@ -4164,6 +4164,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
             window_id: None,
             compaction_response_id: None,
             latest_token_usage_record: Some(record),
+            resume_metadata: None,
         }),
     )
     .await?;

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::McpProcess;
@@ -41,6 +42,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::ThreadActivityReadResponse;
+use codex_app_server_protocol::ThreadHandoffBlocker;
+use codex_app_server_protocol::ThreadHandoffNodeState;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHandoffState;
 use codex_app_server_protocol::ThreadPauseState;
@@ -750,6 +753,170 @@ async fn empty_post_transfer_handoff_does_not_fence_startup_and_recovers() -> Re
     let retained = HandoffJournal::load_all(codex_home.path()).await?;
     assert_eq!(retained.len(), 1);
     assert_eq!(retained[0].state, HandoffJournalState::Completed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn idle_parent_unavailable_child_does_not_strand_recovery_after_restart() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let _responses = responses::mount_sse_sequence(
+        &responses_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("handoff-root-seed"),
+                responses::ev_assistant_message("handoff-root-seed-message", "seed root"),
+                responses::ev_completed("handoff-root-seed"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("handoff-child-seed"),
+                responses::ev_assistant_message("handoff-child-seed-message", "seed child"),
+                responses::ev_completed("handoff-child-seed"),
+            ]),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    MockResponsesConfig::new(&responses_server.uri()).write(codex_home.path())?;
+    let mut old_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let root = old_server
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
+    let child = old_server
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
+    for (thread_id, message) in [
+        (root.id.as_str(), "seed root"),
+        (child.id.as_str(), "seed child"),
+    ] {
+        let request = old_server
+            .send_turn_start_request(TurnStartParams {
+                thread_id: thread_id.to_string(),
+                input: vec![UserInput::Text {
+                    text: message.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..Default::default()
+            })
+            .await?;
+        let _: TurnStartResponse =
+            timeout(DEFAULT_READ_TIMEOUT, old_server.read_response(request)).await??;
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            old_server.read_stream_until_notification_message("turn/completed"),
+        )
+        .await??;
+    }
+    let root_rollout = root.path.clone().context("root rollout path")?;
+    let child_rollout = child.path.clone().context("child rollout path")?;
+    let mut journal = HandoffJournal::begin(
+        codex_home.path(),
+        "test-runtime",
+        vec![
+            HandoffNode {
+                thread_id: root.id.clone(),
+                root_thread_id: root.id.clone(),
+                parent_thread_id: None,
+                agent_path: None,
+                turn_id: None,
+                rollout_path: Some(root_rollout.display().to_string()),
+                was_running: false,
+                was_paused: false,
+                state: HandoffNodeState::Suspended,
+                blockers: Vec::new(),
+            },
+            HandoffNode {
+                thread_id: child.id.clone(),
+                root_thread_id: root.id.clone(),
+                parent_thread_id: Some(root.id.clone()),
+                agent_path: Some("idle-child".to_string()),
+                turn_id: None,
+                rollout_path: Some(child_rollout.display().to_string()),
+                was_running: false,
+                was_paused: false,
+                state: HandoffNodeState::NeedsAttention,
+                blockers: vec![HandoffBlocker::ParentUnavailable],
+            },
+        ],
+    )
+    .await?;
+    journal.transfer_started = Some(true);
+    journal.set_state(HandoffJournalState::NeedsAttention);
+    journal.persist(codex_home.path()).await?;
+    let handoff_id = journal.handoff_id.clone();
+    old_server.shutdown_gracefully().await?;
+
+    let mut replacement = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let recover_id = replacement
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({ "handoffId": handoff_id })),
+        )
+        .await?;
+    let recovered: ThreadHandoffRecoverResponse =
+        timeout(DEFAULT_READ_TIMEOUT, replacement.read_response(recover_id)).await??;
+    assert_eq!(recovered.receipt.state, ThreadHandoffState::Completed);
+    let recovered_root = recovered
+        .receipt
+        .nodes
+        .iter()
+        .find(|node| node.thread_id == root.id)
+        .expect("root is retained in the receipt");
+    assert_eq!(recovered_root.state, ThreadHandoffNodeState::Restored);
+    let idle_child = recovered
+        .receipt
+        .nodes
+        .iter()
+        .find(|node| node.thread_id == child.id)
+        .expect("child is retained in the receipt");
+    assert_eq!(idle_child.state, ThreadHandoffNodeState::NeedsAttention);
+    assert_eq!(
+        idle_child.blockers,
+        vec![ThreadHandoffBlocker::ParentUnavailable]
+    );
+
+    let status_id = replacement
+        .send_raw_request(
+            "thread/handoff/status",
+            Some(json!({ "handoffId": handoff_id })),
+        )
+        .await?;
+    let status: codex_app_server_protocol::ThreadHandoffStatusResponse =
+        timeout(DEFAULT_READ_TIMEOUT, replacement.read_response(status_id)).await??;
+    assert_eq!(status.receipt, recovered.receipt);
+    let repeated_recover_id = replacement
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({ "handoffId": handoff_id })),
+        )
+        .await?;
+    let repeated: ThreadHandoffRecoverResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        replacement.read_response(repeated_recover_id),
+    )
+    .await??;
+    assert_eq!(repeated.receipt, recovered.receipt);
+
+    let _: codex_app_server_protocol::ThreadStartResponse = replacement
+        .start_thread(ThreadStartParams::default())
+        .await?;
+    replacement.shutdown_gracefully().await?;
+    let retained = HandoffJournal::load_all(codex_home.path()).await?;
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].state, HandoffJournalState::Completed);
+    assert!(retained[0].nodes.iter().any(|node| {
+        node.thread_id == child.id
+            && node.state == HandoffNodeState::NeedsAttention
+            && node.blockers == vec![HandoffBlocker::ParentUnavailable]
+    }));
     Ok(())
 }
 

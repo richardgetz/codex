@@ -1,10 +1,26 @@
+use std::path::Path;
 use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
 
 use super::super::LaunchIdentity;
+use super::managed_app_server_codex_home;
 use super::retain_launch_identity;
 use crate::managed_install::executable_identity_from_bytes;
+
+#[test]
+fn managed_app_server_home_comes_from_the_daemon_state_directory() {
+    assert_eq!(
+        managed_app_server_codex_home(Path::new("/home/user/.codex/app-server-daemon/daemon.pid"))
+            .expect("daemon Codex home"),
+        Path::new("/home/user/.codex")
+    );
+    assert_eq!(
+        managed_app_server_codex_home(Path::new("/tmp/codex-home/daemon.pid"))
+            .expect("test daemon Codex home"),
+        Path::new("/tmp/codex-home")
+    );
+}
 
 #[test]
 fn launch_identity_is_retained_when_launcher_generation_is_stable() {

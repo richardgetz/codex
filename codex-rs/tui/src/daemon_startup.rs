@@ -231,9 +231,23 @@ pub(super) fn launcher_update_issue(
         .error
         .as_deref()
         .unwrap_or("daemon update reconciliation did not complete");
+    let recovery_guidance = match output.failure_kind {
+        Some(codex_app_server_daemon::ApplyFailureKind::HandoffJournalMissing) => {
+            "The matching handoff journal is missing; Codex preserved the receipt and did not replay or discard its saved sessions."
+        }
+        Some(codex_app_server_daemon::ApplyFailureKind::HandoffStorageMismatch) => {
+            "The daemon and handoff use different Codex homes; Codex preserved the handoff and did not mutate either home."
+        }
+        Some(codex_app_server_daemon::ApplyFailureKind::HandoffWorkPending) => {
+            "Codex preserved the pending handoff and its saved session ownership."
+        }
+        Some(codex_app_server_daemon::ApplyFailureKind::RunningLauncherMismatch) | None => {
+            "The selected launcher is not verified as the running fork build."
+        }
+    };
     CompatibilityError {
         reason: format!(
-            "safe daemon update returned {:?}; selected launcher {} (installed version {}) is running as version {} (app-server version {}). {error}. If a handoff is pending, run `codex app-server daemon recover`, then retry `codex app-server daemon apply --codex-bin <selected absolute path>`",
+            "safe daemon update returned {:?}; selected launcher {} (installed version {}) is running as version {} (app-server version {}). {recovery_guidance} {error}",
             output.status,
             launcher.display(),
             output.managed_codex_version.as_deref().unwrap_or("unknown"),

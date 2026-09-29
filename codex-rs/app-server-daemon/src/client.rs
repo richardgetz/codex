@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -30,7 +31,33 @@ const INITIALIZE_REQUEST_ID: RequestId = RequestId::Integer(1);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProbeInfo {
     pub(crate) app_server_version: String,
+    pub(crate) codex_home: PathBuf,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CoordinatorResponse {
+    pub(crate) message: JSONRPCMessage,
+    pub(crate) codex_home: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodexHomeMismatch {
+    pub(crate) expected: PathBuf,
+    pub(crate) actual: PathBuf,
+}
+
+impl std::fmt::Display for CodexHomeMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "app-server Codex home {} does not match selected Codex home {}; refusing handoff mutation",
+            self.actual.display(),
+            self.expected.display()
+        )
+    }
+}
+
+impl std::error::Error for CodexHomeMismatch {}
 
 pub(crate) async fn probe(socket_path: &Path) -> Result<ProbeInfo> {
     timeout(CONTROL_SOCKET_RESPONSE_TIMEOUT, probe_inner(socket_path))
@@ -43,19 +70,19 @@ pub(crate) async fn probe(socket_path: &Path) -> Result<ProbeInfo> {
         })?
 }
 
-/// Sends one experimental app-server request over the local control socket.
+/// Sends a coordinator request only when initialize reports the selected Codex home.
 ///
-/// The daemon uses this for coordinator methods that are intentionally kept out
-/// of the daemon crate's protocol dependency. The response is returned to the
-/// caller so JSON-RPC errors can retain their structured journal data.
-pub(crate) async fn request(
+/// The home check runs on the same connection as the request, before the method is sent, so a
+/// socket that changes after a separate probe cannot direct a handoff to another Codex home.
+pub(crate) async fn request_in_codex_home(
     socket_path: &Path,
     method: &str,
     params: Option<serde_json::Value>,
-) -> Result<JSONRPCMessage> {
+    expected_codex_home: &Path,
+) -> Result<CoordinatorResponse> {
     timeout(
         COORDINATOR_RESPONSE_TIMEOUT,
-        request_inner(socket_path, method, params),
+        request_inner(socket_path, method, params, expected_codex_home),
     )
     .await
     .with_context(|| format!("timed out waiting for {method} response"))?
@@ -65,9 +92,33 @@ async fn request_inner(
     socket_path: &Path,
     method: &str,
     params: Option<serde_json::Value>,
-) -> Result<JSONRPCMessage> {
+    expected_codex_home: &Path,
+) -> Result<CoordinatorResponse> {
     let mut websocket = connect(socket_path).await?;
-    initialize(&mut websocket, /*experimental_api*/ true).await?;
+    let initialized_response = initialize(&mut websocket, /*experimental_api*/ true).await?;
+    let expected_codex_home = tokio::fs::canonicalize(expected_codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve selected Codex home {}",
+                expected_codex_home.display()
+            )
+        })?;
+    let server_codex_home = tokio::fs::canonicalize(&initialized_response.codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to resolve app-server Codex home {}",
+                initialized_response.codex_home.display()
+            )
+        })?;
+    if server_codex_home != expected_codex_home {
+        return Err(CodexHomeMismatch {
+            expected: expected_codex_home,
+            actual: server_codex_home,
+        }
+        .into());
+    }
     let initialized = JSONRPCMessage::Notification(JSONRPCNotification {
         method: "initialized".to_string(),
         params: None,
@@ -92,11 +143,17 @@ async fn request_inner(
         match &message {
             JSONRPCMessage::Response(response) if response.id == request_id => {
                 websocket.close(None).await.ok();
-                return Ok(message);
+                return Ok(CoordinatorResponse {
+                    message,
+                    codex_home: initialized_response.codex_home.into(),
+                });
             }
             JSONRPCMessage::Error(error) if error.id == request_id => {
                 websocket.close(None).await.ok();
-                return Ok(message);
+                return Ok(CoordinatorResponse {
+                    message,
+                    codex_home: initialized_response.codex_home.into(),
+                });
             }
             _ => {}
         }
@@ -118,6 +175,7 @@ async fn probe_inner(socket_path: &Path) -> Result<ProbeInfo> {
 
     Ok(ProbeInfo {
         app_server_version: parse_version_from_user_agent(&initialize_response.user_agent)?,
+        codex_home: initialize_response.codex_home.into(),
     })
 }
 

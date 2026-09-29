@@ -11,6 +11,15 @@ use serde::Serialize;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+pub(crate) const MAX_HANDOFF_RESOLUTIONS: usize = 64;
+
+pub(crate) fn retain_latest_handoff_resolutions(resolutions: &mut Vec<HandoffResolution>) {
+    let excess = resolutions.len().saturating_sub(MAX_HANDOFF_RESOLUTIONS);
+    if excess > 0 {
+        resolutions.drain(..excess);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ApplyStatus {
@@ -45,8 +54,40 @@ pub struct ApplyOutput {
     pub can_retry: bool,
     /// Whether this unresolved receipt can be sent through the explicit durable quarantine flow.
     pub can_quarantine: bool,
+    /// Latest handoff resolution, retained as a compatibility alias for older consumers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff_resolution: Option<HandoffResolution>,
+    /// Handoffs reconciled during this selected-launcher apply, in completion order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub handoff_resolutions: Vec<HandoffResolution>,
+    /// Structured reason a pending handoff prevents automatic apply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<ApplyFailureKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffResolution {
+    pub handoff_id: String,
+    pub outcome: HandoffResolutionOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HandoffResolutionOutcome {
+    Recovered,
+    RetiredIdleOrphan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApplyFailureKind {
+    HandoffJournalMissing,
+    HandoffStorageMismatch,
+    HandoffWorkPending,
+    RunningLauncherMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -83,6 +124,17 @@ pub(crate) struct ApplyAttemptReceipt {
     pub(crate) phase: ApplyPhase,
     pub(crate) managed_codex_path: PathBuf,
     pub(crate) managed_codex_version: Option<String>,
+    /// Server home captured from `initialize` when the handoff was prepared. Older receipts omit
+    /// it and must be validated against the live server before they are reconciled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) origin_codex_home: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) handoff_resolution: Option<HandoffResolution>,
+    /// Handoffs resolved in this launcher-update operation. Older receipts omit it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) handoff_resolutions: Vec<HandoffResolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failure_kind: Option<ApplyFailureKind>,
     /// Whether the old backend stop was durably entered. `None` means this receipt predates
     /// the marker and must remain conservative until explicitly resolved.
     #[serde(default)]
@@ -106,6 +158,10 @@ impl ApplyAttemptReceipt {
             phase: ApplyPhase::Prepared,
             managed_codex_path,
             managed_codex_version,
+            origin_codex_home: None,
+            handoff_resolution: None,
+            handoff_resolutions: Vec::new(),
+            failure_kind: None,
             stop_started: Some(false),
             stop_completed: Some(false),
             failure: None,
@@ -135,8 +191,11 @@ impl ApplyAttemptReceipt {
                 )
             })?;
         }
+        let mut receipt = self.clone();
+        receipt.handoff_resolutions = receipt.handoff_resolution_history();
+        receipt.handoff_resolution = receipt.handoff_resolutions.last().cloned();
         let contents =
-            serde_json::to_vec_pretty(self).context("failed to serialize apply receipt")?;
+            serde_json::to_vec_pretty(&receipt).context("failed to serialize apply receipt")?;
         let temporary = path.with_extension("json.tmp");
         let mut temporary_file = fs::OpenOptions::new()
             .create(true)
@@ -184,6 +243,16 @@ impl ApplyAttemptReceipt {
         Ok(())
     }
 
+    pub(crate) fn handoff_resolution_history(&self) -> Vec<HandoffResolution> {
+        let mut history = if self.handoff_resolutions.is_empty() {
+            self.handoff_resolution.clone().into_iter().collect()
+        } else {
+            self.handoff_resolutions.clone()
+        };
+        retain_latest_handoff_resolutions(&mut history);
+        history
+    }
+
     pub(crate) fn is_resolved(&self) -> bool {
         self.phase == ApplyPhase::Applied
     }
@@ -226,6 +295,14 @@ impl ApplyAttemptReceipt {
             && self.handoff.is_empty_post_transfer_noop()
     }
 
+    pub(crate) fn can_retry_preparation(&self) -> bool {
+        self.phase == ApplyPhase::NeedsAttention
+            && self.handoff.state == "needsAttention"
+            && self.handoff.transfer_started == Some(false)
+            && !self.handoff.quarantined
+            && !self.blocks_new_apply()
+    }
+
     pub(crate) fn output(
         &self,
         socket_path: &Path,
@@ -247,6 +324,7 @@ impl ApplyAttemptReceipt {
         error: Option<String>,
         running_managed_codex_version: Option<String>,
     ) -> ApplyOutput {
+        let handoff_resolutions = self.handoff_resolution_history();
         ApplyOutput {
             status: match self.phase {
                 ApplyPhase::Applied => ApplyStatus::Applied,
@@ -272,6 +350,9 @@ impl ApplyAttemptReceipt {
                 && !self.handoff.quarantined
                 && self.handoff.can_quarantine()
                 && self.blocks_new_apply(),
+            handoff_resolution: handoff_resolutions.last().cloned(),
+            handoff_resolutions,
+            failure_kind: self.failure_kind,
             error: error.or_else(|| self.failure.clone()),
         }
     }
@@ -300,6 +381,9 @@ impl ApplyOutput {
             quarantined: false,
             can_retry: false,
             can_quarantine: false,
+            handoff_resolution: None,
+            handoff_resolutions: Vec::new(),
+            failure_kind: None,
             error,
         }
     }
@@ -385,6 +469,8 @@ pub(crate) struct HandoffRpcError {
     pub(crate) method: String,
     pub(crate) message: String,
     pub(crate) receipt: Option<HandoffReceipt>,
+    pub(crate) server_codex_home: Option<PathBuf>,
+    pub(crate) codex_home_mismatch: bool,
 }
 
 impl std::fmt::Display for HandoffRpcError {
@@ -394,6 +480,10 @@ impl std::fmt::Display for HandoffRpcError {
 }
 
 impl HandoffRpcError {
+    pub(crate) fn is_codex_home_mismatch(&self) -> bool {
+        self.codex_home_mismatch
+    }
+
     pub(crate) fn is_unknown_handoff(&self) -> bool {
         matches!(
             self.method.as_str(),
@@ -419,6 +509,8 @@ pub(crate) fn parse_handoff_response(
                 method: method.to_string(),
                 message: error.to_string(),
                 receipt: None,
+                server_codex_home: None,
+                codex_home_mismatch: false,
             })
         }
         JSONRPCMessage::Error(error) => {
@@ -430,12 +522,16 @@ pub(crate) fn parse_handoff_response(
                 method: method.to_string(),
                 message: error.error.message,
                 receipt,
+                server_codex_home: None,
+                codex_home_mismatch: false,
             })
         }
         _ => Err(HandoffRpcError {
             method: method.to_string(),
             message: "unexpected JSON-RPC message".to_string(),
             receipt: None,
+            server_codex_home: None,
+            codex_home_mismatch: false,
         }),
     }
 }
@@ -469,6 +565,15 @@ pub(crate) fn ensure_transferable_handoff(receipt: &HandoffReceipt) -> Result<()
             _ => anyhow::bail!("handoff node {thread_id} has non-transferable state {state}"),
         }
     }
+    Ok(())
+}
+
+pub(crate) fn ensure_handoff_id(expected_id: &str, receipt: &HandoffReceipt) -> Result<()> {
+    anyhow::ensure!(
+        receipt.handoff_id == expected_id,
+        "requested handoff {expected_id}, but the app server returned {}",
+        receipt.handoff_id
+    );
     Ok(())
 }
 

@@ -11,11 +11,13 @@ use anyhow::anyhow;
 use crate::ApplyOptions;
 use crate::Daemon;
 use crate::apply_receipt::ApplyAttemptReceipt;
+use crate::apply_receipt::ApplyFailureKind;
 use crate::apply_receipt::ApplyOutput;
 use crate::apply_receipt::ApplyPhase;
 use crate::apply_receipt::ApplyStatus;
 use crate::apply_receipt::HandoffReceipt;
-use crate::apply_receipt::HandoffRpcError;
+use crate::apply_receipt::HandoffResolution;
+use crate::apply_receipt::ensure_handoff_id;
 use crate::apply_receipt::ensure_transferable_handoff;
 use crate::apply_receipt::parse_handoff_response;
 use crate::apply_receipt::sanitize_failure;
@@ -25,6 +27,17 @@ use crate::settings::DaemonSettings;
 const PREPARE_METHOD: &str = "thread/handoff/prepare";
 const STATUS_METHOD: &str = "thread/handoff/status";
 const RECOVER_METHOD: &str = "thread/handoff/recover";
+
+#[path = "apply/reconcile.rs"]
+mod reconcile;
+#[path = "apply/target.rs"]
+mod target;
+
+async fn canonical_home(path: &Path) -> Result<PathBuf> {
+    tokio::fs::canonicalize(path)
+        .await
+        .with_context(|| format!("failed to resolve Codex home {}", path.display()))
+}
 
 async fn stop_backend_with_receipt<F>(
     attempt: &mut ApplyAttemptReceipt,
@@ -57,20 +70,17 @@ fn launcher_update_required(
     managed_codex_bin: &Path,
     managed_backend_is_running: bool,
     running_managed_codex_version: Option<String>,
-    running_app_server_version: Option<String>,
     managed_codex_version: Option<String>,
 ) -> Result<bool> {
     if !managed_backend_is_running {
         return Ok(false);
     }
-    let running_version = running_managed_codex_version
-        .or(running_app_server_version)
-        .ok_or_else(|| {
-            anyhow!(
-                "cannot safely reconcile selected launcher {} because the running daemon version is unavailable",
-                managed_codex_bin.display()
-            )
-        })?;
+    let running_version = running_managed_codex_version.ok_or_else(|| {
+        anyhow!(
+            "cannot safely verify selected launcher {} because the managed process has no full Codex launch identity; app-server version alone does not identify the fork build",
+            managed_codex_bin.display()
+        )
+    })?;
     let managed_codex_version = managed_codex_version.ok_or_else(|| {
         anyhow!(
             "cannot safely reconcile selected launcher {} because its installed version is unavailable",
@@ -105,105 +115,6 @@ impl Daemon {
         self.apply_fresh(settings, &managed_codex_bin).await
     }
 
-    async fn apply_to_target(&self, target: PathBuf) -> Result<ApplyOutput> {
-        anyhow::ensure!(
-            target.is_absolute(),
-            "selected Codex launcher path must be absolute: {}",
-            target.display()
-        );
-        let mut settings = self.load_settings().await?;
-        let receipt = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?;
-        if settings.managed_codex_path.is_none() {
-            if let Some(receipt) = receipt.as_ref().filter(|receipt| !receipt.is_resolved()) {
-                let error = format!(
-                    "cannot select launcher {} while handoff {} is unresolved and no managed launcher is configured; recovery is pinned to {}",
-                    target.display(),
-                    receipt.handoff.handoff_id,
-                    receipt.managed_codex_path.display()
-                );
-                let mut output = receipt.output_with_running_version(
-                    &self.socket_path,
-                    client::probe(&self.socket_path)
-                        .await
-                        .ok()
-                        .map(|info| info.app_server_version),
-                    Some(error),
-                    self.running_managed_codex_version_best_effort().await,
-                );
-                output.status = ApplyStatus::NeedsAttention;
-                return Ok(output);
-            }
-            return Ok(ApplyOutput::without_handoff(
-                ApplyStatus::NotConfigured,
-                None,
-                None,
-                &self.socket_path,
-                None,
-            ));
-        }
-        self.ensure_managed_codex_bin(&target)?;
-
-        if let Some(receipt) = receipt.filter(|receipt| !receipt.is_resolved()) {
-            if receipt.managed_codex_path != target {
-                let error = format!(
-                    "cannot select launcher {} while handoff {} is unresolved; recovery is pinned to {}",
-                    target.display(),
-                    receipt.handoff.handoff_id,
-                    receipt.managed_codex_path.display()
-                );
-                let mut output = receipt.output_with_running_version(
-                    &self.socket_path,
-                    client::probe(&self.socket_path)
-                        .await
-                        .ok()
-                        .map(|info| info.app_server_version),
-                    Some(error),
-                    self.running_managed_codex_version_best_effort().await,
-                );
-                output.status = ApplyStatus::NeedsAttention;
-                return Ok(output);
-            }
-            if receipt.blocks_new_apply() {
-                if settings.managed_codex_path.as_deref() != Some(target.as_path()) {
-                    settings.managed_codex_path = Some(target);
-                    settings.save(&self.settings_file).await?;
-                }
-                return Ok(receipt.output_with_running_version(
-                    &self.socket_path,
-                    client::probe(&self.socket_path)
-                        .await
-                        .ok()
-                        .map(|info| info.app_server_version),
-                    /*error*/ None,
-                    self.running_managed_codex_version_best_effort().await,
-                ));
-            }
-        }
-
-        if self.running_backend_instance(&settings).await?.is_none() {
-            if client::probe(&self.socket_path).await.is_ok() {
-                return Err(anyhow!(
-                    "app server is running but is not managed by codex app-server daemon"
-                ));
-            }
-            settings.managed_codex_path = Some(target.clone());
-            settings.save(&self.settings_file).await?;
-            return Ok(ApplyOutput::without_handoff(
-                ApplyStatus::Deferred,
-                Some(target.clone()),
-                self.managed_codex_version_best_effort(&target).await,
-                &self.socket_path,
-                None,
-            ));
-        }
-
-        settings.managed_codex_path = Some(target.clone());
-        // Persist the selected launcher before the handoff begins. A pre-transfer blocker
-        // leaves the current process alive, while later reloads continue to select this target.
-        settings.save(&self.settings_file).await?;
-        self.apply_fresh(settings, &target).await
-    }
-
     pub(crate) async fn recover(&self) -> Result<ApplyOutput> {
         self.recover_with_resolution(None).await
     }
@@ -214,12 +125,13 @@ impl Daemon {
 
     async fn recover_with_resolution(&self, resolution: Option<&str>) -> Result<ApplyOutput> {
         let _operation_lock = self.acquire_operation_lock().await?;
-        self.recover_with_resolution_locked(resolution).await
+        self.recover_with_resolution_locked(resolution, None).await
     }
 
     async fn recover_with_resolution_locked(
         &self,
         resolution: Option<&str>,
+        launcher_override: Option<&Path>,
     ) -> Result<ApplyOutput> {
         let Some(mut attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await? else {
             return Err(anyhow!("no pending app-server handoff receipt to recover"));
@@ -391,22 +303,180 @@ impl Daemon {
                 .await;
         }
 
-        let settings = self.load_settings().await?;
+        let mut settings = self.load_settings().await?;
         ensure_apply_launcher(&settings)?;
-        let managed_codex_bin = self.configured_managed_codex_bin(&settings);
-        if managed_codex_bin != attempt.managed_codex_path {
+        if let Some(launcher_override) = launcher_override {
+            self.ensure_managed_codex_bin(launcher_override)?;
+        }
+        let configured_managed_codex_bin = self.configured_managed_codex_bin(&settings);
+        if launcher_override.is_none() && configured_managed_codex_bin != attempt.managed_codex_path
+        {
             let failure = format!(
                 "configured Codex launcher changed from {} to {}; refusing recovery",
                 attempt.managed_codex_path.display(),
-                managed_codex_bin.display()
+                configured_managed_codex_bin.display()
             );
             return self.mark_needs_attention(&mut attempt, failure).await;
         }
-        self.ensure_managed_codex_bin(managed_codex_bin)?;
+        if launcher_override.is_none() {
+            self.ensure_managed_codex_bin(configured_managed_codex_bin)?;
+        }
 
         let mut backend = self.running_backend_instance(&settings).await?;
+        if let Some(launcher_override) = launcher_override {
+            let server_home = if backend.is_some() {
+                match client::probe(&self.socket_path).await {
+                    Ok(info) => info.codex_home,
+                    Err(error) => {
+                        return self
+                            .mark_needs_attention_kind(
+                                &mut attempt,
+                                ApplyFailureKind::HandoffWorkPending,
+                                format!(
+                                    "cannot verify the current app server before changing its selected launcher: {error}"
+                                ),
+                            )
+                            .await;
+                    }
+                }
+            } else {
+                self.codex_home()?
+            };
+            if let Err(error) = self
+                .persist_recovery_target_after_server_home_check(
+                    &mut settings,
+                    &attempt,
+                    launcher_override,
+                    &server_home,
+                )
+                .await
+            {
+                return self
+                    .mark_needs_attention_kind(
+                        &mut attempt,
+                        ApplyFailureKind::HandoffStorageMismatch,
+                        error,
+                    )
+                    .await;
+            }
+        }
+        let managed_codex_bin = self.configured_managed_codex_bin(&settings);
+        self.ensure_managed_codex_bin(managed_codex_bin)?;
+
         if resolution.is_none() && attempt.stop_completed != Some(true) {
             if let Some(backend_instance) = backend.as_ref() {
+                let current_server = match client::probe(&self.socket_path).await {
+                    Ok(info) => info,
+                    Err(error) => {
+                        return self
+                            .mark_needs_attention_kind(
+                                &mut attempt,
+                                ApplyFailureKind::HandoffWorkPending,
+                                format!(
+                                    "cannot verify the current app server before stopping it: {error}"
+                                ),
+                            )
+                            .await;
+                    }
+                };
+                if let Err(error) = self
+                    .validate_server_home(Some(&attempt), &current_server.codex_home)
+                    .await
+                {
+                    return self
+                        .mark_needs_attention_kind(
+                            &mut attempt,
+                            ApplyFailureKind::HandoffStorageMismatch,
+                            error,
+                        )
+                        .await;
+                }
+                let prepared = match self
+                    .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id, None)
+                    .await
+                {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        let mut failure = error.to_string();
+                        let failure_kind = if let Some(server_home) =
+                            error.server_codex_home.as_deref()
+                            && let Err(home_error) =
+                                self.validate_server_home(Some(&attempt), server_home).await
+                        {
+                            return self
+                                .mark_needs_attention_kind(
+                                    &mut attempt,
+                                    ApplyFailureKind::HandoffStorageMismatch,
+                                    home_error,
+                                )
+                                .await;
+                        } else if error.is_unknown_handoff() {
+                            ApplyFailureKind::HandoffJournalMissing
+                        } else {
+                            ApplyFailureKind::HandoffWorkPending
+                        };
+                        match error.receipt {
+                            Some(receipt)
+                                if ensure_handoff_id(&attempt.handoff.handoff_id, &receipt)
+                                    .is_ok() =>
+                            {
+                                attempt.handoff = receipt;
+                            }
+                            Some(_) => {
+                                failure.push_str(
+                                    "; app server returned a receipt for a different handoff",
+                                );
+                            }
+                            None => {}
+                        }
+                        return self
+                            .mark_needs_attention_kind(
+                                &mut attempt,
+                                failure_kind,
+                                format!(
+                                    "prepared handoff could not be verified before stopping the daemon: {failure}"
+                                ),
+                            )
+                            .await;
+                    }
+                };
+                if let Err(error) = self
+                    .validate_server_home(Some(&attempt), &prepared.server_codex_home)
+                    .await
+                {
+                    return self
+                        .mark_needs_attention_kind(
+                            &mut attempt,
+                            ApplyFailureKind::HandoffStorageMismatch,
+                            error,
+                        )
+                        .await;
+                }
+                if let Err(error) =
+                    ensure_handoff_id(&attempt.handoff.handoff_id, &prepared.receipt)
+                {
+                    return self
+                        .mark_needs_attention_kind(
+                            &mut attempt,
+                            ApplyFailureKind::HandoffWorkPending,
+                            error,
+                        )
+                        .await;
+                }
+                if let Err(error) = ensure_transferable_handoff(&prepared.receipt) {
+                    return self
+                        .mark_needs_attention_kind(
+                            &mut attempt,
+                            ApplyFailureKind::HandoffWorkPending,
+                            format!(
+                                "prepared journal is no longer transferable before daemon stop: {error}"
+                            ),
+                        )
+                        .await;
+                }
+                attempt.handoff = prepared.receipt;
+                attempt.origin_codex_home = Some(prepared.server_codex_home);
+                attempt.save(&self.apply_receipt_file).await?;
                 if let Err(error) = stop_backend_with_receipt(
                     &mut attempt,
                     &self.apply_receipt_file,
@@ -457,67 +527,6 @@ impl Daemon {
             .await
     }
 
-    pub(crate) async fn reconcile_launcher_update(&self) -> Result<Option<ApplyOutput>> {
-        let _operation_lock = self.acquire_operation_lock().await?;
-        let settings = self.load_settings().await?;
-        let Some(managed_codex_bin) = settings.managed_codex_path.clone() else {
-            return Ok(None);
-        };
-        self.ensure_managed_codex_bin(&managed_codex_bin)?;
-
-        if let Some(attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await?
-            && !attempt.is_resolved()
-        {
-            if attempt.phase == ApplyPhase::NeedsAttention && !attempt.blocks_new_apply() {
-                return self
-                    .apply_fresh(settings, &managed_codex_bin)
-                    .await
-                    .map(Some);
-            }
-            if attempt.blocks_new_apply() {
-                let output = self.recover_with_resolution_locked(None).await?;
-                if output.status != ApplyStatus::Applied {
-                    return Ok(Some(output));
-                }
-            }
-        }
-
-        let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
-        let managed_backend_is_running = self.running_backend_instance(&settings).await?.is_some();
-        let running_app_server_version = if managed_backend_is_running
-            && running_managed_codex_version.is_none()
-        {
-            Some(
-                client::probe(&self.socket_path)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "cannot safely compare selected launcher {} because its active daemon PID record has no launch version and the app-server version probe failed",
-                            managed_codex_bin.display()
-                        )
-                    })?
-                    .app_server_version,
-            )
-        } else {
-            None
-        };
-        let installed_version = self
-            .managed_codex_version_best_effort(&managed_codex_bin)
-            .await;
-        if !launcher_update_required(
-            &managed_codex_bin,
-            managed_backend_is_running,
-            running_managed_codex_version,
-            running_app_server_version,
-            installed_version,
-        )? {
-            return Ok(None);
-        }
-        self.apply_fresh(settings, &managed_codex_bin)
-            .await
-            .map(Some)
-    }
-
     pub(crate) async fn apply_status(&self) -> Result<ApplyOutput> {
         let Some(attempt) = ApplyAttemptReceipt::load(&self.apply_receipt_file).await? else {
             return Err(anyhow!("no app-server handoff receipt has been recorded"));
@@ -527,7 +536,18 @@ impl Daemon {
             .ok()
             .map(|info| info.app_server_version);
         let running_managed_codex_version = self.running_managed_codex_version_best_effort().await;
-        if attempt.is_resolved() || app_server_version.is_none() {
+        if attempt.is_resolved() {
+            let mut output = attempt.output_with_running_version(
+                &self.socket_path,
+                app_server_version,
+                /*error*/ None,
+                running_managed_codex_version,
+            );
+            self.verify_applied_target(&mut output, &attempt.managed_codex_path)
+                .await?;
+            return Ok(output);
+        }
+        if app_server_version.is_none() {
             return Ok(attempt.output_with_running_version(
                 &self.socket_path,
                 app_server_version,
@@ -541,8 +561,32 @@ impl Daemon {
             .await
         {
             Ok(status) => {
+                if let Err(error) = self
+                    .validate_server_home(Some(&attempt), &status.server_codex_home)
+                    .await
+                {
+                    let mut output = fallback.output_with_running_version(
+                        &self.socket_path,
+                        app_server_version,
+                        Some(sanitize_failure(&error.to_string())),
+                        running_managed_codex_version,
+                    );
+                    output.failure_kind = Some(ApplyFailureKind::HandoffStorageMismatch);
+                    return Ok(output);
+                }
+                if let Err(error) = ensure_handoff_id(&attempt.handoff.handoff_id, &status.receipt)
+                {
+                    let mut output = fallback.output_with_running_version(
+                        &self.socket_path,
+                        app_server_version,
+                        Some(sanitize_failure(&error.to_string())),
+                        running_managed_codex_version,
+                    );
+                    output.failure_kind = Some(ApplyFailureKind::HandoffWorkPending);
+                    return Ok(output);
+                }
                 let mut view = attempt;
-                view.handoff = status;
+                view.handoff = status.receipt;
                 view.phase = match view.handoff.state.as_str() {
                     "completed" => ApplyPhase::Applied,
                     "needsAttention" => ApplyPhase::NeedsAttention,
@@ -550,19 +594,34 @@ impl Daemon {
                     "draining" | "suspended" | "restoring" => ApplyPhase::Recovering,
                     _ => ApplyPhase::NeedsAttention,
                 };
-                Ok(view.output_with_running_version(
+                let mut output = view.output_with_running_version(
                     &self.socket_path,
                     app_server_version,
                     /*error*/ None,
                     running_managed_codex_version,
-                ))
+                );
+                self.verify_applied_target(&mut output, &view.managed_codex_path)
+                    .await?;
+                Ok(output)
             }
-            Err(error) => Ok(fallback.output_with_running_version(
-                &self.socket_path,
-                app_server_version,
-                Some(sanitize_failure(&error.to_string())),
-                running_managed_codex_version,
-            )),
+            Err(error) => {
+                let mut output = fallback.output_with_running_version(
+                    &self.socket_path,
+                    app_server_version,
+                    Some(sanitize_failure(&error.to_string())),
+                    running_managed_codex_version,
+                );
+                if let Some(server_home) = error.server_codex_home.as_deref()
+                    && let Err(home_error) =
+                        self.validate_server_home(Some(&attempt), server_home).await
+                {
+                    output.error = Some(sanitize_failure(&home_error.to_string()));
+                    output.failure_kind = Some(ApplyFailureKind::HandoffStorageMismatch);
+                } else if error.is_unknown_handoff() {
+                    output.failure_kind = Some(ApplyFailureKind::HandoffJournalMissing);
+                }
+                Ok(output)
+            }
         }
     }
 
@@ -571,6 +630,17 @@ impl Daemon {
         settings: DaemonSettings,
         managed_codex_bin: &Path,
     ) -> Result<ApplyOutput> {
+        self.apply_fresh_with_resolution(settings, managed_codex_bin, Vec::new())
+            .await
+    }
+
+    async fn apply_fresh_with_resolution(
+        &self,
+        settings: DaemonSettings,
+        managed_codex_bin: &Path,
+        handoff_resolutions: Vec<HandoffResolution>,
+    ) -> Result<ApplyOutput> {
+        let latest_resolution = handoff_resolutions.last().cloned();
         ensure_apply_launcher(&settings)?;
         self.ensure_managed_codex_bin(managed_codex_bin)?;
         let Some(backend) = self.running_backend_instance(&settings).await? else {
@@ -584,8 +654,16 @@ impl Daemon {
             ));
         };
 
-        let message = client::request(&self.socket_path, PREPARE_METHOD, None).await?;
-        let handoff = match parse_handoff_response(message, PREPARE_METHOD) {
+        let expected_codex_home = self.codex_home()?;
+        let response = client::request_in_codex_home(
+            &self.socket_path,
+            PREPARE_METHOD,
+            None,
+            &expected_codex_home,
+        )
+        .await?;
+        let server_home = response.codex_home.clone();
+        let handoff = match parse_handoff_response(response.message, PREPARE_METHOD) {
             Ok(receipt) => receipt,
             Err(error) => {
                 let failure = sanitize_failure(&error.to_string());
@@ -596,9 +674,34 @@ impl Daemon {
                         self.managed_codex_version_best_effort(managed_codex_bin)
                             .await,
                     );
-                    return self.mark_needs_attention(&mut attempt, failure).await;
+                    attempt.origin_codex_home =
+                        Some(self.validate_server_home(None, &server_home).await?);
+                    attempt.handoff_resolution = latest_resolution.clone();
+                    attempt.handoff_resolutions = handoff_resolutions.clone();
+                    return self
+                        .mark_needs_attention_kind(
+                            &mut attempt,
+                            ApplyFailureKind::HandoffWorkPending,
+                            failure,
+                        )
+                        .await;
                 }
                 return Err(anyhow!(failure));
+            }
+        };
+        let origin_codex_home = match self.validate_server_home(None, &server_home).await {
+            Ok(home) => home,
+            Err(error) => {
+                let mut attempt = ApplyAttemptReceipt::new(
+                    handoff,
+                    managed_codex_bin.to_path_buf(),
+                    self.managed_codex_version_best_effort(managed_codex_bin)
+                        .await,
+                );
+                attempt.failure_kind = Some(ApplyFailureKind::HandoffStorageMismatch);
+                attempt.handoff_resolution = latest_resolution.clone();
+                attempt.handoff_resolutions = handoff_resolutions.clone();
+                return self.mark_needs_attention(&mut attempt, error).await;
             }
         };
         if let Err(error) = ensure_transferable_handoff(&handoff) {
@@ -608,8 +711,15 @@ impl Daemon {
                 self.managed_codex_version_best_effort(managed_codex_bin)
                     .await,
             );
+            attempt.origin_codex_home = Some(origin_codex_home);
+            attempt.handoff_resolution = latest_resolution.clone();
+            attempt.handoff_resolutions = handoff_resolutions.clone();
             return self
-                .mark_needs_attention(&mut attempt, sanitize_failure(&error.to_string()))
+                .mark_needs_attention_kind(
+                    &mut attempt,
+                    ApplyFailureKind::HandoffWorkPending,
+                    sanitize_failure(&error.to_string()),
+                )
                 .await;
         }
 
@@ -619,6 +729,70 @@ impl Daemon {
             self.managed_codex_version_best_effort(managed_codex_bin)
                 .await,
         );
+        attempt.origin_codex_home = Some(origin_codex_home);
+        attempt.handoff_resolution = latest_resolution;
+        attempt.handoff_resolutions = handoff_resolutions;
+        attempt.save(&self.apply_receipt_file).await?;
+        let prepared = match self
+            .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id, None)
+            .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Some(server_home) = error.server_codex_home.as_deref()
+                    && let Err(home_error) =
+                        self.validate_server_home(Some(&attempt), server_home).await
+                {
+                    return self
+                        .mark_needs_attention_kind(
+                            &mut attempt,
+                            ApplyFailureKind::HandoffStorageMismatch,
+                            home_error,
+                        )
+                        .await;
+                }
+                return self
+                    .mark_needs_attention_kind(
+                        &mut attempt,
+                        ApplyFailureKind::HandoffWorkPending,
+                        format!(
+                            "prepared handoff was not readable before stopping the daemon: {error}"
+                        ),
+                    )
+                    .await;
+            }
+        };
+        if let Err(error) = self
+            .validate_server_home(Some(&attempt), &prepared.server_codex_home)
+            .await
+        {
+            return self
+                .mark_needs_attention_kind(
+                    &mut attempt,
+                    ApplyFailureKind::HandoffStorageMismatch,
+                    error,
+                )
+                .await;
+        }
+        if let Err(error) = ensure_handoff_id(&attempt.handoff.handoff_id, &prepared.receipt) {
+            return self
+                .mark_needs_attention_kind(
+                    &mut attempt,
+                    ApplyFailureKind::HandoffWorkPending,
+                    error,
+                )
+                .await;
+        }
+        if let Err(error) = ensure_transferable_handoff(&prepared.receipt) {
+            return self
+                .mark_needs_attention_kind(
+                    &mut attempt,
+                    ApplyFailureKind::HandoffWorkPending,
+                    format!("prepared journal was not transferable before daemon stop: {error}"),
+                )
+                .await;
+        }
+        attempt.handoff = prepared.receipt;
         attempt.save(&self.apply_receipt_file).await?;
         if let Err(error) = stop_backend_with_receipt(
             &mut attempt,
@@ -647,170 +821,12 @@ impl Daemon {
                     .await;
             }
         };
-        self.recover_attempt(attempt, managed_codex_bin, info, None)
-            .await
-    }
-
-    async fn recover_attempt(
-        &self,
-        mut attempt: ApplyAttemptReceipt,
-        managed_codex_bin: &Path,
-        info: client::ProbeInfo,
-        resolution: Option<&str>,
-    ) -> Result<ApplyOutput> {
-        attempt.phase = ApplyPhase::Recovering;
-        attempt.save(&self.apply_receipt_file).await?;
-        match self
-            .request_handoff(STATUS_METHOD, &attempt.handoff.handoff_id, None)
-            .await
-        {
-            Ok(status) => {
-                attempt.handoff = status;
-                if attempt.handoff.state == "completed" {
-                    attempt.phase = ApplyPhase::Applied;
-                    attempt.failure = None;
-                    attempt.save(&self.apply_receipt_file).await?;
-                    return Ok(attempt.output_with_running_version(
-                        &self.socket_path,
-                        Some(info.app_server_version.clone()),
-                        /*error*/ None,
-                        self.running_managed_codex_version_best_effort().await,
-                    ));
-                }
-                if attempt.handoff.state == "needsAttention"
-                    && resolution.is_none()
-                    && !attempt.can_reconcile_empty_orphan()
-                {
-                    return self
-                        .mark_needs_attention(
-                            &mut attempt,
-                            "coordinator reported needsAttention before recovery",
-                        )
-                        .await;
-                }
-                if !matches!(
-                    attempt.handoff.state.as_str(),
-                    "prepared" | "draining" | "suspended" | "restoring"
-                ) && !(attempt.can_reconcile_empty_orphan()
-                    || (resolution.is_some() && attempt.handoff.state == "needsAttention"))
-                {
-                    return self
-                        .mark_needs_attention(
-                            &mut attempt,
-                            "coordinator returned an unknown handoff state",
-                        )
-                        .await;
-                }
-            }
-            Err(error) => {
-                if error.is_unknown_handoff() && attempt.can_reconcile_empty_orphan() {
-                    return self
-                        .mark_empty_orphan_applied(&mut attempt, managed_codex_bin, &info)
-                        .await;
-                }
-                let failure = error.to_string();
-                if let Some(receipt) = error.receipt {
-                    attempt.handoff = receipt;
-                }
-                return self.mark_needs_attention(&mut attempt, failure).await;
-            }
-        }
-
-        match self
-            .request_handoff(RECOVER_METHOD, &attempt.handoff.handoff_id, resolution)
-            .await
-        {
-            Ok(receipt) if receipt.state == "completed" => {
-                attempt.handoff = receipt;
-                attempt.phase = ApplyPhase::Applied;
-                attempt.failure = None;
-                attempt.managed_codex_version = self
-                    .managed_codex_version_best_effort(managed_codex_bin)
-                    .await;
-                attempt.save(&self.apply_receipt_file).await?;
-                Ok(attempt.output_with_running_version(
-                    &self.socket_path,
-                    Some(info.app_server_version),
-                    /*error*/ None,
-                    self.running_managed_codex_version_best_effort().await,
-                ))
-            }
-            Ok(receipt) if receipt.quarantined => {
-                attempt.handoff = receipt;
-                attempt.phase = ApplyPhase::NeedsAttention;
-                attempt.save(&self.apply_receipt_file).await?;
-                Ok(attempt.output_with_running_version(
-                    &self.socket_path,
-                    Some(info.app_server_version),
-                    /*error*/ None,
-                    self.running_managed_codex_version_best_effort().await,
-                ))
-            }
-            Ok(receipt) => {
-                attempt.handoff = receipt;
-                self.mark_needs_attention(
-                    &mut attempt,
-                    "coordinator did not complete exact handoff recovery",
-                )
-                .await
-            }
-            Err(error) => {
-                if error.is_unknown_handoff() && attempt.can_reconcile_empty_orphan() {
-                    return self
-                        .mark_empty_orphan_applied(&mut attempt, managed_codex_bin, &info)
-                        .await;
-                }
-                let failure = error.to_string();
-                if let Some(receipt) = error.receipt {
-                    attempt.handoff = receipt;
-                }
-                self.mark_needs_attention(&mut attempt, failure).await
-            }
-        }
-    }
-
-    async fn request_handoff(
-        &self,
-        method: &str,
-        handoff_id: &str,
-        resolution: Option<&str>,
-    ) -> std::result::Result<HandoffReceipt, HandoffRpcError> {
-        let params = match resolution {
-            Some(resolution) => serde_json::json!({
-                "handoffId": handoff_id,
-                "resolution": resolution,
-            }),
-            None => serde_json::json!({ "handoffId": handoff_id }),
-        };
-        let message = client::request(&self.socket_path, method, Some(params))
-            .await
-            .map_err(|error| HandoffRpcError {
-                method: method.to_string(),
-                message: error.to_string(),
-                receipt: None,
-            })?;
-        parse_handoff_response(message, method)
-    }
-
-    async fn mark_empty_orphan_applied(
-        &self,
-        attempt: &mut ApplyAttemptReceipt,
-        managed_codex_bin: &Path,
-        info: &client::ProbeInfo,
-    ) -> Result<ApplyOutput> {
-        attempt.handoff.state = "completed".to_string();
-        attempt.phase = ApplyPhase::Applied;
-        attempt.failure = None;
-        attempt.managed_codex_version = self
-            .managed_codex_version_best_effort(managed_codex_bin)
-            .await;
-        attempt.save(&self.apply_receipt_file).await?;
-        Ok(attempt.output_with_running_version(
-            &self.socket_path,
-            Some(info.app_server_version.clone()),
-            /*error*/ None,
-            self.running_managed_codex_version_best_effort().await,
-        ))
+        let mut output = self
+            .recover_attempt(attempt, managed_codex_bin, info, None)
+            .await?;
+        self.verify_applied_target(&mut output, managed_codex_bin)
+            .await?;
+        Ok(output)
     }
 
     async fn mark_needs_attention(
@@ -818,11 +834,22 @@ impl Daemon {
         attempt: &mut ApplyAttemptReceipt,
         error: impl std::fmt::Display,
     ) -> Result<ApplyOutput> {
+        self.mark_needs_attention_kind(attempt, ApplyFailureKind::HandoffWorkPending, error)
+            .await
+    }
+
+    async fn mark_needs_attention_kind(
+        &self,
+        attempt: &mut ApplyAttemptReceipt,
+        failure_kind: ApplyFailureKind,
+        error: impl std::fmt::Display,
+    ) -> Result<ApplyOutput> {
         let failure = sanitize_failure(&error.to_string());
         attempt.phase = ApplyPhase::NeedsAttention;
         attempt.failure = Some(failure.clone());
+        attempt.failure_kind = Some(failure_kind);
         attempt.save(&self.apply_receipt_file).await?;
-        Ok(attempt.output_with_running_version(
+        let mut output = attempt.output_with_running_version(
             &self.socket_path,
             client::probe(&self.socket_path)
                 .await
@@ -830,7 +857,9 @@ impl Daemon {
                 .map(|info| info.app_server_version),
             Some(failure),
             self.running_managed_codex_version_best_effort().await,
-        ))
+        );
+        output.failure_kind = Some(failure_kind);
+        Ok(output)
     }
 }
 

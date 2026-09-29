@@ -192,7 +192,7 @@ impl HandoffCoordinator {
             matches!(
                 node.state,
                 HandoffNodeState::Restored | HandoffNodeState::Paused
-            )
+            ) || (journal.transfer_started == Some(true) && is_idle_parent_unavailable_node(node))
         });
         journal.set_state(if complete {
             HandoffJournalState::Completed
@@ -235,9 +235,16 @@ impl HandoffCoordinator {
             }
             return Ok((loaded_nodes, false));
         }
+        let transferred = journal.transfer_started == Some(true);
         for index in ordered_indices(&journal.nodes, false) {
             let node = journal.nodes[index].clone();
             if node.state == HandoffNodeState::NeedsAttention || !node.blockers.is_empty() {
+                if transferred && is_idle_parent_unavailable_node(&node) {
+                    // The durable node snapshot proves there is no exact turn or manual pause
+                    // to restore. Keep the child blocker visible, but do not let an unavailable
+                    // parent route strand unrelated roots or startup forever.
+                    continue;
+                }
                 all_loaded = false;
                 if node.state != HandoffNodeState::NeedsAttention {
                     journal.update_node(
@@ -252,7 +259,10 @@ impl HandoffCoordinator {
             match self.load_recovery_node(&node).await {
                 Ok(thread) => loaded_nodes.push(LoadedRecoveryNode { index, thread }),
                 Err(blocker) => {
-                    all_loaded = false;
+                    let idle_parent_unavailable = transferred
+                        && blocker == HandoffBlocker::ParentUnavailable
+                        && has_no_active_recovery_work(&node);
+                    all_loaded &= idle_parent_unavailable;
                     journal.update_node(
                         &node.thread_id,
                         HandoffNodeState::NeedsAttention,
@@ -564,4 +574,20 @@ impl HandoffCoordinator {
             .await
             .map_err(|_| HandoffBlocker::Persistence)
     }
+}
+
+fn has_no_active_recovery_work(node: &HandoffNode) -> bool {
+    node.parent_thread_id.is_some()
+        && node.turn_id.is_none()
+        && !node.was_running
+        && !node.was_paused
+}
+
+fn is_idle_parent_unavailable_node(node: &HandoffNode) -> bool {
+    node.state == HandoffNodeState::NeedsAttention
+        && has_no_active_recovery_work(node)
+        && matches!(
+            node.blockers.as_slice(),
+            [HandoffBlocker::ParentUnavailable]
+        )
 }
