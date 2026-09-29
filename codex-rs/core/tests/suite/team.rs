@@ -81,6 +81,8 @@ mod team_idle;
 mod team_usage;
 #[path = "team_worker_limits.rs"]
 mod worker_limits;
+#[path = "team_worker_question.rs"]
+mod worker_question;
 
 fn team_config(mode: TeamMode, lead_model: &str, worker_model: &str) -> TeamConfig {
     TeamConfig {

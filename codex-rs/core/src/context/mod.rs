@@ -62,6 +62,7 @@ mod usage_limits;
 mod user_instructions;
 mod user_shell_command;
 mod user_verification_notice;
+mod worker_question;
 pub(crate) mod world_state;
 
 use codex_utils_output_truncation::TruncationPolicy;
@@ -165,4 +166,7 @@ pub(crate) use usage_limits::UsageLimitsContext;
 pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;
 pub(crate) use user_verification_notice::UserVerificationNotice;
+pub(crate) use worker_question::WorkerQuestionAnswered;
+pub(crate) use worker_question::WorkerQuestionReply;
+pub(crate) use worker_question::WorkerQuestionRequest;
 pub(crate) use world_state::ManagedDeveloperInstructions;

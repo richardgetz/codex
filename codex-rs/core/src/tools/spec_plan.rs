@@ -34,6 +34,7 @@ use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::WriteStdinHandler;
+use crate::tools::handlers::ask_worker_question::Handler as AskWorkerQuestionHandler;
 use crate::tools::handlers::builtin_schedule::BuiltinScheduleHandler;
 use crate::tools::handlers::builtin_scratchpad::BuiltinScratchpadHandler;
 use crate::tools::handlers::builtin_scratchpad_spec::SCRATCHPAD_TOOL_DESCRIPTIONS;
@@ -1539,6 +1540,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 exposure,
             );
             if is_team_lead_turn(turn_context) {
+                registry.add_with_exposure(AskWorkerQuestionHandler, exposure);
                 registry.add_with_exposure(TeamWorkerCapacityHandler::new(None), exposure);
             }
         } else {
@@ -1562,6 +1564,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 exposure,
             );
             if is_team_lead_turn(turn_context) {
+                registry.add_with_exposure(AskWorkerQuestionHandler, exposure);
                 registry.add_with_exposure(
                     TeamWorkerCapacityHandler::new(Some(MULTI_AGENT_V1_NAMESPACE)),
                     exposure,

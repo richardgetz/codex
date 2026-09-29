@@ -91,6 +91,7 @@ mod user_authorization;
 mod watch;
 mod worker_handoff;
 mod worker_limit;
+mod worker_question;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;

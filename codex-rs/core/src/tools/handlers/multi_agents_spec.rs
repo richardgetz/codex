@@ -247,6 +247,48 @@ pub fn create_send_message_action_tool() -> ToolSpec {
     })
 }
 
+pub fn create_ask_worker_question_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "target".to_string(),
+            JsonSchema::string(Some(
+                "Direct Worker thread id or task name from spawn_agent.".to_string(),
+            )),
+        ),
+        (
+            "question".to_string(),
+            JsonSchema::string(Some(
+                "Question for the Worker, limited to 2048 bytes. The Worker replies in its next final response and continues its assigned task.".to_string(),
+            )),
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ask_worker_question".to_string(),
+        description: "Ask one direct Worker a bounded question. The Worker’s next final response is routed back as an actionable reply with a question id, independently of task completion; the Worker then continues its assigned task. Only one unanswered question may be pending per Worker."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["target".to_string(), "question".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: Some(
+            json!({
+                "type": "object",
+                "properties": {
+                    "question_id": {"type": "string"},
+                    "target": {"type": "string"}
+                },
+                "required": ["question_id", "target"],
+                "additionalProperties": false
+            })
+            .into(),
+        ),
+    })
+}
+
 pub fn create_followup_task_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
