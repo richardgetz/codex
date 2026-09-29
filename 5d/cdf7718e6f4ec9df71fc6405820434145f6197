@@ -1,22 +1,24 @@
 intent:
-  id: codex-daemon-handoff-auto-reconcile-20260929
-  change_type: behavior
-  scope: Codex daemon target-aware launcher upgrade and app-server handoff recovery
-  summary: Reconcile safe idle orphans automatically during launcher upgrades, preserve ambiguous handoff ownership, and verify the full running fork launcher identity.
-  decision: Use same-home handoff RPC checks and durable archive receipts; recover from authoritative journals where present; retire only strictly proven idle orphan attempts with their complete history retained; then prepare a fresh handoff for the selected launcher.
+  id: "intent/2026-09-29/codex-daemon-handoff-auto-reconcile#5dcdf7718e6f"
+  change_type: fix
+  scope: daemon handoff launcher updates
+  summary: Automatically reconcile safe handoffs during daemon launcher upgrades while preserving ambiguous recovery state.
+  decision: Recover with an authoritative same-home journal where present; archive and retire only strictly proven idle orphan attempts while retaining node history; then prepare and verify the selected launcher.
   constraints:
     - Never claim children were reattached when retiring an idle orphan graph.
     - Never clear or overwrite ambiguous active, paused, foreign-home, malformed, or missing-authority handoffs.
     - Preserve daemon settings and full-fork version identity across apply and restart.
     - Keep unresolved receipt history and resolution events bounded and inspectable.
-  intent_priority: high
+  intent_priority: must
   code_locations:
     - codex-rs/app-server-daemon/src/apply
     - codex-rs/app-server-daemon/src/apply_receipt.rs
     - codex-rs/app-server/src/handoff_coordinator/recovery.rs
     - codex-rs/tui/src/daemon_startup.rs
     - codex-rs/core/templates/fork/delta_inventory.md
-  requested_by: Rick Getz
-  recorded_by: Codex
-  agent: Codex
-  model: GPT-6
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: codex
+    model: gpt-6
+  agent: codex
+  model: gpt-6
