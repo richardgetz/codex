@@ -288,3 +288,6 @@ async fn recovery_preserves_storage_mismatch_when_socket_switches_homes() {
     );
     assert_eq!(server.await.expect("server task"), None);
 }
+
+#[path = "target_apply_orphan_tests.rs"]
+mod orphan_apply;
