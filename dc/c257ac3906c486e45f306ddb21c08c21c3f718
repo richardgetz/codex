@@ -3,7 +3,7 @@ intent:
   change_type: feat
   scope: Team worker questions
   summary: Add correlated parent-to-Worker questions and direct replies that reach the Lead independently of Worker completion.
-  decision: Use a first-class ask function and targetless reply function, derive the requester from ThreadSpawn parent metadata, and reuse V1 send_input plus V2 Action delivery. Track one pending question per Worker and forward only its final answer at the final-turn boundary before continuous loopback, after verifying the sampled Worker input contains the matching question ID.
+  decision: Use a first-class ask function, derive the requester from ThreadSpawn parent metadata, and reuse V1 send_input plus V2 Action delivery. Track one pending question per Worker and forward only its final answer at the final-turn boundary before continuous loopback, after verifying the sampled Worker input contains the matching question ID.
   constraints:
     - Preserve V1 and V2 backend selection and lifecycle semantics.
     - Keep V2 helper functions outside the reserved collaboration namespace.
