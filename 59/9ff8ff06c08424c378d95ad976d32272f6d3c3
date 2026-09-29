@@ -1,0 +1,17 @@
+intent:
+  id: "intent/2026-09-29/codex-daemon-idle-orphan-public-apply-test#599ff8ff06"
+  change_type: "test"
+  scope: "app-server-daemon target-aware apply"
+  summary: "Cover automatic idle orphan retirement and repeated target-aware apply through the public Daemon API."
+  decision: "Exercise the 24-node missing-journal incident shape, retained archive, fresh handoff, selected full fork launcher identity, and idempotent repeat in an isolated test home."
+  constraints:
+    - "Use only synthetic isolated daemon state; never touch the live CODEX_HOME."
+    - "Keep the test focused on public apply orchestration and preserve existing recovery semantics."
+  intent_priority: "must"
+  code_locations:
+    - "codex-rs/app-server-daemon/src/apply/target_tests.rs"
+    - "codex-rs/app-server-daemon/src/apply/target_apply_orphan_tests.rs"
+  requested_by: "@richardgetz"
+  recorded_by:
+    agent: "codex-cli"
+    model: "gpt-6"
