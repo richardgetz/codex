@@ -5,6 +5,7 @@ use super::LocalAgentControl;
 use super::execution::AgentExecutionLimiter;
 use super::residency::V2Residency;
 use super::worker_limit::TeamWorkerLimiter;
+use crate::agent::control::worker_question::WorkerQuestionRegistry;
 use crate::agent::eta_reminders::EtaReminderController;
 use crate::agent::registry::AgentRegistry;
 use crate::config::RolloutBudgetConfig;
@@ -82,6 +83,8 @@ pub(crate) struct LocalAgentRuntime {
     pub(super) shared_thread_instructions_provider:
         Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
     pub(super) registry: Arc<AgentRegistry>,
+    /// One outstanding explicit question per Worker, shared by the local tree.
+    pub(super) worker_questions: Arc<WorkerQuestionRegistry>,
     pub(super) residency: Arc<V2Residency>,
     /// One-shot ETA reminders shared by the root and all descendants.
     pub(super) eta_reminders: Arc<EtaReminderController>,
@@ -97,6 +100,7 @@ impl LocalAgentRuntime {
             manager,
             thread_id_generator,
             registry: Arc::default(),
+            worker_questions: Arc::default(),
             residency: Arc::default(),
             agent_execution_limiter: Arc::default(),
             team_worker_limiter: Arc::default(),

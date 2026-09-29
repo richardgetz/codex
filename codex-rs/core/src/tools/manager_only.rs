@@ -68,6 +68,9 @@ pub(crate) fn enable_code_mode_for_manager_coordination(
 }
 
 fn is_manager_coordination_tool(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
+    if tool_name.is_default_namespace() && tool_name.name == "ask_worker_question" {
+        return turn_context.config.team_mode == TeamMode::LeadWorker;
+    }
     if tool_name.namespace.as_deref()
         == Some(crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE)
     {

@@ -20,6 +20,13 @@ release or merge rules.
 
 ## Unreleased
 
+- Team Leads can use the standalone `ask_worker_question` tool with either
+  multi-agent backend to send a bounded, correlated question to a direct Worker.
+  One pending question per Worker is tracked at runtime. The Worker’s next final
+  answer is routed immediately to the recorded Lead with its question ID, then
+  the Worker turn resumes; unrelated finals and normal completion batching are
+  unchanged. The helper stays outside the reserved V2 `collaboration` namespace.
+
 - `app-server daemon apply --codex-bin PATH` lets installers apply selected launchers safely: unconfigured
   daemons skip, stopped daemons defer, and running daemons use checkpoint/recovery. Startup retries
   pending work with RPC causes and versions; legacy PID records use an app-server version probe, and
@@ -1355,6 +1362,13 @@ release or merge rules.
   the configured ceiling and one consistent active/pending/remaining snapshot,
   reports an unset ceiling as unbounded, excludes grandchildren, and does not
   reserve a slot or change runtime admission.
+- Verify Team Leads can ask direct Workers one bounded question in V1 and V2,
+  receive the correlated answer through an immediate Lead wake before Worker
+  completion handling, and see the Worker continue its assigned task. Duplicate
+  pending questions, stale replies, terminal cleanup, and unanswered capacity
+  limits must behave predictably. Confirm unrelated Worker finals still follow
+  normal completion policy and the standalone helper does not alter either
+  reserved collaboration namespace.
 - Verify ManagerOnly Code Mode nested `send_message_action` carries the
   supplied message as Worker `input_text`, not as encrypted content; direct
   provider messaging continues to preserve encrypted message handling.

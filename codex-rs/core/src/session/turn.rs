@@ -15,6 +15,7 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
+use crate::context::WorkerQuestionRequest;
 use crate::context::world_state::WorldState;
 use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_discoverable_tools_for_mode;
@@ -720,6 +721,56 @@ pub(crate) async fn run_turn(
                 }
 
                 if !needs_follow_up {
+                    if let (Some(answer), Some(question)) = (
+                        sampling_request_last_agent_message.as_deref(),
+                        sess.services
+                            .agent_control
+                            .pending_worker_question(sess.thread_id),
+                    ) && WorkerQuestionRequest::matches_sampling_input(
+                        &question.question_id,
+                        &sampling_request_input,
+                    ) {
+                        match sess
+                            .services
+                            .agent_control
+                            .forward_worker_question_reply(
+                                sess.thread_id,
+                                answer,
+                                turn_context.multi_agent_version,
+                                turn_context.config.as_ref().clone(),
+                                crate::TurnStartOptions {
+                                    parent_turn_id: Some(turn_context.sub_id.clone()),
+                                    root_turn_id: turn_context.turn_metadata_state.root_turn_id(),
+                                    turn_trigger: turn_context
+                                        .turn_metadata_state
+                                        .current_turn_trigger(),
+                                    cyber_access_program: turn_context.cyber_access_program,
+                                    ..Default::default()
+                                },
+                            )
+                            .await
+                        {
+                            Ok(true) => {
+                                sess.conversation.suppress_non_final_handoff_output().await;
+                                let message: ResponseItem = ContextualUserFragment::into(
+                                    crate::context::WorkerQuestionAnswered::new(
+                                        question.question_id,
+                                    ),
+                                );
+                                sess.record_conversation_items(
+                                    &turn_context,
+                                    turn_context.model_info(),
+                                    std::slice::from_ref(&message),
+                                )
+                                .await;
+                                continue;
+                            }
+                            Ok(false) => {}
+                            Err(err) => {
+                                warn!(error = %err, "failed to deliver explicit Worker question reply");
+                            }
+                        }
+                    }
                     last_agent_message = sampling_request_last_agent_message;
                     let lead_has_active_workers = sess.is_team_lead().await
                         && sess

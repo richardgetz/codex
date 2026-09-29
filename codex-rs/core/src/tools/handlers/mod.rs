@@ -1,5 +1,6 @@
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
+pub(crate) mod ask_worker_question;
 pub(crate) mod builtin_schedule;
 pub(crate) mod builtin_scratchpad;
 pub(crate) mod builtin_scratchpad_spec;
