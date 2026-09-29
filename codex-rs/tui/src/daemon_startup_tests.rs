@@ -109,7 +109,7 @@ fn monorepo_wrapper_overrides_are_eligible_and_select_only_server_features() {
 }
 
 #[test]
-fn blocked_launcher_update_reports_selected_and_running_versions_with_recovery() {
+fn missing_handoff_journal_reports_versions_without_invalid_recovery_guidance() {
     let issue = daemon_startup::launcher_update_issue(&ApplyOutput {
         status: ApplyStatus::NeedsAttention,
         handoff_id: Some("handoff-1".to_string()),
@@ -125,6 +125,9 @@ fn blocked_launcher_update_reports_selected_and_running_versions_with_recovery()
         quarantined: false,
         can_retry: false,
         can_quarantine: false,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: Some(codex_app_server_daemon::ApplyFailureKind::HandoffJournalMissing),
         error: Some("handoff blocked".to_string()),
     });
 
@@ -132,7 +135,8 @@ fn blocked_launcher_update_reports_selected_and_running_versions_with_recovery()
     assert!(issue.reason.contains("0.157.1-rick.2"));
     assert!(issue.reason.contains("0.156.1-rick.2"));
     assert!(issue.reason.contains("handoff blocked"));
-    assert!(issue.reason.contains("daemon recover"));
+    assert!(issue.reason.contains("matching handoff journal is missing"));
+    assert!(!issue.reason.contains("daemon recover"));
     assert_eq!(issue.restart_features, None);
 }
 

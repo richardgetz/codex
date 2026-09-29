@@ -28,9 +28,18 @@ release or merge rules.
   unchanged. The helper stays outside the reserved V2 `collaboration` namespace.
 
 - `app-server daemon apply --codex-bin PATH` lets installers apply selected launchers safely: unconfigured
-  daemons skip, stopped daemons defer, and running daemons use checkpoint/recovery. Startup retries
-  pending work with RPC causes and versions; legacy PID records use an app-server version probe, and
-  startup fails closed if it cannot compare a running launcher. Unresolved receipts pin their launcher.
+  daemons skip, stopped daemons defer, and running daemons reconcile prior handoffs before a new
+  checkpoint. Prepared journals are read back from the initialized server's canonical `CODEX_HOME`
+  before the old process stops, and managed app-server children receive that home explicitly.
+  Journal-backed recovery preserves exact turns and pause intent; missing-journal receipts are
+  automatically retired only when completed transfer/stop markers and a complete, explicit idle
+  graph prove there is no turn or pause to replay. The full receipt remains in durable apply history
+  and is never reported as server-restored. Idle child `parentUnavailable` attachment blockers remain
+  visible while unrelated recoverable roots complete. Missing or ambiguous authority stays fenced
+  with a structured failure reason. `handoffResolutions` retains every outcome in one update across
+  retries, with `handoffResolution` as the latest-event compatibility alias. Applied status requires
+  exact full running/installed fork-version equality; upstream `appServerVersion` is not used as
+  launch identity.
 
 - The checked-in aggregate Python v2 protocol module may exceed the blob-size
   threshold after upstream schema refreshes. The exact generated path is
@@ -1187,6 +1196,20 @@ release or merge rules.
   explicit quarantine validates graph closure, durably pauses every affected
   root, retains the original receipt diagnostics, and only then permits
   ordinary startup writes.
+- Verify target-aware apply binds the receipt to canonical initialized-server
+  `CODEX_HOME`, pins that home in managed children, and reads the prepared
+  journal back before stopping the source process. Same-home journal recovery
+  is idempotent across real process replacement. A missing journal is retired
+  only for a complete rooted graph with explicit null turns, false running and
+  pause flags, readable rollout files, only idle roots and child
+  `parentUnavailable` blockers, and completed stop markers; retain the full
+  archive before a new prepare. Any active turn, user pause, other blocker,
+  malformed graph, missing rollout, home mismatch, or incomplete stop remains
+  fenced. Idle child `parentUnavailable` rows in an existing journal stay
+  visible while unrelated recoverable roots complete. Verify ordered
+  `handoffResolutions` retains every `recovered` and `retiredIdleOrphan` event
+  across retries, and exact `.rick.*` version suffix mismatches never pass as
+  applied based on the upstream app-server version.
 - Verify a discovered local daemon connection failure remains visible and does
   not silently switch the TUI to an embedded server; preserve initial embedded
   selection and explicit remote or embedded overrides.

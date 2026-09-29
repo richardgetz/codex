@@ -9,6 +9,7 @@ use codex_app_server_protocol::ThreadHandoffNodeState;
 use codex_app_server_protocol::ThreadHandoffPrepareResponse;
 use codex_app_server_protocol::ThreadHandoffRecoverResponse;
 use codex_app_server_protocol::ThreadHandoffState;
+use codex_app_server_protocol::ThreadHandoffStatusResponse;
 use codex_app_server_protocol::ThreadPauseState;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -138,6 +139,32 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
 
     timeout(REQUEST_TIMEOUT, old_server.shutdown_gracefully()).await??;
 
+    // The same ID must not resolve from a different CODEX_HOME. This is the concrete
+    // distinction the daemon uses before retiring an orphaned receipt.
+    let wrong_home = TempDir::new()?;
+    MockResponsesConfig::new(responses_server.uri()).write(wrong_home.path())?;
+    let mut wrong_home_server = TestAppServer::builder()
+        .with_codex_home(wrong_home.path())
+        .build_initialized_with_timeout(REQUEST_TIMEOUT)
+        .await?;
+    let wrong_home_status = wrong_home_server
+        .send_raw_request(
+            "thread/handoff/status",
+            Some(json!({"handoffId": prepared.receipt.handoff_id})),
+        )
+        .await?;
+    let wrong_home_error: JSONRPCError = timeout(
+        REQUEST_TIMEOUT,
+        wrong_home_server.read_stream_until_error_message(RequestId::Integer(wrong_home_status)),
+    )
+    .await??;
+    assert!(wrong_home_error.error.message.contains(&format!(
+        "unknown handoff id {}",
+        prepared.receipt.handoff_id
+    )));
+    assert_eq!(wrong_home_error.error.code, -32602);
+    wrong_home_server.shutdown_gracefully().await?;
+
     let mut replacement = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(REQUEST_TIMEOUT)
@@ -186,6 +213,29 @@ async fn handoff_prepare_and_cold_recover_preserves_turn_and_pause_state() -> Re
         .find(|node| node.thread_id == paused_idle.id)
         .expect("recovered paused node should be recorded");
     assert_eq!(recovered_paused.state, ThreadHandoffNodeState::Paused);
+
+    let status_request = replacement
+        .send_raw_request(
+            "thread/handoff/status",
+            Some(json!({"handoffId": prepared.receipt.handoff_id})),
+        )
+        .await?;
+    let status: ThreadHandoffStatusResponse =
+        timeout(REQUEST_TIMEOUT, replacement.read_response(status_request)).await??;
+    assert_eq!(status.receipt, recovered.receipt);
+
+    let repeated_recover_request = replacement
+        .send_raw_request(
+            "thread/handoff/recover",
+            Some(json!({"handoffId": prepared.receipt.handoff_id})),
+        )
+        .await?;
+    let repeated_recovered: ThreadHandoffRecoverResponse = timeout(
+        REQUEST_TIMEOUT,
+        replacement.read_response(repeated_recover_request),
+    )
+    .await??;
+    assert_eq!(repeated_recovered.receipt, recovered.receipt);
 
     timeout(
         REQUEST_TIMEOUT,

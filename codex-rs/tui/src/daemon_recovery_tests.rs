@@ -21,7 +21,7 @@ fn daemon_recovery_requires_explicit_restart_and_defaults_to_cancel() {
         restart_features: None,
     };
     let launcher_update = CompatibilityError {
-        reason: "safe daemon update returned NeedsAttention; selected launcher /opt/homebrew/bin/codex-rick (installed version 0.157.1-rick.2) is running as version 0.156.1-rick.2 (app-server version 0.156.1). handoff blocked. If a handoff is pending, run `codex app-server daemon recover`, then retry `codex app-server daemon apply --codex-bin <selected absolute path>`".to_string(),
+        reason: "safe daemon update returned NeedsAttention; selected launcher /opt/homebrew/bin/codex-rick (installed version 0.157.1-rick.2) is running as version 0.156.1-rick.2 (app-server version 0.156.1). The matching handoff journal is missing; Codex preserved the receipt and did not replay or discard its saved sessions. thread/handoff/status failed: unknown handoff id handoff-1".to_string(),
         restart_features: None,
     };
     for (issue, managed, snapshot) in [

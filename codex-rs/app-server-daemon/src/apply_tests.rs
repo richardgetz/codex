@@ -12,6 +12,7 @@ use tokio::time::timeout;
 use super::ensure_apply_launcher;
 use super::stop_backend_with_receipt;
 use crate::apply_receipt::ApplyAttemptReceipt;
+use crate::apply_receipt::ApplyFailureKind;
 use crate::apply_receipt::ApplyPhase;
 use crate::apply_receipt::HandoffReceipt;
 
@@ -40,24 +41,22 @@ fn test_daemon(home: &std::path::Path) -> Daemon {
 }
 
 #[test]
-fn launcher_update_uses_server_version_for_legacy_running_pid_records() {
+fn launcher_update_requires_exact_fork_launcher_version_identity() {
     let managed_codex_bin = PathBuf::from("/codex/selected");
     assert_eq!(
         super::launcher_update_required(
             &managed_codex_bin,
             /*managed_backend_is_running*/ true,
-            /*running_managed_codex_version*/ None,
-            Some("0.156.1-rick.2".to_string()),
             Some("0.157.1-rick.2".to_string()),
+            Some("0.157.1-rick.3".to_string()),
         )
-        .expect("the running app-server version identifies the old launcher"),
+        .expect("different fork patch builds require a refresh"),
         true,
     );
     assert_eq!(
         super::launcher_update_required(
             &managed_codex_bin,
             /*managed_backend_is_running*/ true,
-            /*running_managed_codex_version*/ None,
             Some("0.157.1-rick.2".to_string()),
             Some("0.157.1-rick.2".to_string()),
         )
@@ -69,7 +68,6 @@ fn launcher_update_uses_server_version_for_legacy_running_pid_records() {
             &managed_codex_bin,
             /*managed_backend_is_running*/ false,
             /*running_managed_codex_version*/ None,
-            /*running_app_server_version*/ None,
             /*managed_codex_version*/ None,
         )
         .expect("a stopped daemon needs no startup reconciliation"),
@@ -79,7 +77,6 @@ fn launcher_update_uses_server_version_for_legacy_running_pid_records() {
         &managed_codex_bin,
         /*managed_backend_is_running*/ true,
         /*running_managed_codex_version*/ None,
-        /*running_app_server_version*/ None,
         Some("0.157.1-rick.2".to_string()),
     )
     .expect_err("an unverified running version must fail closed");
@@ -139,6 +136,52 @@ async fn target_apply_skips_when_no_daemon_is_configured() {
             .expect("load receipt")
             .expect("receipt"),
         attempt
+    );
+}
+
+#[tokio::test]
+async fn handoff_home_validation_accepts_canonical_aliases_and_rejects_other_homes() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let daemon = test_daemon(directory.path());
+    let expected = directory.path().canonicalize().expect("canonical home");
+    assert_eq!(
+        daemon
+            .validate_server_home(None, &expected)
+            .await
+            .expect("same daemon home"),
+        expected
+    );
+
+    let foreign = tempfile::tempdir().expect("foreign home");
+    let error = daemon
+        .validate_server_home(None, foreign.path())
+        .await
+        .expect_err("foreign server home must be rejected");
+    assert!(error.to_string().contains("does not match daemon home"));
+
+    let mut attempt = test_attempt();
+    attempt.origin_codex_home = Some(foreign.path().to_path_buf());
+    let error = daemon
+        .validate_server_home(Some(&attempt), &expected)
+        .await
+        .expect_err("foreign receipt origin must be rejected");
+    assert!(error.to_string().contains("originated in Codex home"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn handoff_home_validation_accepts_symlink_equivalent_home() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let alias = directory.path().join("codex-home-alias");
+    std::os::unix::fs::symlink(directory.path(), &alias).expect("home alias");
+    let daemon = test_daemon(directory.path());
+
+    assert_eq!(
+        daemon
+            .validate_server_home(None, &alias)
+            .await
+            .expect("canonical home alias"),
+        directory.path().canonicalize().expect("canonical home")
     );
 }
 
@@ -210,7 +253,45 @@ async fn target_apply_persists_selected_launcher_without_starting_stopped_daemon
 }
 
 #[tokio::test]
-async fn target_apply_keeps_any_unresolved_receipt_when_a_different_target_is_requested() {
+async fn target_apply_recognizes_default_launcher_configuration_when_stopped() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let daemon = test_daemon(directory.path());
+    let target = directory.path().join("updated-codex");
+    tokio::fs::write(&target, "updated")
+        .await
+        .expect("selected launcher");
+    tokio::fs::write(
+        &daemon.settings_file,
+        serde_json::json!({
+            "remoteControlEnabled": true,
+            "shutdownGraceSeconds": 45,
+            "updater": {"autoUpdateEnabled": false, "updateIntervalMinutes": 17}
+        })
+        .to_string(),
+    )
+    .await
+    .expect("default-launcher daemon settings");
+
+    let output = daemon
+        .apply_to_target(target.clone())
+        .await
+        .expect("configured daemon should persist its selected target");
+
+    assert_eq!(output.status, ApplyStatus::Deferred);
+    assert_eq!(output.managed_codex_path, Some(target.clone()));
+    assert!(!daemon.pid_file.exists());
+    let settings = DaemonSettings::load(&daemon.settings_file)
+        .await
+        .expect("reloaded settings");
+    assert_eq!(settings.managed_codex_path, Some(target));
+    assert!(settings.remote_control_enabled);
+    assert!(!settings.auto_update_enabled);
+    assert_eq!(settings.update_interval_minutes, 17);
+    assert_eq!(settings.shutdown_grace_seconds, 45);
+}
+
+#[tokio::test]
+async fn target_apply_keeps_the_saved_launcher_until_unresolved_handoff_recovers() {
     let directory = tempfile::tempdir().expect("temp dir");
     let daemon = test_daemon(directory.path());
     let pinned = directory.path().join("pinned-codex");
@@ -231,7 +312,6 @@ async fn target_apply_keeps_any_unresolved_receipt_when_a_different_target_is_re
     let mut attempt = test_attempt();
     attempt.managed_codex_path = pinned.clone();
     attempt.handoff.state = "needsAttention".to_string();
-    attempt.handoff.quarantined = true;
     attempt.handoff.nodes = vec![serde_json::json!({
         "threadId": "thread-1",
         "rootThreadId": "thread-1",
@@ -241,7 +321,7 @@ async fn target_apply_keeps_any_unresolved_receipt_when_a_different_target_is_re
     attempt.phase = ApplyPhase::NeedsAttention;
     attempt.stop_started = Some(true);
     attempt.stop_completed = Some(true);
-    assert!(!attempt.blocks_new_apply());
+    assert!(attempt.blocks_new_apply());
     attempt
         .save(&daemon.apply_receipt_file)
         .await
@@ -264,13 +344,12 @@ async fn target_apply_keeps_any_unresolved_receipt_when_a_different_target_is_re
             .managed_codex_path,
         Some(pinned)
     );
-    assert_eq!(
-        ApplyAttemptReceipt::load(&daemon.apply_receipt_file)
-            .await
-            .expect("load receipt")
-            .expect("receipt"),
-        attempt,
-    );
+    let persisted = ApplyAttemptReceipt::load(&daemon.apply_receipt_file)
+        .await
+        .expect("load receipt")
+        .expect("receipt");
+    assert_eq!(persisted.managed_codex_path, attempt.managed_codex_path);
+    assert_eq!(persisted.handoff, attempt.handoff);
 }
 
 fn test_attempt() -> ApplyAttemptReceipt {
@@ -287,6 +366,44 @@ fn test_attempt() -> ApplyAttemptReceipt {
         PathBuf::from("/codex"),
         None,
     )
+}
+
+#[tokio::test]
+async fn apply_status_rechecks_the_running_full_fork_version_for_resolved_receipts() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let daemon = test_daemon(directory.path());
+    let mut attempt = test_attempt();
+    attempt.phase = ApplyPhase::Applied;
+    attempt.handoff.state = "completed".to_string();
+    attempt.managed_codex_path = directory.path().join("updated-codex");
+    attempt.managed_codex_version = Some("0.157.1-rick.3".to_string());
+    attempt
+        .save(&daemon.apply_receipt_file)
+        .await
+        .expect("save receipt");
+
+    let output = daemon
+        .apply_status()
+        .await
+        .expect("status should report an unverifiable running launcher");
+
+    assert_eq!(output.status, ApplyStatus::NeedsAttention);
+    assert_eq!(
+        output.failure_kind,
+        Some(ApplyFailureKind::RunningLauncherMismatch)
+    );
+    assert!(output.error.as_deref().is_some_and(|error| {
+        error.contains("updated-codex") && error.contains("full fork versions must match")
+    }));
+    let persisted = ApplyAttemptReceipt::load(&daemon.apply_receipt_file)
+        .await
+        .expect("load persisted diagnostic")
+        .expect("receipt");
+    assert_eq!(
+        persisted.failure_kind,
+        Some(ApplyFailureKind::RunningLauncherMismatch)
+    );
+    assert_eq!(persisted.failure, output.error);
 }
 
 #[tokio::test]

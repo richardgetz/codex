@@ -12,7 +12,10 @@ use super::ApplyAttemptReceipt;
 use super::ApplyPhase;
 use super::ApplyStatus;
 use super::HandoffReceipt;
+use super::HandoffResolution;
+use super::HandoffResolutionOutcome;
 use super::HandoffRpcError;
+use super::ensure_handoff_id;
 use super::ensure_transferable_handoff;
 use super::parse_handoff_response;
 use super::sanitize_failure;
@@ -39,6 +42,67 @@ fn node(state: &str, turn_id: Option<&str>) -> Value {
         node["turnId"] = Value::String(turn_id.to_string());
     }
     node
+}
+
+#[test]
+fn legacy_scalar_resolution_projects_as_single_event_history() {
+    let resolution = HandoffResolution {
+        handoff_id: "handoff-old".to_string(),
+        outcome: HandoffResolutionOutcome::RetiredIdleOrphan,
+    };
+    let mut attempt =
+        ApplyAttemptReceipt::new(receipt("completed", Vec::new()), "/codex".into(), None);
+    attempt.handoff_resolution = Some(resolution.clone());
+    attempt.phase = ApplyPhase::Applied;
+
+    let stored = serde_json::to_value(&attempt).expect("serialize legacy-shaped receipt");
+    assert!(stored.get("handoffResolutions").is_none());
+    let reloaded: ApplyAttemptReceipt =
+        serde_json::from_value(stored).expect("load legacy-shaped receipt");
+
+    assert_eq!(
+        reloaded.handoff_resolution_history(),
+        vec![resolution.clone()]
+    );
+    assert_eq!(
+        reloaded
+            .output(Path::new("socket"), None, None)
+            .handoff_resolutions,
+        vec![resolution]
+    );
+}
+
+#[tokio::test]
+async fn resolution_history_keeps_the_newest_sixty_four_events_and_final_alias() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("apply-receipt.json");
+    let resolutions = (0..=64)
+        .map(|index| HandoffResolution {
+            handoff_id: format!("handoff-{index}"),
+            outcome: HandoffResolutionOutcome::Recovered,
+        })
+        .collect::<Vec<_>>();
+    let mut attempt = ApplyAttemptReceipt::new(
+        receipt("completed", Vec::new()),
+        "/codex".into(),
+        Some("0.157.1-rick.3".to_string()),
+    );
+    attempt.phase = ApplyPhase::Applied;
+    attempt.handoff_resolutions = resolutions.clone();
+    attempt.handoff_resolution = resolutions.last().cloned();
+
+    attempt.save(&path).await.expect("save bounded receipt");
+    let reloaded = ApplyAttemptReceipt::load(&path)
+        .await
+        .expect("load receipt")
+        .expect("saved receipt");
+    let expected = resolutions[1..].to_vec();
+    assert_eq!(reloaded.handoff_resolution_history(), expected);
+    assert_eq!(reloaded.handoff_resolution, expected.last().cloned());
+
+    let output = reloaded.output(Path::new("socket"), None, None);
+    assert_eq!(output.handoff_resolutions, expected);
+    assert_eq!(output.handoff_resolution, resolutions.last().cloned());
 }
 
 fn failed_preparation_node() -> Value {
@@ -104,6 +168,10 @@ async fn apply_receipt_round_trips_atomically() {
         phase: ApplyPhase::Recovering,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: Some("0.154.0-rick.2".to_string()),
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: None,
@@ -164,6 +232,10 @@ fn failed_preparation_can_be_retried_without_reusing_an_old_receipt() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(false),
         stop_completed: Some(false),
         failure: Some("preparation failed".to_string()),
@@ -198,6 +270,10 @@ fn preflight_failure_marker_allows_retry_without_replacing_the_old_runtime() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(false),
         stop_completed: Some(false),
         failure: Some("pending approval".to_string()),
@@ -215,6 +291,10 @@ fn legacy_failed_receipts_remain_conservative() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: None,
         stop_completed: None,
         failure: Some("unknown failure".to_string()),
@@ -232,6 +312,10 @@ fn completed_legacy_stop_allows_recovery_to_restart_missing_replacement() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: None,
         failure: Some("recovery failed after stopping the old runtime".to_string()),
@@ -259,6 +343,10 @@ fn legacy_failed_preparation_receipts_with_no_running_nodes_can_retry() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: None,
         stop_completed: None,
         failure: Some("parentUnavailable".to_string()),
@@ -297,6 +385,10 @@ fn malformed_legacy_failed_preparation_receipts_remain_fenced() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: None,
         stop_completed: None,
         failure: Some("malformed receipt".to_string()),
@@ -313,6 +405,10 @@ fn legacy_failed_receipts_without_nodes_cannot_retry() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: None,
         stop_completed: None,
         failure: Some("missing receipt nodes".to_string()),
@@ -339,6 +435,10 @@ fn empty_post_transfer_receipt_can_retry_after_stop_completed() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: Some("coordinator did not complete exact handoff recovery".to_string()),
@@ -360,6 +460,10 @@ fn empty_post_transfer_orphan_is_reconcilable_after_completed_stop() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: Some("coordinator did not complete exact handoff recovery".to_string()),
@@ -371,6 +475,8 @@ fn empty_post_transfer_orphan_is_reconcilable_after_completed_stop() {
             method: "thread/handoff/status".to_string(),
             message: "unknown handoff id handoff-1".to_string(),
             receipt: None,
+            server_codex_home: None,
+            codex_home_mismatch: false,
         }
         .is_unknown_handoff()
     );
@@ -386,6 +492,10 @@ fn empty_post_transfer_orphan_without_stop_start_is_not_reconcilable() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(false),
         stop_completed: Some(true),
         failure: Some("invalid receipt markers".to_string()),
@@ -404,6 +514,10 @@ fn empty_post_transfer_receipt_stays_fenced_until_stop_completed() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(false),
         failure: Some("backend stop failed".to_string()),
@@ -424,6 +538,10 @@ fn quarantined_receipts_allow_a_new_apply_without_claiming_completion() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: Some("parentUnavailable".to_string()),
@@ -452,6 +570,10 @@ fn active_needs_attention_receipts_remain_fenced_before_stop_completes() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(false),
         stop_completed: Some(false),
         failure: Some("stop failed".to_string()),
@@ -479,6 +601,10 @@ fn malformed_quarantine_receipts_do_not_advertise_an_unusable_action() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(false),
         stop_completed: Some(false),
         failure: Some("malformed receipt".to_string()),
@@ -500,6 +626,10 @@ fn malformed_quarantined_receipts_remain_fenced() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: Some("malformed state".to_string()),
@@ -519,6 +649,10 @@ fn malformed_quarantined_receipts_remain_fenced() {
         phase: ApplyPhase::Prepared,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: None,
@@ -546,6 +680,10 @@ fn malformed_quarantined_receipts_remain_fenced() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: Some("malformed quarantined receipt".to_string()),
@@ -578,6 +716,10 @@ fn malformed_quarantined_receipts_remain_fenced() {
         phase: ApplyPhase::NeedsAttention,
         managed_codex_path: "/opt/homebrew/bin/codex-rick".into(),
         managed_codex_version: None,
+        origin_codex_home: None,
+        handoff_resolution: None,
+        handoff_resolutions: Vec::new(),
+        failure_kind: None,
         stop_started: Some(true),
         stop_completed: Some(true),
         failure: Some("unknown quarantined node state".to_string()),
@@ -589,4 +731,16 @@ fn malformed_quarantined_receipts_remain_fenced() {
 fn sanitizes_persisted_failures_to_single_line_bounded_text() {
     assert_eq!(sanitize_failure("connect\nfailed\t"), "connect failed ");
     assert_eq!(sanitize_failure(&"x".repeat(600)).len(), 512);
+}
+
+#[test]
+fn handoff_responses_must_match_the_requested_id() {
+    let receipt = receipt("suspended", Vec::new());
+    assert!(ensure_handoff_id("handoff-1", &receipt).is_ok());
+    assert!(
+        ensure_handoff_id("handoff-2", &receipt)
+            .expect_err("a different journal must not replace the receipt")
+            .to_string()
+            .contains("app server returned handoff-1")
+    );
 }

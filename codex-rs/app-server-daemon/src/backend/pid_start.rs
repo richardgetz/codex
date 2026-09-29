@@ -244,6 +244,10 @@ impl PidBackend {
             }
         }
 
+        if managed_app_server {
+            command.env("CODEX_HOME", managed_app_server_codex_home(&self.pid_file)?);
+        }
+
         // Observe the launcher generation immediately before spawn while the reservation lock is
         // held. A same-path installer replacement during this window is caught by the post-spawn
         // comparison and publishes an unknown version instead of attributing it to this child.
@@ -371,6 +375,18 @@ impl PidBackend {
         drop(reservation_lock);
         Ok(Some(pid))
     }
+}
+
+fn managed_app_server_codex_home(pid_file: &Path) -> Result<&Path> {
+    let state_dir = pid_file
+        .parent()
+        .context("daemon pid path has no parent directory")?;
+    if state_dir.file_name() == Some(std::ffi::OsStr::new("app-server-daemon")) {
+        return state_dir
+            .parent()
+            .context("daemon state directory has no Codex home");
+    }
+    Ok(state_dir)
 }
 
 fn retain_launch_identity(

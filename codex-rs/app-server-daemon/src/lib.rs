@@ -1,6 +1,7 @@
 //! Managed app-server lifecycle, serialized across CLI invocations and the updater.
 
 mod apply;
+mod apply_archive;
 mod apply_receipt;
 mod backend;
 #[cfg(windows)]
@@ -28,8 +29,11 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+pub use apply_receipt::ApplyFailureKind;
 pub use apply_receipt::ApplyOutput;
 pub use apply_receipt::ApplyStatus;
+pub use apply_receipt::HandoffResolution;
+pub use apply_receipt::HandoffResolutionOutcome;
 pub use backend::BackendKind;
 use backend::BackendPaths;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
@@ -1359,6 +1363,7 @@ mod tests {
     fn restart_decision_preserves_forced_refreshes() {
         let current_info = ProbeInfo {
             app_server_version: "0.1.0".to_string(),
+            codex_home: PathBuf::from("/codex-home"),
         };
 
         assert_eq!(

@@ -61,6 +61,17 @@ that may be sent through the durable pause-and-quarantine flow. A receipt
 whose replacement may have started remains fenced until exact recovery or
 explicit quarantine succeeds.
 Target-aware apply has null `handoffId` and `state` when deferred or unconfigured.
+`handoffResolutions` lists every handoff reconciled during one selected-launcher
+apply in completion order. `handoffResolution` remains as a compatibility alias
+for the latest event. Outcomes are `recovered` for a server-completed journal or
+`retiredIdleOrphan` for a missing journal whose fully stopped receipt proves
+that it contains no active turn or pause to replay. The original receipt is
+retained in `app-server-daemon/apply-history/` before a new attempt replaces it.
+`failureKind` distinguishes a missing journal, Codex-home mismatch, unresolved
+work, and an unverified running launcher. Missing or ambiguous recovery data
+stays in the active receipt; the daemon never rebuilds an authoritative journal
+from its normalized receipt projection. Applied status requires the installed
+and running full Codex versions to match, including fork suffixes.
 
 ## Bootstrap flow
 
@@ -163,9 +174,12 @@ symlinks and shims can point to the newly installed version.
 
 ### Safe installed-version apply
 
-`apply` and `recover` need a configured launcher from `bootstrap --codex-bin PATH`.
-Installers can pass an absolute target to `apply --codex-bin PATH`. Unconfigured
-daemons return `notConfigured` unchanged; stopped configured daemons persist the
+Plain `apply` and `recover` need a launcher configured by
+`bootstrap --codex-bin PATH`. Installers can pass an absolute target to
+`apply --codex-bin PATH`. A daemon with no settings file, apply receipt, or
+managed PID process returns `notConfigured`; existing settings, a receipt, or a
+managed process identify a daemon even when it uses the default standalone path
+and has no `managedCodexPath` field. A stopped configured daemon persists the
 target as `deferred` without starting. Running daemons validate the target before
 safe handoff; standalone remains ineligible while its updater may race.
 Conflicting unresolved receipts stay unchanged and return `needsAttention`.
@@ -173,11 +187,11 @@ Target-aware `applied`, `deferred`, and `notConfigured` exit 0; `inProgress` and
 `needsAttention` emit JSON and exit nonzero. Standalone lifecycle and updater
 behavior remain available through `start`, `restart`, and bootstrap.
 
-At startup, launcher reconciliation uses the active daemon PID record's launch
-version when available. For legacy PID records without that metadata, it probes
-the active app-server version before deciding whether the selected launcher is
-current; if either version cannot be established, startup reports the specific
-reconciliation failure and does not continue with an unverified launcher.
+At startup, launcher reconciliation uses the active daemon PID record's full
+launch version when available. For legacy PID records without that metadata, it
+does not infer the fork build from `appServerVersion`; automatic reconciliation
+reports that the running launcher cannot be verified and leaves the process
+available for an explicit target-aware apply.
 
 apply is the daemon-wide update button for a locally installed launcher. It asks
 the app-server coordinator to checkpoint every loaded root and child tree. The
@@ -198,7 +212,11 @@ codex app-server daemon apply-status
 apply always prepares all loaded roots because replacing the daemon would
 interrupt every tree. apply-status is read-only. These commands use the local
 Unix control socket and do not enable remote control or enroll a cloud service.
-TUI startup reconciles pending handoffs and launcher mismatches before feature checks, reporting RPC cause, selected path, versions, and recovery steps.
+The managed app-server child receives the daemon's `CODEX_HOME` explicitly.
+Prepare reads the just-published journal back from the initialized server home
+before stopping the old owner. TUI startup reports the RPC cause, selected
+launcher, and full installed/running versions; it does not recommend retrying
+manual recovery when the matching journal is missing.
 
 ## Lifecycle semantics
 
