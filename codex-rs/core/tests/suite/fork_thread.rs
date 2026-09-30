@@ -138,7 +138,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork1,
         ..
     } = thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(1),
             config_for_fork.clone(),
             base_path.clone(),
@@ -167,7 +167,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork2,
         ..
     } = thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
             config_for_fork.clone(),
             fork1_path.clone(),
@@ -271,7 +271,7 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
         .fork_thread_from_history_with_settings(
             ForkSnapshot::Interrupted,
             test.config.clone(),
-            history,
+            history.clone(),
             /*thread_source*/ None,
             /*parent_trace*/ None,
             codex_protocol::mcp::ClientMcpExtensions::default(),
@@ -283,6 +283,26 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
         .await?;
     pretty_assertions::assert_eq!(
         explicit
+            .thread
+            .thread_settings_snapshot()
+            .await
+            .disabled_plugin_ids,
+        Vec::<String>::new()
+    );
+
+    let explicit_option = test
+        .thread_manager
+        .fork_thread_from_history_with_start_options(
+            ForkSnapshot::Interrupted,
+            codex_core::StartThreadOptions {
+                disabled_plugin_ids: Some(Vec::new()),
+                ..codex_core::StartThreadOptions::new(test.config.clone())
+            },
+            history,
+        )
+        .await?;
+    pretty_assertions::assert_eq!(
+        explicit_option
             .thread
             .thread_settings_snapshot()
             .await

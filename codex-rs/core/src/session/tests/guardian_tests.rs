@@ -1344,6 +1344,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         code_mode_session_provider: Arc::new(codex_code_mode::DisabledCodeModeSessionProvider),
         extensions: codex_extension_api::empty_extension_registry(),
         conversation_history: InitialHistory::New,
+        disabled_plugin_ids: None,
         initial_collaboration_mode: None,
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied {
@@ -1357,7 +1358,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         parent_thread_id: None,
         thread_source: None,
         originator: "test_originator".to_string(),
-        agent_control: LocalAgentControl::default(),
+        agent_control: LocalAgentControl::default().into(),
         dynamic_tools: Vec::new(),
         metrics_service_name: None,
         inherited_environments: None,

@@ -69,6 +69,8 @@ use self::store_lock::OAuthStoreLock;
 use self::store_lock::OAuthStoreLockFailure;
 
 use codex_keyring_store::CredentialStoreError;
+
+use codex_config::McpServerOAuthConfig;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringAccessPolicy;
 use codex_keyring_store::KeyringStore;
@@ -760,6 +762,7 @@ struct OAuthPersistorInner {
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
     credential_store: ResolvedOAuthCredentialStore,
+    oauth_config: Option<McpServerOAuthConfig>,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
 }
 
@@ -770,6 +773,7 @@ impl OAuthPersistor {
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
         credential_store: ResolvedOAuthCredentialStore,
         initial_credentials: Option<StoredOAuthTokens>,
+        oauth_config: Option<McpServerOAuthConfig>,
     ) -> Self {
         Self {
             inner: Arc::new(OAuthPersistorInner {
@@ -778,6 +782,7 @@ impl OAuthPersistor {
                 authorization_manager,
                 credential_store,
                 last_credentials: Mutex::new(initial_credentials),
+                oauth_config,
             }),
         }
     }

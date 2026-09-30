@@ -88,6 +88,7 @@ fn usage_limit_reset_prefers_error_timestamp_and_uses_latest_exhausted_window() 
     };
     let from_snapshot = UsageLimitReachedError {
         plan_type: None,
+        limit_window_minutes: None,
         resets_at: None,
         rate_limits: Some(Box::new(snapshot)),
         promo_message: None,
@@ -95,6 +96,7 @@ fn usage_limit_reset_prefers_error_timestamp_and_uses_latest_exhausted_window() 
     };
     let from_error = UsageLimitReachedError {
         plan_type: None,
+        limit_window_minutes: None,
         resets_at: Some(Utc.timestamp_opt(1_700_000_030, 0).single().unwrap()),
         rate_limits: Some(Box::new(RateLimitSnapshot {
             primary: Some(RateLimitWindow {
@@ -127,6 +129,7 @@ fn usage_limit_reset_prefers_error_timestamp_and_uses_latest_exhausted_window() 
 fn usage_limit_reset_uses_retained_snapshot_when_error_omits_it() {
     let error = UsageLimitReachedError {
         plan_type: None,
+        limit_window_minutes: None,
         resets_at: None,
         rate_limits: None,
         promo_message: None,
@@ -153,6 +156,7 @@ fn usage_limit_reset_uses_retained_snapshot_when_error_omits_it() {
 fn workspace_limits_are_not_auto_resumed() {
     let error = UsageLimitReachedError {
         plan_type: None,
+        limit_window_minutes: None,
         resets_at: Some(Utc.timestamp_opt(1_700_000_030, 0).single().unwrap()),
         rate_limits: None,
         promo_message: None,

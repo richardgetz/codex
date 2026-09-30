@@ -45,9 +45,12 @@ async fn refresh_keeps_superseded_mcp_server_alive_for_in_flight_calls() -> anyh
                     environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
                     startup: Default::default(),
                     sharing: Default::default(),
+
+                    tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),

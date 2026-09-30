@@ -39,6 +39,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 codex-model-provider-info = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 core_test_support = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
@@ -50,3 +51,6 @@ ignored-paths = [
     "src/sync_reviewer/prompt.rs",
     "src/sync_reviewer/reviewer_config_tests.rs",
 ]
+
+wiremock = { workspace = true }
+zstd = { workspace = true }

@@ -76,6 +76,13 @@ release or merge rules.
   The colliding upstream creator identity and Guardian metadata cleanup
   migrations are appended as `0065` and `0066`.
 
+- Stable refresh `rust-v0.159.1` preserves all shipped migration filenames and
+  checksums through `0066`; its incoming archive-sort index migration is
+  appended as `0067_upstream_threads_archive_sort_indexes.sql`. Upstream
+  originator, Daybreak, attachment, creator-identity, and Guardian-cleanup
+  migrations already exist under stable's `0057`, `0058`, and `0064`–`0066`
+  filenames and are not applied twice.
+
 - Fork operations that start from rollout, loaded history, or prepared history
   preserve explicit per-thread startup options such as environment selection,
   thread instruction providers, MCP extensions, and thread extensions. The
@@ -87,6 +94,17 @@ release or merge rules.
   cloud, custom resource, then host. The upstream Orchestrator-to-Cloud source
   rename retains the former Orchestrator priority, so executor-owned skills
   still win host name collisions.
+
+- Hosted plugin extension metadata is preserved through `plugin/installed` in
+  `PluginSummary.extensions`, including entrypoints, quick actions, settings,
+  file handlers, and search providers. Unknown optional extension variants do
+  not make the installed plugin inventory unreadable.
+
+- Realtime handoff safety admission stays scoped to its originating voice
+  session, including when a handoff is steered into an already-running turn.
+  A misalignment failure retires every originating gate attached to that turn;
+  session close rejects ordinary handoffs while allowing at most one configured
+  transcript tail through fanout drain before sealing the old gate.
 
 - Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
   recovery contract, account and launcher ownership, pause/continue and ETA
@@ -352,6 +370,10 @@ release or merge rules.
 - Native GPT-Live voice in the TUI remains fork-owned: WebRTC V3 transport,
   microphone/speaker controls, voice rotation, handoff classification and
   preamble policy, bounded diagnostics/history, and realtime configuration.
+  Each turn retains its originating voice-session gate, so a delayed
+  misalignment-policy failure retires only that session. Closing a session
+  rejects ordinary handoffs while allowing its configured final transcript
+  tail once; safety retirement also revokes a pending tail.
 - Named exec-policy rulesets (`overlay`/`exclusive`) remain selectable through
   app-server `execPolicy` and server config.
 - Fork-aware help context and fork-only feature labeling keep
@@ -1106,7 +1128,11 @@ release or merge rules.
   SQL body, and applied checksum. For `rust-v0.157.1`, keep migration `0056`
   Git-clear markers and `0057` thread-originator intact, plus fork migrations
   `0059`–`0064`; apply upstream creator identity and Guardian cleanup at `0065`
-  and `0066`, with no duplicate SQL objects.
+  and `0066`, with no duplicate SQL objects. For `rust-v0.159.1`, keep every
+  shipped filename and checksum through `0066`, do not reapply upstream
+  migrations already represented by stable `0057`, `0058`, and `0064`–`0066`,
+  and append only the archive-sort indexes as `0067` after checking SQL object
+  overlap.
 - Verify plain-name skill mentions preserve executor, cloud, custom-resource,
   and host priority after upstream changes the source kind from Orchestrator to
   Cloud; executor-owned skills must still win host-name collisions.
@@ -1223,7 +1249,11 @@ release or merge rules.
   experimental help/announcements retain the `(rick)` owner label.
 - Verify GPT-Live voice/device controls, WebRTC V3 handoff classification,
   preamble behavior, bounded diagnostics/history, and realtime config remain
-  available in the native TUI.
+  available in the native TUI. A misalignment-policy failure retires only its
+  originating session gate, including after replacement; it cannot close a
+  later voice session. Closing a session rejects ordinary parsed handoffs,
+  flushes at most one configured final transcript tail, and seals the gate
+  after fanout drains. A safety failure revokes an unadmitted tail.
 - Verify named exec-policy rulesets retain their `overlay`/`exclusive`
   semantics and app-server `execPolicy` selection.
 - Verify fork-aware help continues to load the checked-in fork differences and
@@ -1508,6 +1538,9 @@ release or merge rules.
   orchestrator-memory cleanup pass.
 - Verify `[enablement.modes.<mode>]` still filters `skills`, `mcps`, and
   `plugins` correctly.
+- Verify hosted `PluginSummary.extensions` survives plugin catalog and installed
+  reads, retains the generated app-server schema types, and ignores unknown
+  optional extension variants without dropping the installed inventory.
 - Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
   call can recover the configured server namespace instead of permanently
   reporting the tool unavailable, and eager MCP servers remain listed in the

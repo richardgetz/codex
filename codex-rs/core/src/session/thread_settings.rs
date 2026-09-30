@@ -8,6 +8,8 @@ use crate::agent::control::HandoffAdmissionGuard;
 use crate::config::ConstraintResult;
 use codex_config::TeamLeadWorkPolicy;
 use codex_history::RolloutItem;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
@@ -20,6 +22,7 @@ use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_thread_store::ThreadStoreResult;
 use std::sync::Arc;
 use tokio::sync::SemaphorePermit;
+use tokio::sync::oneshot;
 
 impl Session {
     /// Persists the current settings snapshot without emitting a live settings event.
@@ -38,14 +41,14 @@ impl Session {
     }
 }
 
-/// Applies standalone thread settings and reports invalid overrides through the
-/// normal event stream.
+/// Applies standalone thread settings. The caller holds the persistence permit through notification.
 pub(super) async fn update(
     session: &Arc<Session>,
     submission_id: String,
     overrides: ThreadSettingsOverrides,
     usage_policy_update: Option<ThreadUsagePolicyUpdate>,
     handoff_admission: Option<&HandoffAdmissionGuard>,
+    reply: Option<oneshot::Sender<CodexResult<()>>>,
 ) {
     let mut updates = prepare_update(overrides);
     updates.usage_policy_update = usage_policy_update;
@@ -55,6 +58,7 @@ pub(super) async fn update(
         updates,
         handoff_admission,
         PendingContinuationUpdate::Supersede,
+        reply,
     )
     .await
     {
@@ -146,6 +150,7 @@ pub(super) async fn apply_update(
         updates,
         handoff_admission,
         PendingContinuationUpdate::Preserve,
+        None,
     )
     .await
 }
@@ -156,6 +161,7 @@ async fn apply_update_with_policy(
     updates: SessionSettingsUpdate,
     handoff_admission: Option<&HandoffAdmissionGuard>,
     pending_continuation_update: PendingContinuationUpdate,
+    reply: Option<oneshot::Sender<CodexResult<()>>>,
 ) -> ConstraintResult<()> {
     let _settings_guard = acquire_persistence_lock(session).await;
     let release_pending_manager_completions = updates
@@ -164,13 +170,26 @@ async fn apply_update_with_policy(
         .is_some_and(|team| team.lead_work_policy == Some(TeamLeadWorkPolicy::PromptGuided))
         && session.get_config().await.effective_team_lead_work_policy()
             == TeamLeadWorkPolicy::ManagerOnly;
-    let commit = session.update_settings(updates).await?;
+    let commit = match session.update_settings(updates).await {
+        Ok(commit) => commit,
+        Err(error) => {
+            if let Some(reply) = reply {
+                let message = format!("invalid thread settings override: {error}");
+                let _ = reply.send(Err(CodexErr::InvalidRequest(message)));
+                return Ok(());
+            }
+            return Err(error);
+        }
+    };
     if matches!(
         pending_continuation_update,
         PendingContinuationUpdate::Supersede
     ) {
         // Invalidate the continuation before its accepted settings snapshot can be delivered.
         session.state.lock().await.last_started_turn_id = None;
+    }
+    if let Some(reply) = reply {
+        let _ = reply.send(Ok(()));
     }
     // `update_settings` returns after the shared Team admission boundary is released. The
     // Applied event therefore acknowledges that later tool calls will observe the committed

@@ -136,7 +136,9 @@ async fn strict_tool_collisions_fail_the_turn_before_sampling(
             defer_loading: false,
         })]
     };
-    let codex_core::NewThread { thread, .. } = test
+    let codex_core::NewThread {
+        thread_id, thread, ..
+    } = test
         .thread_manager
         .start_thread(StartThreadOptions {
             dynamic_tools,
@@ -176,7 +178,13 @@ async fn strict_tool_collisions_fail_the_turn_before_sampling(
     };
     assert_eq!(completed.error, Some(error));
     thread.flush_rollout().await?;
-    let history = thread.load_history(/*include_archived*/ false).await?;
+    let history = test
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id,
+            include_archived: false,
+        })
+        .await?;
     let attribution = history.items.iter().find_map(|item| match item {
         codex_history::RolloutItem::EventMsg(EventMsg::TurnStarted(event))
             if event.turn_id == completed.turn_id =>
@@ -422,9 +430,11 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
                     environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
                     startup: codex_config::McpServerStartupMode::Auto,
                     sharing: codex_config::McpServerSharingMode::Auto,
+                    tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
@@ -581,9 +591,11 @@ async fn historical_unavailable_mcp_call_is_exposed_as_placeholder_tool() -> Res
                     environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
                     startup: codex_config::McpServerStartupMode::Lazy,
                     sharing: codex_config::McpServerSharingMode::Auto,
+                    tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(1)),

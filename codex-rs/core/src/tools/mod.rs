@@ -12,6 +12,8 @@ pub(crate) mod hosted_spec;
 mod lead_passive_poll;
 pub(crate) mod lifecycle;
 mod manager_only;
+
+pub(crate) mod metadata_metrics;
 mod multi_agent_tool;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
@@ -24,6 +26,7 @@ pub(crate) mod spec_plan;
 pub(crate) mod tool_dispatch_trace;
 mod tool_namespaces_info;
 mod user_messaging;
+pub(crate) use user_messaging::record_confirmed_code_mode_send;
 
 use std::borrow::Cow;
 

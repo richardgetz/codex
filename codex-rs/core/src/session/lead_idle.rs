@@ -242,7 +242,7 @@ impl Session {
         }
         let active_workers = self
             .services
-            .agent_control
+            .local_agent_control()
             .active_direct_worker_count(self.thread_id)
             .await;
         if active_workers == 0 {
@@ -360,7 +360,7 @@ impl Session {
         }
         let active_workers = self
             .services
-            .agent_control
+            .local_agent_control()
             .active_direct_worker_count(self.thread_id)
             .await;
         if active_workers == 0 {
@@ -414,7 +414,11 @@ impl Session {
     /// Enqueues an actionable Lead wake and flushes the bounded routine-progress summary first.
     /// This is shared by the deadline and target-side message handling paths.
     pub(crate) async fn enqueue_lead_wakeup(&self, message: &str) {
-        let Ok(_handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
+        let Ok(_handoff_admission) = self
+            .services
+            .local_agent_control()
+            .begin_handoff_admission()
+        else {
             return;
         };
         self.enqueue_lead_wakeup_with_admission(message).await;
@@ -476,7 +480,11 @@ impl Session {
     /// Cancellation takes that same lock before removing synthetic messages,
     /// so a cancelled timer cannot enqueue a stale trigger after the cleanup.
     async fn enqueue_lead_oversight_wakeup(&self, generation: u64, message: &str) -> bool {
-        let Ok(_handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
+        let Ok(_handoff_admission) = self
+            .services
+            .local_agent_control()
+            .begin_handoff_admission()
+        else {
             tracing::debug!(
                 generation,
                 "suppressed Lead oversight wake because handoff admission is closed"
@@ -509,7 +517,7 @@ impl Session {
         }
         let active_workers = self
             .services
-            .agent_control
+            .local_agent_control()
             .active_direct_worker_count(self.thread_id)
             .await;
         if active_workers == 0 {

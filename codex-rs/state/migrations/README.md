@@ -121,3 +121,16 @@ collide with shipped versions, so they are appended as:
 0065_upstream_threads_creator_identity.sql
 0066_upstream_cleanup_guardian_thread_metadata.sql
 ```
+
+The `rust-v0.159.1` refresh keeps every already-shipped stable migration and
+checksum through `0066` unchanged. The incoming archive-sort index migration is
+appended as:
+
+```text
+0067_upstream_threads_archive_sort_indexes.sql
+```
+
+The incoming upstream migrations for thread originator, Daybreak enablement,
+thread attachments, creator identity, and Guardian metadata cleanup duplicate
+the already-shipped stable migrations at `0057`, `0058`, and `0064` through
+`0066`; retain the stable copies and do not apply duplicate migrations.

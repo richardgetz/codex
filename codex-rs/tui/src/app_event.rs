@@ -527,13 +527,19 @@ pub(crate) enum AppEvent {
     OpenWarnings,
     /// Copy a diagnostic and acknowledge in the footer, without appending history.
     CopyWarning(String),
+    /// Apply the user's decisions for the frozen warning details, in viewer-close order.
+    UpdateWarnings {
+        transcript: Arc<()>,
+        dismissed: Vec<crate::history_cell::WarningEntry>,
+        kept: Vec<crate::history_cell::WarningEntry>,
+    },
 
     /// Export all current-thread history to the selected destination.
     ExportTranscript {
         destination: TranscriptExportDestination,
     },
 
-    /// Copy a picker selection while retaining its clipboard lease in the chat widget.
+    /// Copy text through the session clipboard worker.
     CopySelection {
         text: Arc<str>,
         label: String,
@@ -640,6 +646,11 @@ pub(crate) enum AppEvent {
     ClearUi {
         name: Option<String>,
     },
+
+    /// Clear history queued by the previous thread before the new thread's replay events.
+    ResetTranscriptForThreadSwitch,
+    /// Reset queued history while keeping the startup draft visible until the next frame.
+    ResetTranscriptForThreadSwitchPreservingScreen,
 
     /// Re-render the transcript using the selected scrollback rendering mode.
     RawOutputModeChanged {
@@ -1224,14 +1235,16 @@ pub(crate) enum AppEvent {
     /// resize-reflow tail renderer.
     BeginThreadSwitchHistoryReplayBuffer,
 
-    /// Clear history queued by the previous thread before the new thread's replay events.
-    ResetTranscriptForThreadSwitch,
-
     /// Resume following the transcript after an explicit local command submission.
     /// Background output and later refreshes must preserve the user's reading position.
     FollowTranscript,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    /// FIFO barrier after the completed turn's history insertions.
+    TurnTipReady {
+        thread_id: ThreadId,
+        turn_id: String,
+    },
 
     /// Move visible completed voice captions into history in one app event.
     CommitRealtimeTranscriptHistory,

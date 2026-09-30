@@ -145,6 +145,7 @@ async fn submit_team_update_expect_error(thread: &CodexThread, mode: TeamMode) -
         .submit(Op::ThreadSettings {
             thread_settings: team_mode_update(mode),
             usage_policy_update: None,
+            reply: None,
         })
         .await?;
     timeout(Duration::from_secs(10), async {

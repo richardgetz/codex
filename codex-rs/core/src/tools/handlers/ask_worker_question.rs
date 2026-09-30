@@ -100,7 +100,7 @@ impl Handler {
         }
 
         let worker_thread_id = resolve_agent_target(&session, &turn, &args.target).await?;
-        let agent_control = &session.services.agent_control;
+        let agent_control = session.services.local_agent_control();
         let question_id = agent_control
             .register_worker_question(session.thread_id, worker_thread_id)
             .await
@@ -140,9 +140,10 @@ async fn deliver_question(
     message: String,
     start_options: TurnStartOptions,
 ) -> Result<(), String> {
-    let control = &session.services.agent_control;
     match turn.multi_agent_version {
-        MultiAgentVersion::V1 => control
+        MultiAgentVersion::V1 => session
+            .services
+            .local_agent_control()
             .send_input(
                 worker_thread_id,
                 vec![UserInput::Text {
@@ -156,7 +157,9 @@ async fn deliver_question(
             .map_err(|err| err.to_string()),
         MultiAgentVersion::V2 => {
             let resume_config = crate::agent::child_config::build_agent_resume_config(turn)?;
-            control
+            session
+                .services
+                .agent_control
                 .send(SendRequest {
                     caller: session.thread_id,
                     target: AgentTarget::Id(worker_thread_id),

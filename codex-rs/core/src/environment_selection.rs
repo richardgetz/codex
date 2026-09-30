@@ -364,7 +364,7 @@ impl ThreadEnvironments {
         if shell_snapshot.should_rebuild_inherited() {
             return futures::future::ready(None).boxed().shared();
         }
-        shell_snapshot
+        let task = shell_snapshot
             .build(
                 environment,
                 cwd,
@@ -374,7 +374,11 @@ impl ThreadEnvironments {
                 /*sandbox*/ None,
             )
             .boxed()
-            .shared()
+            .shared();
+        drop(tokio::spawn(
+            task.clone().in_current_span().with_current_subscriber(),
+        ));
+        task
     }
 
     /// Updates the selected list before waking work that was waiting on the previous selection.
@@ -900,34 +904,17 @@ impl ThreadEnvironments {
             })
             .unwrap_or_default();
         let shell_snapshot_builder = shell_snapshot.clone();
-        let task = if shell_snapshot_builder.should_rebuild_inherited() {
-            Self::start_shell_snapshot_task(
-                shell_snapshot_builder.clone(),
-                Arc::clone(&environment),
-                selection.cwd,
-                shell.clone(),
-                allow_login_shell,
-                shell_environment_policy,
-            )
-        } else {
-            shell_snapshot_builder
-                .clone()
-                .build(
-                    Arc::clone(&environment),
-                    selection.cwd,
-                    shell.clone(),
-                    allow_login_shell,
-                    shell_environment_policy,
-                    None,
-                )
-                .boxed()
-                .shared()
-        };
-        drop(tokio::spawn(
-            task.clone().in_current_span().with_current_subscriber(),
-        ));
+        let task = Self::start_shell_snapshot_task(
+            shell_snapshot_builder.clone(),
+            Arc::clone(&environment),
+            selection.cwd,
+            shell.clone(),
+            allow_login_shell,
+            shell_environment_policy,
+        );
         let shell_snapshot_v2_supported =
             snapshot_v2 && (environment.is_remote() || !shell_snapshot.should_rebuild_inherited());
+
         Ok(ResolvedEnvironment {
             environment,
             shell,
@@ -1289,7 +1276,7 @@ mod tests {
 
     use crate::config::PermissionProfileSnapshot;
     use codex_exec_server::Environment;
-    use codex_exec_server::ExecServerRuntimePaths;
+    use codex_exec_server::ExecServerRuntimeOptions;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
     use codex_exec_server::REMOTE_ENVIRONMENT_ID;
     use codex_exec_server_test_support::environment_manager_without_environments;
@@ -1353,8 +1340,8 @@ mod tests {
         turn_environments
     }
 
-    fn test_runtime_paths() -> ExecServerRuntimePaths {
-        ExecServerRuntimePaths::new(
+    fn test_runtime_paths() -> ExecServerRuntimeOptions {
+        ExecServerRuntimeOptions::new(
             std::env::current_exe().expect("current exe"),
             /*codex_linux_sandbox_exe*/ None,
         )

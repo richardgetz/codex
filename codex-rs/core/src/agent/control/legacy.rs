@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent::api::AgentInfo;
 use crate::agent::status::is_final;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::context::SubagentNotification;
 use crate::session_prefix::format_inter_agent_completion_message;
 use codex_protocol::error::CodexErrorDetails;
@@ -212,7 +213,7 @@ impl LocalAgentControl {
                 let Ok(handoff_admission) = parent_thread
                     .session
                     .services
-                    .agent_control
+                    .local_agent_control()
                     .begin_handoff_admission()
                 else {
                     Self::retain_legacy_completion_after_handoff(
@@ -250,7 +251,7 @@ impl LocalAgentControl {
             let Ok(handoff_admission) = parent_thread
                 .session
                 .services
-                .agent_control
+                .local_agent_control()
                 .begin_handoff_admission()
             else {
                 Self::retain_legacy_completion_after_handoff(
@@ -380,7 +381,7 @@ impl LocalAgentControl {
         parent_thread
             .session
             .services
-            .agent_control
+            .local_agent_control()
             .mark_handoff_delivery_failed();
         if trigger_turn {
             parent_thread
@@ -400,7 +401,7 @@ impl LocalAgentControl {
     /// Submit a shutdown request for a live agent without marking it explicitly closed in
     /// persisted spawn-edge state.
     pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         let result = if let Ok(thread) = state.get_thread(agent_id).await {
             thread
                 .session
@@ -441,7 +442,9 @@ impl LocalAgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<AgentInfo> {
         let eta_dispatch = self.lock_eta_reminders().await;
-        let state = self.upgrade()?;
+        let _state = self.upgrade()?;
+
+        let state = self.runtime.upgrade()?;
         let metadata = self.get_agent_metadata(agent_id);
         let known_agent = metadata.is_some();
         let snapshot = match state.get_thread(agent_id).await {
@@ -505,7 +508,7 @@ impl LocalAgentControl {
 
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
     pub(crate) async fn shutdown_agent_tree(&self, agent_id: ThreadId) -> CodexResult<String> {
-        let descendant_ids = self.live_thread_spawn_descendants(agent_id).await?;
+        let descendant_ids = self.runtime.live_thread_spawn_descendants(agent_id).await?;
         let result = self.shutdown_live_agent(agent_id).await;
         for descendant_id in descendant_ids {
             match self.shutdown_live_agent(descendant_id).await {

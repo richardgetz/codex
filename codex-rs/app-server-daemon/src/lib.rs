@@ -5,6 +5,8 @@ mod apply_archive;
 mod apply_receipt;
 mod backend;
 #[cfg(windows)]
+pub use backend::windows::DetachedLaunchRestricted;
+#[cfg(windows)]
 use backend::windows::try_lock_file;
 mod client;
 mod install_lock;
@@ -376,6 +378,9 @@ fn ensure_supported_platform() -> Result<()> {
 
 #[derive(Clone)]
 struct Daemon {
+    // Feature-aware TUI startup owns a live terminal. Direct lifecycle commands
+    // must still report their diagnostics to stderr.
+    log_diagnostics: bool,
     socket_path: PathBuf,
     pid_file: PathBuf,
     update_pid_file: PathBuf,
@@ -401,6 +406,7 @@ impl Daemon {
                 (DAEMON_PID_FILE_NAME, DAEMON_UPDATE_PID_FILE_NAME)
             };
         Ok(Self {
+            log_diagnostics: false,
             socket_path,
             pid_file: state_dir.join(pid_file),
             update_pid_file: state_dir.join(update_pid_file),
@@ -409,6 +415,14 @@ impl Daemon {
             apply_receipt_file: state_dir.join(APPLY_RECEIPT_FILE_NAME),
             managed_codex_bin,
         })
+    }
+
+    fn diagnostic(&self, message: std::fmt::Arguments<'_>) {
+        if self.log_diagnostics {
+            tracing::info!("{message}");
+        } else {
+            eprintln!("{message}");
+        }
     }
 
     fn recovery_file(&self) -> Result<PathBuf> {
@@ -483,7 +497,9 @@ impl Daemon {
         } else {
             // A fresh start must ignore snapshots left by older stop clients.
             if let Err(err) = thread_recovery::discard_pending(self) {
-                eprintln!("warning: failed to clear stale daemon recovery before start: {err}");
+                self.diagnostic(format_args!(
+                    "warning: failed to clear stale daemon recovery before start: {err}"
+                ));
             }
             prepare_install::prepare(self, &settings).await?;
             managed.managed_codex_bin = self.current_managed_codex_bin()?;
@@ -504,7 +520,9 @@ impl Daemon {
         if backend.is_some()
             && let Err(err) = managed.ensure_managed_updater(&settings).await
         {
-            eprintln!("warning: failed to ensure managed updater after app-server start: {err:#}");
+            self.diagnostic(format_args!(
+                "warning: failed to ensure managed updater after app-server start: {err:#}"
+            ));
         }
         let output_bin = managed
             .configured_managed_codex_bin(&settings)
@@ -1583,6 +1601,7 @@ mod tests {
         let legacy = home.path().join("packages/standalone/current");
         std::fs::create_dir_all(&legacy).expect("legacy selection");
         let daemon = Daemon {
+            log_diagnostics: false,
             socket_path: home.path().join("server.sock"),
             pid_file: state.join(super::LEGACY_PID_FILE_NAME),
             update_pid_file: state.join(super::LEGACY_UPDATE_PID_FILE_NAME),
@@ -1617,6 +1636,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let state = temp.path().join("missing-home").join("daemon-state");
         let daemon = Daemon {
+            log_diagnostics: false,
             socket_path: state.join("server.sock"),
             pid_file: state.join("server.pid"),
             update_pid_file: state.join("updater.pid"),
@@ -1636,9 +1656,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stop_and_fresh_start_discard_pending_thread_restore() {
+        let home = TempDir::new().expect("home");
+        let state = home.path().join("app-server-daemon");
+        codex_uds::prepare_private_socket_directory(&state)
+            .await
+            .expect("private state directory");
+        let daemon = Daemon {
+            log_diagnostics: false,
+            socket_path: home.path().join("server.sock"),
+            pid_file: state.join("server.pid"),
+            update_pid_file: state.join("updater.pid"),
+            operation_lock_file: state.join("daemon.lock"),
+            settings_file: state.join("settings.json"),
+            managed_codex_bin: home.path().join("codex"),
+        };
+        codex_app_server_transport::daemon_recovery::write_candidates(
+            &daemon.recovery_file().expect("recovery path"),
+            &["thread".to_string()].into_iter().collect(),
+        )
+        .expect("saved threads");
+        assert_eq!(
+            daemon
+                .run(super::LifecycleCommand::Stop)
+                .await
+                .expect("stop")
+                .status,
+            LifecycleStatus::NotRunning
+        );
+        assert!(!daemon.recovery_file().expect("recovery path").exists());
+        // Simulate an older stop client leaving a snapshot behind.
+        std::fs::write(
+            daemon.recovery_file().expect("recovery path"),
+            r#"["thread"]"#,
+        )
+        .expect("legacy saved threads");
+        daemon
+            .run(super::LifecycleCommand::Start)
+            .await
+            .expect_err("missing backend binary");
+        assert!(!daemon.recovery_file().expect("recovery path").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_local_backend_counts_as_bootstrapped_without_updater() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = TempDir::new().expect("home");
+        let standalone = home.path().join("packages/standalone");
+        let local_bin = standalone.join("local-main/bin/codex");
+        tokio::fs::create_dir_all(local_bin.parent().expect("bin parent"))
+            .await
+            .expect("local bin directory");
+        tokio::fs::write(&local_bin, b"#!/bin/sh\nexec sleep 30\n")
+            .await
+            .expect("local bin");
+        std::fs::set_permissions(&local_bin, std::fs::Permissions::from_mode(0o755))
+            .expect("executable local bin");
+        std::os::unix::fs::symlink("local-main", standalone.join("current"))
+            .expect("current local build");
+        let state = home.path().join("app-server-daemon");
+        let daemon = Daemon {
+            log_diagnostics: false,
+            socket_path: home
+                .path()
+                .join("app-server-control/app-server-control.sock"),
+            pid_file: state.join("app-server.pid"),
+            update_pid_file: state.join("app-server-updater.pid"),
+            operation_lock_file: state.join("daemon.lock"),
+            settings_file: state.join("settings.json"),
+            managed_codex_bin: standalone.join("current/bin/codex"),
+        };
+        let settings = DaemonSettings::default();
+        assert!(
+            !daemon
+                .is_bootstrapped(&settings)
+                .await
+                .expect("not running")
+        );
+        let backend = crate::backend::pid_backend(daemon.backend_paths(&settings));
+        backend.start().await.expect("start local backend");
+        let bootstrapped = daemon.is_bootstrapped(&settings).await;
+        backend.stop().await.expect("stop local backend");
+        assert!(bootstrapped.expect("managed local backend"));
+    }
+
+    #[tokio::test]
     async fn not_ready_context_reports_daemon_app_server_before_stderr() {
         let temp_dir = TempDir::new().expect("temp dir");
         let daemon = Daemon {
+            log_diagnostics: false,
             socket_path: temp_dir.path().join("app-server-control.sock"),
             pid_file: temp_dir.path().join("app-server.pid"),
             update_pid_file: temp_dir.path().join("app-server-updater.pid"),

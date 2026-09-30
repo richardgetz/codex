@@ -133,18 +133,23 @@ impl CodeModeService {
         request
             .yield_time_ms
             .get_or_insert(self.default_exec_yield_time_ms);
+        let preempt = step_context.preempt.clone();
         let delegate = Arc::new(CodeModeCellDelegate {
             broker: Arc::clone(&self.dispatch_broker),
             step_context,
         });
-        self.session().await?.execute(request, delegate).await
+        self.session()
+            .await?
+            .execute(request, delegate, preempt)
+            .await
     }
 
     pub(crate) async fn wait(
         &self,
         request: codex_code_mode::WaitRequest,
+        preempt: Option<CancellationToken>,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session().await?.wait(request).await
+        self.session().await?.wait(request, preempt).await
     }
 
     pub(crate) async fn terminate(
@@ -395,12 +400,14 @@ fn submit_nested_tool(
             cell_id: cell_id.to_string(),
         });
     let result = tool_runtime.handle_tool_call_with_source(
+        step_context,
         call,
         ToolCallSource::CodeMode {
             cell_id: cell_id.to_string(),
             runtime_tool_call_id,
         },
         cancellation_token,
+        Arc::default(),
     );
     Ok(async move { Ok(result.await?.code_mode_result()) })
 }

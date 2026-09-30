@@ -6,7 +6,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
-use std::sync::Arc;
 use tokio::sync::MutexGuard;
 
 impl LocalAgentControl {
@@ -20,9 +19,7 @@ impl LocalAgentControl {
 
     /// Publishes a root-owned tier without mutating individual child sessions.
     pub(crate) fn set_root_service_tier(&self, service_tier: Option<String>) {
-        self.runtime
-            .root_service_tier
-            .store(service_tier.map(Arc::new));
+        self.runtime.set_root_service_tier(service_tier);
     }
 
     /// Serializes a root tier settings commit with its descendant synchronization pass.

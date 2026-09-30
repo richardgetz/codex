@@ -1274,10 +1274,6 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::Toggle));
             }
-            SlashCommand::Voice => {
-                self.app_event_tx
-                    .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status));
-            }
             SlashCommand::Cd => {
                 self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
             }
@@ -1690,18 +1686,6 @@ impl ChatWidget {
             SlashCommand::Spend => {
                 self.add_spend_output(trimmed);
             }
-            SlashCommand::Voice => match trimmed.to_ascii_lowercase().as_str() {
-                "settings" => self.app_event_tx.send(AppEvent::OpenRealtimeSettings),
-                "mute" => self.app_event_tx.send(AppEvent::VoiceControl {
-                    thread_id: self.thread_id(),
-                    control: crate::app_event::VoiceControl::Mute,
-                }),
-                "stop" => self.app_event_tx.send(AppEvent::VoiceControl {
-                    thread_id: self.thread_id(),
-                    control: crate::app_event::VoiceControl::Stop,
-                }),
-                _ => self.add_error_message("Usage: /voice [settings|mute|stop]".to_string()),
-            },
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
@@ -1887,6 +1871,15 @@ impl ChatWidget {
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::Status)),
                     "help" | "?" => self.add_info_message(VOICE_USAGE.to_string(), None),
+                    "settings" => self.app_event_tx.send(AppEvent::OpenRealtimeSettings),
+                    "mute" => self.app_event_tx.send(AppEvent::VoiceControl {
+                        thread_id: self.thread_id(),
+                        control: crate::app_event::VoiceControl::Mute,
+                    }),
+                    "stop" => self.app_event_tx.send(AppEvent::VoiceControl {
+                        thread_id: self.thread_id(),
+                        control: crate::app_event::VoiceControl::Stop,
+                    }),
                     "on" => self
                         .app_event_tx
                         .send(AppEvent::RealtimeVoiceControl(RealtimeVoiceCommand::On)),

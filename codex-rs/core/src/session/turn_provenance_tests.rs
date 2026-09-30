@@ -383,7 +383,7 @@ async fn disabled_run_turn_preserves_model_flow_without_provenance() {
         session.clone(),
         turn_context,
         vec![TurnInput::UserInput {
-            acceptance_order: None,
+            metadata: Default::default(),
             content: vec![UserInput::Text {
                 text: "please change generated files".to_string(),
                 text_elements: Vec::new(),
@@ -512,7 +512,7 @@ async fn enabled_run_turn_records_advisory_and_continues_model_work() {
         session.clone(),
         turn_context,
         vec![TurnInput::UserInput {
-            acceptance_order: None,
+            metadata: Default::default(),
             content: vec![UserInput::Text {
                 text: "please change generated files".to_string(),
                 text_elements: Vec::new(),
@@ -627,7 +627,7 @@ async fn enabled_git_intent_bridge_records_advisory_before_model_work() {
         session,
         turn_context,
         vec![TurnInput::UserInput {
-            acceptance_order: None,
+            metadata: Default::default(),
             content: vec![UserInput::Text {
                 text: "please modify generated files for the API contract".to_string(),
                 text_elements: Vec::new(),

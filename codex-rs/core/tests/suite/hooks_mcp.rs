@@ -293,9 +293,12 @@ fn insert_rmcp_test_server(
             environment_id,
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
             startup: McpServerStartupMode::Auto,
             sharing: McpServerSharingMode::Auto,
+
+            tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
             startup_timeout_sec: Some(Duration::from_secs(10)),

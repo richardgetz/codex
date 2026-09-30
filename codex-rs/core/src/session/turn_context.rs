@@ -6,6 +6,8 @@ use crate::config::TokenBudgetConfig;
 use crate::environment_selection::EnvironmentConfigOrigin;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::AllowPrefixRules;
+use crate::realtime_conversation::RealtimeHandoffAdmission;
+use crate::realtime_conversation::RealtimeHandoffAdmissions;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use crate::shell_snapshot::ShellSnapshotSandbox;
@@ -26,7 +28,6 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::permissions::RawFileSystemSandboxPolicy;
 use codex_protocol::protocol::EnvironmentConfig;
@@ -210,7 +211,9 @@ impl TurnEnvironment {
             }
             None
         } else {
-            self.shell_snapshot.peek()?.clone()
+            self.shell_snapshot.peek()?.clone().filter(|snapshot| {
+                &snapshot.shell_environment_policy == self.shell_environment_policy()
+            })
         }
     }
 
@@ -311,6 +314,7 @@ impl std::fmt::Debug for TurnEnvironment {
 pub(crate) struct NewTurnContextOptions {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
+    pub(crate) realtime_handoff_admission: Option<Arc<RealtimeHandoffAdmission>>,
 }
 
 /// The context needed for a single turn of the thread.
@@ -318,7 +322,10 @@ pub(crate) struct NewTurnContextOptions {
 pub struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) trace_id: Option<String>,
+    /// Call state at turn creation; model requests use the `StepContext` snapshot.
     pub(crate) realtime_active: bool,
+    /// Realtime session gates that have supplied handoffs to this turn.
+    pub(crate) realtime_handoff_admissions: Arc<RealtimeHandoffAdmissions>,
     pub(crate) code_mode_available: bool,
     /// Turn-scoped configuration. Read step-specific settings such as service tier and
     /// approvals reviewer from the corresponding `StepContext` instead.
@@ -399,9 +406,8 @@ enum TurnContextBuildMode {
     /// shared model/multi-agent metadata.
     StartupPrewarm,
 
-    /// Resolves and stores model/multi-agent metadata but skips skill discovery.
-    /// Only for injecting items into an initialized thread; must not initialize
-    /// context or capture an execution step.
+    /// Captures recording settings without updating shared model/multi-agent metadata
+    /// or discovering skills. Must not initialize context or capture an execution step.
     InjectItems,
 }
 
@@ -787,6 +793,7 @@ impl TurnContext {
             sub_id: self.sub_id.clone(),
             trace_id: self.trace_id.clone(),
             realtime_active: self.realtime_active,
+            realtime_handoff_admissions: Arc::clone(&self.realtime_handoff_admissions),
             code_mode_available: self.code_mode_available,
             config: Arc::new(config),
             configured_token_budget: self.configured_token_budget.clone(),
@@ -1181,7 +1188,10 @@ impl Session {
             use_model_token_budget_defaults,
             model_info,
         );
-        if step_settings.reasoning_effort() == Some(&ReasoningEffort::Persistent) {
+        if per_turn_config
+            .features
+            .persistent_execution_enabled(step_settings.reasoning_effort())
+        {
             super::time_reminder::apply_persistent_defaults(&mut per_turn_config);
         }
         let _tool_mode = model_info.tool_mode.unwrap_or_else(|| {
@@ -1254,6 +1264,7 @@ impl Session {
             sub_id,
             trace_id: current_span_trace_id(),
             realtime_active: false,
+            realtime_handoff_admissions: Arc::default(),
             code_mode_available: true,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
@@ -1464,17 +1475,19 @@ impl Session {
             )
             .await;
         let multi_agent_version = match build_mode {
-            TurnContextBuildMode::Full | TurnContextBuildMode::InjectItems => {
-                // A background preview must not overwrite a newer turn's model metadata.
+            TurnContextBuildMode::Full => {
+                // Only execution and initial context creation publish model metadata.
                 self.services
                     .thread_extension_data
                     .insert(model_info.clone());
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
             }
-            TurnContextBuildMode::StartupPrewarm => per_turn_config.multi_agent_version_for_model(
-                self.multi_agent_version()
-                    .or(model_info.multi_agent_version),
-            ),
+            TurnContextBuildMode::StartupPrewarm | TurnContextBuildMode::InjectItems => {
+                per_turn_config.multi_agent_version_for_model(
+                    self.multi_agent_version()
+                        .or(model_info.multi_agent_version),
+                )
+            }
         };
         let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self
@@ -1557,7 +1570,18 @@ impl Session {
                 })
                 .collect(),
         );
-        turn_context.realtime_active = self.conversation.running_state().await.is_some();
+        let (realtime_active, active_handoff_admission) =
+            self.conversation.turn_realtime_state().await;
+        turn_context.realtime_active = realtime_active;
+        if let Some(admission) = options
+            .realtime_handoff_admission
+            .or(active_handoff_admission)
+        {
+            let _ = turn_context
+                .realtime_handoff_admissions
+                .register(admission)
+                .await;
+        }
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
         if turn_context.config.model_provider_id == codex_model_provider_info::OPENAI_PROVIDER_ID {

@@ -7,6 +7,7 @@ use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::ModelsResponse;
@@ -35,6 +36,7 @@ const PERMISSION_INSTRUCTIONS: &str = "Protected-model read-only instructions.";
 #[derive(Clone, Copy)]
 enum SettingsOperation {
     Standalone,
+    StandaloneWithReply,
     TurnStart,
 }
 
@@ -50,8 +52,30 @@ impl SettingsOperation {
                     .submit(Op::ThreadSettings {
                         thread_settings,
                         usage_policy_update: None,
+                        reply: None,
                     })
                     .await?
+            }
+            Self::StandaloneWithReply => {
+                if let Err(error) = codex.update_thread_settings(thread_settings).await {
+                    assert!(matches!(
+                        error.details(),
+                        CodexErrorDetails::InvalidRequest(_)
+                    ));
+                    return Err(error.into());
+                }
+                // A successful update still notifies subscribers. A prior direct rejection must not.
+                return match wait_for_event(codex, |event| {
+                    matches!(
+                        event,
+                        EventMsg::ThreadSettingsApplied(_) | EventMsg::Error(_)
+                    )
+                })
+                .await
+                {
+                    EventMsg::ThreadSettingsApplied(applied) => Ok(applied.thread_settings),
+                    event => anyhow::bail!("unexpected settings event: {event:?}"),
+                };
             }
             Self::TurnStart => {
                 let result = codex
@@ -90,6 +114,7 @@ impl SettingsOperation {
 }
 
 #[test_case(SettingsOperation::Standalone; "standalone settings")]
+#[test_case(SettingsOperation::StandaloneWithReply; "standalone settings with reply")]
 #[test_case(SettingsOperation::TurnStart; "turn-start settings")]
 #[tokio::test]
 async fn protected_model_settings_use_the_proposed_permissions(
@@ -209,7 +234,10 @@ async fn protected_model_settings_use_the_proposed_permissions(
     );
     assert_eq!(test.codex.thread_settings_snapshot().await, expected);
 
-    if let SettingsOperation::Standalone = operation {
+    if matches!(
+        operation,
+        SettingsOperation::Standalone | SettingsOperation::StandaloneWithReply
+    ) {
         test.submit_text_turn("use the committed settings").await?;
     }
     let request = response.single_request();

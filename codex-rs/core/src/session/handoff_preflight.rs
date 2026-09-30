@@ -90,10 +90,18 @@ impl Session {
         if !preflight.pending_mailbox_diagnostics.is_empty() {
             preflight.blockers.push(HandoffBlocker::PendingMailbox);
         }
-        if self.services.agent_control.handoff_delivery_failed() {
+        if self
+            .services
+            .local_agent_control()
+            .handoff_delivery_failed()
+        {
             preflight.blockers.push(HandoffBlocker::Persistence);
         }
-        if self.services.agent_control.handoff_inbound_unsupported() {
+        if self
+            .services
+            .local_agent_control()
+            .handoff_inbound_unsupported()
+        {
             preflight.blockers.push(HandoffBlocker::VersionMismatch);
         }
         if self.pending_handoff_dispatches() > 0 {
@@ -120,7 +128,7 @@ impl Session {
         if descendants == HandoffDescendantState::MustBeDrained
             && self
                 .services
-                .agent_control
+                .local_agent_control()
                 .list_live_agent_subtree_thread_ids(self.thread_id)
                 .await
                 .map(|thread_ids| thread_ids.len() > 1)

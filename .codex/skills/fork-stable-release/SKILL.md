@@ -87,7 +87,10 @@ As of the current branch, the fork contract includes at least:
   concurrency/oversight controls, and activity pause/continue behavior
 - per-thread usage policy, recursive usage accounting, local spend visibility,
   reset-aware auto-resume, and session-owned temporary storage
-- GPT-Live voice/device controls and realtime handoff diagnostics
+- GPT-Live voice/device controls and realtime handoff diagnostics; a delayed
+  misalignment-policy failure retires only its originating session gate,
+  shutdown closes ordinary handoffs while preserving one configured transcript
+  tail, and safety retirement revokes that pending tail
 - macOS GPU/Metal Seatbelt allowances and their regression coverage
 - Rick-owned feature toggles, fork-aware help/feature labeling, and
   mode-scoped enablement filters
@@ -137,6 +140,13 @@ The SQL objects may not conflict even when filenames do. Check both separately:
 
 For this repo, also keep `codex-rs/state/migrations/README.md` and
 `docs/fork-differences.md` aligned with the current migration policy.
+
+The `rust-v0.159.1` refresh retains the shipped migration sequence through
+`0066`; its incoming archive-sort index migration is appended as
+`0067_upstream_threads_archive_sort_indexes.sql`. The upstream migrations for
+thread originator, Daybreak enablement, attachments, creator identity, and
+Guardian metadata cleanup already match shipped stable migrations and must not
+be applied a second time.
 
 ## Conflict Policy
 

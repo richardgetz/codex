@@ -29,7 +29,7 @@ pub(crate) async fn wait_for_lead_passive_poll(
     let sampled_policy = *step_context.team_lead_work_policy.load_full();
     let active_workers = session
         .services
-        .agent_control
+        .local_agent_control()
         .active_direct_worker_count(session.thread_id)
         .await;
     if active_workers == 0 {
@@ -82,7 +82,7 @@ pub(crate) async fn wait_for_lead_passive_poll(
             WaitOutcome::TeamPolicyChanged
         } else if session
             .services
-            .agent_control
+            .local_agent_control()
             .active_direct_worker_count(session.thread_id)
             .await
             == 0

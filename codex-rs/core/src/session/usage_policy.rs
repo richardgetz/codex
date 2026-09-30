@@ -333,7 +333,10 @@ async fn wait_for_usage_recovery(
             .services
             .time_provider
             .sleep(sess.thread_id, sleep_duration);
-        let activity_notify = sess.services.agent_control.root_activity_resume_notify();
+        let activity_notify = sess
+            .services
+            .local_agent_control()
+            .root_activity_resume_notify();
         let activity_change = activity_notify.notified();
         let mut manually_requested = false;
         tokio::select! {
