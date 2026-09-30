@@ -83,13 +83,18 @@ fn realtime_handoff_dedupe_evicts_old_ids() {
 }
 
 #[tokio::test]
-async fn turn_retirement_closes_late_handoff_gate_registration() {
+async fn turn_retirement_rejects_late_handoff_with_held_route_permit() {
     let admissions = RealtimeHandoffAdmissions::default();
     admissions.retire_all().await;
 
     let gate = Arc::new(RealtimeHandoffAdmission::new());
-    admissions.register(Arc::clone(&gate)).await;
+    let held_permit = gate
+        .acquire_route_permit(RealtimeDelegationSource::Handoff)
+        .await
+        .expect("route permit is acquired before retirement wins");
 
+    assert!(!admissions.register(Arc::clone(&gate)).await);
+    drop(held_permit);
     assert!(
         gate.acquire_route_permit(RealtimeDelegationSource::Handoff)
             .await

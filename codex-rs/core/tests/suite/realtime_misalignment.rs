@@ -166,7 +166,7 @@ async fn misalignment_retires_handoff_steered_into_active_turn() -> Result<()> {
             "misalignment_policy_violation",
             "This request violated the misalignment policy.",
         ))
-        .set_delay(Duration::from_secs(2)),
+        .set_delay(Duration::from_secs(10)),
     )
     .await;
 
@@ -219,6 +219,22 @@ async fn misalignment_retires_handoff_steered_into_active_turn() -> Result<()> {
         config.realtime.version = RealtimeWsVersion::V1;
     });
     let test = builder.build_with_auto_env(&api_server).await?;
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "ordinary prompt".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    assert!(matches!(started, TurnInputSubmission::Started { .. }));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while active_turn_response.requests().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("active turn did not reach the mock API")?;
+
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             client_managed_handoffs: false,
@@ -254,22 +270,6 @@ async fn misalignment_retires_handoff_steered_into_active_turn() -> Result<()> {
         _ => None,
     })
     .await;
-
-    let started = test
-        .codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "ordinary prompt".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
-    assert!(matches!(started, TurnInputSubmission::Started { .. }));
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while active_turn_response.requests().is_empty() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .context("active turn did not reach the mock API")?;
 
     send_handoff_tx.send(()).expect("sideband still open");
     let _ = wait_for_event_match(&test.codex, |event| match event {

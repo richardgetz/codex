@@ -365,6 +365,7 @@ pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
     ActiveTurnNotSteerable { turn_kind: NonSteerableTurnKind },
+    RealtimeHandoffAdmissionRetired,
     EmptyInput,
 }
 
@@ -394,6 +395,12 @@ impl SteerInputError {
                     }),
                 }
             }
+            Self::RealtimeHandoffAdmissionRetired => ErrorEvent {
+                misalignment: None,
+                message: "realtime handoff was rejected after its turn admission closed"
+                    .to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
             Self::EmptyInput => ErrorEvent {
                 misalignment: None,
                 message: "input must not be empty".to_string(),
@@ -2095,6 +2102,33 @@ impl Session {
             )
             .await;
         }
+    }
+
+    /// Associates an admitted realtime handoff with the active regular turn before route setup
+    /// can yield, so a safety cutoff waits for this route or rejects it.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active turn checks and realtime admission registration must remain atomic"
+    )]
+    pub(crate) async fn register_realtime_handoff_admission_for_active_turn(
+        &self,
+        admission: Arc<RealtimeHandoffAdmission>,
+    ) -> bool {
+        let active = self.active_turn.lock().await;
+        let Some(active_task) = active
+            .as_ref()
+            .and_then(|active_turn| active_turn.task.as_ref())
+        else {
+            return true;
+        };
+        if !matches!(active_task.kind, crate::state::TaskKind::Regular) {
+            return true;
+        }
+        active_task
+            .turn_context
+            .realtime_handoff_admissions
+            .register(admission)
+            .await
     }
 
     pub(crate) async fn new_turn_with_transient_reasoning_effort(
@@ -6813,12 +6847,14 @@ impl Session {
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
         }
 
-        if let Some(admission) = realtime_handoff_admission {
-            active_task
+        if let Some(admission) = realtime_handoff_admission
+            && !active_task
                 .turn_context
                 .realtime_handoff_admissions
                 .register(admission)
-                .await;
+                .await
+        {
+            return Err(SteerInputError::RealtimeHandoffAdmissionRetired);
         }
 
         let mut pending_input = additional_context_input

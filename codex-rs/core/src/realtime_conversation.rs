@@ -368,7 +368,7 @@ struct RealtimeHandoffAdmissionsState {
 }
 
 impl RealtimeHandoffAdmissions {
-    pub(crate) async fn register(&self, admission: Arc<RealtimeHandoffAdmission>) {
+    pub(crate) async fn register(&self, admission: Arc<RealtimeHandoffAdmission>) -> bool {
         let retire_immediately = {
             let mut state = self.state.lock().await;
             if state.retired {
@@ -387,6 +387,9 @@ impl RealtimeHandoffAdmissions {
 
         if retire_immediately {
             admission.close_admission();
+            false
+        } else {
+            true
         }
     }
 
@@ -424,6 +427,12 @@ impl RealtimeHandoffAdmission {
         let Some(_permit) = self.acquire_route_permit(source).await else {
             return;
         };
+        if !session
+            .register_realtime_handoff_admission_for_active_turn(Arc::clone(self))
+            .await
+        {
+            return;
+        }
         session
             .route_realtime_text_input(
                 text,

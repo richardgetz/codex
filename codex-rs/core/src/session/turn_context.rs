@@ -1577,7 +1577,7 @@ impl Session {
             .realtime_handoff_admission
             .or(active_handoff_admission)
         {
-            turn_context
+            let _ = turn_context
                 .realtime_handoff_admissions
                 .register(admission)
                 .await;
