@@ -20,6 +20,10 @@ release or merge rules.
 
 ## Unreleased
 
+- Built-in TUI API-equivalent rates recognize `gpt-6.1-sol` across Standard,
+  Fast, and Flex/Batch tiers for short and long contexts, keeping its cached-
+  input price distinct from `gpt-6-sol`.
+
 - Team Leads can use the standalone `ask_worker_question` tool with either
   multi-agent backend to send a bounded, correlated question to a direct Worker.
   One pending question per Worker is tracked at runtime. The Worker’s next final
@@ -822,9 +826,6 @@ release or merge rules.
 - Local token usage and spend tracking:
   - `/status` can show API-equivalent token usage and estimated cost when
     `[tui.status_token_usage].enabled = true`.
-  - Built-in API-equivalent rates include `gpt-6.1-sol` across Standard, Fast,
-    and Flex/Batch tiers for short and long contexts, with cached-input pricing
-    kept distinct from `gpt-6-sol`.
   - `/spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]` renders local daily spend
     rollups from `<codex_home>/usage/daily_spend.json`.
   - Config: `[tui.status_token_usage]` with `daily_spend_retention_days`
