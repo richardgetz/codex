@@ -822,6 +822,9 @@ release or merge rules.
 - Local token usage and spend tracking:
   - `/status` can show API-equivalent token usage and estimated cost when
     `[tui.status_token_usage].enabled = true`.
+  - Built-in API-equivalent rates include `gpt-6.1-sol` across Standard, Fast,
+    and Flex/Batch tiers for short and long contexts, with cached-input pricing
+    kept distinct from `gpt-6-sol`.
   - `/spend [days|YYYY-MM|YYYY-MM-DD..YYYY-MM-DD]` renders local daily spend
     rollups from `<codex_home>/usage/daily_spend.json`.
   - Config: `[tui.status_token_usage]` with `daily_spend_retention_days`
@@ -1060,6 +1063,11 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify API-equivalent usage estimates recognize `gpt-6.1-sol` with its
+  public Standard, Fast, and Flex/Batch rates for short and long contexts.
+  Keep its cached-input price distinct from `gpt-6-sol` ($0.10 vs. $0.20 per
+  1M tokens for short Standard context).
 
 - Verify `.github/blob-size-allowlist.txt` retains only the exact exception for
   `sdk/python/src/openai_codex/generated/v2_all.py` among Python SDK paths while
