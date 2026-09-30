@@ -108,6 +108,7 @@ async fn remote_installed_plugins_paginate_across_all_scopes_without_download_ur
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/installed"))
         .and(query_param_is_missing("scope"))
+        .and(query_param("includeExtensions", "true"))
         .and(query_param("limit", "200"))
         .and(query_param_is_missing("includeDownloadUrls"))
         .and(query_param_is_missing("pageToken"))
@@ -121,6 +122,7 @@ async fn remote_installed_plugins_paginate_across_all_scopes_without_download_ur
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/installed"))
         .and(query_param_is_missing("scope"))
+        .and(query_param("includeExtensions", "true"))
         .and(query_param("limit", "200"))
         .and(query_param_is_missing("includeDownloadUrls"))
         .and(query_param("pageToken", "next page/+"))
@@ -333,8 +335,8 @@ fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only
         directory_plugin("plugin-m", "mike"),
     ];
     let installed_plugins = vec![RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin("plugin-a", "alpha"),
+        extensions: None,
         installed_at: None,
         enabled: true,
         disabled_skill_names: Vec::new(),
@@ -366,8 +368,8 @@ fn installation_policy_source_is_preserved_across_remote_summary_paths() {
     directory_plugin.installation_policy_source =
         Some(RemotePluginInstallPolicySource::ImplicitCanonicalApp);
     let installed_plugin = RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin.clone(),
+        extensions: None,
         installed_at: None,
         enabled: true,
         disabled_skill_names: Vec::new(),
@@ -422,8 +424,8 @@ fn plan_eligibility_is_preserved_across_remote_summary_paths() {
         "enterprise_cbp_automation".to_string(),
     ]);
     let installed_plugin = RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin.clone(),
+        extensions: None,
         installed_at: None,
         enabled: false,
         disabled_skill_names: Vec::new(),
@@ -516,8 +518,8 @@ fn installation_interstitial_requirement_is_preserved_across_remote_summary_path
 
     directory_plugin.must_show_installation_interstitial = Some(false);
     let installed_plugin = remote_installed_plugin_to_cache_entry(&RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin,
+        extensions: None,
         installed_at: None,
         enabled: true,
         disabled_skill_names: Vec::new(),

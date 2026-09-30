@@ -30,6 +30,8 @@ or behaves differently from upstream.
   shipped fork migration, preserve the fork migration filename/checksum and move
   the upstream migration to the next unused version. See
   [`codex-rs/state/migrations/README.md`](../codex-rs/state/migrations/README.md).
+  The `rust-v0.159.1` refresh retains the shipped sequence through `0066` and
+  appends the upstream archive-sort index migration as `0067`.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 

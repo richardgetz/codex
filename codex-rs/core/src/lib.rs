@@ -11,6 +11,8 @@ mod arc_monitor;
 mod client;
 mod client_common;
 mod realtime_classifier;
+
+mod model_request;
 mod realtime_context;
 mod realtime_conversation;
 mod realtime_handoff;
@@ -67,7 +69,6 @@ pub use agent::api::AgentTurnOutcome;
 pub use agent::api::DeliveryReceipt;
 pub use agent::api::SendRequest;
 pub use agent::api::SpawnRequest;
-pub use agent::api::StatusSubscription;
 pub use agent::types::AgentExecutionGuard;
 pub use agent::types::AgentMessage;
 pub use agent::types::AgentMetadata;
@@ -152,7 +153,6 @@ pub(crate) mod mentions {
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
-mod session_startup_prewarm;
 mod skills;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;
 pub(crate) use skills::skills_load_input_from_config;

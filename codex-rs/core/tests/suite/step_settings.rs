@@ -40,6 +40,7 @@ use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ConfirmationPolicies;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::McpResourceToolMessages;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::ModelsResponse;
@@ -328,6 +329,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
     let started = test
         .thread_manager
         .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
             dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "diagnostics".to_string(),
                 description: "Returns diagnostic text and a screenshot.".to_string(),
@@ -491,6 +493,8 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                     ..Default::default()
                 },
                 usage_policy_update: None,
+
+                reply: None,
             })
             .await?;
         test.submit_text_turn("review previous diagnostics").await?;
@@ -575,7 +579,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
         replay_config.model = Some(model.to_string());
         let resumed = test
             .thread_manager
-            .resume_thread_from_rollout(
+            .resume_legacy_thread_from_rollout(
                 replay_config.clone(),
                 rollout_path.clone(),
                 codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
@@ -586,7 +590,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
             .thread;
         let forked = test
             .thread_manager
-            .fork_thread(
+            .fork_legacy_thread(
                 ForkSnapshot::Interrupted,
                 replay_config,
                 rollout_path.clone(),
@@ -604,6 +608,8 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                         ..Default::default()
                     },
                     usage_policy_update: None,
+
+                    reply: None,
                 })
                 .await?;
             thread
@@ -711,7 +717,7 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
     replay_config.model = Some(MODEL_A.to_string());
     let resumed = test
         .thread_manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             replay_config.clone(),
             rollout_path.clone(),
             codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
@@ -722,7 +728,7 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
         .thread;
     let forked = test
         .thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::Interrupted,
             replay_config,
             rollout_path,
@@ -787,6 +793,8 @@ async fn settings_updates_preserve_turn_identity_and_target(target: SettingsTarg
                         ..Default::default()
                     },
                     usage_policy_update: None,
+
+                    reply: None,
                 })
                 .await?;
         }
@@ -1912,6 +1920,8 @@ async fn sparse_updates_preserve_divergent_active_and_future_models() -> Result<
                 ..Default::default()
             },
             usage_policy_update: None,
+
+            reply: None,
         })
         .await?;
     assert_eq!(
@@ -2209,6 +2219,22 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             "additionalProperties": false,
         })
     };
+    let async_parameters = |model: &str| {
+        json!({
+            "type": "object",
+            "properties": {"questions": {
+                "type": "array",
+                "description": format!("Questions for {model}."),
+                "items": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}},
+                    "required": ["title"],
+                },
+            }},
+            "required": ["questions"],
+            "additionalProperties": false,
+        })
+    };
     let server = start_mock_server().await;
     let response_mock = mount_sse_sequence(
         &server,
@@ -2224,6 +2250,11 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                 .features
                 .enable(Feature::MultiAgentV2)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::AgentMessageBoard)
+                .expect("test config should allow channel tools");
+            config.ephemeral = false;
             config.multi_agent_v2.expose_spawn_agent_model_overrides = false;
             config.multi_agent_v2.non_code_mode_only = true;
             config.code_mode.disable_in_process_fallback = true;
@@ -2251,7 +2282,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     .tools = Some(ToolMessages {
                     send_user_message_async: Some(ToolMessage {
                         description: Some(format!("Async message description for {}.", model.slug)),
-                        ..Default::default()
+                        parameters: Some(async_parameters(&model.slug).to_string()),
                     }),
                     multi_agent: Some(MultiAgentToolMessages {
                         spawn_agent: tool_message("spawn_agent"),
@@ -2260,6 +2291,8 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                         wait_agent: tool_message("wait_agent"),
                         interrupt_agent: tool_message("interrupt_agent"),
                         list_agents: tool_message("list_agents"),
+                        post: tool_message("post"),
+                        ..Default::default()
                     }),
                     code_mode: Some(CodeModeToolMessages {
                         exec: Some(ToolMessage {
@@ -2272,6 +2305,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                         }),
                         ..Default::default()
                     }),
+                    ..Default::default()
                 });
             }
         })
@@ -2315,10 +2349,14 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                         "parameters": tool["parameters"],
                     }))
                 }).into_iter().collect::<serde_json::Map<String, Value>>();
+                let channel_post = namespace_child_tool(&body, "collaboration", "post").expect("post");
                 json!({
                     "model": body["model"],
                     "async_description": tool("request_user_input_async")["description"],
+                    "async_parameters": tool("request_user_input_async")["parameters"],
                     "multi_agent_messages": multi_agent_messages,
+                    "channel_post_description": channel_post["description"].as_str().expect("post description").lines().next(),
+                    "channel_post_required": channel_post["parameters"]["required"],
                     "exec_description": tool("exec")["description"],
                     "wait_description": tool("wait")["description"],
                     "wait_parameters": tool("wait")["parameters"],
@@ -2329,6 +2367,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             .map(|model| json!({
                 "model": model,
                 "async_description": format!("Async message description for {model}."),
+                "async_parameters": async_parameters(model),
                 "multi_agent_messages": MULTI_AGENT_TOOLS
                     .map(|name| (name.to_string(), json!({
                         "description": format!("{name} description for {model}."),
@@ -2336,6 +2375,8 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     })))
                     .into_iter()
                     .collect::<serde_json::Map<String, Value>>(),
+                "channel_post_description": format!("post description for {model}."),
+                "channel_post_required": ["text"],
                 "exec_description": format!("Exec description for {model}."),
                 "wait_description": format!("Wait description for {model}."),
                 "wait_parameters": wait_parameters(model),
@@ -3029,6 +3070,17 @@ async fn captured_step_settings_and_history_reach_extension_executor(
 async fn captured_step_controls_mcp_resource_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
     core_test_support::skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
+    let parameters = |model: &str| {
+        json!({
+            "type": "object",
+            "properties": {
+                "server": {"type": "string"},
+                "uri": {"type": "string", "description": format!("Resource URI for {model}.")},
+            },
+            "required": ["server", "uri"],
+            "additionalProperties": false,
+        })
+    };
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
@@ -3056,6 +3108,19 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
             for model in &mut config.model_catalog.as_mut().expect("models").models {
                 model.truncation_policy =
                     TruncationPolicyConfig::bytes(if model.slug == MODEL_B { 80 } else { 8_000 });
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("model messages")
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .mcp_resources = Some(McpResourceToolMessages {
+                    read_mcp_resource: Some(ToolMessage {
+                        description: Some(format!("Read resource for {}.", model.slug)),
+                        parameters: Some(parameters(&model.slug).to_string()),
+                    }),
+                    ..Default::default()
+                });
             }
             config
                 .mcp_servers
@@ -3088,7 +3153,35 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    let output = responses.requests()[2]
+    let requests = responses.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                let body = request.body_json();
+                let tool = body["tools"]
+                    .as_array()
+                    .expect("request tools")
+                    .iter()
+                    .find(|tool| tool["name"] == "read_mcp_resource")
+                    .expect("resource tool");
+                (body["model"].clone(), tool.clone())
+            })
+            .collect::<Vec<_>>(),
+        [MODEL_A, MODEL_B, MODEL_B]
+            .map(|model| (
+                json!(model),
+                json!({
+                    "type": "function",
+                    "name": "read_mcp_resource",
+                    "description": format!("Read resource for {model}."),
+                    "parameters": parameters(model),
+                    "strict": false,
+                })
+            ))
+            .to_vec(),
+    );
+    let output = requests[2]
         .function_call_output_text("resource-b")
         .expect("resource output");
     assert!(output.starts_with("{\"server\":\"resources\""), "{output}");

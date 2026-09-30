@@ -143,7 +143,7 @@ pub(crate) struct ChatKeymap {
     pub(crate) previous_permission_mode: Vec<KeyBinding>,
     /// Switch to the next available permission mode.
     pub(crate) next_permission_mode: Vec<KeyBinding>,
-    /// Move up through async questions, then edit the most recently queued message.
+    /// Move forward through async questions, then edit the most recently queued message.
     pub(crate) edit_queued_message: Vec<KeyBinding>,
     /// Move back through async questions toward the composer.
     pub(crate) prompt_stack_back: Vec<KeyBinding>,
@@ -1671,8 +1671,8 @@ impl RuntimeKeymap {
                 ],
                 previous_permission_mode: default_bindings![],
                 next_permission_mode: default_bindings![],
-                edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
-                prompt_stack_back: default_bindings![alt(KeyCode::Down), shift(KeyCode::Right)],
+                edit_queued_message: default_bindings![shift(KeyCode::Left), alt(KeyCode::Up)],
+                prompt_stack_back: default_bindings![shift(KeyCode::Right), alt(KeyCode::Down)],
                 skip_question: default_bindings![ctrl(KeyCode::Char(']'))],
             },
             composer: ComposerKeymap {
@@ -2961,7 +2961,7 @@ mod tests {
         );
         assert_eq!(
             runtime.chat.edit_queued_message,
-            vec![key_hint::alt(KeyCode::Up), key_hint::shift(KeyCode::Left)]
+            vec![key_hint::shift(KeyCode::Left), key_hint::alt(KeyCode::Up)]
         );
         assert_eq!(
             runtime.composer.history_search_previous,

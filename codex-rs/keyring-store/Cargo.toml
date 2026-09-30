@@ -12,12 +12,13 @@ keyring = { workspace = true, features = ["crypto-rust"] }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+secret-service = "4"
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-keyring = { workspace = true, features = ["apple-native"] }
 security-framework = "3"
+keyring = { workspace = true, features = ["apple-native"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { workspace = true, features = ["windows-native"] }
@@ -25,6 +26,8 @@ keyring = { workspace = true, features = ["windows-native"] }
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
 
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
 [lib]
-test = false
 doctest = false

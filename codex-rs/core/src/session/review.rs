@@ -237,6 +237,7 @@ pub(super) async fn spawn_review_thread(
         sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
+        realtime_handoff_admissions: Arc::clone(&parent_turn_context.realtime_handoff_admissions),
         code_mode_available: parent_turn_context.code_mode_available,
         configured_token_budget: per_turn_config.token_budget.clone(),
         use_model_token_budget_defaults: per_turn_config.features.enabled(Feature::TokenBudget)
@@ -291,7 +292,7 @@ pub(super) async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input = vec![TurnInput::UserInput {
-        acceptance_order: None,
+        metadata: Default::default(),
         content: vec![UserInput::Text {
             text: review_prompt,
             // Review prompt is synthesized; no UI element ranges to preserve.

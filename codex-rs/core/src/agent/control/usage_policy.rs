@@ -9,7 +9,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadUsagePolicy;
-use std::sync::Arc;
 use tokio::sync::MutexGuard;
 
 impl AgentControl {
@@ -32,7 +31,7 @@ impl AgentControl {
 
     /// Publishes the complete root usage policy for future children.
     pub(crate) fn set_root_usage_policy(&self, policy: ThreadUsagePolicy) {
-        self.root_usage_policy.store(Arc::new(policy));
+        self.runtime.set_root_usage_policy(policy);
     }
 
     /// Synchronizes a root usage-resume toggle to loaded thread-spawn descendants.

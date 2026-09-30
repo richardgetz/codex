@@ -102,6 +102,7 @@ pub(crate) async fn run_codex_thread_interactive(
         code_mode_session_provider: parent_session.services.code_mode_service.session_provider(),
         extensions,
         conversation_history,
+        disabled_plugin_ids: None,
         initial_collaboration_mode: None,
         requested_history_mode: None,
         fork_persistence: ForkPersistence::Copied {
@@ -117,10 +118,10 @@ pub(crate) async fn run_codex_thread_interactive(
             ThreadSource::Subagent
         }),
         originator: parent_ctx.originator.clone(),
-        agent_control: parent_session
-            .services
-            .local_agent_runtime
-            .control(parent_session.session_id()),
+        agent_control: crate::agent::control::AgentControlInit::Provided {
+            control: Arc::clone(&parent_session.services.agent_control),
+            runtime: parent_session.services.local_agent_runtime.clone(),
+        },
         dynamic_tools: Vec::new(),
         metrics_service_name: None,
         user_shell_override: None,

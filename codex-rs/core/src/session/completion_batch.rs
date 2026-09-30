@@ -46,11 +46,15 @@ impl Session {
             .await;
         } else {
             let _handoff_admission = loop {
-                match self.services.agent_control.begin_handoff_admission() {
+                match self
+                    .services
+                    .local_agent_control()
+                    .begin_handoff_admission()
+                {
                     Ok(admission) => break admission,
                     Err(_) => {
                         self.services
-                            .agent_control
+                            .local_agent_control()
                             .wait_for_handoff_admission_open()
                             .await;
                     }
@@ -76,7 +80,7 @@ impl Session {
             || (manager_only
                 && self
                     .services
-                    .agent_control
+                    .local_agent_control()
                     .active_direct_worker_count(self.thread_id)
                     .await
                     != 0)

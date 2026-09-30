@@ -7,6 +7,8 @@ use super::residency::V2Residency;
 use super::worker_limit::TeamWorkerLimiter;
 use crate::agent::control::worker_question::WorkerQuestionRegistry;
 use crate::agent::eta_reminders::EtaReminderController;
+
+use crate::agent::api::AgentControl;
 use crate::agent::registry::AgentRegistry;
 use crate::config::RolloutBudgetConfig;
 use crate::rollout_budget::RolloutBudget;
@@ -139,6 +141,24 @@ impl LocalAgentRuntime {
             runtime: self.clone(),
         }
     }
+
+    pub(crate) fn set_root_service_tier(&self, service_tier: Option<String>) {
+        self.root_service_tier.store(service_tier.map(Arc::new));
+    }
+
+    pub(crate) fn set_root_usage_policy(&self, policy: ThreadUsagePolicy) {
+        self.root_usage_policy.store(Arc::new(policy));
+    }
+
+    pub(crate) fn initialize_limits(
+        &self,
+        max_threads: usize,
+        team_worker_max_concurrent: Option<usize>,
+    ) {
+        self.agent_execution_limiter.initialize(max_threads);
+        self.team_worker_limiter
+            .initialize(team_worker_max_concurrent);
+    }
 }
 
 impl std::ops::Deref for LocalAgentControl {
@@ -146,5 +166,64 @@ impl std::ops::Deref for LocalAgentControl {
 
     fn deref(&self) -> &Self::Target {
         &self.runtime
+    }
+}
+
+/// Local construction binds identity after reading history. Hosts and internal children
+/// provide an already-bound controller without selecting a backend again.
+#[derive(Clone)]
+pub(crate) enum AgentControlInit {
+    Local(LocalAgentControl),
+    Provided {
+        control: Arc<dyn AgentControl>,
+        runtime: LocalAgentRuntime,
+    },
+}
+
+impl From<LocalAgentControl> for AgentControlInit {
+    fn from(control: LocalAgentControl) -> Self {
+        Self::Local(control)
+    }
+}
+
+impl AgentControlInit {
+    pub(crate) fn runtime(&self) -> &LocalAgentRuntime {
+        match self {
+            Self::Local(control) => &control.runtime,
+            Self::Provided { runtime, .. } => runtime,
+        }
+    }
+
+    pub(crate) fn control(&self) -> &dyn AgentControl {
+        match self {
+            Self::Local(control) => control,
+            Self::Provided { control, .. } => control.as_ref(),
+        }
+    }
+}
+
+impl LocalAgentRuntime {
+    pub(crate) fn generate_thread_id(&self) -> ThreadId {
+        (self.thread_id_generator)()
+    }
+
+    pub(crate) fn root_thread_instructions_provider(
+        &self,
+        root_thread_id: ThreadId,
+        provider: Option<Arc<dyn ThreadInstructionsProvider>>,
+    ) -> Option<Arc<dyn ThreadInstructionsProvider>> {
+        let provider = match self.manager.upgrade() {
+            Some(manager) => manager.shared_thread_instructions_provider(root_thread_id, provider),
+            None => provider,
+        };
+        if let Some(provider) = provider
+            .as_ref()
+            .filter(|provider| provider.share_with_subagents())
+        {
+            let _ = self
+                .shared_thread_instructions_provider
+                .set(Arc::clone(provider));
+        }
+        provider
     }
 }

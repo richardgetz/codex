@@ -3,6 +3,9 @@ use super::ConversationState;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
 use super::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::RealtimeConversationManager;
+use super::RealtimeConversationManagerState;
+use super::RealtimeHandoffAdmission;
+use super::RealtimeHandoffAdmissions;
 use super::RealtimeHandoffDeduper;
 use super::RealtimeHandoffState;
 use super::RealtimeInputTaskExit;
@@ -80,8 +83,24 @@ fn realtime_handoff_dedupe_evicts_old_ids() {
 }
 
 #[tokio::test]
-async fn shutdown_returns_original_submission_id_for_requested_close() {
+async fn turn_retirement_closes_late_handoff_gate_registration() {
+    let admissions = RealtimeHandoffAdmissions::default();
+    admissions.retire_all().await;
+
+    let gate = Arc::new(RealtimeHandoffAdmission::new());
+    admissions.register(Arc::clone(&gate)).await;
+
+    assert!(
+        gate.acquire_route_permit(RealtimeDelegationSource::Handoff)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retires_current_gate() {
     let (output_tx, _output_rx) = bounded(1);
+    let route_handoffs = Arc::new(RealtimeHandoffAdmission::new());
     let handoff = RealtimeHandoffState {
         output_tx,
         output_send_gate: Arc::new(Semaphore::new(1)),
@@ -100,24 +119,65 @@ async fn shutdown_returns_original_submission_id_for_requested_close() {
         event_parser: RealtimeEventParser::V1,
     };
     let manager = RealtimeConversationManager {
-        state: Mutex::new(Some(ConversationState {
-            audio_tx: bounded(1).0,
-            text_tx: bounded(1).0,
-            session_kind: RealtimeSessionKind::V1,
-            submission_id: "start-submission".to_string(),
-            handoff,
-            input_task: tokio::spawn(async {}),
-            fanout_task: None,
-            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            stop_token: CancellationToken::new(),
-        })),
+        state: Mutex::new(RealtimeConversationManagerState {
+            conversation: Some(ConversationState {
+                audio_tx: bounded(1).0,
+                text_tx: bounded(1).0,
+                session_kind: RealtimeSessionKind::V1,
+                submission_id: "start-submission".to_string(),
+                handoff,
+                input_task: tokio::spawn(async {}),
+                fanout_task: None,
+                realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                route_handoffs: Arc::clone(&route_handoffs),
+                flush_transcript_tail_on_session_end: false,
+                stop_token: CancellationToken::new(),
+            }),
+            mode_instructions: None,
+        }),
         starting_stop_token: std::sync::Mutex::new(None),
-        mode_instructions: Mutex::new(None),
     };
+
+    let (realtime_active, originating_gate) = manager.turn_realtime_state().await;
+    assert!(realtime_active);
+    let originating_gate = originating_gate.expect("active realtime session has a gate");
+    let replacement_gate = Arc::new(RealtimeHandoffAdmission::new());
+    manager
+        .state
+        .lock()
+        .await
+        .conversation
+        .as_mut()
+        .expect("conversation remains installed")
+        .route_handoffs = Arc::clone(&replacement_gate);
+
+    originating_gate.retire().await;
+    assert!(
+        originating_gate
+            .acquire_route_permit(RealtimeDelegationSource::Handoff)
+            .await
+            .is_none()
+    );
+    let replacement_permit = replacement_gate
+        .acquire_route_permit(RealtimeDelegationSource::Handoff)
+        .await
+        .expect("late old-session failures must not retire the replacement gate");
+    drop(replacement_permit);
 
     assert_eq!(
         manager.shutdown().await.expect("shutdown should succeed"),
         Some("start-submission".to_string())
+    );
+    assert!(
+        replacement_gate
+            .retired
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    assert!(
+        replacement_gate
+            .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
+            .await
+            .is_none()
     );
     assert_eq!(
         manager
@@ -125,6 +185,112 @@ async fn shutdown_returns_original_submission_id_for_requested_close() {
             .await
             .expect("repeated shutdown should succeed"),
         None
+    );
+}
+
+#[tokio::test]
+async fn shutdown_allows_one_final_transcript_tail_and_rejects_handoffs() {
+    let route_handoffs = RealtimeHandoffAdmission::new();
+    route_handoffs.begin_shutdown(true).await;
+
+    assert!(
+        route_handoffs
+            .acquire_route_permit(RealtimeDelegationSource::Handoff)
+            .await
+            .is_none()
+    );
+    let tail_permit = route_handoffs
+        .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
+        .await
+        .expect("configured shutdown must admit the final transcript tail");
+    drop(tail_permit);
+    assert!(
+        route_handoffs
+            .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
+            .await
+            .is_none()
+    );
+
+    route_handoffs.retire().await;
+    assert!(
+        route_handoffs
+            .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn replacement_closes_old_handoff_admission_before_waiting_for_in_flight_route() {
+    let route_handoffs = Arc::new(RealtimeHandoffAdmission::new());
+    let in_flight_route = route_handoffs
+        .acquire_route_permit(RealtimeDelegationSource::Handoff)
+        .await
+        .expect("the old conversation starts with open handoff admission");
+
+    let shutdown_gate = Arc::clone(&route_handoffs);
+    let shutdown = tokio::spawn(async move {
+        shutdown_gate.begin_shutdown(false).await;
+    });
+    while !route_handoffs
+        .shutting_down
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        tokio::task::yield_now().await;
+    }
+
+    assert!(
+        route_handoffs
+            .retired
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    let late_old_route_gate = Arc::clone(&route_handoffs);
+    let late_old_route = tokio::spawn(async move {
+        late_old_route_gate
+            .acquire_route_permit(RealtimeDelegationSource::Handoff)
+            .await
+            .is_none()
+    });
+
+    drop(in_flight_route);
+    shutdown.await.expect("shutdown task should complete");
+    assert!(
+        late_old_route
+            .await
+            .expect("late route task should complete")
+    );
+}
+
+#[tokio::test]
+async fn shutdown_without_transcript_tail_enabled_rejects_all_handoffs() {
+    let route_handoffs = RealtimeHandoffAdmission::new();
+    route_handoffs.begin_shutdown(false).await;
+
+    assert!(
+        route_handoffs
+            .acquire_route_permit(RealtimeDelegationSource::Handoff)
+            .await
+            .is_none()
+    );
+    assert!(
+        route_handoffs
+            .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn misalignment_retirement_revokes_a_pending_shutdown_tail() {
+    let route_handoffs = RealtimeHandoffAdmission::new();
+    route_handoffs.begin_shutdown(true).await;
+    route_handoffs.retire().await;
+
+    assert!(
+        route_handoffs
+            .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
+            .await
+            .is_none()
     );
 }
 
@@ -454,19 +620,23 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
     }
 
     let manager = RealtimeConversationManager {
-        state: Mutex::new(Some(ConversationState {
-            audio_tx: bounded(1).0,
-            text_tx: bounded(1).0,
-            session_kind: RealtimeSessionKind::V1,
-            submission_id: "submission-1".to_string(),
-            handoff,
-            input_task: tokio::spawn(async {}),
-            fanout_task: None,
-            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            stop_token: CancellationToken::new(),
-        })),
+        state: Mutex::new(RealtimeConversationManagerState {
+            conversation: Some(ConversationState {
+                audio_tx: bounded(1).0,
+                text_tx: bounded(1).0,
+                session_kind: RealtimeSessionKind::V1,
+                submission_id: "submission-1".to_string(),
+                handoff,
+                input_task: tokio::spawn(async {}),
+                fanout_task: None,
+                realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                route_handoffs: Arc::new(RealtimeHandoffAdmission::new()),
+                flush_transcript_tail_on_session_end: false,
+                stop_token: CancellationToken::new(),
+            }),
+            mode_instructions: None,
+        }),
         starting_stop_token: std::sync::Mutex::new(None),
-        mode_instructions: Mutex::new(None),
     };
     let output_task = tokio::spawn(async move {
         let mut append_texts = Vec::new();
@@ -517,24 +687,29 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
         event_parser: RealtimeEventParser::FramelessBidi,
     };
     let manager = RealtimeConversationManager {
-        state: Mutex::new(Some(ConversationState {
-            audio_tx: bounded(1).0,
-            text_tx: bounded(1).0,
-            session_kind: RealtimeSessionKind::V1,
-            submission_id: "submission-2".to_string(),
-            handoff,
-            input_task: tokio::spawn(async {}),
-            fanout_task: None,
-            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            stop_token: CancellationToken::new(),
-        })),
+        state: Mutex::new(RealtimeConversationManagerState {
+            conversation: Some(ConversationState {
+                audio_tx: bounded(1).0,
+                text_tx: bounded(1).0,
+                session_kind: RealtimeSessionKind::V1,
+                submission_id: "submission-2".to_string(),
+                handoff,
+                input_task: tokio::spawn(async {}),
+                fanout_task: None,
+                realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                route_handoffs: Arc::new(RealtimeHandoffAdmission::new()),
+                flush_transcript_tail_on_session_end: false,
+                stop_token: CancellationToken::new(),
+            }),
+            mode_instructions: None,
+        }),
         starting_stop_token: std::sync::Mutex::new(None),
-        mode_instructions: Mutex::new(None),
     };
     let handoff = manager
         .state
         .lock()
         .await
+        .conversation
         .as_ref()
         .expect("realtime state should be present")
         .handoff
@@ -624,24 +799,29 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
         event_parser: RealtimeEventParser::FramelessBidi,
     };
     let manager = RealtimeConversationManager {
-        state: Mutex::new(Some(ConversationState {
-            audio_tx: bounded(1).0,
-            text_tx: bounded(1).0,
-            session_kind: RealtimeSessionKind::V1,
-            submission_id: "submission-3".to_string(),
-            handoff,
-            input_task: tokio::spawn(async {}),
-            fanout_task: None,
-            realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            stop_token: CancellationToken::new(),
-        })),
+        state: Mutex::new(RealtimeConversationManagerState {
+            conversation: Some(ConversationState {
+                audio_tx: bounded(1).0,
+                text_tx: bounded(1).0,
+                session_kind: RealtimeSessionKind::V1,
+                submission_id: "submission-3".to_string(),
+                handoff,
+                input_task: tokio::spawn(async {}),
+                fanout_task: None,
+                realtime_active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                route_handoffs: Arc::new(RealtimeHandoffAdmission::new()),
+                flush_transcript_tail_on_session_end: false,
+                stop_token: CancellationToken::new(),
+            }),
+            mode_instructions: None,
+        }),
         starting_stop_token: std::sync::Mutex::new(None),
-        mode_instructions: Mutex::new(None),
     };
     let handoff = manager
         .state
         .lock()
         .await
+        .conversation
         .as_ref()
         .expect("realtime state should be present")
         .handoff

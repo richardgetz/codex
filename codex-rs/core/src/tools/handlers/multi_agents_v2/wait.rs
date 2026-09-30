@@ -75,7 +75,7 @@ impl Handler {
             Some(
                 session
                     .services
-                    .agent_control
+                    .local_agent_control()
                     .active_direct_worker_count(session.thread_id)
                     .await,
             )
@@ -100,7 +100,7 @@ impl Handler {
             active_workers = Some(
                 session
                     .services
-                    .agent_control
+                    .local_agent_control()
                     .active_direct_worker_count(session.thread_id)
                     .await,
             );

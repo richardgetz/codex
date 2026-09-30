@@ -54,6 +54,7 @@ use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TokenUsage;
@@ -300,11 +301,14 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) -> CodexResult<()> {
-        let team_worker_lease = match self.services.agent_control.reserve_team_worker_turn(
-            turn_context.config.as_ref(),
-            &turn_context.session_source,
-            self.thread_id,
-        ) {
+        let team_worker_lease = match self
+            .services
+            .local_agent_control()
+            .reserve_team_worker_turn(
+                turn_context.config.as_ref(),
+                &turn_context.session_source,
+                self.thread_id,
+            ) {
             Ok(lease) => lease,
             Err(err) => {
                 self.send_event(
@@ -467,11 +471,14 @@ impl Session {
             .clear_turn(&turn_context.sub_id);
         let mut team_worker_lease = match pre_reserved_team_worker_lease {
             Some(lease) => Some(lease),
-            None => match self.services.agent_control.reserve_team_worker_turn(
-                turn_context.config.as_ref(),
-                &turn_context.session_source,
-                self.thread_id,
-            ) {
+            None => match self
+                .services
+                .local_agent_control()
+                .reserve_team_worker_turn(
+                    turn_context.config.as_ref(),
+                    &turn_context.session_source,
+                    self.thread_id,
+                ) {
                 Ok(lease) => lease,
                 Err(err) => {
                     if let Some(provisional_turn_state) = provisional_turn_state.as_ref() {
@@ -612,7 +619,9 @@ impl Session {
             self.requeue_pending_input_for_next_turn(&turn_state).await;
             return Ok(());
         }
-        let agent_execution_guard = self.services.agent_control.execution_guard(
+        let turn = active.get_or_insert_with(ActiveTurn::default);
+        debug_assert!(turn.task.is_none());
+        let agent_execution_guard = self.services.agent_control.admit_turn(
             turn_context.multi_agent_version,
             &turn_context.session_source,
         );
@@ -832,7 +841,11 @@ impl Session {
             // hostage by an unavailable Worker slot.
             let admission = match pre_acquired_admission.take() {
                 Some(admission) => admission,
-                None => match self.services.agent_control.begin_handoff_admission() {
+                None => match self
+                    .services
+                    .local_agent_control()
+                    .begin_handoff_admission()
+                {
                     Ok(admission) => admission,
                     Err(_) => return,
                 },
@@ -847,17 +860,18 @@ impl Session {
             };
             let config = self.get_config().await;
             let session_source = self.session_source().await;
-            match self.services.agent_control.reserve_team_worker_turn(
-                &config,
-                &session_source,
-                self.thread_id,
-            ) {
+            match self
+                .services
+                .local_agent_control()
+                .reserve_team_worker_turn(&config, &session_source, self.thread_id)
+            {
                 Ok(team_worker_lease) => break (turn_state, team_worker_lease, admission),
                 Err(_) => {
                     self.clear_reserved_idle_turn(&turn_state).await;
                     drop(admission);
+                    let local_agent_control = self.services.local_agent_control();
                     tokio::select! {
-                        _ = self.services.agent_control.wait_for_team_worker_capacity() => {},
+                        _ = local_agent_control.wait_for_team_worker_capacity() => {},
                         _ = self.wait_for_shutdown() => return,
                     }
                 }
@@ -920,6 +934,7 @@ impl Session {
                 NewTurnContextOptions {
                     final_output_json_schema: start_options.final_output_json_schema,
                     cyber_access_program: start_options.cyber_access_program,
+                    ..Default::default()
                 },
             )
             .await;
@@ -986,7 +1001,7 @@ impl Session {
             }
             let handoff_terminal_delivery = if has_task {
                 self.services
-                    .agent_control
+                    .local_agent_control()
                     .begin_handoff_terminal_delivery()
             } else {
                 None
@@ -1004,8 +1019,13 @@ impl Session {
             aborted_turn = task.is_some();
             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
             if let Some(task) = task {
-                self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
-                    .await;
+                self.handle_task_abort(
+                    task,
+                    reason.clone(),
+                    &active_turn.turn_state,
+                    /*error*/ None,
+                )
+                .await;
             } else if reason == TurnAbortReason::Interrupted {
                 self.requeue_pending_input_for_next_turn(&active_turn.turn_state)
                     .await;
@@ -1034,6 +1054,7 @@ impl Session {
         self: &Arc<Self>,
         turn_id: &str,
         reason: TurnAbortReason,
+        error: Option<ErrorEvent>,
     ) -> bool {
         // Claim a terminal delivery obligation while removing the matching task. A sealed
         // handoff keeps ownership of the task so it cannot emit an untracked callback.
@@ -1054,7 +1075,7 @@ impl Session {
                 }
                 let handoff_terminal_delivery = self
                     .services
-                    .agent_control
+                    .local_agent_control()
                     .begin_handoff_terminal_delivery();
                 if handoff_terminal_delivery.is_none() {
                     return false;
@@ -1066,7 +1087,7 @@ impl Session {
             return false;
         };
 
-        self.finish_turn_abort(active_turn, reason).await;
+        self.finish_turn_abort(active_turn, reason, error).await;
         true
     }
 
@@ -1074,6 +1095,7 @@ impl Session {
         self: &Arc<Self>,
         mut active_turn: ActiveTurn,
         reason: TurnAbortReason,
+        error: Option<ErrorEvent>,
     ) {
         // Only the matching active turn may invalidate a parked Lead's oversight
         // deadline. A stale Guardian abort request must not clear supervision for
@@ -1082,7 +1104,7 @@ impl Session {
         let task = active_turn.task.take();
         let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
         if let Some(task) = task {
-            self.handle_task_abort(task, reason.clone(), &active_turn.turn_state)
+            self.handle_task_abort(task, reason.clone(), &active_turn.turn_state, error)
                 .await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
@@ -1114,12 +1136,15 @@ impl Session {
                 .filter(|task| Arc::ptr_eq(&task.turn_context, &turn_context))
                 .and_then(|_| {
                     self.services
-                        .agent_control
+                        .local_agent_control()
                         .begin_handoff_terminal_delivery()
                 })
         };
         if handoff_terminal_delivery.is_none()
-            && self.services.agent_control.handoff_admission_sealed()
+            && self
+                .services
+                .local_agent_control()
+                .handoff_admission_sealed()
         {
             // The sealed owner keeps the task for the coordinator to classify instead of emitting
             // a terminal callback after delivery registration has closed.
@@ -1362,6 +1387,7 @@ impl Session {
             EventMsg::TurnAborted(TurnAbortedEvent {
                 turn_id: Some(turn_context.sub_id.clone()),
                 reason,
+                error: None,
                 started_at,
                 completed_at,
                 duration_ms,
@@ -1434,7 +1460,7 @@ impl Session {
             .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         if let Some(parent_thread_id) = parent_thread_id {
             self.services
-                .agent_control
+                .local_agent_control()
                 .schedule_pending_manager_completion_batch_flush(parent_thread_id)
                 .await;
         }
@@ -1463,6 +1489,7 @@ impl Session {
         task: RunningTask,
         reason: TurnAbortReason,
         turn_state: &Mutex<TurnState>,
+        error: Option<ErrorEvent>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
@@ -1546,6 +1573,7 @@ impl Session {
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
+            error,
             started_at,
             completed_at,
             duration_ms,

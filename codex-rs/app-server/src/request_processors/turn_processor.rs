@@ -1179,6 +1179,8 @@ impl TurnRequestProcessor {
                 Op::ThreadSettings {
                     thread_settings,
                     usage_policy_update,
+
+                    reply: None,
                 },
             )
             .await
@@ -2282,7 +2284,7 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         prompt: &str,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        // AgentRunner::start still delegates to spawn_subagent, which forks from the parent's
+        // AgentRunner::start still delegates to spawn_legacy_subagent, which forks from the parent's
         // full history. Paginated threads only allow bounded model-context reads, so keep this
         // closed until detached review has a bounded fork path.
         if matches!(

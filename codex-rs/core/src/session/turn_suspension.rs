@@ -53,7 +53,11 @@ async fn suspend_turn_and_shutdown_for_handoff_with_descendants(
     submission_id: String,
     scope: SuspensionScope,
 ) -> CodexResult<SuspendTurnOutcome> {
-    if !session.services.agent_control.handoff_admission_sealed() {
+    if !session
+        .services
+        .local_agent_control()
+        .handoff_admission_sealed()
+    {
         return Err(CodexErr::InvalidRequest(
             "handoff suspension requires a sealed agent tree".to_string(),
         ));
@@ -99,7 +103,7 @@ async fn suspend_turn_and_shutdown_with_scope(
     if matches!(scope, SuspensionScope::Root | SuspensionScope::Handoff)
         && session
             .services
-            .agent_control
+            .local_agent_control()
             .list_live_agent_subtree_thread_ids(session.thread_id)
             .await?
             .len()
@@ -205,7 +209,7 @@ async fn suspend_turn_and_shutdown_with_scope(
         // into a synthetic Worker completion for the replacement daemon.
         session
             .services
-            .agent_control
+            .local_agent_control()
             .mark_handoff_suspended(session.thread_id);
     }
     session

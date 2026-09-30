@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::hash_map::Entry;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -30,7 +30,14 @@ pub(crate) struct McpHandlerCache {
 
 struct CachedMcpHandlers {
     binding: usize,
-    handlers: HashMap<ToolName, Arc<McpHandler>>,
+    handlers: HashMap<ToolName, CachedMcpHandler>,
+}
+
+struct CachedMcpHandler {
+    tool_info: McpToolInfo,
+    agent_plugin: bool,
+    schema_max_bytes: Option<NonZeroUsize>,
+    handler: Arc<McpHandler>,
 }
 
 impl McpHandlerCache {
@@ -79,7 +86,7 @@ fn append_mcp_tools(
     apps_enabled: bool,
     mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
     search_tool_enabled: bool,
-    handlers: &mut HashMap<ToolName, Arc<McpHandler>>,
+    handlers: &mut HashMap<ToolName, CachedMcpHandler>,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
     append_mcp_tools_with_selection(
@@ -133,9 +140,15 @@ fn append_mcp_tools_with_selection(
     apps_enabled: bool,
     mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
     search_tool_enabled: bool,
-    handlers: &mut HashMap<ToolName, Arc<McpHandler>>,
+    handlers: &mut HashMap<ToolName, CachedMcpHandler>,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
+    let current_tools: HashSet<_> = all_mcp_tools
+        .iter()
+        .map(McpToolInfo::canonical_tool_name)
+        .collect();
+    handlers.retain(|name, _| current_tools.contains(name));
+
     // Keep regular MCP tools first; Apps tools also require connector and policy checks.
     let non_app_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
     let direct_only_app_tools = apps_enabled
@@ -188,25 +201,44 @@ fn append_mcp_tools_with_selection(
     let mut agent_plugin_bytes = 0usize;
     for tool in exposed_tools {
         let tool_name = tool.canonical_tool_name();
-        let agent_plugin = mcp_server_catalog
-            .server(&tool.server_name)
-            .is_some_and(|server| server.source().is_agent_plugin());
-        let handler = match handlers.entry(tool_name.clone()) {
-            Entry::Occupied(entry) => Arc::clone(entry.get()),
-            Entry::Vacant(entry) => {
-                let handler = if agent_plugin {
-                    McpHandler::new_agent_plugin(tool.clone())
-                } else {
-                    McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
-                };
-                match handler {
-                    Ok(handler) => Arc::clone(entry.insert(Arc::new(handler))),
-                    Err(err) => {
-                        warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
-                        continue;
-                    }
+        let server = mcp_server_catalog.server(&tool.server_name);
+        let agent_plugin = server.is_some_and(|server| server.source().is_agent_plugin());
+        let tool_input_schema_max_bytes =
+            server.and_then(|server| server.config().tool_input_schema_max_bytes);
+        // Handlers contain immutable tool metadata, not a connection or authorization snapshot.
+        // Preserve their identity across equivalent bindings so the search index can also be reused.
+        let handler = if let Some(cached) = handlers.get(&tool_name).filter(|cached| {
+            cached.tool_info == tool
+                && cached.agent_plugin == agent_plugin
+                && cached.schema_max_bytes == tool_input_schema_max_bytes
+        }) {
+            Arc::clone(&cached.handler)
+        } else {
+            let handler = if agent_plugin {
+                McpHandler::new_agent_plugin(tool.clone())
+            } else if let Some(budget) = tool_input_schema_max_bytes {
+                McpHandler::new_with_schema_max_bytes(tool.clone(), budget.get())
+            } else {
+                McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
+            };
+
+            let handler = match handler {
+                Ok(handler) => Arc::new(handler),
+                Err(err) => {
+                    warn!("Skipping MCP tool `{tool_name}`: failed to build tool spec: {err}");
+                    continue;
                 }
-            }
+            };
+            handlers.insert(
+                tool_name.clone(),
+                CachedMcpHandler {
+                    tool_info: tool.clone(),
+                    agent_plugin,
+                    schema_max_bytes: tool_input_schema_max_bytes,
+                    handler: Arc::clone(&handler),
+                },
+            );
+            handler
         };
 
         let fits_agent_budget = if agent_plugin {

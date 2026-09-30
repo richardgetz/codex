@@ -1,5 +1,7 @@
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
+
+use crate::agent::types::SpawnAgentForkMode;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
@@ -10,6 +12,8 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
+
+use codex_otel::SessionTelemetry;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -92,6 +96,36 @@ pub(crate) fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
         }
         _ => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
     }
+}
+
+pub(crate) fn record_collab_spawn_failure(
+    telemetry: &SessionTelemetry,
+    product_sku: Option<&str>,
+    err: &CodexErr,
+    fork_mode: Option<&SpawnAgentForkMode>,
+    multi_agent_version: MultiAgentVersion,
+) {
+    let reason = match err.details() {
+        CodexErrorDetails::AgentLimitReached { .. } => "limit_reached",
+        CodexErrorDetails::InvalidRequest(_) => "invalid_request",
+        CodexErrorDetails::ThreadNotFound(_) => "thread_not_found",
+        CodexErrorDetails::UnsupportedOperation(_) => "unsupported_operation",
+        _ => "internal",
+    };
+    let fork_mode = match fork_mode {
+        None => "none",
+        Some(SpawnAgentForkMode::FullHistory) => "all",
+        Some(SpawnAgentForkMode::LastNTurns(_)) => "last_n",
+    };
+    let multi_agent_version = match multi_agent_version {
+        MultiAgentVersion::Disabled => "disabled",
+        MultiAgentVersion::V1 => "v1",
+        MultiAgentVersion::V2 => "v2",
+    };
+    telemetry
+        .clone()
+        .with_product_sku(product_sku)
+        .record_multi_agent_spawn_failure(reason, fork_mode, multi_agent_version);
 }
 
 pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
@@ -368,7 +402,7 @@ pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
 ) -> Result<(), FunctionCallError> {
-    let Some(service_tier) = session.services.agent_control.root_service_tier() else {
+    let Some(service_tier) = session.services.local_agent_control().root_service_tier() else {
         config.service_tier = None;
         return Ok(());
     };

@@ -85,7 +85,11 @@ async fn admit_handoff_callback(
     sess: &Arc<Session>,
     callback_id: &str,
 ) -> Option<crate::agent::control::HandoffAdmissionGuard> {
-    match sess.services.agent_control.begin_handoff_admission() {
+    match sess
+        .services
+        .local_agent_control()
+        .begin_handoff_admission()
+    {
         Ok(admission) => Some(admission),
         Err(error) => {
             // Callback operations cannot be replayed from rollout history. Make a sealed-owner
@@ -109,7 +113,7 @@ pub async fn interrupt(sess: &Arc<Session>) {
 pub async fn continue_usage(sess: &Arc<Session>, sub_id: String) {
     let waiting = sess
         .services
-        .agent_control
+        .local_agent_control()
         .request_usage_resume_for_subtree(sess.thread_id())
         .await;
     let waiting = waiting > 0;
@@ -130,7 +134,7 @@ pub async fn continue_usage(sess: &Arc<Session>, sub_id: String) {
 pub async fn pause_activity(sess: &Arc<Session>, sub_id: String) {
     let snapshots = sess
         .services
-        .agent_control
+        .local_agent_control()
         .pause_activity_for_subtree()
         .await;
     sess.send_event_raw_without_materializing_rollout(Event {
@@ -149,12 +153,12 @@ pub async fn pause_activity(sess: &Arc<Session>, sub_id: String) {
 pub async fn continue_activity(sess: &Arc<Session>, sub_id: String) {
     let snapshots = sess
         .services
-        .agent_control
+        .local_agent_control()
         .continue_activity_for_subtree()
         .await;
     let usage_waiting = sess
         .services
-        .agent_control
+        .local_agent_control()
         .request_usage_resume_for_subtree(sess.thread_id())
         .await
         > 0;
@@ -203,6 +207,7 @@ pub async fn user_input_or_turn(
         sess,
         sub_id.clone(),
         op,
+        NewTurnContextOptions::default(),
         client_user_message_id,
         parent_turn_id,
     )
@@ -225,6 +230,7 @@ pub(super) async fn user_input_or_turn_with_admission(
         sub_id.clone(),
         op,
         TurnReasoningEffort::Persistent,
+        NewTurnContextOptions::default(),
         client_user_message_id,
         parent_turn_id,
     )
@@ -277,6 +283,7 @@ pub(super) async fn user_input_or_turn_inner(
     sess: &Arc<Session>,
     sub_id: String,
     op: Op,
+    turn_context_options: NewTurnContextOptions,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
 ) -> CodexResult<UserMessageAdmission> {
@@ -285,6 +292,7 @@ pub(super) async fn user_input_or_turn_inner(
         sub_id,
         op,
         TurnReasoningEffort::Persistent,
+        turn_context_options,
         client_user_message_id,
         parent_turn_id,
     )
@@ -296,6 +304,7 @@ pub(super) async fn user_input_or_turn_inner_with_transient_reasoning_effort(
     sub_id: String,
     op: Op,
     effort: ReasoningEffort,
+    turn_context_options: NewTurnContextOptions,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
 ) -> CodexResult<UserMessageAdmission> {
@@ -304,6 +313,7 @@ pub(super) async fn user_input_or_turn_inner_with_transient_reasoning_effort(
         sub_id,
         op,
         TurnReasoningEffort::Transient(effort),
+        turn_context_options,
         client_user_message_id,
         parent_turn_id,
     )
@@ -320,10 +330,15 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
     sub_id: String,
     op: Op,
     reasoning_effort: TurnReasoningEffort,
+    turn_context_options: NewTurnContextOptions,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
 ) -> CodexResult<UserMessageAdmission> {
-    let _admission = match sess.services.agent_control.begin_handoff_admission() {
+    let _admission = match sess
+        .services
+        .local_agent_control()
+        .begin_handoff_admission()
+    {
         Ok(admission) => admission,
         Err(err) => {
             sess.send_event_raw(Event {
@@ -339,6 +354,7 @@ async fn user_input_or_turn_inner_with_reasoning_effort(
         sub_id,
         op,
         reasoning_effort,
+        turn_context_options,
         client_user_message_id,
         parent_turn_id,
     )
@@ -350,16 +366,17 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
     sub_id: String,
     op: Op,
     reasoning_effort: TurnReasoningEffort,
+    turn_context_options: NewTurnContextOptions,
     client_user_message_id: Option<String>,
     parent_turn_id: Option<String>,
 ) -> CodexResult<UserMessageAdmission> {
     let config = sess.get_config().await;
     let session_source = sess.session_source().await;
-    let _team_worker_lease = match sess.services.agent_control.reserve_team_worker_turn(
-        &config,
-        &session_source,
-        sess.thread_id(),
-    ) {
+    let _team_worker_lease = match sess
+        .services
+        .local_agent_control()
+        .reserve_team_worker_turn(&config, &session_source, sess.thread_id())
+    {
         Ok(lease) => lease,
         Err(err) => {
             sess.send_event_raw(Event {
@@ -385,6 +402,8 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
         .as_ref()
         .is_some_and(|team| team.mode == codex_protocol::protocol::TeamMode::Off);
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
+    let steered_realtime_handoff_admission =
+        turn_context_options.realtime_handoff_admission.clone();
     let updates = if emit_thread_settings_applied {
         thread_settings_update(thread_settings)
     } else {
@@ -392,7 +411,7 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
     };
     let options = NewTurnContextOptions {
         final_output_json_schema,
-        ..Default::default()
+        ..turn_context_options
     };
 
     let current_context = match reasoning_effort {
@@ -401,12 +420,8 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
             .await
             .map(|(turn_context, _snapshot)| turn_context),
         TurnReasoningEffort::Transient(effort) => {
-            sess.new_turn_with_transient_reasoning_effort(
-                sub_id.clone(),
-                options.final_output_json_schema,
-                effort,
-            )
-            .await
+            sess.new_turn_with_transient_reasoning_effort(sub_id.clone(), options, effort)
+                .await
         }
     };
     // new_turn_with_sub_id already emits an error event when settings are invalid.
@@ -432,6 +447,7 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
             /*expected_turn_id*/ None,
             client_user_message_id.clone(),
             responsesapi_client_metadata.clone(),
+            steered_realtime_handoff_admission,
         )
         .await
     {
@@ -487,7 +503,10 @@ async fn user_input_or_turn_inner_with_reasoning_effort_admitted(
                 task_input.push(TurnInput::UserInput {
                     content: items,
                     client_id: client_user_message_id,
-                    acceptance_order: sess.reserve_user_input_order().await,
+                    metadata: crate::session::input_queue::UserInputMetadata {
+                        acceptance_order: Some(sess.reserve_user_input_order().await),
+                        ..Default::default()
+                    },
                 });
             }
             if task_input.is_empty() {
@@ -678,7 +697,11 @@ pub async fn run_user_shell_command(
 ) {
     // Active-turn auxiliary shells outlive this handler call. Hold admission in the detached task
     // until its output and persistence finish so a handoff cannot close the writer underneath it.
-    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+    let Ok(handoff_admission) = sess
+        .services
+        .local_agent_control()
+        .begin_handoff_admission()
+    else {
         return;
     };
     if let Some((turn_context, cancellation_token)) =
@@ -925,7 +948,11 @@ pub async fn update_memories(sess: &Arc<Session>, _config: &Arc<Config>, sub_id:
 }
 
 pub fn consolidate_orchestrator_memory(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+    let Ok(handoff_admission) = sess
+        .services
+        .local_agent_control()
+        .begin_handoff_admission()
+    else {
         return;
     };
     let sess = Arc::clone(sess);
@@ -968,7 +995,11 @@ pub fn forget_orchestrator_memory(
     sub_id: String,
     needle: String,
 ) {
-    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+    let Ok(handoff_admission) = sess
+        .services
+        .local_agent_control()
+        .begin_handoff_admission()
+    else {
         return;
     };
     let sess = Arc::clone(sess);
@@ -1048,7 +1079,11 @@ pub fn forget_orchestrator_memory(
 }
 
 pub fn migrate_user_preferences_memory(sess: &Arc<Session>, config: &Arc<Config>, sub_id: String) {
-    let Ok(handoff_admission) = sess.services.agent_control.begin_handoff_admission() else {
+    let Ok(handoff_admission) = sess
+        .services
+        .local_agent_control()
+        .begin_handoff_admission()
+    else {
         return;
     };
     let sess = Arc::clone(sess);
@@ -1207,7 +1242,7 @@ pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32
         .thread_extension_data
         .remove::<NodeReplReviewEvidence>();
     sess.services
-        .agent_control
+        .local_agent_control()
         .rearm_budget_reminder(sess.thread_id());
     sess.recompute_token_usage(turn_context.as_ref()).await;
 
@@ -1409,7 +1444,7 @@ pub async fn set_scratchpad_continuous_policy(sess: &Arc<Session>, sub_id: Strin
 pub async fn prune_idle_agents(sess: &Arc<Session>, sub_id: String) {
     match sess
         .services
-        .agent_control
+        .local_agent_control()
         .prune_idle_agents(sess.thread_id)
         .await
     {
@@ -1572,7 +1607,13 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
     } else {
         sess.cancel_eta_reminders().await;
     }
-    if let Some(startup_prewarm) = sess.take_session_startup_prewarm().await {
+    let startup_prewarm = {
+        let mut state = sess.state.lock().await;
+        // Stop admission and take the current warmup together so resume cannot replace it.
+        state.shutting_down = true;
+        state.take_session_startup_prewarm()
+    };
+    if let Some(startup_prewarm) = startup_prewarm {
         startup_prewarm.abort().await;
     }
     let _ = sess.conversation.shutdown().await;
@@ -1598,6 +1639,9 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         sess.mcp_refresh.close();
         sess.services.mcp_runtime.shutdown().await;
     }
+
+    sess.drain_code_mode_messages().await;
+
     crate::hook_runtime::run_session_end_hooks(sess).await;
     emit_thread_stop_lifecycle(sess).await;
 }
@@ -1713,7 +1757,9 @@ async fn persist_rejected_inter_agent_communication(
     team_lead_completion: bool,
 ) -> bool {
     let Some(state_db) = sess.state_db() else {
-        sess.services.agent_control.mark_handoff_delivery_failed();
+        sess.services
+            .local_agent_control()
+            .mark_handoff_delivery_failed();
         warn!(thread_id = %sess.thread_id(), "state database unavailable for rejected inter-agent handoff");
         return false;
     };
@@ -1732,7 +1778,9 @@ async fn persist_rejected_inter_agent_communication(
             true
         }
         Err(error) => {
-            sess.services.agent_control.mark_handoff_delivery_failed();
+            sess.services
+                .local_agent_control()
+                .mark_handoff_delivery_failed();
             warn!(thread_id = %sess.thread_id(), %error, "failed to persist rejected inter-agent handoff");
             false
         }
@@ -1755,7 +1803,9 @@ async fn reject_handoff_submission(sess: &Arc<Session>, sub: Submission, err: Co
         match state_db.unclaim_thread_inbound_message(&message_id).await {
             Ok(requeued) => inbound_message_requeued = requeued,
             Err(unclaim_error) => {
-                sess.services.agent_control.mark_handoff_delivery_failed();
+                sess.services
+                    .local_agent_control()
+                    .mark_handoff_delivery_failed();
                 warn!(%message_id, %unclaim_error, "failed to return rejected inbound message to queue");
             }
         }
@@ -1861,8 +1911,11 @@ pub(super) async fn submission_loop(
                 | Op::TeamLeadCompletion { .. }
         );
         let _recovery_admission = if durable_inbound {
-            let admission = sess.services.agent_control.begin_recovery_admission();
-            if admission.is_none() && sess.services.agent_control.recovery_pending() {
+            let admission = sess
+                .services
+                .local_agent_control()
+                .begin_recovery_admission();
+            if admission.is_none() && sess.services.local_agent_control().recovery_pending() {
                 reject_handoff_submission(
                     &sess,
                     sub,
@@ -1880,7 +1933,11 @@ pub(super) async fn submission_loop(
         };
         let dispatch_span = submission_dispatch_span(&sub);
         let mut handoff_admission = if sub.op.requires_handoff_admission() {
-            match sess.services.agent_control.begin_handoff_admission() {
+            match sess
+                .services
+                .local_agent_control()
+                .begin_handoff_admission()
+            {
                 Ok(admission) => Some(admission),
                 Err(err) => {
                     reject_handoff_submission(&sess, sub, err).await;
@@ -1912,7 +1969,7 @@ pub(super) async fn submission_loop(
                 Op::PauseActivityWithSnapshotAck { reply } => {
                     let snapshots = sess
                         .services
-                        .agent_control
+                        .local_agent_control()
                         .pause_activity_for_subtree_with_snapshot()
                         .await;
                     let _ = reply.send(snapshots);
@@ -1975,6 +2032,7 @@ pub(super) async fn submission_loop(
                 Op::ThreadSettings {
                     thread_settings,
                     usage_policy_update,
+                    reply,
                 } => {
                     thread_settings::update(
                         &sess,
@@ -1982,6 +2040,7 @@ pub(super) async fn submission_loop(
                         thread_settings,
                         usage_policy_update,
                         handoff_admission.as_ref(),
+                        reply,
                     )
                     .await;
                     false
@@ -2060,6 +2119,7 @@ pub(super) async fn submission_loop(
                     let _ = reply.send(result);
                     should_exit
                 }
+
                 Op::TurnSettings {
                     turn_id,
                     update,

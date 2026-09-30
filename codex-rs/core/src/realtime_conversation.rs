@@ -85,6 +85,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -206,7 +207,12 @@ async fn send_realtime_fanout_event(sess: &Session, sub_id: &str, event: Realtim
     .await;
 }
 
-async fn finish_ready_realtime_event(sess: &Arc<Session>, sub_id: &str, ready: ReadyRealtimeEvent) {
+async fn finish_ready_realtime_event(
+    sess: &Arc<Session>,
+    sub_id: &str,
+    route_handoffs: &Arc<RealtimeHandoffAdmission>,
+    ready: ReadyRealtimeEvent,
+) {
     match ready {
         ReadyRealtimeEvent::Forward(event) => send_realtime_fanout_event(sess, sub_id, event).await,
         ReadyRealtimeEvent::Handoff {
@@ -222,13 +228,15 @@ async fn finish_ready_realtime_event(sess: &Arc<Session>, sub_id: &str, ready: R
             }
             send_realtime_fanout_event(sess, sub_id, event).await;
             debug!(text = %text, "[realtime-text] realtime conversation text output");
-            sess.route_realtime_text_input(
-                text,
-                RealtimeDelegationSource::Handoff,
-                routing_input,
-                routing_decision,
-            )
-            .await;
+            route_handoffs
+                .route(
+                    sess,
+                    text,
+                    RealtimeDelegationSource::Handoff,
+                    routing_input,
+                    routing_decision,
+                )
+                .await;
         }
     }
 }
@@ -236,12 +244,13 @@ async fn finish_ready_realtime_event(sess: &Arc<Session>, sub_id: &str, ready: R
 async fn finish_ready_realtime_events(
     sess: &Arc<Session>,
     sub_id: &str,
+    route_handoffs: &Arc<RealtimeHandoffAdmission>,
     ready_events: &mut BTreeMap<u64, ReadyRealtimeEvent>,
     next_sequence: &mut u64,
 ) {
     while let Some(ready) = ready_events.remove(next_sequence) {
         *next_sequence += 1;
-        finish_ready_realtime_event(sess, sub_id, ready).await;
+        finish_ready_realtime_event(sess, sub_id, route_handoffs, ready).await;
     }
 }
 
@@ -337,16 +346,156 @@ enum RealtimeFanoutTaskStop {
     Detach,
 }
 
+/// Serializes turn admission with the safety cutoff for one voice session.
+#[derive(Debug)]
+pub(crate) struct RealtimeHandoffAdmission {
+    gate: Semaphore,
+    retired: AtomicBool,
+    shutting_down: AtomicBool,
+    transcript_tail_admitted: AtomicBool,
+}
+
+/// Tracks the realtime sessions whose handoffs have been admitted to one turn.
+#[derive(Debug, Default)]
+pub(crate) struct RealtimeHandoffAdmissions {
+    state: Mutex<RealtimeHandoffAdmissionsState>,
+}
+
+#[derive(Debug, Default)]
+struct RealtimeHandoffAdmissionsState {
+    admissions: Vec<Arc<RealtimeHandoffAdmission>>,
+    retired: bool,
+}
+
+impl RealtimeHandoffAdmissions {
+    pub(crate) async fn register(&self, admission: Arc<RealtimeHandoffAdmission>) {
+        let retire_immediately = {
+            let mut state = self.state.lock().await;
+            if state.retired {
+                true
+            } else {
+                if !state
+                    .admissions
+                    .iter()
+                    .any(|existing| Arc::ptr_eq(existing, &admission))
+                {
+                    state.admissions.push(Arc::clone(&admission));
+                }
+                false
+            }
+        };
+
+        if retire_immediately {
+            admission.close_admission();
+        }
+    }
+
+    pub(crate) async fn retire_all(&self) {
+        let admissions = {
+            let mut state = self.state.lock().await;
+            state.retired = true;
+            state.admissions.clone()
+        };
+
+        for admission in admissions {
+            admission.retire().await;
+        }
+    }
+}
+
+impl RealtimeHandoffAdmission {
+    fn new() -> Self {
+        Self {
+            gate: Semaphore::new(1),
+            retired: AtomicBool::new(false),
+            shutting_down: AtomicBool::new(false),
+            transcript_tail_admitted: AtomicBool::new(false),
+        }
+    }
+
+    async fn route(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        text: String,
+        source: RealtimeDelegationSource,
+        routing_input: Option<String>,
+        routing_decision: Option<RealtimeHandoffRoutingDecision>,
+    ) {
+        let Some(_permit) = self.acquire_route_permit(source).await else {
+            return;
+        };
+        session
+            .route_realtime_text_input(
+                text,
+                source,
+                routing_input,
+                routing_decision,
+                Arc::clone(self),
+            )
+            .await;
+    }
+
+    async fn acquire_route_permit(
+        &self,
+        source: RealtimeDelegationSource,
+    ) -> Option<SemaphorePermit<'_>> {
+        let permit = self.gate.acquire().await.ok()?;
+        if self.retired.load(Ordering::Acquire)
+            || (self.shutting_down.load(Ordering::Acquire)
+                && source != RealtimeDelegationSource::TranscriptTailFlush)
+        {
+            return None;
+        }
+        if source == RealtimeDelegationSource::TranscriptTailFlush
+            && self.transcript_tail_admitted.swap(true, Ordering::AcqRel)
+        {
+            return None;
+        }
+        Some(permit)
+    }
+
+    async fn begin_shutdown(&self, allow_transcript_tail: bool) {
+        self.shutting_down.store(true, Ordering::Release);
+        if !allow_transcript_tail {
+            self.retired.store(true, Ordering::Release);
+        }
+        let Ok(_permit) = self.gate.acquire().await else {
+            return;
+        };
+    }
+
+    pub(crate) async fn retire(&self) {
+        self.close_admission();
+        let Ok(_permit) = self.gate.acquire().await else {
+            return;
+        };
+    }
+
+    fn close_admission(&self) {
+        self.retired.store(true, Ordering::Release);
+    }
+}
+
 pub(crate) struct RealtimeConversationManager {
-    state: Mutex<Option<ConversationState>>,
+    state: Mutex<RealtimeConversationManagerState>,
     starting_stop_token: std::sync::Mutex<Option<CancellationToken>>,
-    mode_instructions: Mutex<Option<RealtimeModeInstructions>>,
+}
+
+struct RealtimeConversationManagerState {
+    conversation: Option<ConversationState>,
+    mode_instructions: Option<RealtimeModeInstructions>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct RealtimeModeInstructions {
     pub(crate) start: Option<String>,
     pub(crate) end: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RealtimeConversationSnapshot {
+    pub(crate) active: bool,
+    pub(crate) mode_instructions: Option<RealtimeModeInstructions>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -719,6 +868,9 @@ struct ConversationState {
     input_task: JoinHandle<()>,
     fanout_task: Option<JoinHandle<()>>,
     realtime_active: Arc<AtomicBool>,
+    // Retirement is scoped to this voice session; a later session gets a fresh gate.
+    route_handoffs: Arc<RealtimeHandoffAdmission>,
+    flush_transcript_tail_on_session_end: bool,
     stop_token: CancellationToken,
 }
 
@@ -745,6 +897,7 @@ struct RealtimeStart {
 
 struct RealtimeStartOutput {
     realtime_active: Arc<AtomicBool>,
+    route_handoffs: Arc<RealtimeHandoffAdmission>,
     events_rx: Receiver<RealtimeEvent>,
     transcript_tail_rx: Receiver<String>,
     route_handoff_deduper: Arc<Mutex<RealtimeHandoffDeduper>>,
@@ -755,14 +908,23 @@ struct RealtimeStartOutput {
 impl RealtimeConversationManager {
     pub(crate) fn new() -> Self {
         Self {
-            state: Mutex::new(None),
+            state: Mutex::new(RealtimeConversationManagerState {
+                conversation: None,
+                mode_instructions: None,
+            }),
             starting_stop_token: std::sync::Mutex::new(None),
-            mode_instructions: Mutex::new(None),
         }
     }
 
-    pub(crate) async fn mode_instructions(&self) -> Option<RealtimeModeInstructions> {
-        self.mode_instructions.lock().await.clone()
+    pub(crate) async fn snapshot(&self) -> RealtimeConversationSnapshot {
+        let state = self.state.lock().await;
+        RealtimeConversationSnapshot {
+            active: state
+                .conversation
+                .as_ref()
+                .is_some_and(|conversation| conversation.realtime_active.load(Ordering::Relaxed)),
+            mode_instructions: state.mode_instructions.clone(),
+        }
     }
 
     #[tracing::instrument(
@@ -773,6 +935,7 @@ impl RealtimeConversationManager {
     pub(crate) async fn running_state(&self) -> Option<()> {
         let state = self.state.lock().await;
         state
+            .conversation
             .as_ref()
             .and_then(|state| state.realtime_active.load(Ordering::Relaxed).then_some(()))
     }
@@ -780,16 +943,30 @@ impl RealtimeConversationManager {
     pub(crate) async fn is_running_v2(&self) -> bool {
         let state = self.state.lock().await;
         matches!(
-            state.as_ref(),
+            state.conversation.as_ref(),
             Some(state)
                 if state.realtime_active.load(Ordering::Relaxed)
                     && state.session_kind == RealtimeSessionKind::V2
         )
     }
 
+    pub(crate) async fn turn_realtime_state(
+        &self,
+    ) -> (bool, Option<Arc<RealtimeHandoffAdmission>>) {
+        let guard = self.state.lock().await;
+        let Some(state) = guard.conversation.as_ref() else {
+            return (false, None);
+        };
+        (
+            state.realtime_active.load(Ordering::Relaxed),
+            Some(Arc::clone(&state.route_handoffs)),
+        )
+    }
+
     pub(crate) async fn preamble_policy(&self) -> Option<RealtimePreamblePolicy> {
         let state = self.state.lock().await;
         state
+            .conversation
             .as_ref()
             .filter(|state| state.realtime_active.load(Ordering::Relaxed))
             .map(|state| {
@@ -805,7 +982,7 @@ impl RealtimeConversationManager {
     /// final answer for the active GPT-Live handoff.
     pub(crate) async fn suppress_non_final_handoff_output(&self) {
         let guard = self.state.lock().await;
-        if let Some(state) = guard.as_ref() {
+        if let Some(state) = guard.conversation.as_ref() {
             state
                 .handoff
                 .suppress_non_final_output
@@ -815,7 +992,7 @@ impl RealtimeConversationManager {
 
     pub(crate) async fn reset_handoff_output_suppression(&self) {
         let guard = self.state.lock().await;
-        if let Some(state) = guard.as_ref() {
+        if let Some(state) = guard.conversation.as_ref() {
             state
                 .handoff
                 .suppress_non_final_output
@@ -830,23 +1007,25 @@ impl RealtimeConversationManager {
     ) -> CodexResult<RealtimeStartOutput> {
         let previous_state = {
             let mut guard = self.state.lock().await;
-            guard.take()
+            guard.conversation.take()
         };
         if let Some(state) = previous_state {
-            stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await;
+            stop_conversation_state_with_tail_drain(state, RealtimeFanoutTaskStop::Await).await;
         }
 
-        let output = self.start_inner(start).await;
+        let output = self.start_inner(start, mode_instructions).await;
         self.starting_stop_token
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        let output = output?;
-        *self.mode_instructions.lock().await = Some(mode_instructions);
-        Ok(output)
+        output
     }
 
-    async fn start_inner(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
+    async fn start_inner(
+        &self,
+        start: RealtimeStart,
+        mode_instructions: RealtimeModeInstructions,
+    ) -> CodexResult<RealtimeStartOutput> {
         let RealtimeStart {
             submission_id,
             api_provider,
@@ -884,6 +1063,7 @@ impl RealtimeConversationManager {
         let (transcript_tail_tx, transcript_tail_rx) = async_channel::bounded::<String>(1);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
+        let route_handoffs = Arc::new(RealtimeHandoffAdmission::new());
         let stop_token = CancellationToken::new();
         *self
             .starting_stop_token
@@ -1001,7 +1181,7 @@ impl RealtimeConversationManager {
             let _ = task.await;
             return Err(CodexErr::TurnAborted);
         }
-        *guard = Some(ConversationState {
+        guard.conversation = Some(ConversationState {
             audio_tx,
             text_tx,
             session_kind,
@@ -1010,12 +1190,16 @@ impl RealtimeConversationManager {
             input_task: task,
             fanout_task: None,
             realtime_active: Arc::clone(&realtime_active),
+            route_handoffs: Arc::clone(&route_handoffs),
+            flush_transcript_tail_on_session_end,
             stop_token,
         });
+        guard.mode_instructions = Some(mode_instructions);
         Ok(RealtimeStartOutput {
             realtime_active,
             events_rx,
             transcript_tail_rx,
+            route_handoffs,
             route_handoff_deduper,
             sdp,
         })
@@ -1029,7 +1213,7 @@ impl RealtimeConversationManager {
         let mut fanout_task = Some(fanout_task);
         {
             let mut guard = self.state.lock().await;
-            if let Some(state) = guard.as_mut()
+            if let Some(state) = guard.conversation.as_mut()
                 && Arc::ptr_eq(&state.realtime_active, realtime_active)
             {
                 state.fanout_task = fanout_task.take();
@@ -1045,13 +1229,16 @@ impl RealtimeConversationManager {
     pub(crate) async fn finish_if_active(&self, realtime_active: &Arc<AtomicBool>) {
         let state = {
             let mut guard = self.state.lock().await;
-            match guard.as_ref() {
-                Some(state) if Arc::ptr_eq(&state.realtime_active, realtime_active) => guard.take(),
+            match guard.conversation.as_ref() {
+                Some(state) if Arc::ptr_eq(&state.realtime_active, realtime_active) => {
+                    guard.conversation.take()
+                }
                 _ => None,
             }
         };
 
         if let Some(state) = state {
+            state.route_handoffs.retire().await;
             stop_conversation_state(state, RealtimeFanoutTaskStop::Detach).await;
         }
     }
@@ -1059,7 +1246,10 @@ impl RealtimeConversationManager {
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
         let sender = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.audio_tx.clone())
+            guard
+                .conversation
+                .as_ref()
+                .map(|state| state.audio_tx.clone())
         };
 
         let Some(sender) = sender else {
@@ -1084,6 +1274,7 @@ impl RealtimeConversationManager {
         let sender = {
             let guard = self.state.lock().await;
             guard
+                .conversation
                 .as_ref()
                 .map(|state| (state.text_tx.clone(), state.session_kind))
         };
@@ -1110,6 +1301,7 @@ impl RealtimeConversationManager {
             .state
             .lock()
             .await
+            .conversation
             .as_ref()
             .map(|state| state.handoff.clone());
         let Some(handoff) = handoff.filter(|handoff| {
@@ -1140,7 +1332,7 @@ impl RealtimeConversationManager {
     ) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
-            let Some(state) = guard.as_ref() else {
+            let Some(state) = guard.conversation.as_ref() else {
                 return Err(CodexErr::InvalidRequest(
                     "conversation is not running".to_string(),
                 ));
@@ -1266,7 +1458,10 @@ impl RealtimeConversationManager {
     ) {
         let handoff = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
+            guard
+                .conversation
+                .as_ref()
+                .map(|state| state.handoff.clone())
         };
         let Some(handoff) = handoff else {
             return;
@@ -1345,7 +1540,7 @@ impl RealtimeConversationManager {
         }
         let handoff = {
             let guard = self.state.lock().await;
-            let Some(state) = guard.as_ref() else {
+            let Some(state) = guard.conversation.as_ref() else {
                 return Err(CodexErr::InvalidRequest(
                     "conversation is not running".to_string(),
                 ));
@@ -1384,7 +1579,10 @@ impl RealtimeConversationManager {
     pub(crate) async fn finish_handoff_stream_item(&self, item_id: &str) -> bool {
         let handoff = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
+            guard
+                .conversation
+                .as_ref()
+                .map(|state| state.handoff.clone())
         };
         let Some(handoff) = handoff else {
             return false;
@@ -1435,7 +1633,7 @@ impl RealtimeConversationManager {
 
         let handoff = {
             let guard = self.state.lock().await;
-            let Some(state) = guard.as_ref() else {
+            let Some(state) = guard.conversation.as_ref() else {
                 return Err(CodexErr::InvalidRequest(
                     "conversation is not running".to_string(),
                 ));
@@ -1461,7 +1659,10 @@ impl RealtimeConversationManager {
     pub(crate) async fn handoff_complete(&self) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
+            guard
+                .conversation
+                .as_ref()
+                .map(|state| state.handoff.clone())
         };
         let Some(handoff) = handoff else {
             return Ok(());
@@ -1565,7 +1766,10 @@ impl RealtimeConversationManager {
     pub(crate) async fn clear_active_handoff(&self) {
         let handoff = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
+            guard
+                .conversation
+                .as_ref()
+                .map(|state| state.handoff.clone())
         };
         if let Some(handoff) = handoff {
             {
@@ -1583,7 +1787,10 @@ impl RealtimeConversationManager {
     pub(crate) async fn discard_pending_unphased_handoff_output(&self) {
         let handoff = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.handoff.clone())
+            guard
+                .conversation
+                .as_ref()
+                .map(|state| state.handoff.clone())
         };
         let Some(handoff) = handoff else {
             return;
@@ -1610,7 +1817,7 @@ impl RealtimeConversationManager {
     pub(crate) async fn shutdown(&self) -> CodexResult<Option<String>> {
         let (state, starting_stop_token) = {
             let mut guard = self.state.lock().await;
-            let state = guard.take();
+            let state = guard.conversation.take();
             let starting_stop_token = self
                 .starting_stop_token
                 .lock()
@@ -1624,10 +1831,22 @@ impl RealtimeConversationManager {
         }
         let submission_id = state.as_ref().map(|state| state.submission_id.clone());
         if let Some(state) = state {
-            stop_conversation_state(state, RealtimeFanoutTaskStop::Await).await;
+            stop_conversation_state_with_tail_drain(state, RealtimeFanoutTaskStop::Await).await;
         }
         Ok(submission_id)
     }
+}
+
+async fn stop_conversation_state_with_tail_drain(
+    state: ConversationState,
+    fanout_task_stop: RealtimeFanoutTaskStop,
+) {
+    let route_handoffs = Arc::clone(&state.route_handoffs);
+    route_handoffs
+        .begin_shutdown(state.flush_transcript_tail_on_session_end)
+        .await;
+    stop_conversation_state(state, fanout_task_stop).await;
+    route_handoffs.retire().await;
 }
 
 async fn stop_conversation_state(
@@ -2144,6 +2363,7 @@ async fn handle_start_inner(
 
     let RealtimeStartOutput {
         realtime_active,
+        route_handoffs,
         events_rx,
         transcript_tail_rx,
         route_handoff_deduper,
@@ -2183,6 +2403,7 @@ async fn handle_start_inner(
                             finish_ready_realtime_events(
                                 &sess_clone,
                                 &sub_id,
+                                &route_handoffs,
                                 &mut ready_events,
                                 &mut next_sequence_to_finish,
                             )
@@ -2212,6 +2433,7 @@ async fn handle_start_inner(
                                 finish_ready_realtime_events(
                                     &sess_clone,
                                     &sub_id,
+                                    &route_handoffs,
                                     &mut ready_events,
                                     &mut next_sequence_to_finish,
                                 )
@@ -2264,6 +2486,7 @@ async fn handle_start_inner(
                     finish_ready_realtime_events(
                         &sess_clone,
                         &sub_id,
+                        &route_handoffs,
                         &mut ready_events,
                         &mut next_sequence_to_finish,
                     )
@@ -2281,6 +2504,7 @@ async fn handle_start_inner(
                     finish_ready_realtime_events(
                         &sess_clone,
                         &sub_id,
+                        &route_handoffs,
                         &mut ready_events,
                         &mut next_sequence_to_finish,
                     )
@@ -2290,12 +2514,13 @@ async fn handle_start_inner(
             }
         }
         if let Ok(text) = transcript_tail_rx.recv().await {
-            sess_clone
-                .route_realtime_text_input(
+            route_handoffs
+                .route(
+                    &sess_clone,
                     text,
                     RealtimeDelegationSource::TranscriptTailFlush,
-                    /*routing_input*/ None,
-                    /*routing_decision*/ None,
+                    None,
+                    None,
                 )
                 .await;
         }

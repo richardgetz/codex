@@ -110,7 +110,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
             if let Some((substantive_work_rx, substantive_work_generation)) = passive_park {
                 let active_workers = session
                     .services
-                    .agent_control
+                    .local_agent_control()
                     .active_direct_worker_count(session.thread_id)
                     .await;
                 if active_workers == 0 {

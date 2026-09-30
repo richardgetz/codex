@@ -181,10 +181,9 @@ impl SlashCommand {
             SlashCommand::Team => "show or toggle Lead/Worker team mode for this session",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Eta => "show stored task estimates for this session",
-            SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
+            SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::AgentsPrune => "close idle agents in this session",
             SlashCommand::Agents => "view and switch between all active agent sessions",
-            SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::MultiAgents => "switch between this session's subagents",
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"

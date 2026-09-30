@@ -559,7 +559,7 @@ impl HandoffCoordinator {
                 .filter(|path| !path.is_empty())
                 .ok_or(HandoffBlocker::Persistence)?;
             self.thread_manager
-                .resume_thread_from_rollout(
+                .resume_legacy_thread_from_rollout(
                     self.config.as_ref().clone(),
                     PathBuf::from(rollout_path),
                     self.thread_manager.auth_manager(),

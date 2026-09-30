@@ -743,7 +743,10 @@ impl App {
         }
         chat_widget.note_rendered_width(tui.terminal.last_known_screen_size.width);
         if pending_startup_thread_start && !start_in_agents_overview {
-            chat_widget.empty_state_animation.borrow_mut().start_fresh();
+            chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .continue_from(&mut startup_draft.blossom.borrow_mut());
         }
         chat_widget.remote_connection = remote_connection;
         chat_widget.snapshot_local_images = app_server_target.uses_remote_workspace();
@@ -838,8 +841,8 @@ Fix the config and retry.\n\
             keymap: runtime_keymap,
             key_chord_matcher: KeyChordMatcher::default(),
             transcript_cells: Vec::new(),
-            composer_tips: Default::default(),
             native_history: Default::default(),
+            turn_tips: Default::default(),
             transcript_view: Default::default(),
             last_rendered_history_tail: None,
             last_thread_usage_status_cell: None,
@@ -863,6 +866,9 @@ Fix the config and retry.\n\
             environment_manager,
             app_server_target,
             frontend_launcher,
+
+            pending_right_click_paste: None,
+            right_click_paste_environment: super::right_click_paste::PasteEnvironment::detect(),
             reconnect: ReconnectState {
                 seen_version_notice: initial_server_version_notice
                     .as_ref()
@@ -922,6 +928,8 @@ Fix the config and retry.\n\
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
             recap: recap::RecapState::default(),
+            #[cfg(test)]
+            _test_codex_home: None,
         };
         if !tui.is_terminal_focused() {
             app.recap.note_focus_lost(Instant::now());

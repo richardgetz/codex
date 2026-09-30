@@ -62,7 +62,7 @@ impl Session {
         }
         if self
             .services
-            .agent_control
+            .local_agent_control()
             .active_direct_worker_count(self.thread_id)
             .await
             > 0
@@ -84,7 +84,7 @@ impl Session {
         if self.usage_resume_waiting.load(Ordering::Acquire)
             || self
                 .services
-                .agent_control
+                .local_agent_control()
                 .active_direct_worker_count(self.thread_id)
                 .await
                 > 0
@@ -108,7 +108,11 @@ impl Session {
         // Keep the durable claim and parent enqueue inside one handoff admission. A coordinator
         // waits for this short operation before closing the old runtime, so a sealed handoff cannot
         // strand the one-shot latch in a process-local task.
-        let Ok(handoff_admission) = self.services.agent_control.begin_handoff_admission() else {
+        let Ok(handoff_admission) = self
+            .services
+            .local_agent_control()
+            .begin_handoff_admission()
+        else {
             return false;
         };
         if !self
@@ -118,7 +122,7 @@ impl Session {
         {
             return false;
         }
-        let agent_control = self.services.agent_control.clone();
+        let agent_control = self.services.local_agent_control();
         let child_thread_id = self.thread_id;
         tokio::spawn(async move {
             if let Err(err) = agent_control

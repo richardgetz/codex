@@ -77,7 +77,7 @@ impl Drop for HandoffDispatchGuard {
 impl Session {
     /// Returns true while the root activity control has paused this thread tree.
     pub(crate) fn is_activity_paused(&self) -> bool {
-        self.services.agent_control.root_activity_paused()
+        self.services.local_agent_control().root_activity_paused()
     }
 
     /// Wait at a cooperative turn boundary until `/continue` releases the root tree.
@@ -89,7 +89,10 @@ impl Session {
             // Register before checking the flag so a continue edge between the check and the
             // await cannot strand a retained turn. `Notify::notify_waiters` is intentionally
             // edge-triggered; the loop's flag check supplies the level-triggered state.
-            let resume_notify = self.services.agent_control.root_activity_resume_notify();
+            let resume_notify = self
+                .services
+                .local_agent_control()
+                .root_activity_resume_notify();
             let notified = resume_notify.notified();
             if !self.is_activity_paused() {
                 break;
@@ -152,7 +155,10 @@ impl Session {
         kind: ActivityOperationKind,
     ) -> CodexResult<ActivityOperationGuard> {
         loop {
-            let _admission = self.services.agent_control.begin_handoff_admission()?;
+            let _admission = self
+                .services
+                .local_agent_control()
+                .begin_handoff_admission()?;
             if kind == ActivityOperationKind::Model {
                 // Increment the model counter before the shared activity slot so a preflight
                 // cannot observe an admitted stream as an unknown tool operation between those
@@ -162,7 +168,7 @@ impl Session {
             }
             let admitted = self
                 .services
-                .agent_control
+                .local_agent_control()
                 .admit_activity_operation(&self.activity_in_flight)
                 .await;
             drop(_admission);
@@ -176,7 +182,11 @@ impl Session {
             if kind == ActivityOperationKind::Model {
                 self.model_activity_in_flight.fetch_sub(1, Ordering::AcqRel);
             }
-            if self.services.agent_control.handoff_admission_sealed() {
+            if self
+                .services
+                .local_agent_control()
+                .handoff_admission_sealed()
+            {
                 return Err(CodexErr::TurnAborted);
             }
             self.wait_for_activity_resume(cancellation_token).await?;
@@ -195,7 +205,10 @@ impl Session {
         // Registration itself is a short admission boundary. The guard then remains alive until
         // the sibling reaches a real activity operation or exits, so handoff can classify it as
         // pending dispatch without waiting for the tool's full execution.
-        let _admission = self.services.agent_control.begin_handoff_admission()?;
+        let _admission = self
+            .services
+            .local_agent_control()
+            .begin_handoff_admission()?;
         self.handoff_dispatches_pending
             .fetch_add(1, Ordering::AcqRel);
         Ok(HandoffDispatchGuard {
@@ -251,7 +264,7 @@ impl Session {
         ThreadActivityUpdatedEvent {
             thread_id: self.thread_id,
             root_thread_id: codex_protocol::ThreadId::from(
-                self.services.agent_control.session_id(),
+                self.services.local_agent_control().session_id(),
             ),
             activity,
             pause_state,
@@ -319,7 +332,7 @@ impl Session {
         }
         let active_direct_worker_count = self
             .services
-            .agent_control
+            .local_agent_control()
             .active_direct_worker_count(self.thread_id)
             .await;
         classify_active_turn_activity(in_flight_operations, active_direct_worker_count)

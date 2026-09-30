@@ -57,7 +57,7 @@ impl Drop for TerminalResultDeliveryGuard {
         if previous == 1
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
-            let agent_control = self.session.services.agent_control.clone();
+            let agent_control = self.session.services.local_agent_control();
             let parent_thread_id = self.parent_thread_id;
             runtime.spawn(async move {
                 agent_control

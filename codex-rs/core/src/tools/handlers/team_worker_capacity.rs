@@ -120,7 +120,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
             }
             let snapshot = session
                 .services
-                .agent_control
+                .local_agent_control()
                 .team_worker_capacity_snapshot();
             Ok(boxed_tool_output(WorkerCapacityOutput {
                 direct_worker_limit: snapshot.max_concurrent,

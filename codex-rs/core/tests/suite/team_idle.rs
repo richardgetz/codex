@@ -1565,6 +1565,7 @@ async fn team_lead_default_hides_passive_notice_but_wakes_at_oversight_deadline(
                 ..Default::default()
             },
             usage_policy_update: None,
+            reply: None,
         })
         .await?;
     let policy_wake_request = wait_for_captured_request_with_route_diagnostics(

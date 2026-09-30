@@ -1676,7 +1676,9 @@ impl App {
             self.chat_widget.set_token_info(/*info*/ None);
         }
         match presentation {
-            ThreadAttachPresentation::Fresh | ThreadAttachPresentation::SessionLineage => {
+            ThreadAttachPresentation::Fresh
+            | ThreadAttachPresentation::FreshWithDraft
+            | ThreadAttachPresentation::SessionLineage => {
                 self.chat_widget.handle_thread_session(session);
             }
         }
@@ -2145,8 +2147,13 @@ impl App {
                             | ServerNotification::ThreadRealtimeTranscriptDone(_)
                     );
                 if realtime_notification_is_current && !suppress_calibration_output {
+                    let tip_ready = self.turn_tips.observe(&notification, Instant::now());
                     self.chat_widget
                         .handle_server_notification(*notification, /*replay_kind*/ None);
+                    // History cells queued by completion must be applied before anchoring its tip.
+                    if let Some(event) = tip_ready {
+                        self.app_event_tx.send(event);
+                    }
                 }
             }
             ThreadBufferedEvent::Request(request) => {
@@ -2232,6 +2239,7 @@ impl App {
     }
 
     pub(super) fn handle_thread_event_replay(&mut self, event: ThreadBufferedEvent) {
+        self.turn_tips.dismiss();
         match event {
             ThreadBufferedEvent::Notification(notification) => self
                 .chat_widget

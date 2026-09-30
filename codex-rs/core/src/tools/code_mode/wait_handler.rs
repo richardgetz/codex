@@ -97,8 +97,7 @@ impl CodeModeWaitHandler {
         } = invocation;
 
         let mut telemetry = CodeModeToolCallGuard::new(
-            session.services.analytics_events_client.clone(),
-            session.thread_id.to_string(),
+            &session,
             turn.sub_id.clone(),
             turn.turn_metadata_state.clone(),
             call_id.clone(),
@@ -127,10 +126,13 @@ impl CodeModeWaitHandler {
                     exec.session
                         .services
                         .code_mode_service
-                        .wait(codex_code_mode::WaitRequest {
-                            cell_id,
-                            yield_time_ms: args.yield_time_ms,
-                        })
+                        .wait(
+                            codex_code_mode::WaitRequest {
+                                cell_id,
+                                yield_time_ms: args.yield_time_ms,
+                            },
+                            step_context.preempt.clone(),
+                        )
                         .await
                 }
                 .map_err(|error| {

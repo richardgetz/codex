@@ -619,7 +619,7 @@ async fn reasoning_effort_override_websocket_prewarm_preserves_baseline(
             configure_prewarm(&mut config);
             let forked = previous
                 .thread_manager
-                .fork_thread(
+                .fork_legacy_thread(
                     ForkSnapshot::Interrupted,
                     config.clone(),
                     previous.codex.rollout_path().expect("rollout path"),

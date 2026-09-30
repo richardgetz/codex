@@ -3,6 +3,8 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
@@ -10,6 +12,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeOutputModality;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -147,6 +150,165 @@ async fn misalignment_retires_late_voice_handoff_before_it_starts_a_turn() -> Re
             .filter(|request| request.url.path() == "/v1/responses")
             .count(),
         1,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn misalignment_retires_handoff_steered_into_active_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = responses::start_mock_server().await;
+    let active_turn_response = responses::mount_response_once(
+        &api_server,
+        responses::sse_response(responses::sse_failed(
+            "resp_active_misalignment",
+            "misalignment_policy_violation",
+            "This request violated the misalignment policy.",
+        ))
+        .set_delay(Duration::from_secs(2)),
+    )
+    .await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let realtime_url = format!("ws://{}", listener.local_addr()?);
+    let (send_handoff_tx, mut send_handoff_rx) = oneshot::channel();
+    let (late_handoff_tx, mut late_handoff_rx) = oneshot::channel();
+    let (finish_tx, finish_rx) = oneshot::channel();
+    let sideband = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await?;
+        let mut websocket = accept_async(stream).await?;
+        websocket
+            .send(Message::Text(
+                json!({
+                    "type": "session.updated",
+                    "session": {"id": "session_active_misalignment", "instructions": "backend prompt"}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+        (&mut send_handoff_rx).await?;
+        for (handoff_id, text) in [
+            ("active_handoff", "steer the active turn"),
+            ("late_handoff", "must not start another turn"),
+        ] {
+            if handoff_id == "late_handoff" {
+                (&mut late_handoff_rx).await?;
+            }
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "conversation.handoff.requested",
+                        "handoff_id": handoff_id,
+                        "item_id": handoff_id,
+                        "input_transcript": text
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await?;
+        }
+        finish_rx.await?;
+        websocket.close(None).await?;
+        Ok::<_, anyhow::Error>(())
+    });
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.experimental_realtime_ws_base_url = Some(realtime_url);
+        config.realtime.version = RealtimeWsVersion::V1;
+    });
+    let test = builder.build_with_auto_env(&api_server).await?;
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: false,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: true,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        }))
+        .await?;
+    let _ = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload:
+                RealtimeEvent::SessionUpdated {
+                    realtime_session_id,
+                    ..
+                },
+        }) if realtime_session_id == "session_active_misalignment" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "ordinary prompt".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    assert!(matches!(started, TurnInputSubmission::Started { .. }));
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while active_turn_response.requests().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("active turn did not reach the mock API")?;
+
+    send_handoff_tx.send(()).expect("sideband still open");
+    let _ = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.handoff_id == "active_handoff" => Some(()),
+        _ => None,
+    })
+    .await;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::Error(error)
+            if error.codex_error_info == Some(CodexErrorInfo::MisalignmentPolicyViolation) =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .await;
+
+    late_handoff_tx.send(()).expect("sideband still open");
+    let _ = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.handoff_id == "late_handoff" => Some(()),
+        _ => None,
+    })
+    .await;
+    finish_tx.send(()).expect("sideband still open");
+    sideband.await??;
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let requests = api_server.received_requests().await.unwrap_or_default();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/v1/responses")
+            .count(),
+        1,
+        "the handoff after misalignment must not start a second model request"
     );
     Ok(())
 }

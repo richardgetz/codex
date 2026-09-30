@@ -119,7 +119,7 @@ pub(super) async fn consolidate_with_model(
             .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
     )?;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
-    let agent_control = session.services.agent_control.clone();
+    let agent_control = session.services.local_agent_control();
     let (agent, _) = AgentControlApi::spawn(
         &agent_control,
         SpawnRequest {
@@ -140,9 +140,9 @@ pub(super) async fn consolidate_with_model(
     let final_status = wait_for_final_status(&agent_control, thread_id).await;
 
     if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
-        let agent_control = agent_control.clone();
+        let local_agent_control = agent_control.clone();
         tokio::spawn(async move {
-            if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
+            if let Err(err) = local_agent_control.shutdown_live_agent(thread_id).await {
                 warn!(
                     "failed to auto-close orchestrator memory consolidation agent {thread_id}: {err}"
                 );
@@ -207,7 +207,7 @@ pub(super) async fn cleanup_events_with_model(
             .is_some_and(codex_login::CodexAuth::is_chatgpt_auth),
     )?;
     let source = SessionSource::SubAgent(SubAgentSource::MemoryConsolidation);
-    let agent_control = session.services.agent_control.clone();
+    let agent_control = session.services.local_agent_control();
     let (agent, _) = AgentControlApi::spawn(
         &agent_control,
         SpawnRequest {
@@ -228,9 +228,9 @@ pub(super) async fn cleanup_events_with_model(
     let final_status = wait_for_final_status(&agent_control, thread_id).await;
 
     if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
-        let agent_control = agent_control.clone();
+        let local_agent_control = agent_control.clone();
         tokio::spawn(async move {
-            if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
+            if let Err(err) = local_agent_control.shutdown_live_agent(thread_id).await {
                 warn!("failed to auto-close orchestrator memory cleanup agent {thread_id}: {err}");
             }
         });

@@ -5447,6 +5447,7 @@ async fn mount_remote_installed_plugins(server: &MockServer, scope: &str, body: 
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/installed"))
         .and(query_param("scope", scope))
+        .and(query_param("includeExtensions", "true"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(body))
@@ -5457,6 +5458,7 @@ async fn mount_remote_installed_plugins(server: &MockServer, scope: &str, body: 
     Mock::given(method("GET"))
         .and(path("/backend-api/ps/plugins/installed"))
         .and(query_param_is_missing("scope"))
+        .and(query_param("includeExtensions", "true"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(move |_request: &wiremock::Request| {

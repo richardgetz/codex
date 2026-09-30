@@ -270,6 +270,7 @@ impl LocalSecretsBackend {
         }
         .map_err(anyhow::Error::new)
         .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
+
         match loaded {
             Some(existing) => Ok(SecretString::from(existing)),
             None => {

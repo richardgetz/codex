@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
@@ -196,7 +195,7 @@ async fn handle_spawn_agent(
             source: spawn_source,
             options: SpawnAgentOptions {
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
-                fork_mode,
+                fork_mode: fork_mode.clone(),
                 initial_collaboration_mode: None,
                 parent_thread_id: Some(session.thread_id),
                 parent_turn_id: Some(turn.sub_id.clone()),
@@ -208,7 +207,16 @@ async fn handle_spawn_agent(
             },
         })
         .await
-        .map_err(collab_spawn_error)?;
+        .map_err(|err| {
+            record_collab_spawn_failure(
+                &turn.session_telemetry,
+                turn.config.apps_mcp_product_sku.as_deref(),
+                &err,
+                fork_mode.as_ref(),
+                MultiAgentVersion::V2,
+            );
+            collab_spawn_error(err)
+        })?;
     let new_thread_id = spawned_agent.thread_id;
     let agent_status = spawned_agent.status;
     let nickname = agent_snapshot

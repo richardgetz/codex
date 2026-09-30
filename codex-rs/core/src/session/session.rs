@@ -2,16 +2,17 @@ use super::continuous_loopback::ScratchpadLoopbackLimiter;
 use super::input_queue::InputQueue;
 use super::lead_idle::LeadIdleController;
 use super::mcp_refresh::McpRefresh;
+use super::retained_context::CodeModeMessageTasks;
 use super::step_context::StepContext;
 use super::step_settings::ModelInfoOverrides;
 use super::step_settings::StepSettings;
 use super::step_settings::StepSettingsConstraints;
 use super::step_settings::StepSettingsUpdate;
 use super::*;
+use crate::agent::api::AgentControl;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
 use crate::config::ConstraintError;
-use crate::context::GuardianContextMode;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
@@ -88,13 +89,13 @@ pub(crate) struct Session {
     /// Orders accepted settings commits and their persisted events with compaction checkpoints.
     /// Keep this separate from `state` so storage I/O does not block runtime state access.
     pub(super) thread_settings_persistence: Semaphore,
+    pub(super) code_mode_message_tasks: CodeModeMessageTasks,
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
-    pub(crate) guardian_context_mode: GuardianContextMode,
     pub(super) isolation: codex_extension_api::SessionIsolation,
     pub(crate) tool_policy: Arc<codex_extension_api::ToolPolicy>,
     pub(crate) windows_sandbox_proxy_settings_mode:
@@ -1051,7 +1052,7 @@ impl Session {
 
     /// Returns the identity shared by the root thread and all descendant threads.
     pub(crate) fn session_id(&self) -> SessionId {
-        self.services.agent_control.session_id()
+        self.services.agent_control.identity()
     }
 
     pub(crate) fn session_tmp_agent_root(&self) -> Option<&Path> {
@@ -1125,7 +1126,7 @@ impl Session {
         )
     }
 
-    fn with_window_and_fork_metadata(
+    pub(crate) fn with_window_and_fork_metadata(
         &self,
         turn_context: &TurnContext,
         responses_metadata: CodexResponsesMetadata,
@@ -1180,7 +1181,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         mut thread_extension_init: ExtensionDataInit,
         client_mcp_extensions: ClientMcpExtensions,
-        agent_control: LocalAgentControl,
+        agent_control: AgentControlInit,
         reserved_thread_id: Option<ThreadId>,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -1279,7 +1280,7 @@ impl Session {
                 Some(thread_id),
             ) => thread_id,
             (InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_), None) => {
-                agent_control.generate_thread_id()
+                agent_control.runtime().generate_thread_id()
             }
             (InitialHistory::Resumed(resumed_history), None) => resumed_history.conversation_id,
             (InitialHistory::Resumed(_), Some(_)) => {
@@ -1337,8 +1338,10 @@ impl Session {
             }
         }
         if parent_thread_id.is_none() {
-            agent_control.set_root_usage_policy(session_configuration.usage_policy);
-            agent_control.set_root_service_tier(
+            agent_control
+                .runtime()
+                .set_root_usage_policy(session_configuration.usage_policy);
+            agent_control.runtime().set_root_service_tier(
                 session_configuration
                     .step_settings
                     .service_tier
@@ -1354,6 +1357,7 @@ impl Session {
             && isolation != codex_extension_api::SessionIsolation::Isolated
         {
             instructions.thread_provider = agent_control
+                .runtime()
                 .root_thread_instructions_provider(thread_id, instructions.thread_provider);
         }
         // Ephemeral forks reuse cache routing, without sharing storage or lifecycle identity.
@@ -1389,7 +1393,7 @@ impl Session {
         // session_id is equal to the root thread's ID.
         let session_id = resumed_session_id.unwrap_or_else(|| {
             if session_configuration.session_source.is_non_root_agent() {
-                agent_control.session_id()
+                agent_control.control().identity()
             } else {
                 SessionId::from(thread_id)
             }
@@ -1409,13 +1413,6 @@ impl Session {
                 }
             }
         }
-        let agent_control = agent_control.with_session_id(
-            session_id,
-            config
-                .effective_agent_max_threads(MultiAgentVersion::V2)
-                .unwrap_or(usize::MAX),
-            config.team.worker_max_concurrent,
-        );
         let session_tmp_config = codex_session_tmp::SessionTmpConfig {
             enabled: config.session_tmp.enabled,
             root: config
@@ -1496,6 +1493,39 @@ impl Session {
             .as_ref()
             .map(|manager| AbsolutePathBuf::from_absolute_path(manager.agent_root()))
             .transpose()?;
+
+        let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
+            AgentControlInit::Local(control) => {
+                let control = control.with_session_id(
+                    session_id,
+                    config
+                        .effective_agent_max_threads(MultiAgentVersion::V2)
+                        .unwrap_or(usize::MAX),
+                    config.team.worker_max_concurrent,
+                );
+                if parent_thread_id.is_none() {
+                    control.propagate_config_update(AgentConfigUpdate::ServiceTier(
+                        session_configuration
+                            .step_settings
+                            .service_tier
+                            .clone()
+                            .or_else(|| config.service_tier.clone()),
+                    ));
+                }
+                let runtime = control.runtime.clone();
+                (Arc::new(control), runtime)
+            }
+            AgentControlInit::Provided { control, runtime } => {
+                let controller_id = control.identity();
+                if controller_id != session_id {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "agent controller identity {controller_id} does not match session identity {session_id}"
+                    ))
+                    .into());
+                }
+                (control, runtime)
+            }
+        };
         let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),
             external_time_provider,
@@ -1532,8 +1562,6 @@ impl Session {
             thread_id.to_string(),
             thread_extension_init,
         );
-        // Capture follows the flag; replay selects reviewer policy from the saved checkpoint.
-        let guardian_context_mode = GuardianContextMode::from_features(&config.features);
         thread_extension_data.insert(crate::context::GuardianReviewEvidence::default());
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -1724,7 +1752,7 @@ impl Session {
         let (thread_persistence_result, state_db_ctx, (auth, mcp_projection)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
-        let root_thread_id = codex_protocol::ThreadId::from(agent_control.session_id());
+        let root_thread_id = codex_protocol::ThreadId::from(agent_control.identity());
         if session_id == SessionId::from(thread_id)
             && let Some(state_db) = state_db_ctx.as_ref()
         {
@@ -1748,7 +1776,10 @@ impl Session {
             // can be admitted. The marker is cleared only after an explicit ContinueActivity
             // acknowledgement, so a replacement that stops halfway through reconstruction stays
             // paused and can retry without replaying work.
-            agent_control.pause_activity_for_subtree().await;
+            local_agent_runtime
+                .control(agent_control.identity())
+                .pause_activity_for_subtree()
+                .await;
         }
 
         let (live_thread, mut live_thread_init) = thread_persistence_result.map_err(|e| {
@@ -1869,7 +1900,7 @@ impl Session {
                 model: Some(session_model.clone()),
                 slug: Some(session_model),
             };
-            config.features.emit_metrics(&session_telemetry);
+            crate::config::emit_session_start_metrics(config.as_ref(), &session_telemetry);
             session_telemetry.counter(
                 THREAD_STARTED_METRIC,
                 /*inc*/ 1,
@@ -2057,9 +2088,9 @@ impl Session {
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
-                ContextManager::with_guardian_context_mode(
-                    guardian_context_mode,
+                ContextManager::for_session(
                     &session_configuration.session_source,
+                    &config.features,
                 ),
             );
             if let Some(state_db_ctx) = state_db_ctx.as_ref() {
@@ -2274,14 +2305,14 @@ impl Session {
                 agents_md_manager,
                 plugins_manager: Arc::clone(&plugins_manager),
                 mcp_manager: Arc::clone(&mcp_manager),
-                extensions,
+                extensions: Arc::clone(&extensions),
                 // TODO(jif): extract session to share between sub-agents
                 session_extension_data,
                 thread_extension_data,
                 selected_capability_roots,
                 mcp_thread_init,
                 client_mcp_extensions,
-                local_agent_runtime: agent_control.runtime.clone(),
+                local_agent_runtime,
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,
@@ -2316,7 +2347,9 @@ impl Session {
                     attestation_provider,
                     config.http_client_factory(),
                     workspace_routing.as_ref().clone(),
+                    extensions.model_request_contributors().to_vec(),
                 )
+                .with_executed_tool_calls(executed_tool_calls.clone())
                 .with_restored_history(matches!(
                     &initial_history,
                     InitialHistory::Resumed(_) | InitialHistory::Forked(_)
@@ -2354,9 +2387,9 @@ impl Session {
                 state: Mutex::new(state),
                 memory_write_gate: Semaphore::new(MEMORY_WRITE_GATE_PERMITS as usize),
                 thread_settings_persistence: Semaphore::new(/*permits*/ 1),
+                code_mode_message_tasks: CodeModeMessageTasks::default(),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
-                guardian_context_mode,
                 isolation,
                 tool_policy,
                 windows_sandbox_proxy_settings_mode,
@@ -2486,7 +2519,7 @@ impl Session {
             )
             .await?;
             sess.start_mcp_prewarm_worker(mcp_prewarm_rx, mcp_auth_changes);
-            sess.schedule_startup_prewarm(sess.get_prompt_base_instructions().await.text)
+            sess.schedule_startup_prewarm(super::startup_prewarm::PrewarmInput::Base)
                 .await;
             let session_start_source = match &initial_history {
                 InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,

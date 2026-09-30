@@ -277,17 +277,25 @@ impl ProcessOwnedCodeModeSession {
         &self,
         request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        preempt: Option<CancellationToken>,
     ) -> Result<StartedCell, String> {
         let binding = self.connection().await?;
         binding
             .connection
-            .execute(binding.remote, request, delegate)
+            .execute(binding.remote, request, delegate, preempt)
             .await
     }
 
-    pub async fn wait(&self, request: WaitRequest) -> Result<WaitOutcome, String> {
+    pub async fn wait(
+        &self,
+        request: WaitRequest,
+        preempt: Option<CancellationToken>,
+    ) -> Result<WaitOutcome, String> {
         let binding = self.connection().await?;
-        binding.connection.wait(binding.remote, request).await
+        binding
+            .connection
+            .wait(binding.remote, request, preempt)
+            .await
     }
 
     pub async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {
@@ -548,14 +556,19 @@ impl CodeModeSession for ProcessOwnedCodeModeSession {
         &'a self,
         request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        preempt: Option<CancellationToken>,
     ) -> CodeModeSessionResultFuture<'a, StartedCell> {
         Box::pin(ProcessOwnedCodeModeSession::execute(
-            self, request, delegate,
+            self, request, delegate, preempt,
         ))
     }
 
-    fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
-        Box::pin(ProcessOwnedCodeModeSession::wait(self, request))
+    fn wait<'a>(
+        &'a self,
+        request: WaitRequest,
+        preempt: Option<CancellationToken>,
+    ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+        Box::pin(ProcessOwnedCodeModeSession::wait(self, request, preempt))
     }
 
     fn terminate<'a>(&'a self, cell_id: CellId) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
