@@ -20,6 +20,10 @@ release or merge rules.
 
 ## Unreleased
 
+- Built-in TUI API-equivalent rates recognize `gpt-6.1-sol` across Standard,
+  Fast, and Flex/Batch tiers for short and long contexts, keeping its cached-
+  input price distinct from `gpt-6-sol`.
+
 - Team Leads can use the standalone `ask_worker_question` tool with either
   multi-agent backend to send a bounded, correlated question to a direct Worker.
   One pending question per Worker is tracked at runtime. The Worker’s next final
@@ -1060,6 +1064,11 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- Verify API-equivalent usage estimates recognize `gpt-6.1-sol` with its
+  public Standard, Fast, and Flex/Batch rates for short and long contexts.
+  Keep its cached-input price distinct from `gpt-6-sol` ($0.10 vs. $0.20 per
+  1M tokens for short Standard context).
 
 - Verify `.github/blob-size-allowlist.txt` retains only the exact exception for
   `sdk/python/src/openai_codex/generated/v2_all.py` among Python SDK paths while
