@@ -16,6 +16,7 @@ use crate::agent::agent_status_from_event;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent::control::AgentControlInit;
+use crate::agent::control::HandoffAdmissionGuard;
 use crate::agent::status::is_final;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
@@ -980,11 +981,10 @@ impl Session {
                 config.http_client_factory(),
             )
             .await;
-        if team_assignment_active && config.model.as_deref() != Some(model.as_str()) {
-            return Err(CodexErr::InvalidRequest(format!(
-                "configured team model `{}` is unavailable",
-                config.model.as_deref().unwrap_or_default()
-            )));
+        if model.trim().is_empty() {
+            return Err(CodexErr::InvalidRequest(
+                "No models are available. Set `model` explicitly or check your model catalog configuration.".to_string(),
+            ));
         }
         let trusted_guardian_reviewer = crate::guardian::is_basic_session_source(&session_source)
             && !matches!(conversation_history, InitialHistory::Resumed(_));
@@ -1362,6 +1362,31 @@ impl SessionIo {
             parent_turn_id,
             root_turn_id,
             residency_guard,
+            handoff_admission: None,
+        };
+        self.submit_with_id(sub).await?;
+        Ok(id)
+    }
+
+    pub(crate) async fn submit_with_trace_and_admission(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        residency_guard: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
+        handoff_admission: &HandoffAdmissionGuard,
+    ) -> CodexResult<String> {
+        let id = new_submission_id();
+        let sub = Submission {
+            id: id.clone(),
+            op,
+            client_user_message_id: None,
+            trace,
+            parent_turn_id,
+            root_turn_id,
+            residency_guard,
+            handoff_admission: Some(handoff_admission.fork()),
         };
         self.submit_with_id(sub).await?;
         Ok(id)
@@ -1403,6 +1428,34 @@ impl SessionIo {
             parent_turn_id: None,
             root_turn_id: None,
             residency_guard: None,
+            handoff_admission: None,
+        })
+        .await?;
+        reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
+    }
+
+    pub(crate) async fn submit_turn_input_with_admission(
+        &self,
+        mut request: TurnInputRequest,
+        mode: TurnInputMode,
+        handoff_admission: &HandoffAdmissionGuard,
+    ) -> CodexResult<TurnInputSubmission> {
+        let id = new_submission_id();
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let trace = request.trace.take();
+        self.submit_with_id(Submission {
+            id,
+            op: Op::TurnInput {
+                request: Box::new(request),
+                mode,
+                reply: reply_tx,
+            },
+            client_user_message_id: None,
+            trace,
+            parent_turn_id: None,
+            root_turn_id: None,
+            residency_guard: None,
+            handoff_admission: Some(handoff_admission.fork()),
         })
         .await?;
         reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
@@ -1428,6 +1481,7 @@ impl SessionIo {
             parent_turn_id: None,
             root_turn_id: None,
             residency_guard: None,
+            handoff_admission: None,
         })
         .await?;
         reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))
@@ -2562,25 +2616,6 @@ impl Session {
             .zip(metadata)
             .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
             .collect();
-        let world_state_baseline = if world_state_baseline.is_some() {
-            world_state_baseline
-        } else if reference_context_item.is_some() {
-            let world_state = self.build_world_state_for_turn_context(turn_context).await;
-            reconstructed_environment_context_matches_current(
-                &history
-                    .iter()
-                    .map(|envelope| envelope.item.clone())
-                    .collect::<Vec<_>>(),
-                &world_state,
-            )
-            .then(|| world_state.snapshot())
-        } else {
-            None
-        };
-        let context = crate::guardian::GuardianReviewContext::from(turn_context);
-        let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
-        let _reviewer_compaction_hash = reviewer.comp_hash.clone();
-
         let context = crate::guardian::GuardianReviewContext::from(turn_context);
         let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
         let reviewer_compaction_hash = reviewer.comp_hash.clone();

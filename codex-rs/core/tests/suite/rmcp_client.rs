@@ -381,7 +381,6 @@ fn insert_mcp_server(
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,

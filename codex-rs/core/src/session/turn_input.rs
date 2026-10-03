@@ -6,8 +6,6 @@
 //! rollout persistence, or sampling.
 //!
 //! Persistent thread settings apply on Started and Steered. Turn start
-//! options only apply on Started.
-
 //! options only update turn context on Started; input provenance follows each request.
 //! Host shutdown admission is checked before reserving or starting a new turn.
 //! Parent-delegated subagent input bypasses drain; automatic starts remain gated.
@@ -626,7 +624,6 @@ async fn steer(
         &input,
         SubmittedTurnInput::UserInput { content, .. } if !content.is_empty()
     );
-
     let origin = UserInputOrigin::from_turn_trigger(start.turn_trigger.as_deref());
     if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
         return Err(CodexErr::InvalidRequest(
@@ -708,7 +705,6 @@ impl Session {
         required_final_output_json_schema: Option<&Value>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
         incoming_root_turn_id: Option<Option<String>>,
-
         origin: UserInputOrigin,
     ) -> Result<String, NotSubmittedReason> {
         let mut active = self.active_turn.lock().await;

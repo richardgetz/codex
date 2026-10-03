@@ -130,7 +130,6 @@ async fn queued_mail_and_cancelled_eviction_keep_worker_ownership() -> Result<()
                 ..Default::default()
             },
             usage_policy_update: None,
-
             reply: None,
         })
         .await?;

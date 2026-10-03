@@ -9,7 +9,14 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadUsagePolicy;
+use std::sync::atomic::Ordering;
 use tokio::sync::MutexGuard;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RootUsageAutoResumeSnapshot {
+    pub(crate) enabled: bool,
+    pub(crate) generation: u64,
+}
 
 impl AgentControl {
     /// Returns the root's latest automatic usage-resume setting.
@@ -95,6 +102,17 @@ impl AgentControl {
         requested
     }
 
+    /// Captures the root auto-resume value and generation under the settings update lock.
+    pub(crate) async fn root_usage_auto_resume_snapshot(&self) -> RootUsageAutoResumeSnapshot {
+        let _update_guard = self.root_usage_auto_resume_update.lock().await;
+        RootUsageAutoResumeSnapshot {
+            enabled: self.root_usage_auto_resume(),
+            generation: self
+                .root_usage_auto_resume_generation
+                .load(Ordering::Relaxed),
+        }
+    }
+
     /// Reconciles a child that finished startup after a root toggle was published.
     ///
     /// Session construction reads the root setting before the child is inserted into the live
@@ -103,7 +121,7 @@ impl AgentControl {
     pub(crate) async fn reconcile_spawned_usage_auto_resume(
         &self,
         session: &Session,
-        inherited_root_auto_resume: Option<bool>,
+        inherited_root_auto_resume: Option<RootUsageAutoResumeSnapshot>,
     ) {
         // A manager-created control has no root session identity or shared root toggle state.
         // Its explicit inherited policy is authoritative; reconciling against the default would
@@ -113,7 +131,12 @@ impl AgentControl {
         }
         let _update_guard = self.root_usage_auto_resume_update.lock().await;
         let enabled = self.root_usage_auto_resume();
-        if inherited_root_auto_resume.is_some_and(|captured| captured == enabled) {
+        let generation = self
+            .root_usage_auto_resume_generation
+            .load(Ordering::Relaxed);
+        if inherited_root_auto_resume.is_some_and(|captured| {
+            captured.enabled == enabled && captured.generation == generation
+        }) {
             return;
         }
         let Some(thread_settings) = session.apply_root_usage_auto_resume(enabled).await else {

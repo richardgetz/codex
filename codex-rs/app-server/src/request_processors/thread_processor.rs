@@ -4,6 +4,9 @@ mod daemon_continuation;
 #[path = "daemon_snapshot.rs"]
 mod daemon_snapshot;
 
+#[path = "thread_handoff_recovery.rs"]
+mod thread_handoff_recovery;
+
 use super::persisted_resume_settings::PersistedResumeSettings;
 use super::persisted_resume_settings::latest_persisted_resume_settings;
 use super::thread_enrichment::enrich_loaded_threads;
@@ -1355,7 +1358,11 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
-        let removed_conversation = self.thread_manager.remove_thread(&thread_id).await;
+        let removed_conversation = self
+            .thread_manager
+            .remove_thread_for_client(&thread_id)
+            .await
+            .map_err(|err| core_thread_write_error(operation, err))?;
         // Keep the shared dispatch fence through runtime removal. An ETA update that already
         // captured this runtime may otherwise re-arm a timer after cancellation but before the
         // owner disappears from the manager; the callback's live-owner check must observe the
@@ -4543,6 +4550,7 @@ impl ThreadRequestProcessor {
                 &thread_history,
                 &mut request_overrides,
                 &mut typesafe_overrides,
+                None,
             )
             .await;
 
@@ -4866,12 +4874,21 @@ impl ThreadRequestProcessor {
         thread_history: &InitialHistory,
         request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: &mut ConfigOverrides,
+        thread_settings_snapshot: Option<&codex_protocol::protocol::ThreadSettingsSnapshot>,
     ) -> Option<ThreadMetadata> {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        if let Some(persisted_settings) = latest_persisted_resume_settings(&resumed_history.history)
-        {
+        let persisted_settings = thread_settings_snapshot
+            .map(|settings| PersistedResumeSettings {
+                approval_policy: settings.approval_policy,
+                approvals_reviewer: Some(settings.approvals_reviewer),
+                active_permission_profile: settings.active_permission_profile.clone(),
+                usage_policy: settings.usage_policy,
+                thread_settings: Some(settings.clone()),
+            })
+            .or_else(|| latest_persisted_resume_settings(&resumed_history.history));
+        if let Some(persisted_settings) = persisted_settings {
             if typesafe_overrides.approval_policy.is_none() {
                 typesafe_overrides.approval_policy = Some(persisted_settings.approval_policy);
             }
@@ -5247,6 +5264,69 @@ impl ThreadRequestProcessor {
                 .map(|item| RolloutItem::ResponseItem(item.into()))
                 .collect(),
         ))
+    }
+
+    /// Reconstruct handoff history using the persisted thread's selected history mode.
+    ///
+    /// Cold handoff recovery needs the exact runtime metadata to route agent threads and must
+    /// support the current paginated default as well as legacy full-history rollouts.
+    pub(crate) async fn load_handoff_recovery_initial_history(
+        &self,
+        thread_id: ThreadId,
+        rollout_path: PathBuf,
+    ) -> Result<
+        (
+            InitialHistory,
+            Option<codex_protocol::protocol::ThreadSettingsAppliedEvent>,
+        ),
+        JSONRPCErrorError,
+    > {
+        let thread_id_string = thread_id.to_string();
+        let stored_thread = self
+            .read_stored_thread_for_resume(
+                &thread_id_string,
+                Some(&rollout_path),
+                /*include_history*/ false,
+            )
+            .await?;
+        if stored_thread.thread_id != thread_id {
+            return Err(invalid_request(format!(
+                "rollout path for handoff thread {thread_id} belongs to thread {}",
+                stored_thread.thread_id
+            )));
+        }
+        let scan_rollout_settings = stored_thread.history_mode == ThreadHistoryMode::Paginated
+            && stored_thread.parent_thread_id.is_none();
+        let settings_rollout_path = stored_thread
+            .rollout_path
+            .clone()
+            .unwrap_or_else(|| rollout_path.clone());
+        let (initial_history, _) = self
+            .load_resume_initial_history_from_stored_thread(stored_thread)
+            .await?;
+        let thread_settings_event = if scan_rollout_settings {
+            thread_handoff_recovery::latest_owned_settings_from_rollout(
+                settings_rollout_path,
+                thread_id,
+            )
+            .await
+            .map_err(|error| {
+                internal_error(format!(
+                    "failed to read persisted settings for handoff thread {thread_id}: {error}"
+                ))
+            })?
+        } else {
+            None
+        };
+        Ok((initial_history, thread_settings_event))
+    }
+
+    pub(crate) async fn resume_handoff_recovery_thread(
+        &self,
+        initial_history: InitialHistory,
+        thread_settings_event: Option<codex_protocol::protocol::ThreadSettingsAppliedEvent>,
+    ) -> Result<NewThread, JSONRPCErrorError> {
+        thread_handoff_recovery::resume_thread(self, initial_history, thread_settings_event).await
     }
 
     async fn load_resume_initial_history_from_stored_thread(

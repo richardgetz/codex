@@ -45,7 +45,10 @@ fn palette<T>(render: impl FnOnce() -> T) -> T {
 fn enabled() -> Tui {
     Tui {
         animations: true,
-        effects: Default::default(),
+        effects: codex_config::types::TuiEffects {
+            starfield: true,
+            ..Default::default()
+        },
         ..Tui::default()
     }
 }
@@ -115,6 +118,19 @@ fn sparkle_matches_the_original_starfield_and_protects_the_placeholder_and_curso
     palette(|| {
         let now = Instant::now();
         let mut snapshots = Vec::new();
+        let mut default_pane = pane();
+        let default_settings = Tui {
+            animations: true,
+            ..Tui::default()
+        };
+        default_pane.mark_fresh_task_for_sparkle("gpt-6-astra", &default_settings);
+        let (default_frame, _) = draw(
+            &default_pane.composer,
+            /*width*/ 80,
+            now + IDLE_TIMEOUT + IDLE_FADE,
+        );
+        assert!(dots(&default_frame).is_empty());
+        snapshots.push(format!("default settings\n{}", text(&default_frame)));
         for width in [40, 80] {
             let mut pane = pane();
             let (plain, _) = draw(&pane.composer, width, now);

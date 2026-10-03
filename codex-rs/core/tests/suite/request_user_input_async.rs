@@ -362,22 +362,20 @@ const CATALOG_ASYNC_PARAMETERS: &str = r#"{
     "additionalProperties": false
 }"#;
 
-#[test_case(None, "send_user_message_async", true, None; "fallback_description")]
-#[test_case(None, "request_user_input_async", false, None; "current_catalog_name")]
-#[test_case(Some(ToolMessages::default()), "send_user_message_async", true, None; "missing_tool")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage::default()), ..Default::default() }), "send_user_message_async", true, None; "missing_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async", true, None; "catalog_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async", true, None; "empty_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { parameters: Some(CATALOG_ASYNC_PARAMETERS.to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async", true, Some(CATALOG_ASYNC_PARAMETERS); "catalog_parameters")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), parameters: Some(CATALOG_ASYNC_PARAMETERS.to_string()) }), ..Default::default() }), "request_user_input_async", false, Some(CATALOG_ASYNC_PARAMETERS); "catalog_description_and_parameters")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { parameters: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async", true, None; "empty_parameters_fallback")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), parameters: Some(r#"{"type":"object","properties":{"questions":{"type":"unsupported"}}}"#.to_string()) }), ..Default::default() }), "send_user_message_async", true, None; "invalid_parameters_preserve_description")]
+#[test_case(None, "send_user_message_async", None; "fallback_description")]
+#[test_case(None, "request_user_input_async", None; "current_catalog_name")]
+#[test_case(Some(ToolMessages::default()), "send_user_message_async", None; "missing_tool")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage::default()), ..Default::default() }), "send_user_message_async", None; "missing_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async", None; "catalog_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async", None; "empty_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { parameters: Some(CATALOG_ASYNC_PARAMETERS.to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async", Some(CATALOG_ASYNC_PARAMETERS); "catalog_parameters")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), parameters: Some(CATALOG_ASYNC_PARAMETERS.to_string()) }), ..Default::default() }), "request_user_input_async", Some(CATALOG_ASYNC_PARAMETERS); "catalog_description_and_parameters")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { parameters: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async", None; "empty_parameters_fallback")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), parameters: Some(r#"{"type":"object","properties":{"questions":{"type":"unsupported"}}}"#.to_string()) }), ..Default::default() }), "send_user_message_async", None; "invalid_parameters_preserve_description")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_async_emits_item_and_does_not_end_the_turn(
     tool_messages: Option<ToolMessages>,
     catalog_tool_name: &'static str,
-    expect_legacy_tool: bool,
-
     expected_parameters: Option<&'static str>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -535,11 +533,11 @@ async fn request_user_input_async_emits_item_and_does_not_end_the_turn(
                 "string"
             );
         }
-        assert_eq!(
+        assert!(
             tools
                 .iter()
                 .any(|tool| tool["name"] == "send_user_message_async"),
-            expect_legacy_tool,
+            "the legacy send_user_message_async tool should remain available",
         );
     }
     assert_eq!(

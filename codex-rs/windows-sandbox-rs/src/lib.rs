@@ -766,7 +766,7 @@ mod windows_impl {
                 &env_map,
                 logs_base_dir,
                 Some((in_r, out_w, err_w)),
-                ConsoleMode::Inherit,
+                ConsoleMode::NoWindow,
                 desktop,
             )
         });

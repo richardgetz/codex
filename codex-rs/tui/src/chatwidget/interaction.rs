@@ -3,8 +3,6 @@
 use super::clipboard::PendingCopy;
 use super::*;
 use crate::bottom_pane::BottomPaneView;
-use crate::realtime_voice::RealtimeMicCommand;
-
 use crate::clipboard_copy::CopyStatus;
 use crate::clipboard_copy::worker::CopyResult;
 
@@ -90,17 +88,6 @@ impl ChatWidget {
             if self.bottom_pane.no_modal_or_popup_active() {
                 self.on_modal_or_popup_closed();
             }
-            return KeyEventAction::None;
-        }
-
-        if key_event.kind == KeyEventKind::Press
-            && self.chat_keymap.toggle_voice_mute.is_pressed(key_event)
-        {
-            self.bottom_pane.clear_quit_shortcut_hint();
-            self.quit_shortcut_expires_at = None;
-            self.quit_shortcut_key = None;
-            self.app_event_tx
-                .send(AppEvent::RealtimeMicControl(RealtimeMicCommand::ToggleMute));
             return KeyEventAction::None;
         }
 
@@ -226,14 +213,6 @@ impl ChatWidget {
             } else {
                 self.input_queue.submit_pending_steers_after_interrupt = false;
             }
-            return KeyEventAction::None;
-        }
-
-        if matches!(key_event.code, KeyCode::Esc)
-            && key_event.kind == KeyEventKind::Press
-            && self.should_show_plan_mode_nudge()
-        {
-            self.dismiss_plan_mode_nudge();
             return KeyEventAction::None;
         }
 

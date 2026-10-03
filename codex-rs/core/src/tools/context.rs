@@ -132,6 +132,7 @@ pub struct McpToolOutput {
     pub wall_time: Duration,
     pub original_image_detail_supported: bool,
     pub truncation_policy: TruncationPolicy,
+    pub(crate) serialized_output_max_bytes: Option<usize>,
 }
 
 impl ToolOutput for McpToolOutput {
@@ -211,6 +212,43 @@ impl McpToolOutput {
             with_serialization_allowance(self.truncation_policy),
             estimate_audio_token_count,
         );
+        if let Some(max_bytes) = self.serialized_output_max_bytes {
+            loop {
+                let serialized_size = serde_json::to_vec(&payload)
+                    .map(|serialized| serialized.len())
+                    .unwrap_or(usize::MAX);
+                if serialized_size <= max_bytes {
+                    break;
+                }
+                let excess = serialized_size.saturating_sub(max_bytes);
+                let text = match &mut payload.body {
+                    FunctionCallOutputBody::Text(text) => Some(text),
+                    FunctionCallOutputBody::ContentItems(items) => {
+                        items.iter_mut().rev().find_map(|item| match item {
+                            FunctionCallOutputContentItem::InputText { text } => Some(text),
+                            FunctionCallOutputContentItem::InputImage { .. }
+                            | FunctionCallOutputContentItem::InputAudio { .. }
+                            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
+                        })
+                    }
+                };
+                let Some(text) = text else {
+                    payload.body = FunctionCallOutputBody::Text(
+                        "[history output omitted to stay within the response limit]".to_owned(),
+                    );
+                    continue;
+                };
+                // Leave room for the truncation marker so each serialized-cap retry makes
+                // progress even when the payload is only slightly over the limit.
+                let reduced_budget = text.len().saturating_sub(excess).saturating_sub(64);
+                let truncated = truncate_text(text, TruncationPolicy::Bytes(reduced_budget));
+                if truncated.len() >= text.len() {
+                    *text = "[history output omitted to stay within the response limit]".to_owned();
+                } else {
+                    *text = truncated;
+                }
+            }
+        }
         payload
     }
 }

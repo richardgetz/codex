@@ -96,18 +96,9 @@ impl AgentRunner {
         };
         let NewThread {
             thread_id, thread, ..
-        } = match session_source {
-            Some(session_source) => {
-                thread_manager
-                    .spawn_subagent_with_source(parent_thread_id, options, session_source)
-                    .await?
-            }
-            None => {
-                thread_manager
-                    .spawn_legacy_subagent(parent_thread_id, options)
-                    .await?
-            }
-        };
+        } = thread_manager
+            .spawn_legacy_subagent(parent_thread_id, options, session_source)
+            .await?;
         let turn_id = match thread
             .start_turn_if_idle(
                 TurnInputRequest::user_input(vec![UserInput::Text {

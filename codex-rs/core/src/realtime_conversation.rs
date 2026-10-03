@@ -959,6 +959,21 @@ impl RealtimeConversationManager {
         )
     }
 
+    /// Prevent already parsed handoffs from starting turns after a safety failure.
+    /// Keep the gate on the old session so a later voice session starts fresh.
+    pub(crate) async fn retire_handoffs_for_misalignment(&self) {
+        let route_handoffs = self
+            .state
+            .lock()
+            .await
+            .conversation
+            .as_ref()
+            .map(|state| Arc::clone(&state.route_handoffs));
+        if let Some(route_handoffs) = route_handoffs {
+            route_handoffs.retire().await;
+        }
+    }
+
     pub(crate) async fn turn_realtime_state(
         &self,
     ) -> (bool, Option<Arc<RealtimeHandoffAdmission>>) {
@@ -1183,14 +1198,14 @@ impl RealtimeConversationManager {
             (task, None)
         };
 
-        let mut guard = self.state.lock().await;
+        let mut state = self.state.lock().await;
         if stop_token.is_cancelled() {
             task.abort();
-            drop(guard);
+            drop(state);
             let _ = task.await;
             return Err(CodexErr::TurnAborted);
         }
-        guard.conversation = Some(ConversationState {
+        state.conversation = Some(ConversationState {
             audio_tx,
             text_tx,
             session_kind,
@@ -1203,7 +1218,7 @@ impl RealtimeConversationManager {
             flush_transcript_tail_on_session_end,
             stop_token,
         });
-        guard.mode_instructions = Some(mode_instructions);
+        state.mode_instructions = Some(mode_instructions);
         Ok(RealtimeStartOutput {
             realtime_active,
             events_rx,

@@ -49,6 +49,7 @@ fn usage_records_include_compaction_checkpoint_records() {
             message: "checkpoint".to_string(),
             replacement_history: None,
             guardian_history: None,
+            retained_context: None,
             mcp_resource_origins: None,
             window_number: None,
             first_window_id: None,
@@ -56,6 +57,7 @@ fn usage_records_include_compaction_checkpoint_records() {
             window_id: None,
             compaction_response_id: None,
             latest_token_usage_record: Some(checkpoint.clone()),
+            resume_metadata: None,
         }),
     ];
 

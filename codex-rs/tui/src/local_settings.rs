@@ -66,7 +66,10 @@ impl LocalSettings {
                 animations: animations && system_motion == crate::motion::MotionMode::Animated,
                 whimsy: config.tui_whimsy,
                 screen_reader_detection_done: None,
-                effects: config.tui_effects,
+                effects: codex_config::types::TuiEffects {
+                    starfield: config.tui_effects.starfield || config.tui_whimsy,
+                    ..config.tui_effects
+                },
                 rendering: config.tui_rendering,
                 show_tooltips: config.show_tooltips,
                 show_server_version_notice: config.tui_show_server_version_notice,

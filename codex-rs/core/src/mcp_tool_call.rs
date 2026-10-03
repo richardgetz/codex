@@ -110,6 +110,7 @@ const MCP_SMART_WAIT_MAX_NO_UPDATE_RESULTS: usize = 12;
 const MCP_SMART_WAIT_MAX_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 
 mod account;
+pub(crate) mod conversation_history;
 mod telemetry;
 
 use account::McpToolAccountError;
@@ -195,13 +196,17 @@ pub(crate) async fn handle_mcp_tool_call(
             sess.refresh_mcp_if_dirty().await;
             let _ = sess.services.mcp_runtime.latest_start_server(&server).await;
         }
-        prepared_call = sess
+        let server_ready = sess
             .services
             .mcp_runtime
             .current_binding_for_call(&server)
             .await
-            .as_ref()
-            .and_then(|binding| binding.prepare_call(&server, &tool_name));
+            .is_some();
+        prepared_call = if server_ready {
+            sess.prepare_mcp_call(tool_info).await
+        } else {
+            None
+        };
     }
     let Some(prepared_call) = prepared_call else {
         let item_metadata =
@@ -251,15 +256,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, Some(&metadata));
     let runtime_config = prepared_call.config();
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
-        let annotations = metadata.annotations.as_ref();
-        AppToolPolicyEvaluator::new(&runtime_config.config_layer_stack).policy(AppToolPolicyInput {
-            connector_id: metadata.connector_id.as_deref(),
-            link_id: metadata.link_id.as_deref(),
-            tool_name: &tool_name,
-            tool_title: metadata.tool_title.as_deref(),
-            destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
-            open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
-        })
+        app_tool_policy(runtime_config, &metadata, &tool_name)
     } else {
         AppToolPolicy::default()
     };
@@ -286,7 +283,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let status = if result.is_ok() { "ok" } else { "error" };
         let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
-            &turn_context.session_telemetry,
+            &step_context.session_telemetry,
             &outcome,
             &server,
             &tool_name,
@@ -400,7 +397,7 @@ pub(crate) async fn handle_mcp_tool_call(
         let status = if result.is_ok() { "ok" } else { "error" };
         let outcome = McpCallMetricOutcome::from_status(status);
         emit_mcp_call_metrics(
-            &turn_context.session_telemetry,
+            &step_context.session_telemetry,
             &outcome,
             &server,
             &tool_name,
@@ -510,155 +507,104 @@ async fn handle_approved_mcp_tool_call(
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
     let mut elicitation_type = None;
     let result = async {
-        let mut prepared_request = None;
-        let mut result = {
-            let _activity_operation = sess
-                .begin_activity_operation(cancellation_token)
-                .await
-                .map_err(|error| format!("tool call blocked: {error}"))?;
-            prepared_call
-                .call_with_preparation(/*requested_timeout*/ None, || async {
-                    if let McpToolApprovalApplication::Apply { decision, policy } =
-                        &approval_application
-                    {
-                        let session_approval_key = session_mcp_tool_approval_key(
-                            &invocation,
-                            Some(&metadata),
-                            policy.mode,
-                        );
-                        let persistent_approval_key = if policy.allow_persistent {
-                            persistent_mcp_tool_approval_key(
+        let result = async {
+            let mut prepared_request = None;
+            let mut result = {
+                let _activity_operation = sess
+                    .begin_activity_operation(cancellation_token)
+                    .await
+                    .map_err(|error| format!("tool call blocked: {error}"))?;
+                prepared_call
+                    .call_with_preparation(/*requested_timeout*/ None, || async {
+                        if let McpToolApprovalApplication::Apply { decision, policy } =
+                            &approval_application
+                        {
+                            let session_approval_key = session_mcp_tool_approval_key(
                                 &invocation,
                                 Some(&metadata),
                                 policy.mode,
+                            );
+                            let persistent_approval_key = if policy.allow_persistent {
+                                persistent_mcp_tool_approval_key(
+                                    &invocation,
+                                    Some(&metadata),
+                                    policy.mode,
+                                )
+                            } else {
+                                None
+                            };
+                            apply_mcp_tool_approval_decision(
+                                sess,
+                                turn_context,
+                                decision,
+                                session_approval_key,
+                                persistent_approval_key,
                             )
-                        } else {
-                            None
-                        };
-                        apply_mcp_tool_approval_decision(
+                            .await;
+                        }
+                        maybe_mark_thread_memory_mode_polluted(sess, turn_context, &prepared_call)
+                            .await;
+                        let hosted_upload = item_metadata
+                            .connector_id
+                            .as_ref()
+                            .zip(item_metadata.action_name.as_ref())
+                            .map(|(connector_id, action_name)| HostedFileUploadContext {
+                                connector_id: connector_id.clone(),
+                                action_name: action_name.clone(),
+                                model: step_context.settings.model_info.slug.clone(),
+                            });
+                        let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
                             sess,
-                            turn_context,
-                            decision,
-                            session_approval_key,
-                            persistent_approval_key,
+                            step_context,
+                            arguments_value,
+                            metadata.openai_file_input_optional_fields.as_ref(),
+                            hosted_upload.as_ref(),
                         )
-                        .await;
-                    }
-                    maybe_mark_thread_memory_mode_polluted(sess, turn_context, &prepared_call)
-                        .await;
-                    let hosted_upload = item_metadata
-                        .connector_id
-                        .as_ref()
-                        .zip(item_metadata.action_name.as_ref())
-                        .map(|(connector_id, action_name)| HostedFileUploadContext {
-                            connector_id: connector_id.clone(),
-                            action_name: action_name.clone(),
-                            model: turn_context.model_info().slug.clone(),
-                        });
-                    let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
-                        sess,
-                        step_context,
-                        arguments_value,
-                        metadata.openai_file_input_optional_fields.as_ref(),
-                        hosted_upload.as_ref(),
-                    )
+                        .await
+                        .map_err(anyhow::Error::msg)?;
+                        if let Some(rewritten_arguments) = rewritten_arguments.as_ref() {
+                            tool_input = rewritten_arguments.clone();
+                        }
+                        let request_meta = build_mcp_tool_call_request_meta(
+                            step_context,
+                            &server,
+                            call_id,
+                            Some(&metadata),
+                        );
+                        let request_meta = with_mcp_tool_call_ids_meta(
+                            request_meta,
+                            &sess.thread_id.to_string(),
+                            &sess.session_id().to_string(),
+                            originating_call,
+                        );
+                        let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
+                            step_context,
+                            &prepared_call,
+                            request_meta,
+                        )
+                        .await?;
+                        let mcp_call_trace = sess
+                            .services
+                            .rollout_thread_trace
+                            .start_mcp_call_trace(call_id);
+                        let request = (
+                            rewritten_arguments,
+                            mcp_call_trace.add_request_meta(request_meta),
+                        );
+                        prepared_request = Some(request.clone());
+                        Ok(request)
+                    })
                     .await
-                    .map_err(anyhow::Error::msg)?;
-                    if let Some(rewritten_arguments) = rewritten_arguments.as_ref() {
-                        tool_input = rewritten_arguments.clone();
-                    }
-                    let request_meta = build_mcp_tool_call_request_meta(
-                        step_context,
-                        &server,
-                        call_id,
-                        Some(&metadata),
-                    );
-                    let request_meta = with_mcp_tool_call_ids_meta(
-                        request_meta,
-                        &sess.thread_id.to_string(),
-                        &sess.session_id().to_string(),
-                        originating_call,
-                    );
-                    let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
-                        step_context,
-                        &prepared_call,
-                        request_meta,
-                    )
-                    .await?;
-                    let mcp_call_trace = sess
-                        .services
-                        .rollout_thread_trace
-                        .start_mcp_call_trace(call_id);
-                    let request = (
-                        rewritten_arguments,
-                        mcp_call_trace.add_request_meta(request_meta),
-                    );
-                    prepared_request = Some(request.clone());
-                    Ok(request)
-                })
-                .await
-                .map_err(|error| format!("tool call error: {error:?}"))?
-        };
-        crate::tools::record_confirmed_code_mode_send(
-            sess,
-            &turn_context.sub_id,
-            call_id,
-            source,
-            &prepared_call,
-            &tool_input,
-            &result,
-        );
-        // Capture trusted server metadata before result callbacks or model-facing rewrites.
-        elicitation_type = mcp_tool_call_auth_elicitation_type(&server, connector_id, &result);
-        let mcp_tool = McpToolContext::from_prepared_call(
-            &prepared_call,
-            turn_context.config.mcp_servers.get().get(&server),
-        );
-        process_mcp_tool_result(
-            sess,
-            turn_context,
-            call_id,
-            &mcp_tool,
-            &tool_input,
-            &mut result,
-        )
-        .await;
-        let mut result = sanitize_mcp_tool_result_for_model(
-            &turn_context.model_info().input_modalities,
-            Ok(result),
-        )?;
-        result = maybe_request_codex_apps_auth_elicitation(
-            sess,
-            turn_context,
-            prepared_call.config().approval_policy.value(),
-            call_id,
-            &invocation.server,
-            Some(&metadata),
-            result,
-        )
-        .await;
-
-        let mut no_update_results = 0;
-        loop {
-            let Some(retry_after) = mcp_smart_wait_retry_after(&result) else {
-                return Ok(result);
+                    .map_err(|error| format!("tool call error: {error:?}"))?
             };
-            no_update_results += 1;
-            if no_update_results >= MCP_SMART_WAIT_MAX_NO_UPDATE_RESULTS {
-                tracing::debug!(
-                    server = %invocation.server,
-                    tool_name = %invocation.tool,
-                    no_update_results,
-                    "MCP smart wait retry cap reached"
-                );
-                return Ok(result);
-            }
-            tracing::debug!(
-                server = %invocation.server,
-                tool_name = %invocation.tool,
-                no_update_results,
-                retry_after_ms = retry_after.as_millis(),
-                "MCP tool reported no update; waiting before retry"
+            crate::tools::record_confirmed_code_mode_send(
+                sess,
+                &turn_context.sub_id,
+                call_id,
+                source,
+                &prepared_call,
+                &tool_input,
+                &result,
             );
             // Capture trusted server metadata before result callbacks or model-facing rewrites.
             elicitation_type = mcp_tool_call_auth_elicitation_type(&server, connector_id, &result);
@@ -666,21 +612,6 @@ async fn handle_approved_mcp_tool_call(
                 &prepared_call,
                 turn_context.config.mcp_servers.get().get(&server),
             );
-            tokio::time::sleep(retry_after).await;
-
-            let (rewritten_arguments, request_meta) = prepared_request
-                .clone()
-                .ok_or_else(|| "MCP smart wait request was not prepared".to_string())?;
-            result = {
-                let _activity_operation = sess
-                    .begin_activity_operation(cancellation_token)
-                    .await
-                    .map_err(|error| format!("tool call blocked: {error}"))?;
-                prepared_call
-                    .call(rewritten_arguments, request_meta, /*timeout*/ None)
-                    .await
-                    .map_err(|error| format!("tool call error: {error:?}"))?
-            };
             process_mcp_tool_result(
                 sess,
                 turn_context,
@@ -690,8 +621,8 @@ async fn handle_approved_mcp_tool_call(
                 &mut result,
             )
             .await;
-            result = sanitize_mcp_tool_result_for_model(
-                &turn_context.model_info().input_modalities,
+            let mut result = sanitize_mcp_tool_result_for_model(
+                &step_context.settings.model_info.input_modalities,
                 Ok(result),
             )?;
             result = maybe_request_codex_apps_auth_elicitation(
@@ -704,7 +635,79 @@ async fn handle_approved_mcp_tool_call(
                 result,
             )
             .await;
+
+            let mut no_update_results = 0;
+            loop {
+                let Some(retry_after) = mcp_smart_wait_retry_after(&result) else {
+                    return Ok(result);
+                };
+                no_update_results += 1;
+                if no_update_results >= MCP_SMART_WAIT_MAX_NO_UPDATE_RESULTS {
+                    tracing::debug!(
+                        server = %invocation.server,
+                        tool_name = %invocation.tool,
+                        no_update_results,
+                        "MCP smart wait retry cap reached"
+                    );
+                    return Ok(result);
+                }
+                tracing::debug!(
+                    server = %invocation.server,
+                    tool_name = %invocation.tool,
+                    no_update_results,
+                    retry_after_ms = retry_after.as_millis(),
+                    "MCP tool reported no update; waiting before retry"
+                );
+                let mcp_tool = McpToolContext::from_prepared_call(
+                    &prepared_call,
+                    turn_context.config.mcp_servers.get().get(&server),
+                );
+                tokio::time::sleep(retry_after).await;
+
+                let (rewritten_arguments, request_meta) = prepared_request
+                    .clone()
+                    .ok_or_else(|| "MCP smart wait request was not prepared".to_string())?;
+                result = {
+                    let _activity_operation = sess
+                        .begin_activity_operation(cancellation_token)
+                        .await
+                        .map_err(|error| format!("tool call blocked: {error}"))?;
+                    prepared_call
+                        .call(rewritten_arguments, request_meta, /*timeout*/ None)
+                        .await
+                        .map_err(|error| format!("tool call error: {error:?}"))?
+                };
+                // Capture trusted server metadata before result callbacks or model-facing rewrites.
+                elicitation_type =
+                    mcp_tool_call_auth_elicitation_type(&server, connector_id, &result);
+                process_mcp_tool_result(
+                    sess,
+                    turn_context,
+                    call_id,
+                    &mcp_tool,
+                    &tool_input,
+                    &mut result,
+                )
+                .await;
+                result = sanitize_mcp_tool_result_for_model(
+                    &step_context.settings.model_info.input_modalities,
+                    Ok(result),
+                )?;
+                result = maybe_request_codex_apps_auth_elicitation(
+                    sess,
+                    turn_context,
+                    prepared_call.config().approval_policy.value(),
+                    call_id,
+                    &invocation.server,
+                    Some(&metadata),
+                    result,
+                )
+                .await;
+            }
         }
+        .await;
+        record_mcp_result_span_telemetry(&Span::current(), &result);
+        result
     }
     .instrument(mcp_tool_call_span(
         sess,
@@ -751,11 +754,11 @@ async fn handle_approved_mcp_tool_call(
         truncate_mcp_tool_result_for_event(&result),
     )
     .await;
-    maybe_track_codex_app_used(sess, turn_context, &server, &metadata, elicitation_type).await;
+    maybe_track_codex_app_used(sess, step_context, &server, &metadata, elicitation_type).await;
 
     let outcome = mcp_call_metric_outcome(&result);
     emit_mcp_call_metrics(
-        &turn_context.session_telemetry,
+        &step_context.session_telemetry,
         &outcome,
         &server,
         &tool_name,
@@ -1243,7 +1246,7 @@ async fn notify_mcp_tool_call_completed(
 
 async fn maybe_track_codex_app_used(
     sess: &Session,
-    turn_context: &TurnContext,
+    step_context: &StepContext,
     server: &str,
     metadata: &McpToolApprovalMetadata,
     elicitation_type: Option<ElicitationType>,
@@ -1264,8 +1267,9 @@ async fn maybe_track_codex_app_used(
         InvocationType::Implicit
     };
 
+    let turn_context = &step_context.turn;
     let tracking = build_track_events_context(
-        turn_context.model_info().slug.clone(),
+        step_context.settings.model_info.slug.clone(),
         sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
         turn_context.originator.clone(),
@@ -1947,6 +1951,22 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
                 read_only_hint: annotations.read_only_hint,
             }),
     }
+}
+
+fn app_tool_policy(
+    config: &codex_mcp::McpConfig,
+    metadata: &McpToolApprovalMetadata,
+    tool_name: &str,
+) -> AppToolPolicy {
+    let annotations = metadata.annotations.as_ref();
+    AppToolPolicyEvaluator::new(&config.config_layer_stack).policy(AppToolPolicyInput {
+        connector_id: metadata.connector_id.as_deref(),
+        link_id: metadata.link_id.as_deref(),
+        tool_name,
+        tool_title: metadata.tool_title.as_deref(),
+        destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+        open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+    })
 }
 
 fn mcp_tool_metadata(

@@ -10,9 +10,8 @@ mod apps;
 mod arc_monitor;
 mod client;
 mod client_common;
-mod realtime_classifier;
-
 mod model_request;
+mod realtime_classifier;
 mod realtime_context;
 mod realtime_conversation;
 mod realtime_handoff;

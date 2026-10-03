@@ -192,7 +192,7 @@ async fn model_switch_program_pair(
             config.model = Some(next_model.to_owned());
             initial
                 .thread_manager
-                .fork_thread_with_start_options(
+                .fork_legacy_thread(
                     ForkSnapshot::TruncateBeforeNthUserMessage(1),
                     StartThreadOptions::new(config),
                     initial.codex.rollout_path().expect("rollout"),

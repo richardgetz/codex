@@ -29,6 +29,7 @@ use codex_history::ResponseItemEnvelope;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
@@ -646,10 +647,10 @@ impl LocalAgentControl {
         // Keep admission through the initial turn submission so handoff cannot capture a child
         // before its spawn edge and first input are accepted.
         let _admission = self.begin_handoff_admission()?;
-        let root_usage_auto_resume_at_spawn = self.root_usage_auto_resume();
 
         let spawn_started_at = Instant::now();
         let state = self.runtime.upgrade()?;
+        let root_usage_auto_resume_at_spawn = self.root_usage_auto_resume_snapshot().await;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
                 &InitialHistory::New,
@@ -692,9 +693,13 @@ impl LocalAgentControl {
             .registry
             .reserve_spawn_slot(reservation_max_threads)?;
         let inheritance = SpawnAgentThreadInheritance {
-            environments: self
-                .inherited_environments_for_source(&state, session_source.as_ref())
-                .await,
+            environments: match &options.environments {
+                Some(environments) => Some(environments.clone()),
+                None => {
+                    self.inherited_environments_for_source(&state, session_source.as_ref())
+                        .await
+                }
+            },
             exec_policy: self
                 .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
                 .await,
@@ -765,6 +770,10 @@ impl LocalAgentControl {
                 let inherited_usage_policy = parent_thread_settings
                     .as_ref()
                     .map(|settings| settings.usage_policy);
+                let environments = options
+                    .environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::inheritable_selections);
                 let child_create_started_at = Instant::now();
                 let new_thread = Box::pin(state.spawn_new_thread_with_source_and_settings(
                     config.clone(),
@@ -778,7 +787,7 @@ impl LocalAgentControl {
                     /*metrics_service_name*/ None,
                     inheritance.environments,
                     inheritance.exec_policy,
-                    options.environments.clone(),
+                    environments,
                     inherited_usage_policy,
                     parent_thread_settings,
                 ))
@@ -804,7 +813,8 @@ impl LocalAgentControl {
         if let Some(team_worker_lease) = team_worker_lease.as_mut() {
             team_worker_lease.commit_pending_spawn(new_thread.thread_id);
         }
-        let mut pending_spawn = PendingSpawn::new(Arc::clone(&state), new_thread.thread_id);
+        let mut pending_spawn =
+            PendingSpawn::new(Arc::clone(&state), new_thread.thread_id, &_admission);
 
         if let Some(SessionSource::SubAgent(
             subagent_source @ SubAgentSource::ThreadSpawn {
@@ -893,12 +903,16 @@ impl LocalAgentControl {
         } else {
             None
         };
-
         let input_admission_started_at = Instant::now();
-        match initial_input {
+        let input_result = match initial_input {
             SpawnInitialInput::UserInput(input) => {
-                self.send_input(new_thread.thread_id, input, start_options)
-                    .await?;
+                self.send_input_with_admission(
+                    new_thread.thread_id,
+                    input,
+                    start_options,
+                    &_admission,
+                )
+                .await
             }
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
@@ -908,9 +922,14 @@ impl LocalAgentControl {
                     context,
                     start_options,
                     /*team_lead_completion*/ false,
+                    &_admission,
                 )
-                .await?;
+                .await
             }
+        };
+        if let Err(error) = input_result {
+            pending_spawn.rollback().await;
+            return Err(error);
         }
         let input_admission = input_admission_started_at.elapsed();
         reservation.commit(agent_metadata.clone());
@@ -1295,7 +1314,10 @@ impl LocalAgentControl {
                 /*forked_from_thread_id*/ Some(parent_thread_id),
                 inherited_environments,
                 inherited_exec_policy,
-                options.environments.clone(),
+                options
+                    .environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::inheritable_selections),
                 thread_extension_init,
                 inherited_usage_policy,
                 inherited_thread_settings,

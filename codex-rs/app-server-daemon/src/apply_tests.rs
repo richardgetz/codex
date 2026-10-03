@@ -30,6 +30,7 @@ fn apply_requires_an_explicit_launcher() {
 
 fn test_daemon(home: &std::path::Path) -> Daemon {
     Daemon {
+        log_diagnostics: false,
         socket_path: home.join("app-server-control.sock"),
         pid_file: home.join("daemon.pid"),
         update_pid_file: home.join("daemon-updater.pid"),

@@ -541,7 +541,6 @@ fn stdio_server(
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -582,7 +581,6 @@ fn declared_placement_preserves_local_plugin_normalization() {
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -907,7 +905,6 @@ fn local_environment_placement_preserves_http_env_references() {
                     supports_parallel_tool_calls: false,
                     startup: Default::default(),
                     sharing: Default::default(),
-
                     tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,

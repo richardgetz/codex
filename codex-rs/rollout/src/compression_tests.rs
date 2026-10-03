@@ -341,7 +341,7 @@ async fn worker_skips_rollout_when_writer_lock_is_busy() -> anyhow::Result<()> {
     set_old_mtime(&path)?;
     let lock = acquire_rollout_file_lock(path.as_path())?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     assert!(path.exists());
     assert!(!compressed_rollout_path(&path).exists());
@@ -359,7 +359,7 @@ async fn worker_skips_legacy_rollout_without_writer_lock_sidecar() -> anyhow::Re
     fs::remove_file(rollout_file_lock_path(&path))?;
     set_old_mtime(&path)?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     assert!(path.exists());
     assert!(!compressed_rollout_path(&path).exists());

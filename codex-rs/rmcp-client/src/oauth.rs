@@ -68,9 +68,8 @@ use self::store_lock::OAuthStore;
 use self::store_lock::OAuthStoreLock;
 use self::store_lock::OAuthStoreLockFailure;
 
-use codex_keyring_store::CredentialStoreError;
-
 use codex_config::McpServerOAuthConfig;
+use codex_keyring_store::CredentialStoreError;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringAccessPolicy;
 use codex_keyring_store::KeyringStore;

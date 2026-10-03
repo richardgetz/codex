@@ -435,16 +435,7 @@ async fn edit_matches_context_selector_for_generated_images_after_latest_user_an
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,u1".to_string(),
-                    detail: None,
-                },
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,u2".to_string(),
-                    detail: None,
-                },
-            ],
+            content: vec![input_image("u1"), input_image("u2")],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
@@ -468,10 +459,7 @@ async fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
             role: "user".to_string(),
             content: ["a", "b", "c", "d", "e"]
                 .into_iter()
-                .map(|image| ContentItem::InputImage {
-                    image_url: format!("data:image/png;base64,{image}"),
-                    detail: None,
-                })
+                .map(input_image)
                 .collect(),
             phase: None,
             internal_chat_message_metadata_passthrough: None,
@@ -494,10 +482,7 @@ async fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image_url: "data:image/png;base64,user".to_string(),
-                detail: None,
-            }],
+            content: vec![input_image("user")],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
@@ -531,6 +516,7 @@ async fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
             name: IMAGEGEN_TOOL_NAME.to_string(),
             namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
             arguments: "{}".to_string(),
+            encrypted_function_args: None,
             call_id: "imagegen-1".to_string(),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -554,6 +540,7 @@ async fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
                     name: IMAGEGEN_TOOL_NAME.to_string(),
                     namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
                     arguments: "{}".to_string(),
+                    encrypted_function_args: None,
                     call_id: call_id.clone(),
                     internal_chat_message_metadata_passthrough: None,
                 },
@@ -583,6 +570,7 @@ async fn edit_request(prompt: &str, history: &[ResponseItem], count: usize) -> I
             prompt: prompt.to_string(),
             referenced_image_paths: None,
             num_last_images_to_include: Some(count),
+            transparent_background: false,
         },
         history,
         &[],
@@ -638,11 +626,15 @@ fn generated_item(result: &str) -> ResponseItem {
 
 fn generated_function_output(call_id: &str, result: &str) -> ResponseItem {
     ResponseItem::FunctionCallOutput {
-        call_id: call_id.to_string(),
+        call_id: Some(call_id.to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload {
             body: FunctionCallOutputBody::ContentItems(vec![
                 FunctionCallOutputContentItem::InputImage {
-                    image_url: format!("data:image/png;base64,{result}"),
+                    image: ImageReference::Inline {
+                        image_url: format!("data:image/png;base64,{result}"),
+                    },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 FunctionCallOutputContentItem::InputText {

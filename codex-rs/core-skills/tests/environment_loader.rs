@@ -12,11 +12,14 @@ use codex_exec_server::ExecutorFileSystemFuture;
 use codex_exec_server::FileMetadata;
 use codex_exec_server::FileSystemReadStream;
 use codex_exec_server::FileSystemSandboxContext;
+use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadDirectoryEntry;
+use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WalkOptions;
 use codex_exec_server::WalkOutcome;
+use codex_exec_server::WriteFileOptions;
 use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -78,13 +81,14 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
     fn read_file<'a>(
         &'a self,
         path: &'a PathUri,
+        options: ReadFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, Vec<u8>> {
         self.read_files
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(path.clone());
-        self.inner.read_file(path, sandbox)
+        self.inner.read_file(path, options, sandbox)
     }
 
     fn read_file_stream<'a>(
@@ -99,9 +103,10 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
         &'a self,
         path: &'a PathUri,
         contents: Vec<u8>,
+        options: WriteFileOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, ()> {
-        self.inner.write_file(path, contents, sandbox)
+        self.inner.write_file(path, contents, options, sandbox)
     }
 
     fn create_directory<'a>(
@@ -116,13 +121,14 @@ impl ExecutorFileSystem for RecordingFileSystem<'_> {
     fn get_metadata<'a>(
         &'a self,
         path: &'a PathUri,
+        options: GetMetadataOptions,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> ExecutorFileSystemFuture<'a, FileMetadata> {
         self.metadata_files
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(path.clone());
-        self.inner.get_metadata(path, sandbox)
+        self.inner.get_metadata(path, options, sandbox)
     }
 
     fn read_directory<'a>(

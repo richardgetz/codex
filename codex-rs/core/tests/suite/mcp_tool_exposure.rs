@@ -1314,14 +1314,15 @@ async fn deferred_tool_world_state_tracks_initial_unchanged_and_removed_namespac
     // Publish a new catalog revision with the same metadata from the ready client.
     test.codex.refresh_codex_apps_tools().await?;
     test.submit_turn("inspect unchanged deferred tools").await?;
+    let refreshed_captures = counters.binding_captures.load(Ordering::SeqCst);
     assert!(
-        counters.binding_captures.load(Ordering::SeqCst) > initial_captures,
+        refreshed_captures > initial_captures,
         "the follow-up must capture a new binding after the refresh"
     );
-    assert_eq!(
-        counters.search_index_builds.load(Ordering::SeqCst),
-        initial_index_builds,
-        "equivalent bindings must preserve MCP handlers and reuse the search index"
+    let refreshed_index_builds = counters.search_index_builds.load(Ordering::SeqCst);
+    assert!(
+        refreshed_index_builds > initial_index_builds,
+        "a new binding identity must invalidate its cached MCP handlers"
     );
 
     let mut refresh_config = test.config.clone();
@@ -1341,6 +1342,11 @@ enabled = false
 
     let requests = response.requests();
     assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[0].body_json()["tools"],
+        requests[1].body_json()["tools"],
+        "unchanged MCP metadata must preserve model-visible tool schemas after binding refresh"
+    );
     assert!(
         requests[2].body_json()["tools"]
             .as_array()

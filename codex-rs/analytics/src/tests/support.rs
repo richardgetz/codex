@@ -164,6 +164,10 @@ pub(super) fn sample_thread_start_response(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: Default::default(),
+        usage_policy: Default::default(),
+        team: None,
         multi_agent_mode: Default::default(),
     })
 }
@@ -230,6 +234,10 @@ pub(super) fn sample_thread_resume_response_with_source(
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        memory_policy: Default::default(),
+        user_preferences_memory_policy: Default::default(),
+        usage_policy: Default::default(),
+        team: None,
         collaboration_mode: None,
         multi_agent_mode: Default::default(),
         initial_turns_page: None,

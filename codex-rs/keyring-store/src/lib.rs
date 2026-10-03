@@ -55,7 +55,7 @@ impl CredentialStoreError {
         match self {
             Self::Other(error) => error
                 .source()
-                .is_some_and(<(dyn std::error::Error + 'static)>::is::<AccessPolicyFailure>),
+                .is_some_and(<dyn std::error::Error + 'static>::is::<AccessPolicyFailure>),
         }
     }
 

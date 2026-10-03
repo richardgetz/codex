@@ -607,9 +607,7 @@ impl ToolRegistry {
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
-        let _otel = invocation.turn.session_telemetry.clone();
         let permission_profile = invocation.turn.permission_profile();
-
         let otel = invocation
             .step_context
             .session_telemetry

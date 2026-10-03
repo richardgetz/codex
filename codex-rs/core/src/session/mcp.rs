@@ -1239,7 +1239,7 @@ async fn review_guardian_mcp_elicitation(
             .and_then(Value::as_str);
         match call_id {
             Some(call_id) => {
-                match session.mcp_tool_approval_metadata(&turn_context.sub_id, call_id) {
+                match session.mcp_tool_approval_metadata(&request.server_name, call_id) {
                     Some((Some(invocation), metadata)) => {
                         let connector_id = elicitation_connector_id(&request.elicitation);
                         let tool_name = request

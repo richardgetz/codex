@@ -48,7 +48,6 @@ fn server(url: &str) -> McpServerConfig {
         supports_parallel_tool_calls: true,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,

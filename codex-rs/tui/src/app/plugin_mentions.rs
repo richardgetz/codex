@@ -151,6 +151,7 @@ mod tests {
 
     fn shared_plugin_summary(name: &str) -> PluginSummary {
         PluginSummary {
+            extensions: None,
             share_context: Some(PluginShareContext {
                 remote_plugin_id: format!("plugins~{name}"),
                 remote_version: Some("7".to_string()),

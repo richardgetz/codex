@@ -28,6 +28,7 @@ use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 
@@ -55,6 +56,8 @@ pub(crate) struct LocalAgentRuntime {
     pub(super) root_usage_policy: Arc<ArcSwap<ThreadUsagePolicy>>,
     /// Serializes root usage-policy commits with descendant synchronization.
     pub(super) root_usage_auto_resume_update: Arc<Mutex<()>>,
+    /// Advances whenever the root automatic-resume setting changes.
+    pub(super) root_usage_auto_resume_generation: Arc<AtomicU64>,
     /// Serializes settings events sent while the root usage policy changes.
     pub(super) root_usage_auto_resume_propagation: Arc<Mutex<()>>,
     /// Root-scoped process-local manual pause switch shared by loaded descendants.
@@ -112,6 +115,7 @@ impl LocalAgentRuntime {
             root_service_tier_propagation: Arc::new(Mutex::new(())),
             root_usage_policy: Arc::new(ArcSwap::from_pointee(ThreadUsagePolicy::default())),
             root_usage_auto_resume_update: Arc::new(Mutex::new(())),
+            root_usage_auto_resume_generation: Arc::new(AtomicU64::new(0)),
             root_usage_auto_resume_propagation: Arc::new(Mutex::new(())),
             root_activity_paused: Arc::new(AtomicBool::new(false)),
             root_activity_transition: Arc::new(Mutex::new(())),
@@ -147,6 +151,13 @@ impl LocalAgentRuntime {
     }
 
     pub(crate) fn set_root_usage_policy(&self, policy: ThreadUsagePolicy) {
+        if self.root_usage_policy.load().auto_resume != policy.auto_resume {
+            self.root_usage_auto_resume_generation
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                    Some(generation.saturating_add(1))
+                })
+                .expect("generation update always succeeds");
+        }
         self.root_usage_policy.store(Arc::new(policy));
     }
 

@@ -683,9 +683,13 @@ async fn inter_agent_communication_inner(
     }
     if trigger_turn || sess.has_outstanding_durable_sleep() {
         drop(team_lead_turn_admission);
-        drop(handoff_admission);
-        sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
-            .await;
+        if let Some(handoff_admission) = handoff_admission {
+            sess.maybe_start_turn_for_pending_work_with_admission(sub_id, handoff_admission)
+                .await;
+        } else {
+            sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
+                .await;
+        }
     }
 }
 
@@ -1892,7 +1896,7 @@ pub(super) async fn submission_loop(
         ManagerCompletionDeliveryAckCleanup(Arc::clone(&sess));
     // To break out of this loop, send Op::Shutdown.
     let mut shutdown_received = false;
-    while let Ok(sub) = rx_sub.recv().await {
+    while let Ok(mut sub) = rx_sub.recv().await {
         if matches!(sub.op, Op::ResolveElicitation { .. }) {
             debug!(submission_id = %sub.id, operation = sub.op.kind(), "Submission");
         } else {
@@ -1933,15 +1937,19 @@ pub(super) async fn submission_loop(
         };
         let dispatch_span = submission_dispatch_span(&sub);
         let mut handoff_admission = if sub.op.requires_handoff_admission() {
-            match sess
-                .services
-                .local_agent_control()
-                .begin_handoff_admission()
-            {
-                Ok(admission) => Some(admission),
-                Err(err) => {
-                    reject_handoff_submission(&sess, sub, err).await;
-                    continue;
+            if let Some(admission) = sub.handoff_admission.take() {
+                Some(admission)
+            } else {
+                match sess
+                    .services
+                    .local_agent_control()
+                    .begin_handoff_admission()
+                {
+                    Ok(admission) => Some(admission),
+                    Err(err) => {
+                        reject_handoff_submission(&sess, sub, err).await;
+                        continue;
+                    }
                 }
             }
         } else {

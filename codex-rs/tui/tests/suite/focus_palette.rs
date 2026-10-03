@@ -298,18 +298,6 @@ impl PtyCodex {
         )
     }
 
-    pub(super) fn start_with_binary(
-        repo_root: &Path,
-        codex_home: TempDir,
-        extra_args: &[&str],
-        binary_name: &str,
-    ) -> Result<Self> {
-        let codex = codex_utils_cargo_bin::cargo_bin(binary_name)?;
-        Self::start_binary(
-            &codex, repo_root, codex_home, extra_args, /*editor*/ None,
-        )
-    }
-
     /// Include the CLI dispatch futures when testing production stack headroom.
     pub(super) fn start_cli(
         repo_root: &Path,

@@ -49,7 +49,6 @@ async fn refresh_keeps_superseded_mcp_server_alive_for_in_flight_calls() -> anyh
                     supports_parallel_tool_calls: false,
                     startup: Default::default(),
                     sharing: Default::default(),
-
                     tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
                     disabled_reason: None,

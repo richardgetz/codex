@@ -268,9 +268,8 @@ impl LocalSecretsBackend {
         } else {
             self.keyring_store.load(keyring_service(), &account)
         }
-        .map_err(anyhow::Error::new)
+        .map_err(std::io::Error::from)
         .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
-
         match loaded {
             Some(existing) => Ok(SecretString::from(existing)),
             None => {
@@ -290,7 +289,7 @@ impl LocalSecretsBackend {
                         .save(keyring_service(), &account, generated.expose_secret())
                 };
                 result
-                    .map_err(anyhow::Error::new)
+                    .map_err(std::io::Error::from)
                     .context("failed to persist secrets key in keyring")?;
                 Ok(generated)
             }
@@ -570,8 +569,18 @@ mod tests {
         let name = SecretName::new("TEST_SECRET")?;
 
         codex_auth_backend.set(&scope, &name, "codex-auth-value")?;
+        let home_account =
+            compute_keyring_account(codex_home.path(), LocalSecretsNamespace::CodexAuth);
+        assert_eq!(keyring.access_policy(&home_account), None);
         mcp_backend.set(&scope, &name, "mcp-value")?;
+        assert_eq!(
+            keyring.access_policy(&home_account),
+            Some(KeyringAccessPolicy::StableSignedCodex)
+        );
         gateway_backend.set(&scope, &name, "gateway-value")?;
+        let gateway_account =
+            compute_keyring_account(codex_home.path(), LocalSecretsNamespace::GatewayOAuth);
+        assert_eq!(keyring.access_policy(&gateway_account), None);
 
         assert_eq!(
             codex_auth_backend.get(&scope, &name)?,

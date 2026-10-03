@@ -119,6 +119,7 @@ const IMAGEGEN_TOOL_NAME: &str = "imagegen";
 
 #[derive(Clone, Copy)]
 struct CoreToolPlanContext<'a> {
+    tool_policy: &'a codex_extension_api::ToolPolicy,
     turn_context: &'a TurnContext,
     model_info: &'a ModelInfo,
     model_messages: Option<&'a ModelMessages>,
@@ -155,6 +156,7 @@ pub(crate) fn build_tool_router(
         step_store,
         tool_suggest_candidates,
         None,
+        Some(mcp),
     )
 }
 
@@ -188,6 +190,7 @@ pub(crate) fn build_tool_router_for_input(
             explicitly_enabled_connectors,
             explicitly_referenced_mcp_servers,
         }),
+        None,
     )
 }
 
@@ -210,6 +213,7 @@ pub(crate) fn build_tool_router_with_mcp_tools(
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
     mcp_selection: Option<McpToolSelection<'_>>,
+    mcp_binding_identity: Option<&Arc<codex_mcp::McpBinding>>,
 ) -> CodexResult<ToolRouter> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
@@ -218,6 +222,7 @@ pub(crate) fn build_tool_router_with_mcp_tools(
         .thread_extension_data
         .get::<crate::WaitForEnvironmentToolConfig>();
     let context = CoreToolPlanContext {
+        tool_policy: &session.tool_policy,
         turn_context,
         model_info,
         model_messages,
@@ -228,10 +233,25 @@ pub(crate) fn build_tool_router_with_mcp_tools(
         default_agent_type_description: &default_agent_type_description,
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
     };
-    let mut registry = ToolRegistry::default();
+    let mut registry = ToolRegistry::with_tool_policy(Arc::clone(&session.tool_policy));
     add_core_tool_sources(&context, &mut registry);
 
-    let hosted_specs = if crate::guardian::is_basic_session_source(&turn_context.session_source) {
+    let is_basic_session = crate::guardian::is_basic_session_source(&turn_context.session_source);
+    let is_guardian_history_session = is_basic_session
+        && turn_context
+            .config
+            .features
+            .enabled(Feature::GuardianConversationHistoryTools);
+    let hosted_specs = if is_guardian_history_session {
+        let allowed_tools = [
+            ToolName::namespaced("user_message", "search_messages"),
+            ToolName::namespaced("user_message", "read_messages"),
+        ];
+        let history_tools = extension_tool_executors(session, step_store)
+            .filter(|executor| allowed_tools.contains(&executor.tool_name()));
+        append_extension_tool_executors(turn_context, model_info, history_tools, &mut registry);
+        Vec::new()
+    } else if is_basic_session {
         Vec::new()
     } else {
         let registered_mcp_tools = if let Some(selection) = mcp_selection {
@@ -247,8 +267,10 @@ pub(crate) fn build_tool_router_with_mcp_tools(
                 &mut registry,
             )
         } else {
+            let mcp_binding_identity = mcp_binding_identity
+                .expect("shared MCP handler caching requires the owning binding Arc");
             session.services.mcp_handler_cache.append_mcp_tools(
-                mcp,
+                mcp_binding_identity,
                 mcp_tools,
                 &turn_context.config,
                 apps_enabled,
@@ -384,6 +406,7 @@ pub(crate) fn build_core_tool_registry(
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let context = CoreToolPlanContext {
+        tool_policy: &Default::default(),
         turn_context,
         model_info,
         model_messages: model_info.model_messages.as_ref(),
@@ -456,9 +479,10 @@ pub(crate) fn finalize_tool_router(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
     mut registry: ToolRegistry,
-    hosted_specs: Vec<ToolSpec>,
+    mut hosted_specs: Vec<ToolSpec>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
+    hosted_specs.retain(|spec| registry.tool_policy.allows(&ToolName::plain(spec.name())));
     crate::tools::manager_only::enable_code_mode_for_manager_coordination(
         turn_context,
         model_info,
@@ -1141,6 +1165,20 @@ fn code_mode_namespace_descriptions(
 
 #[instrument(level = "trace", skip_all)]
 fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistry) {
+    if context.tool_policy.require_managed_sandbox
+        && (!matches!(
+            context.turn_context.permission_profile(),
+            PermissionProfile::Managed { .. }
+        ) || context.environments.turn_environments().any(|environment| {
+            !matches!(
+                environment.permission_profile(),
+                PermissionProfile::Managed { .. }
+            )
+        }))
+    {
+        return;
+    }
+
     // Guardian reviewers receive only `exec_command`, `write_stdin`, and `view_image`
     // when a managed sandbox can enforce the parent's filesystem restrictions;
     // all general tool sources stay excluded.
@@ -1257,7 +1295,11 @@ fn add_shell_tools(context: &CoreToolPlanContext<'_>, registry: &mut ToolRegistr
     }
 
     let allow_login_shell = any_environment_allows_login_shell(context.environments);
-    let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
+    if context.tool_policy.require_unified_exec && !features.enabled(Feature::UnifiedExec) {
+        return;
+    }
+    let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals)
+        && context.tool_policy.expose_additional_permissions;
     let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
     let options = ExecCommandHandlerOptions {
         allow_login_shell,
@@ -1545,28 +1587,9 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 ),
                 exposure,
             );
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(
-                    SendMessageHandlerV2,
-                    tool_namespace,
-                    model_messages.multi_agent_tool_description_override("send_message"),
-                    model_messages.multi_agent_tool_parameters_override("send_message"),
-                ),
-                exposure,
-            );
             if turn_context.config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker {
                 registry.add_with_exposure(SendMessageActionHandler, exposure);
             }
-            registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(
-                    FollowupTaskHandlerV2,
-                    tool_namespace,
-                    model_messages.multi_agent_tool_description_override("followup_task"),
-                    model_messages.multi_agent_tool_parameters_override("followup_task"),
-                ),
-                exposure,
-            );
-
             if !turn_context.config.multi_agent_v2.disable_direct_message {
                 registry.register_trusted_with_exposure(
                     multi_agent_v2_handler(

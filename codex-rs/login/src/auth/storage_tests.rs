@@ -801,7 +801,7 @@ fn auto_auth_storage_file_fallback_overrides_stale_keyring_after_restart() -> an
         Arc::new(failing_keyring.clone()),
         AuthKeyringBackendKind::Secrets,
     );
-    let key = compute_keyring_account(codex_home.path());
+    let key = compute_keyring_account(codex_home.path(), LocalSecretsNamespace::CodexAuth);
     let stale = auth_with_prefix("stale");
     seed_secrets_backend_with_auth(&failing_keyring, codex_home.path(), &stale)?;
     failing_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));

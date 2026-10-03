@@ -442,8 +442,6 @@ impl LocalAgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<AgentInfo> {
         let eta_dispatch = self.lock_eta_reminders().await;
-        let _state = self.upgrade()?;
-
         let state = self.runtime.upgrade()?;
         let metadata = self.get_agent_metadata(agent_id);
         let known_agent = metadata.is_some();

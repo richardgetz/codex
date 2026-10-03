@@ -76,11 +76,13 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
+use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
@@ -311,6 +313,101 @@ impl AgentControlHarness {
             .expect("child spawn should succeed")
             .thread_id
     }
+}
+
+#[tokio::test]
+async fn spawned_usage_auto_resume_reconciliation_handles_root_aba() {
+    let root_harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = root_harness.start_thread().await;
+    let root_control = parent_thread.session.services.local_agent_control();
+    let captured_at_spawn = root_control.root_usage_auto_resume_snapshot().await;
+    assert!(!captured_at_spawn.enabled);
+    assert_eq!(captured_at_spawn.generation, 0);
+
+    for enabled in [true, false] {
+        let _update_guard = root_control.lock_root_usage_auto_resume_update().await;
+        root_control.set_root_usage_auto_resume(enabled);
+    }
+    let root_after_aba = root_control.root_usage_auto_resume_snapshot().await;
+    assert!(!root_after_aba.enabled);
+    assert_eq!(root_after_aba.generation, 2);
+
+    let child_harness = AgentControlHarness::new().await;
+    let child = child_harness
+        .manager
+        .start_thread(StartThreadOptions {
+            session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            ..StartThreadOptions::new(child_harness.config.clone())
+        })
+        .await
+        .expect("start child session");
+    let inherited_policy = ThreadUsagePolicy {
+        auto_resume: true,
+        ..ThreadUsagePolicy::default()
+    };
+    child
+        .thread
+        .session
+        .update_settings(SessionSettingsUpdate {
+            usage_policy: Some(inherited_policy),
+            ..SessionSettingsUpdate::default()
+        })
+        .await
+        .expect("set inherited child usage policy");
+    assert_eq!(
+        child
+            .thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy,
+        inherited_policy
+    );
+
+    root_control
+        .reconcile_spawned_usage_auto_resume(&child.thread.session, Some(captured_at_spawn))
+        .await;
+    assert_eq!(
+        child
+            .thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy,
+        ThreadUsagePolicy::default(),
+        "the final root policy should win after false→true→false during child startup"
+    );
+
+    child
+        .thread
+        .session
+        .update_settings(SessionSettingsUpdate {
+            usage_policy: Some(inherited_policy),
+            ..SessionSettingsUpdate::default()
+        })
+        .await
+        .expect("restore inherited child usage policy");
+    let unchanged_root = root_control.root_usage_auto_resume_snapshot().await;
+    assert_eq!(unchanged_root.generation, root_after_aba.generation);
+    root_control
+        .reconcile_spawned_usage_auto_resume(&child.thread.session, Some(unchanged_root))
+        .await;
+    assert_eq!(
+        child
+            .thread
+            .session
+            .thread_settings_snapshot()
+            .await
+            .usage_policy,
+        inherited_policy,
+        "an unchanged root must preserve the inherited child policy"
+    );
 }
 
 async fn persisted_originator(thread: &CodexThread) -> String {
@@ -1654,6 +1751,55 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
         .await
         .expect("thread should be registered");
     wait_for_recorded_user_message(thread.as_ref(), "spawned").await;
+}
+
+#[tokio::test]
+async fn environment_context_formatter_selects_v2_paths_and_legacy_for_v1_and_disabled() {
+    let (home, mut config) = test_config().await;
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("enable multi-agent v2");
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("enable sqlite");
+    let harness = AgentControlHarness::new_with_config(home, config).await;
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let worker_path = AgentPath::root().join("worker").expect("worker path");
+    harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("environment context worker"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(worker_path),
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("spawn named worker");
+
+    let v2_context = harness
+        .control
+        .format_environment_context_subagents(parent_thread_id, MultiAgentVersion::V2)
+        .await;
+    let v1_context = harness
+        .control
+        .format_environment_context_subagents(parent_thread_id, MultiAgentVersion::V1)
+        .await;
+    let disabled_context = harness
+        .control
+        .format_environment_context_subagents(parent_thread_id, MultiAgentVersion::Disabled)
+        .await;
+
+    assert!(v2_context.contains("<agent name=\"/root/worker\" />"));
+    assert!(!v1_context.contains("<agent name="));
+    assert!(v1_context.contains("worker"));
+    assert_eq!(disabled_context, v1_context);
 }
 
 #[tokio::test]
@@ -3271,10 +3417,8 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
         .manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            harness.config.clone(),
+            crate::StartThreadOptions::new(harness.config.clone()),
             rollout_path.clone(),
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork unloaded source thread");

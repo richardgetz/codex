@@ -73,6 +73,7 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     let handled = handle_assistant_item_done_in_plan_mode(
         &session,
         turn_context.as_ref(),
+        &turn_context.session_telemetry,
         &turn_store,
         &item,
         &mut state,

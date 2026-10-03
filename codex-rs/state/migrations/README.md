@@ -134,3 +134,8 @@ The incoming upstream migrations for thread originator, Daybreak enablement,
 thread attachments, creator identity, and Guardian metadata cleanup duplicate
 the already-shipped stable migrations at `0057`, `0058`, and `0064` through
 `0066`; retain the stable copies and do not apply duplicate migrations.
+
+The `rust-v0.160.0` refresh keeps all shipped migrations and checksums through
+`0067` unchanged. Its incoming archive-sort index migration is byte-identical
+to `0067_upstream_threads_archive_sort_indexes.sql`, so do not add it again as
+`0058` or create a new migration number.

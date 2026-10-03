@@ -196,6 +196,7 @@ impl McpConnectionSet {
                 .iter()
                 .filter(|(name, _)| include_server(name))
                 .map(|(server_name, view)| async move {
+                    view.connection.client.reconnect_failed_startup().await;
                     let has_cached_tools = view.connection.client.has_cached_tools();
                     let startup_complete = view
                         .connection
@@ -212,7 +213,6 @@ impl McpConnectionSet {
                     {
                         return None;
                     }
-                    view.connection.client.reconnect_failed_startup().await;
                     let server_tools = view
                         .listed_tools(&self.tool_plugin_context)
                         .instrument(trace_span!(

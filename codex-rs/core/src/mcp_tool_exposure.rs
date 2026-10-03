@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
@@ -29,7 +30,7 @@ pub(crate) struct McpHandlerCache {
 }
 
 struct CachedMcpHandlers {
-    binding: usize,
+    binding: Weak<McpBinding>,
     handlers: HashMap<ToolName, CachedMcpHandler>,
 }
 
@@ -43,7 +44,7 @@ struct CachedMcpHandler {
 impl McpHandlerCache {
     pub(crate) fn append_mcp_tools(
         &self,
-        binding: &McpBinding,
+        binding: &Arc<McpBinding>,
         mcp_tools: &[McpToolInfo],
         config: &Config,
         apps_enabled: bool,
@@ -55,16 +56,17 @@ impl McpHandlerCache {
             .cached
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let binding_ptr = std::ptr::from_ref(binding) as usize;
-        if cached
-            .as_ref()
-            .is_none_or(|cached| cached.binding != binding_ptr)
-        {
+        if cached.as_ref().is_none_or(|cached| {
+            cached
+                .binding
+                .upgrade()
+                .is_none_or(|cached_binding| !Arc::ptr_eq(&cached_binding, binding))
+        }) {
             *cached = None;
         }
 
         let cached = cached.get_or_insert_with(|| CachedMcpHandlers {
-            binding: binding_ptr,
+            binding: Arc::downgrade(binding),
             handlers: HashMap::new(),
         });
         append_mcp_tools(
@@ -205,8 +207,6 @@ fn append_mcp_tools_with_selection(
         let agent_plugin = server.is_some_and(|server| server.source().is_agent_plugin());
         let tool_input_schema_max_bytes =
             server.and_then(|server| server.config().tool_input_schema_max_bytes);
-        // Handlers contain immutable tool metadata, not a connection or authorization snapshot.
-        // Preserve their identity across equivalent bindings so the search index can also be reused.
         let handler = if let Some(cached) = handlers.get(&tool_name).filter(|cached| {
             cached.tool_info == tool
                 && cached.agent_plugin == agent_plugin
@@ -214,6 +214,7 @@ fn append_mcp_tools_with_selection(
         }) {
             Arc::clone(&cached.handler)
         } else {
+            handlers.remove(&tool_name);
             let handler = if agent_plugin {
                 McpHandler::new_agent_plugin(tool.clone())
             } else if let Some(budget) = tool_input_schema_max_bytes {

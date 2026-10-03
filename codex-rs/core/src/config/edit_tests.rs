@@ -1084,7 +1084,6 @@ fn blocking_replace_mcp_servers_round_trips() {
             supports_parallel_tool_calls: true,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -1122,7 +1121,6 @@ fn blocking_replace_mcp_servers_round_trips() {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -1219,7 +1217,6 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides(output_token_
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Lazy,
             sharing: codex_config::McpServerSharingMode::Standalone,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -1302,7 +1299,6 @@ foo = { command = "cmd" }
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -1359,7 +1355,6 @@ foo = { command = "cmd" } # keep me
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -1415,7 +1410,6 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -1472,7 +1466,6 @@ foo = { command = "cmd" }
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,

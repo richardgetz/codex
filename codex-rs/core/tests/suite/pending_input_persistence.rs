@@ -15,6 +15,7 @@ use codex_history::ResumedHistory;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -70,6 +71,12 @@ enum InputKind {
 enum FirstInputKind {
     User,
     InterAgentCommunication,
+}
+
+#[derive(Clone, Copy)]
+enum SpawnInputPath {
+    V1UserInput,
+    V2InterAgentCommunication,
 }
 
 #[derive(Debug)]
@@ -550,6 +557,161 @@ async fn local_preparation_is_durable_before_first_input_and_survives_restart(
         vec![("developer", PREPARED_CONTEXT), ("user", FIRST_PROMPT)]
     );
     resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[test_case(SpawnInputPath::V1UserInput; "v1_user_input")]
+#[test_case(SpawnInputPath::V2InterAgentCommunication; "v2_inter_agent_communication")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forked_spawn_materialization_keeps_open_edge_before_first_input(
+    first_input_kind: SpawnInputPath,
+) -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let (checkpoints, mut checkpoint_requests) = mpsc::unbounded_channel();
+    let store = Arc::new(GatedCheckpointStore {
+        inner: InMemoryThreadStore::default(),
+        policy: CheckpointPolicy::Synchronous,
+        armed: AtomicBool::new(false),
+        arm_on: Some(PersistContext::SubagentSpawn),
+        checkpoint_context: Some(PersistContext::Standard),
+        checkpoints,
+    });
+    let thread_store: Arc<dyn ThreadStore> = store.clone();
+    let test = test_codex()
+        .with_thread_store(thread_store)
+        .with_history_mode(ThreadHistoryMode::Legacy)
+        .with_config(move |config| {
+            config.agent_max_depth = 1;
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("enable collaboration");
+            if matches!(first_input_kind, SpawnInputPath::V2InterAgentCommunication) {
+                config
+                    .features
+                    .enable(Feature::MultiAgentV2)
+                    .expect("enable multi-agent v2");
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let request_log = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call_with_namespace(
+                    "spawn-admission",
+                    match first_input_kind {
+                        SpawnInputPath::V1UserInput => "multi_agent_v1",
+                        SpawnInputPath::V2InterAgentCommunication => "collaboration",
+                    },
+                    "spawn_agent",
+                    &match first_input_kind {
+                        SpawnInputPath::V1UserInput => json!({
+                            "message": "child startup task",
+                            "task_name": "worker",
+                            "fork_context": true,
+                        }),
+                        SpawnInputPath::V2InterAgentCommunication => json!({
+                            "message": "child startup task",
+                            "task_name": "worker",
+                            "fork_turns": "all",
+                        }),
+                    }
+                    .to_string(),
+                ),
+                responses::ev_completed("parent-spawn"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("fallback-one"),
+                responses::ev_completed("fallback-one"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("fallback-two"),
+                responses::ev_completed("fallback-two"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "parent context to inherit".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let checkpoint = timeout(Duration::from_secs(10), checkpoint_requests.recv())
+        .await?
+        .expect("child should reach its pre-input materialization barrier");
+    let child = test.thread_manager.get_thread(checkpoint.thread_id).await?;
+    let handoff = test.codex.begin_handoff()?;
+    assert!(
+        timeout(Duration::from_millis(10), handoff.wait_for_admissions())
+            .await
+            .is_err(),
+        "spawn admission must remain held while fork materialization is blocked before input"
+    );
+    let state_db = codex_core::init_state_db(&test.config)
+        .await
+        .expect("state db should be enabled");
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let open_children = state_db
+                .list_thread_spawn_children_with_status(
+                    test.session_configured.thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Open,
+                )
+                .await?;
+            if open_children == vec![checkpoint.thread_id] {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await??;
+
+    checkpoint
+        .complete
+        .send(())
+        .expect("release pre-input child materialization barrier");
+    timeout(Duration::from_secs(10), handoff.wait_for_admissions())
+        .await
+        .expect("spawn admission should finish after initial input submission is accepted");
+    drop(handoff);
+
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let child_history = store
+        .inner
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: checkpoint.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    match first_input_kind {
+        SpawnInputPath::V1UserInput => assert!(child_history.items.iter().any(|item| {
+            matches!(item, RolloutItem::ResponseItem(envelope)
+                if matches!(&envelope.item, ResponseItem::Message { role, content, .. }
+                    if role == "user" && content.iter().any(|content| matches!(content,
+                        ContentItem::InputText { text } if text.contains("child startup task")))))
+        })),
+        SpawnInputPath::V2InterAgentCommunication => assert!(
+            request_log.requests().iter().any(|request| {
+                request
+                    .inputs_of_type("agent_message")
+                    .iter()
+                    .any(|item| item.to_string().contains("child startup task"))
+            }),
+            "V2 initial input should reach the child's model request"
+        ),
+    }
+
+    child.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 

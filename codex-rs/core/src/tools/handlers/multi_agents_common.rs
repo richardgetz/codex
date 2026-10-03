@@ -1,7 +1,6 @@
 use crate::agent::role::apply_role_to_config;
-use crate::config::Config;
-
 use crate::agent::types::SpawnAgentForkMode;
+use crate::config::Config;
 use crate::config::DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 use crate::config::HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
 use crate::function_tool::FunctionCallError;
@@ -12,7 +11,6 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use codex_features::Feature;
 use codex_models_manager::manager::RefreshStrategy;
-
 use codex_otel::SessionTelemetry;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;

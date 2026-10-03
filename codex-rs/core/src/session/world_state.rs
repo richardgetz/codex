@@ -34,12 +34,6 @@ use codex_prompts::ResolvedModelMessages;
 use codex_prompts::render_model_instructions;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructionsProvenance;
-use codex_skills_extension::HostSkillsSnapshot;
-
-use codex_protocol::protocol::MultiAgentVersion;
-
-const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
-const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
 impl Session {
     pub(crate) async fn build_world_state_for_turn_context(
@@ -131,36 +125,13 @@ impl Session {
                 })
         };
         let environment_subagents = if turn_context.config.include_environment_context {
-            match turn_context.multi_agent_version {
-                MultiAgentVersion::V2 => {
-                    let agent_paths = self
-                        .services
-                        .agent_control
-                        .child_agent_paths(self.thread_id)
-                        .await;
-                    let mut lines =
-                        Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
-                    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
-                    for agent_path in agent_paths {
-                        if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
-                            break;
-                        }
-                        let line = format!(r#"<agent name="{agent_path}" />"#);
-                        let line_bytes = "    \n".len() + line.len();
-                        if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
-                            rendered_bytes += line_bytes;
-                            lines.push(line);
-                        }
-                    }
-                    lines.join("\n")
-                }
-                MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
-                    self.services
-                        .local_agent_runtime
-                        .format_legacy_environment_context_subagents(self.thread_id)
-                        .await
-                }
-            }
+            self.services
+                .local_agent_control()
+                .format_environment_context_subagents(
+                    self.thread_id,
+                    turn_context.multi_agent_version,
+                )
+                .await
         } else {
             String::new()
         };
@@ -342,21 +313,6 @@ impl Session {
             .iter()
             .map(|root| root.selected_root().clone())
             .collect::<Vec<_>>();
-        let skills_outcome = turn_context.turn_skills.snapshot.outcome();
-        let mut filtered_skills_outcome = skills_outcome.clone();
-        filtered_skills_outcome.skills = crate::skills::filter_skills_for_mode(
-            &turn_context.config,
-            turn_context.mode,
-            &skills_outcome.skills,
-        )
-        .into_iter()
-        .cloned()
-        .collect();
-        turn_context
-            .extension_data
-            .insert(HostSkillsSnapshot::new(std::sync::Arc::new(
-                filtered_skills_outcome,
-            )));
         let previous_world_state = self.state.lock().await.history.world_state_checkpoint();
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor

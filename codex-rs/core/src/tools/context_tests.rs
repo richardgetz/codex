@@ -101,6 +101,7 @@ fn mcp_tool_output_response_item_includes_wall_time() {
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
         truncation_policy: TruncationPolicy::Bytes(1024),
+        serialized_output_max_bytes: None,
     };
 
     let response = output.to_response_item(
@@ -130,6 +131,39 @@ fn mcp_tool_output_response_item_includes_wall_time() {
 }
 
 #[test]
+fn mcp_tool_output_respects_serialized_response_byte_limit() {
+    let output = McpToolOutput {
+        result: CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "history result ".repeat(10_000),
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        },
+        tool_input: json!({}),
+        result_metadata_capture_allowed: false,
+        wall_time: std::time::Duration::ZERO,
+        original_image_detail_supported: false,
+        truncation_policy: TruncationPolicy::Bytes(8_000),
+        serialized_output_max_bytes: Some(8_192),
+    };
+
+    let ResponseInputItem::FunctionCallOutput { output, .. } = output.to_response_item(
+        "history-call",
+        &ToolPayload::Function {
+            arguments: "{}".to_owned(),
+        },
+    ) else {
+        panic!("expected function call output");
+    };
+
+    assert!(serde_json::to_vec(&output).unwrap().len() <= 8_192);
+    assert!(output.body.to_text().unwrap().contains("Wall time:"));
+}
+
+#[test]
 fn mcp_tool_output_response_item_truncates_large_structured_content() {
     let output = McpToolOutput {
         result: CallToolResult {
@@ -148,6 +182,7 @@ fn mcp_tool_output_response_item_truncates_large_structured_content() {
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
         truncation_policy: TruncationPolicy::Bytes(128),
+        serialized_output_max_bytes: None,
     };
 
     assert_eq!(
@@ -199,6 +234,7 @@ fn mcp_tool_output_response_item_preserves_content_items() {
         wall_time: std::time::Duration::from_millis(500),
         original_image_detail_supported: false,
         truncation_policy: TruncationPolicy::Bytes(1024),
+        serialized_output_max_bytes: None,
     };
 
     let response = output.to_response_item(
@@ -261,6 +297,7 @@ fn mcp_tool_output_code_mode_result_preserves_content_without_private_metadata(
         wall_time: std::time::Duration::from_millis(1250),
         original_image_detail_supported: false,
         truncation_policy,
+        serialized_output_max_bytes: None,
     };
 
     let payload = ToolPayload::Function {

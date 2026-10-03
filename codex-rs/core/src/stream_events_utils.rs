@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_extension_api::ExtensionData;
 use codex_history::ResponseItemEnvelope;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ResponseItemId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
@@ -78,11 +79,13 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
 pub(crate) async fn record_completed_response_item(
     sess: &Session,
     turn_context: &TurnContext,
+    session_telemetry: &SessionTelemetry,
     item: &ResponseItem,
 ) {
     record_completed_response_item_with_finalized_facts(
         sess,
         turn_context,
+        session_telemetry,
         item,
         /*finalized_facts*/ None,
     )
@@ -92,6 +95,7 @@ pub(crate) async fn record_completed_response_item(
 pub(crate) async fn record_completed_response_item_with_finalized_facts(
     sess: &Session,
     turn_context: &TurnContext,
+    session_telemetry: &SessionTelemetry,
     item: &ResponseItem,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
@@ -106,7 +110,7 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
             .extension_data
             .get_or_init(codex_otel::AgentResponseLogger::default)
             .record(
-                &turn_context.session_telemetry,
+                session_telemetry,
                 item,
                 codex_otel::AgentResponseContext {
                     turn_id: &turn_context.sub_id,
@@ -228,6 +232,7 @@ pub(crate) struct OutputItemResult {
 pub(crate) struct HandleOutputCtx {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
+    pub session_telemetry: SessionTelemetry,
     pub turn_store: Arc<ExtensionData>,
     pub tool_runtime: ToolCallRuntime,
     pub cancellation_token: CancellationToken,
@@ -338,8 +343,13 @@ pub(crate) async fn handle_output_item_done(
                 call.tool_name,
             );
 
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+            record_completed_response_item(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &ctx.session_telemetry,
+                &item,
+            )
+            .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
@@ -380,6 +390,7 @@ pub(crate) async fn handle_output_item_done(
             record_completed_response_item_with_finalized_facts(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
+                &ctx.session_telemetry,
                 &item,
                 finalized_facts.as_ref(),
             )
@@ -399,8 +410,13 @@ pub(crate) async fn handle_output_item_done(
                     ..Default::default()
                 },
             };
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+            record_completed_response_item(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &ctx.session_telemetry,
+                &item,
+            )
+            .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
                     .record_conversation_items(

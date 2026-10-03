@@ -624,6 +624,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                 wall_time: Duration::ZERO,
                 original_image_detail_supported: false,
                 truncation_policy,
+                serialized_output_max_bytes: None,
             }),
             model_visible: crate::tools::context::FunctionToolOutput::from_text(
                 "hook feedback".to_string(),
@@ -726,6 +727,7 @@ fn post_tool_use_feedback_output_preserves_mcp_result_metadata(tool_error: bool)
             wall_time: std::time::Duration::ZERO,
             original_image_detail_supported: false,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(64),
+            serialized_output_max_bytes: None,
         }),
         model_visible: FunctionToolOutput::from_text(
             "unrelated hook feedback".to_string(),

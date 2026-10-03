@@ -293,8 +293,6 @@ impl LocalStdioServerLauncher {
             // handles and needs a handle allowlist in the shared spawn backend.
             #[cfg(unix)]
             command.descriptor_policy(DescriptorPolicy::Explicit);
-            #[cfg(windows)]
-            command.creation_flags(CREATE_NO_WINDOW);
             command
         };
         #[cfg(windows)]

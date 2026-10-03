@@ -477,6 +477,7 @@ async fn voice_handoff_attributes_plugin_events_after_realtime_closes() {
             AnalyticsFact::Notification(Box::new(ServerNotification::ThreadRealtimeStarted(
                 ThreadRealtimeStartedNotification {
                     thread_id: "thread-2".to_string(),
+                    submission_id: String::new(),
                     realtime_session_id: Some("work-voice-123".to_string()),
                     version: RealtimeConversationVersion::V2,
                 },
@@ -497,6 +498,7 @@ async fn voice_handoff_attributes_plugin_events_after_realtime_closes() {
             AnalyticsFact::Notification(Box::new(ServerNotification::ThreadRealtimeClosed(
                 ThreadRealtimeClosedNotification {
                     thread_id: "thread-2".to_string(),
+                    submission_id: String::new(),
                     reason: None,
                 },
             ))),
@@ -608,6 +610,7 @@ async fn voice_handoff_steering_active_turn_does_not_tag_next_text_turn() {
             AnalyticsFact::Notification(Box::new(ServerNotification::ThreadRealtimeStarted(
                 ThreadRealtimeStartedNotification {
                     thread_id: "thread-2".to_string(),
+                    submission_id: String::new(),
                     realtime_session_id: Some("work-voice-123".to_string()),
                     version: RealtimeConversationVersion::V2,
                 },
@@ -628,6 +631,7 @@ async fn voice_handoff_steering_active_turn_does_not_tag_next_text_turn() {
             AnalyticsFact::Notification(Box::new(ServerNotification::ThreadRealtimeClosed(
                 ThreadRealtimeClosedNotification {
                     thread_id: "thread-2".to_string(),
+                    submission_id: String::new(),
                     reason: None,
                 },
             ))),

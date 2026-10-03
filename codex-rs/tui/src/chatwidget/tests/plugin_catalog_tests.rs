@@ -179,6 +179,7 @@ async fn plugins_popup_remote_local_dedupe_prefers_installed_remote_after_mapped
 
     let remote_plugin_id = "plugins~Plugin_docs";
     let local_summary = PluginSummary {
+        extensions: None,
         remote_plugin_id: Some(remote_plugin_id.to_string()),
         ..plugins_test_summary(
             "plugin-docs",

@@ -1796,8 +1796,6 @@ impl FileSystemSandboxPolicy {
         dedup_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .iter()
-                .filter(|entry| !entry.access.can_read())
-                .filter(|entry| !self.can_read_local_path_with_cwd(entry.path.as_path(), cwd))
                 .filter(|entry| entry.access == FileSystemAccessMode::Deny)
                 .filter(|entry| {
                     !matching.as_ref().is_some_and(|matching| {

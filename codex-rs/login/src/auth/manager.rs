@@ -2211,7 +2211,7 @@ impl AuthManager {
             agent_identity_authapi_base_url(chatgpt_base_url.as_deref()).ok();
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Self {
-            codex_home: codex_home.clone(),
+            codex_home,
             auth_storage_home: RwLock::new(auth_storage_home),
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,

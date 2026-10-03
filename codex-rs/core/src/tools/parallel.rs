@@ -157,6 +157,8 @@ impl ToolCallRuntime {
                 &step_context.turn.config,
                 &step_context.turn.session_source,
             ) == Some(ConfigTeamRole::Lead);
+        let message_admission =
+            super::user_messaging::admit_code_mode_send(&self.session, &source, &call.tool_name);
         if step_context
             .turn
             .config
@@ -166,8 +168,6 @@ impl ToolCallRuntime {
         {
             executed_tool_calls.record_tool_call(&call, &source, &step_context);
         }
-        let message_admission =
-            super::user_messaging::admit_code_mode_send(&self.session, &source, &call.tool_name);
         let router = &step_context.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
         let tool_runtime = router.tool_runtime(&call.tool_name);
@@ -255,12 +255,6 @@ impl ToolCallRuntime {
                     Err(err) => return Err(FunctionCallError::Fatal(err.to_string())),
                 };
                 let _handoff_dispatch = handoff_dispatch;
-                if let Err(err) = session
-                    .wait_for_activity_resume(&invocation_cancellation_token)
-                    .await
-                {
-                    return Err(FunctionCallError::Fatal(err.to_string()));
-                }
                 let _message_admission = message_admission?;
                 if let Some(tool_runtime) = tool_runtime
                     && let Some(readiness) = tool_runtime.wait_until_ready(&session)

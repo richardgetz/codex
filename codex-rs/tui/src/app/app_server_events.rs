@@ -87,6 +87,7 @@ impl App {
                 }
                 self.agents_overview.request_id = None;
                 self.agents_overview.refresh_pending = false;
+                self.agents_overview.initialized = false;
                 self.agents_overview.refresh_notifications.clear();
                 self.agents_overview.activity.clear();
                 self.agents_overview.last_messages.clear();
@@ -302,32 +303,6 @@ impl App {
                 .or_default();
         }
         self.track_agents_overview_notification(&notification);
-        if let Some(thread_id) = match &notification {
-            ServerNotification::Error(error) if !error.will_retry => {
-                ThreadId::from_string(&error.thread_id).ok()
-            }
-            ServerNotification::TurnCompleted(completed) => {
-                ThreadId::from_string(&completed.thread_id).ok()
-            }
-            _ => None,
-        } {
-            self.finish_thread_activity(thread_id);
-        }
-        if let Some(thread_id) = match &notification {
-            ServerNotification::ThreadClosed(notification) => {
-                ThreadId::from_string(&notification.thread_id).ok()
-            }
-            ServerNotification::ThreadDeleted(notification) => {
-                ThreadId::from_string(&notification.thread_id).ok()
-            }
-            ServerNotification::ThreadArchived(notification) => {
-                ThreadId::from_string(&notification.thread_id).ok()
-            }
-            _ => None,
-        } {
-            self.remove_thread_activity(thread_id);
-        }
-
         // Retained blank sessions stay subscribed after their event channels are cleared.
         if let ServerNotification::ThreadSettingsUpdated(settings) = &notification
             && let Ok(thread_id) = ThreadId::from_string(&settings.thread_id)
@@ -414,6 +389,7 @@ impl App {
                 self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
                 self.chat_widget.cyber_policy_notice = Default::default();
+                self.chat_widget.invalidate_security_setup();
                 if let Some(crate::pager_overlay::Overlay::Analytics(view)) = &mut self.overlay {
                     view.refresh();
                 }
@@ -459,6 +435,12 @@ impl App {
                     has_codex_backend_auth,
                 );
                 if self.chat_widget.has_chatgpt_account() {
+                    crate::security_setup::prefetch(
+                        &self.config,
+                        app_server_client,
+                        self.app_event_tx.clone(),
+                        self.chat_widget.security_setup_request_id,
+                    );
                     crate::daybreak::prefetch_notice(
                         &self.config,
                         app_server_client,

@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 from typing import Sequence
 
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUILD_SCRIPT = REPO_ROOT / "codex-cli" / "scripts" / "build_npm_package.py"
 WORKFLOW_NAME = ".github/workflows/rust-release.yml"
@@ -42,8 +43,7 @@ CODEX_PACKAGE_COMPONENT = getattr(
 )
 
 _RELEASE_CONFIG_SPEC = importlib.util.spec_from_file_location(
-    "codex_release_config",
-    RELEASE_CONFIG_MODULE,
+    "codex_release_config", RELEASE_CONFIG_MODULE
 )
 if _RELEASE_CONFIG_SPEC is None or _RELEASE_CONFIG_SPEC.loader is None:
     raise RuntimeError(f"Unable to load module from {RELEASE_CONFIG_MODULE}")
@@ -128,16 +128,6 @@ def parse_args() -> argparse.Namespace:
         help="Retain temporary staging directories instead of deleting them.",
     )
     parser.add_argument(
-        "--allow-missing-native-component",
-        dest="allow_missing_native_components",
-        action="append",
-        default=[],
-        help=(
-            "Native component that may be absent from reused workflow artifacts. "
-            "Intended for CI compatibility only; release staging should not use this."
-        ),
-    )
-    parser.add_argument(
         "--release-config",
         type=Path,
         help="Optional JSON file that overrides npm package and repo metadata for fork releases.",
@@ -180,18 +170,25 @@ def expand_packages(
     return expanded
 
 
-def resolve_release_workflow(version: str) -> dict:
+def resolve_release_workflow(version: str, github_repo: str) -> dict:
+    is_fork_release = github_repo != GITHUB_REPO
+    branch = "stable" if is_fork_release else f"rust-v{version}"
+    workflow_name = (
+        ".github/workflows/fork-release.yml" if is_fork_release else WORKFLOW_NAME
+    )
     stdout = subprocess.check_output(
         [
             "gh",
             "run",
             "list",
+            "--repo",
+            github_repo,
             "--branch",
-            f"rust-v{version}",
+            branch,
             "--json",
             "workflowName,url,headSha",
             "--workflow",
-            WORKFLOW_NAME,
+            workflow_name,
             "--jq",
             "first(.[])",
         ],
@@ -200,17 +197,17 @@ def resolve_release_workflow(version: str) -> dict:
     )
     workflow = json.loads(stdout or "null")
     if not workflow:
-        raise RuntimeError(
-            f"Unable to find rust-release workflow for version {version}."
-        )
+        raise RuntimeError(f"Unable to find {workflow_name} workflow for {branch}.")
     return workflow
 
 
-def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:
+def resolve_workflow_url(
+    version: str, override: str | None, github_repo: str
+) -> tuple[str, str | None]:
     if override:
         return override, None
 
-    workflow = resolve_release_workflow(version)
+    workflow = resolve_release_workflow(version, github_repo)
     return workflow["url"], workflow.get("headSha")
 
 
@@ -231,10 +228,7 @@ def install_native_components(
     if workflow_url is None:
         with _gha_group("Install downloaded native artifacts"):
             install_from_downloaded_artifacts(
-                artifacts_dir,
-                sorted(components),
-                vendor_dir,
-                supported_targets,
+                artifacts_dir, sorted(components), vendor_dir, supported_targets
             )
     else:
         workflow_id = workflow_url.rstrip("/").split("/")[-1]
@@ -552,29 +546,17 @@ def tarball_name_for_package(package: str, version: str) -> str:
 
 def main() -> int:
     args = parse_args()
+    release_config = load_release_config(args.release_config)
+    supported_targets = tuple(release_config["supported_targets"])
+    github_repo = release_config["github_repo"]
 
     output_dir = args.output_dir or (REPO_ROOT / "dist" / "npm")
     output_dir.mkdir(parents=True, exist_ok=True)
-    release_config = load_release_config(args.release_config)
-    supported_targets = tuple(release_config.get("supported_targets", BINARY_TARGETS))
-    github_repo = release_config.get("github_repo", GITHUB_REPO)
-    allow_missing_native_components = set(args.allow_missing_native_components)
 
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
 
     packages = expand_packages(list(args.packages), set(supported_targets))
     native_component_sets = collect_native_component_sets(packages)
-    native_component_sets = [
-        tuple(
-            component
-            for component in components
-            if component not in allow_missing_native_components
-        )
-        for components in native_component_sets
-    ]
-    native_component_sets = [
-        components for components in native_component_sets if components
-    ]
     print("Expanded packages: " + ", ".join(packages), flush=True)
     if native_component_sets:
         component_sets = [
@@ -614,7 +596,7 @@ def main() -> int:
                 workflow_url = None
             else:
                 workflow_url, resolved_head_sha = resolve_workflow_url(
-                    args.release_version, args.workflow_url
+                    args.release_version, args.workflow_url, github_repo
                 )
                 print(f"Using native artifacts from {workflow_url}", flush=True)
 
@@ -671,8 +653,6 @@ def main() -> int:
                 cmd.extend(["--vendor-src", str(vendor_src)])
             if args.release_config is not None:
                 cmd.extend(["--release-config", str(args.release_config.resolve())])
-            for component in sorted(allow_missing_native_components):
-                cmd.extend(["--allow-missing-native-component", component])
 
             staging_jobs.append(
                 (staging_dir, cmd, f"Staged {package} at {pack_output}")

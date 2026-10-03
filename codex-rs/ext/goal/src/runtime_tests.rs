@@ -61,6 +61,7 @@ async fn completed_background_wait_preserves_terminal_handling_for_same_turn() -
                 analytics: GoalAnalytics::new(AnalyticsEventsClient::disabled()),
                 enabled: true,
                 tools_available_for_thread: true,
+                tools_visible_for_thread: true,
                 root_accounting_state: None,
             },
         );

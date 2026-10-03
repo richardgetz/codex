@@ -1511,6 +1511,7 @@ mod tests {
     #[test]
     fn configured_launcher_overrides_standalone_path() {
         let daemon = Daemon {
+            log_diagnostics: false,
             socket_path: "socket".into(),
             pid_file: "pid".into(),
             update_pid_file: "updater".into(),
@@ -1534,6 +1535,7 @@ mod tests {
     #[tokio::test]
     async fn configured_launcher_counts_as_bootstrapped_without_updater() {
         let daemon = Daemon {
+            log_diagnostics: false,
             socket_path: "socket".into(),
             pid_file: "pid".into(),
             update_pid_file: "updater".into(),
@@ -1560,6 +1562,7 @@ mod tests {
     async fn stale_updater_cannot_restart_after_custom_launcher_selection() {
         let temp_dir = TempDir::new().expect("temp dir");
         let daemon = Daemon {
+            log_diagnostics: false,
             socket_path: temp_dir.path().join("app-server-control.sock"),
             pid_file: temp_dir.path().join("app-server.pid"),
             update_pid_file: temp_dir.path().join("app-server-updater.pid"),
@@ -1669,6 +1672,7 @@ mod tests {
             update_pid_file: state.join("updater.pid"),
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
+            apply_receipt_file: state.join(super::APPLY_RECEIPT_FILE_NAME),
             managed_codex_bin: home.path().join("codex"),
         };
         codex_app_server_transport::daemon_recovery::write_candidates(
@@ -1726,6 +1730,7 @@ mod tests {
             update_pid_file: state.join("app-server-updater.pid"),
             operation_lock_file: state.join("daemon.lock"),
             settings_file: state.join("settings.json"),
+            apply_receipt_file: state.join(super::APPLY_RECEIPT_FILE_NAME),
             managed_codex_bin: standalone.join("current/bin/codex"),
         };
         let settings = DaemonSettings::default();

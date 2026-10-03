@@ -8,7 +8,6 @@ mod coverage;
 mod decision;
 mod feedback;
 mod input_budget;
-mod metrics;
 mod permissions;
 mod prompt;
 mod request_budget;

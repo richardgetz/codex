@@ -15,8 +15,6 @@ use std::path::Path;
 use std::process::Stdio as TokioStdio;
 #[cfg(windows)]
 use winapi::um::winbase::CREATE_NO_WINDOW;
-#[cfg(windows)]
-use winapi::um::winbase::CREATE_SUSPENDED;
 
 use crate::child::Child;
 use crate::child::ChildKind;

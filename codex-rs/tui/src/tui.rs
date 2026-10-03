@@ -71,9 +71,8 @@ mod input_boundary;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
-mod mac_keyboard;
-
 mod link_pointer;
+mod mac_keyboard;
 #[cfg(test)]
 #[path = "tui/owned_screen_tests.rs"]
 mod owned_screen_tests;

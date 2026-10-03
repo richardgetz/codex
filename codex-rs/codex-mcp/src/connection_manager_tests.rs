@@ -112,9 +112,11 @@ fn test_server_config(name: &str) -> McpServerConfig {
         environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
+        startup_readiness: Default::default(),
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::Auto,
         sharing: McpServerSharingMode::default(),
+        tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
         startup_timeout_sec: None,
@@ -139,6 +141,7 @@ impl McpConnectionSet {
             servers: HashMap::new(),
             event_stream_connection: None,
             disabled_servers: Vec::new(),
+            protocol_mode: crate::McpProtocolMode::Legacy,
             required_servers: Vec::new(),
             optional_startup_deadline: OnceLock::new(),
             tool_plugin_context: Arc::new(ToolPluginContext::default()),
@@ -4434,6 +4437,7 @@ async fn list_all_tools_does_not_start_an_unstarted_lazy_server() {
             client,
             is_codex_apps_mcp_server: false,
             cached_server_info: None,
+            server_capabilities: Arc::new(std::sync::Mutex::new(None)),
             codex_apps_tools_cache_context: None,
             tool_catalog_cache_context: None,
             startup_complete: Arc::new(AtomicBool::new(false)),
@@ -4793,7 +4797,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                 supports_parallel_tool_calls: false,
                 startup: McpServerStartupMode::default(),
                 sharing: McpServerSharingMode::default(),
-
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -4826,7 +4829,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
                 supports_parallel_tool_calls: false,
                 startup: McpServerStartupMode::default(),
                 sharing: McpServerSharingMode::default(),
-
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -4942,7 +4944,6 @@ fn mcp_init_error_display_prompts_for_github_pat() {
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -5107,7 +5108,6 @@ fn mcp_init_error_display_reports_generic_errors() {
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -5191,7 +5191,6 @@ fn reusable_server_config(url: &str) -> McpServerConfig {
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
