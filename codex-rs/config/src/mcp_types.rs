@@ -507,7 +507,6 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             supports_parallel_tool_calls,
             startup,
             sharing,
-
             tool_input_schema_max_bytes,
             omit_tools_from,
             default_tools_approval_mode,
@@ -631,7 +630,6 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
             startup: startup.unwrap_or_default(),
             sharing: sharing.unwrap_or_default(),
-
             tool_input_schema_max_bytes,
             omit_tools_from,
             disabled_reason: None,

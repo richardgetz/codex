@@ -655,7 +655,6 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -688,7 +687,6 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,

@@ -1179,7 +1179,6 @@ impl TurnRequestProcessor {
                 Op::ThreadSettings {
                     thread_settings,
                     usage_policy_update,
-
                     reply: None,
                 },
             )

@@ -315,6 +315,7 @@ fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> Hand
     HandleOutputCtx {
         sess: session,
         turn_context: Arc::clone(&turn_context),
+        session_telemetry: step_context.session_telemetry.clone(),
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),

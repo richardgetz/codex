@@ -21,7 +21,6 @@ CODEX_CLI_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
 CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
-CODEX_NPM_NAME = "@openai/codex"
 CODEX_PACKAGE_COMPONENT = "codex-package"
 
 # `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
@@ -142,16 +141,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional JSON file that overrides npm package and repo metadata for fork releases.",
     )
-    parser.add_argument(
-        "--allow-missing-native-component",
-        dest="allow_missing_native_components",
-        action="append",
-        default=[],
-        help=(
-            "Native component that may be absent from --vendor-src. Intended for CI "
-            "compatibility with older artifact workflows; releases should not use this."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -179,17 +168,11 @@ def main() -> int:
 
         vendor_src = args.vendor_src.resolve() if args.vendor_src else None
         native_components = PACKAGE_NATIVE_COMPONENTS.get(package, [])
-        allow_missing_components = set(args.allow_missing_native_components)
-        required_native_components = [
-            component
-            for component in native_components
-            if component not in allow_missing_components
-        ]
         target_filter = PACKAGE_TARGET_FILTERS.get(package)
 
-        if required_native_components:
+        if native_components:
             if vendor_src is None:
-                components_str = ", ".join(required_native_components)
+                components_str = ", ".join(native_components)
                 raise RuntimeError(
                     "Native components "
                     f"({components_str}) required for package '{package}'. Provide --vendor-src "
@@ -201,7 +184,6 @@ def main() -> int:
                 staging_dir,
                 native_components,
                 target_filter={target_filter} if target_filter else None,
-                allow_missing_components=allow_missing_components,
             )
 
         if release_version:
@@ -273,10 +255,7 @@ def stage_sources(
     if package == "codex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        write_codex_launcher(bin_dir / "codex.js", package_name)
-        rg_manifest = CODEX_CLI_ROOT / "bin" / "rg"
-        if rg_manifest.exists():
-            shutil.copy2(rg_manifest, bin_dir / "rg")
+        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
 
         readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
@@ -339,10 +318,9 @@ def stage_sources(
         package_json["repository"] = repository
 
     if package == "codex":
-        supported_targets = set(release_config["supported_targets"])
-        bin_name = release_config["npm_bin_name"]
-        package_json["bin"] = {bin_name: "bin/codex.js"}
+        package_json["bin"] = {release_config["npm_bin_name"]: "bin/codex.js"}
         package_json["files"] = ["bin"]
+        supported_targets = set(release_config["supported_targets"])
         package_json["optionalDependencies"] = {
             package_alias_name(
                 package_name, CODEX_PLATFORM_PACKAGES[platform_package]["npm_tag"]
@@ -378,15 +356,6 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
     return f"{version}-{platform_tag}"
 
 
-def write_codex_launcher(output_path: Path, package_name: str) -> None:
-    with open(CODEX_CLI_ROOT / "bin" / "codex.js", "r", encoding="utf-8") as fh:
-        launcher = fh.read()
-
-    output_path.write_text(
-        launcher.replace(CODEX_NPM_NAME, package_name), encoding="utf-8"
-    )
-
-
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, cwd=cwd, check=True)
@@ -418,14 +387,12 @@ def copy_native_binaries(
     staging_dir: Path,
     components: list[str],
     target_filter: set[str] | None = None,
-    allow_missing_components: set[str] | None = None,
 ) -> None:
     vendor_src = vendor_src.resolve()
     if not vendor_src.exists():
         raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
 
-    allow_missing_components = allow_missing_components or set()
-    components_set = set(components) - allow_missing_components
+    components_set = set(components)
     if not components_set:
         return
 

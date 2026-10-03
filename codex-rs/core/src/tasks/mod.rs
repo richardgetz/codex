@@ -847,7 +847,34 @@ impl Session {
                     .begin_handoff_admission()
                 {
                     Ok(admission) => admission,
-                    Err(_) => return,
+                    Err(_) => {
+                        // The pending mailbox blocks a successful handoff, so retry after an
+                        // aborted handoff reopens admission instead of stranding its wake. Keep
+                        // the submission loop free to process handoff suspension and shutdown.
+                        let local_agent_control = self.services.local_agent_control();
+                        let session = Arc::clone(self);
+                        let sub_id = sub_id.clone();
+                        drop(tokio::spawn(async move {
+                            loop {
+                                tokio::select! {
+                                    _ = local_agent_control.wait_for_handoff_admission_open() => {},
+                                    _ = session.wait_for_shutdown() => return,
+                                }
+                                match local_agent_control.begin_handoff_admission() {
+                                    Ok(admission) => {
+                                        session
+                                            .maybe_start_turn_for_pending_work_with_admission(
+                                                sub_id, admission,
+                                            )
+                                            .await;
+                                        return;
+                                    }
+                                    Err(_) => continue,
+                                }
+                            }
+                        }));
+                        return;
+                    }
                 },
             };
             let turn_state = {
@@ -984,7 +1011,7 @@ impl Session {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
-        let mut should_restart_pending_work = false;
+        let should_restart_pending_work = false;
         let (active_turn, _handoff_terminal_delivery) = {
             let mut active = self.active_turn.lock().await;
             let has_task = active
@@ -1026,10 +1053,6 @@ impl Session {
                     /*error*/ None,
                 )
                 .await;
-            } else if reason == TurnAbortReason::Interrupted {
-                self.requeue_pending_input_for_next_turn(&active_turn.turn_state)
-                    .await;
-                should_restart_pending_work = true;
             }
             if aborted_turn {
                 active_turn_to_clear = Some(active_turn);
@@ -1184,6 +1207,7 @@ impl Session {
                 self.emit_turn_error_lifecycle(
                     turn_context.as_ref(),
                     err.to_codex_protocol_error(),
+                    err.details(),
                 )
                 .await;
                 self.track_turn_codex_error(turn_context.as_ref(), &err);

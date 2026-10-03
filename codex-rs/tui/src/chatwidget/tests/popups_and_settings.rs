@@ -848,6 +848,7 @@ async fn plugin_detail_unmaterialized_default_uses_remote_install_path() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
+        extensions: None,
         install_policy: PluginInstallPolicy::InstalledByDefault,
         ..plugins_test_remote_summary(
             "plugins~Plugin_linear",
@@ -988,6 +989,7 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
+        extensions: None,
         source: PluginSource::Remote,
         ..plugins_test_summary(
             "linear@workspace-shared-with-me-private",
@@ -1043,6 +1045,7 @@ async fn plugin_detail_popup_shows_local_share_context_as_read_only_snapshot() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
+        extensions: None,
         share_context: Some(PluginShareContext {
             remote_plugin_id: "plugins~Plugin_docs".to_string(),
             remote_version: Some("7".to_string()),
@@ -1086,6 +1089,7 @@ async fn plugin_detail_popup_shows_admin_disabled_status_snapshot() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
+        extensions: None,
         availability: PluginAvailability::DisabledByAdmin,
         ..plugins_test_summary(
             "plugin-admin-blocked",
@@ -1138,6 +1142,7 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
+        extensions: None,
         availability: PluginAvailability::DisabledByAdmin,
         ..plugins_test_summary(
             "plugin-admin-blocked",
@@ -1182,6 +1187,7 @@ async fn plugins_popup_admin_disabled_available_plugin_has_view_only_hint() {
     chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
 
     let summary = PluginSummary {
+        extensions: None,
         availability: PluginAvailability::DisabledByAdmin,
         ..plugins_test_summary(
             "plugin-admin-blocked",
@@ -1325,6 +1331,7 @@ async fn plugins_popup_remote_detail_tracks_physical_and_policy_install_state() 
     let remote_plugin_id = "plugins~Plugin_docs";
     let remote_marketplace_name = "workspace-shared-with-me-private";
     let mut local_summary = PluginSummary {
+        extensions: None,
         share_context: Some(PluginShareContext {
             remote_plugin_id: remote_plugin_id.to_string(),
             remote_version: None,

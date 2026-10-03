@@ -31,7 +31,9 @@ or behaves differently from upstream.
   the upstream migration to the next unused version. See
   [`codex-rs/state/migrations/README.md`](../codex-rs/state/migrations/README.md).
   The `rust-v0.159.1` refresh retains the shipped sequence through `0066` and
-  appends the upstream archive-sort index migration as `0067`.
+  appends the upstream archive-sort index migration as `0067`. The
+  `rust-v0.160.0` refresh preserves `0067` and omits upstream `0058`, whose SQL
+  is byte-identical to that already-shipped migration.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 

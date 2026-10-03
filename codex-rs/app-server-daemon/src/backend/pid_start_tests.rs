@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 use super::super::LaunchIdentity;
 use super::managed_app_server_codex_home;
 use super::retain_launch_identity;
-use crate::managed_install::executable_identity_from_bytes;
+use crate::managed_install::executable_identity_from_reader;
 
 #[test]
 fn managed_app_server_home_comes_from_the_daemon_state_directory() {
@@ -28,9 +28,13 @@ fn launch_identity_is_retained_when_launcher_generation_is_stable() {
         retain_launch_identity(
             PathBuf::from("/opt/homebrew/bin/codex-rick"),
             Some("0.154.0-rick.6".to_string()),
-            Some(executable_identity_from_bytes(b"rick.6")),
+            Some(
+                executable_identity_from_reader(&b"rick.6"[..]).expect("test executable identity"),
+            ),
             Some("0.154.0-rick.6".to_string()),
-            Some(executable_identity_from_bytes(b"rick.6")),
+            Some(
+                executable_identity_from_reader(&b"rick.6"[..]).expect("test executable identity"),
+            ),
         ),
         LaunchIdentity {
             path: PathBuf::from("/opt/homebrew/bin/codex-rick"),
@@ -45,9 +49,13 @@ fn launch_identity_is_unknown_when_shim_changes_between_capture_and_spawn() {
         retain_launch_identity(
             PathBuf::from("/opt/homebrew/bin/codex-rick"),
             Some("0.154.0-rick.6".to_string()),
-            Some(executable_identity_from_bytes(b"rick.6")),
+            Some(
+                executable_identity_from_reader(&b"rick.6"[..]).expect("test executable identity"),
+            ),
             Some("0.154.0-rick.7".to_string()),
-            Some(executable_identity_from_bytes(b"rick.7")),
+            Some(
+                executable_identity_from_reader(&b"rick.7"[..]).expect("test executable identity"),
+            ),
         ),
         LaunchIdentity {
             path: PathBuf::from("/opt/homebrew/bin/codex-rick"),

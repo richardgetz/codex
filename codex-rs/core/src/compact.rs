@@ -6,7 +6,6 @@ use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
-use crate::context::GuardianContextMode;
 use crate::context::world_state::WorldState;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
@@ -31,7 +30,6 @@ use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -375,15 +373,7 @@ async fn run_compact_task_inner_impl(
         get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default()
     };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let identity = if GuardianContextMode::from_history(
-        history_snapshot.conversation_history_snapshot().as_ref(),
-    ) == GuardianContextMode::ThreadOwned
-    {
-        CompactedMessageIdentity::Preserve
-    } else {
-        CompactedMessageIdentity::Regenerate
-    };
-    let user_messages = collect_annotated_user_messages(history_items, identity);
+    let user_messages = collect_annotated_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
     if let Some(summary_item) = new_history.last_mut() {
@@ -561,19 +551,12 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompactedMessageIdentity {
-    Preserve,
-    Regenerate,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CompactedUserMessage<'a> {
     // Flattened text is only for the existing budget and truncation policy.
     // Whole text messages retain their exact content parts and annotations.
     // Borrow from the history snapshot until selected output is materialized.
     pub(crate) message: String,
-    id: Option<ResponseItemId>,
     original: &'a ResponseItem,
     harness_metadata: Option<&'a CodexHarnessMetadata>,
 }
@@ -581,32 +564,22 @@ pub(crate) struct CompactedUserMessage<'a> {
 pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUserMessage<'_>> {
     items
         .iter()
-        .filter_map(|item| {
-            compacted_user_message(
-                item,
-                /*harness_metadata*/ None,
-                CompactedMessageIdentity::Preserve,
-            )
-        })
+        .filter_map(|item| compacted_user_message(item, /*harness_metadata*/ None))
         .collect()
 }
 
 pub(crate) fn collect_annotated_user_messages(
     items: &[ResponseItemEnvelope],
-    identity: CompactedMessageIdentity,
 ) -> Vec<CompactedUserMessage<'_>> {
     items
         .iter()
-        .filter_map(|envelope| {
-            compacted_user_message(&envelope.item, envelope.metadata.as_ref(), identity)
-        })
+        .filter_map(|envelope| compacted_user_message(&envelope.item, envelope.metadata.as_ref()))
         .collect()
 }
 
 fn compacted_user_message<'a>(
     item: &'a ResponseItem,
     harness_metadata: Option<&'a CodexHarnessMetadata>,
-    identity: CompactedMessageIdentity,
 ) -> Option<CompactedUserMessage<'a>> {
     let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item) else {
         return None;
@@ -617,10 +590,6 @@ fn compacted_user_message<'a>(
     }
     Some(CompactedUserMessage {
         message,
-        id: match identity {
-            CompactedMessageIdentity::Preserve => item.id().cloned(),
-            CompactedMessageIdentity::Regenerate => None,
-        },
         original: item,
         harness_metadata,
     })
@@ -726,6 +695,7 @@ fn build_compacted_history_with_limit(
             }
             let tokens = approx_token_count(&message.message);
             let ResponseItem::Message {
+                id,
                 content,
                 internal_chat_message_metadata_passthrough,
                 ..
@@ -760,7 +730,7 @@ fn build_compacted_history_with_limit(
             }
             selected_messages.push(ResponseItemEnvelope {
                 item: ResponseItem::Message {
-                    id: message.id.clone(),
+                    id: id.clone(),
                     role: "user".to_owned(),
                     content,
                     phase: None,

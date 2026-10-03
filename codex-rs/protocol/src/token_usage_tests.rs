@@ -74,13 +74,7 @@ fn token_usage_projection_deduplicates_exact_responses_and_keeps_empty_threads()
             },
         ],
         [
-            record(
-                root_thread_id,
-                None,
-                "response-1",
-                first.clone(),
-                short.clone(),
-            ),
+            record(root_thread_id, None, "response-1", first, short.clone()),
             record(root_thread_id, None, "response-1", duplicate, long.clone()),
             record(root_thread_id, None, "response-2", second, long),
             record(

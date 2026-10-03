@@ -238,6 +238,7 @@ async fn enqueue_claimed_messages(
             trace: None,
             root_turn_id,
             residency_guard: None,
+            handoff_admission: None,
         };
         if tx_sub.send(submission).await.is_err() {
             for pending in &messages[index..] {
@@ -509,6 +510,7 @@ mod tests {
                 trace: None,
                 root_turn_id: None,
                 residency_guard: None,
+                handoff_admission: None,
             })
             .await
             .expect("fill submission channel");

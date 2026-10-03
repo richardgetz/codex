@@ -26,7 +26,7 @@ pub struct TuiEffects {
 impl Default for TuiEffects {
     fn default() -> Self {
         Self {
-            starfield: true,
+            starfield: false,
             shimmer: true,
             welcome: true,
             effort: true,

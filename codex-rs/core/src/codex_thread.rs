@@ -305,6 +305,7 @@ impl CodexThread {
             parent_turn_id: None,
             root_turn_id: None,
             residency_guard: None,
+            handoff_admission: None,
         })
         .await?;
         Ok(id)
@@ -453,6 +454,7 @@ impl CodexThread {
                 parent_turn_id: None,
                 root_turn_id: None,
                 residency_guard: None,
+                handoff_admission: None,
             })
             .await?;
             return Ok(id);
@@ -580,6 +582,22 @@ impl CodexThread {
             .await
     }
 
+    pub(crate) async fn start_or_steer_turn_with_admission(
+        &self,
+        request: TurnInputRequest,
+        handoff_admission: &crate::agent::control::HandoffAdmissionGuard,
+    ) -> CodexResult<TurnInputSubmission> {
+        self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
+            .await?;
+        self.io
+            .submit_turn_input_with_admission(
+                request,
+                TurnInputMode::StartOrSteer,
+                handoff_admission,
+            )
+            .await
+    }
+
     /// Starts a regular turn only when the thread is idle.
     ///
     /// Core declines the input without recording or enqueueing it when idle
@@ -629,14 +647,6 @@ impl CodexThread {
         &self,
         request: RecoverTurnRequest,
     ) -> CodexResult<StartIfIdleSubmission> {
-        // Recovery is exact-turn and does not replay user input, but an old owner must not accept
-        // a stale recovery request after its handoff fence seals. Replacement runtimes have a new
-        // control handle and therefore pass this admission normally.
-        let _handoff_admission = self
-            .session
-            .services
-            .local_agent_control()
-            .begin_handoff_admission()?;
         self.ensure_execution_capacity_for_turn_start(self.session.services.agent_control.as_ref())
             .await?;
         let config = self.session.get_config().await;
@@ -710,6 +720,7 @@ impl CodexThread {
                 parent_turn_id: None,
                 root_turn_id: None,
                 residency_guard: None,
+                handoff_admission: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
@@ -740,6 +751,7 @@ impl CodexThread {
                 parent_turn_id: None,
                 root_turn_id: None,
                 residency_guard: None,
+                handoff_admission: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
@@ -770,6 +782,7 @@ impl CodexThread {
                 parent_turn_id: None,
                 root_turn_id: None,
                 residency_guard: None,
+                handoff_admission: None,
             })
             .await
             .map_err(|_| CodexErr::Fatal("thread session has stopped".to_string()))?;
@@ -807,29 +820,6 @@ impl CodexThread {
         request: TurnInputRequest,
         mode: TurnInputMode,
     ) -> CodexResult<TurnInputSubmission> {
-        let _worker_lease = if !matches!(mode, TurnInputMode::Steer { .. }) {
-            self.ensure_execution_capacity_for_turn_start(
-                self.session.services.agent_control.as_ref(),
-            )
-            .await?;
-            let config = self.session.get_config().await;
-            self.session
-                .services
-                .local_agent_control()
-                .reserve_team_worker_turn(&config, &self.session_source, self.session.thread_id)?
-        } else {
-            None
-        };
-
-        // Hold the short handoff permit across the final queue submission. A handoff that seals
-        // concurrently either waits for this already-admitted request or rejects before it can
-        // enter the session loop.
-        let _admission = self
-            .session
-            .services
-            .local_agent_control()
-            .begin_handoff_admission()?;
-
         if !matches!(mode, TurnInputMode::Steer { .. }) {
             self.ensure_execution_capacity_for_turn_start(
                 self.session.services.agent_control.as_ref(),
@@ -1153,8 +1143,6 @@ impl CodexThread {
             .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
             .await;
     }
-
-    /// Append raw Responses API items to the thread's model-visible history.
 
     /// Records an explicit user goal mutation without scheduling a model response.
     pub async fn record_user_goal_update(

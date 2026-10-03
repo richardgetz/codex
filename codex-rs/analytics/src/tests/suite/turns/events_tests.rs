@@ -461,6 +461,7 @@ async fn turn_event_counts_completed_tool_items() {
             AnalyticsFact::Notification(Box::new(ServerNotification::ThreadRealtimeStarted(
                 ThreadRealtimeStartedNotification {
                     thread_id: "thread-2".to_string(),
+                    submission_id: String::new(),
                     realtime_session_id: Some("work-voice-456".to_string()),
                     version: RealtimeConversationVersion::V2,
                 },

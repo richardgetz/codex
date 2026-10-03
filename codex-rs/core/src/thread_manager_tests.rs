@@ -407,7 +407,11 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
         .await
         .expect("spawn actual child agent");
     let fork = manager
-        .spawn_legacy_subagent(root.thread_id, StartThreadOptions::new(config))
+        .spawn_legacy_subagent(
+            root.thread_id,
+            StartThreadOptions::new(config),
+            /*session_source*/ None,
+        )
         .await
         .expect("fork root thread");
 
@@ -788,13 +792,7 @@ fn fork_thread_accepts_legacy_usize_snapshot_argument() {
         path: std::path::PathBuf,
     ) {
         let _future =
-            manager.fork_legacy_thread(usize::MAX, config.clone(), path.clone(), None, None);
-
-        let _future = manager.fork_thread_with_start_options(
-            usize::MAX,
-            crate::StartThreadOptions::new(config),
-            path,
-        );
+            manager.fork_legacy_thread(usize::MAX, crate::StartThreadOptions::new(config), path);
     }
 
     let _: fn(&ThreadManager, Config, std::path::PathBuf) = assert_legacy_snapshot_callsite;
@@ -2063,10 +2061,8 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     let forked = manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            config,
+            crate::StartThreadOptions::new(config),
             rollout_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork source thread");
@@ -2503,10 +2499,8 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
     let forked = manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            config,
+            crate::StartThreadOptions::new(config),
             rollout_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork from rollout path");
@@ -3030,10 +3024,8 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let forked = manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            config.clone(),
+            crate::StartThreadOptions::new(config.clone()),
             source_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork interrupted snapshot");
@@ -3157,10 +3149,8 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let forked = manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            config.clone(),
+            crate::StartThreadOptions::new(config.clone()),
             source_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork interrupted snapshot");
@@ -3245,10 +3235,8 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let forked = manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            config.clone(),
+            crate::StartThreadOptions::new(config.clone()),
             source_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork interrupted snapshot");
@@ -3286,10 +3274,8 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let reforked = manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            config.clone(),
+            crate::StartThreadOptions::new(config.clone()),
             forked_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("re-fork interrupted snapshot");

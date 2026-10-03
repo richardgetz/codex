@@ -98,12 +98,12 @@ async fn suspend_turn_and_shutdown_with_scope(
         ));
     }
 
-    // This is checked again after the caller's fence and preflight. A descendant admitted before
-    // the fence still owns work and must be drained child-first before this thread can close.
+    // HandoffAfterDescendants runs after children have been durably suspended. Their
+    // process-local graph edges can remain loaded until later cleanup.
     if matches!(scope, SuspensionScope::Root | SuspensionScope::Handoff)
         && session
             .services
-            .local_agent_control()
+            .local_agent_runtime
             .list_live_agent_subtree_thread_ids(session.thread_id)
             .await?
             .len()

@@ -470,16 +470,18 @@ impl StatusHistoryCell {
             config_entries.insert(2, ("provider", provider_id.clone()));
         }
         if config.model_provider.wire_api == WireApi::Responses {
-            if let Some(effort) = reasoning_effort {
-                config_entries.push(("reasoning effort", effort));
+            if let Some(effort_value) = reasoning_effort {
+                config_entries.push(("reasoning effort", effort_value));
             }
-            config_entries.push((
-                "reasoning summaries",
-                config
-                    .model_reasoning_summary
-                    .map(|summary| summary.to_string())
-                    .unwrap_or_else(|| "auto".to_string()),
-            ));
+            if remote_connection.is_none() {
+                config_entries.push((
+                    "reasoning summaries",
+                    config
+                        .model_reasoning_summary
+                        .map(|summary| summary.to_string())
+                        .unwrap_or_else(|| "auto".to_string()),
+                ));
+            }
         }
         let (model_name, model_details) =
             compose_model_display(&status_model_name, &config_entries);

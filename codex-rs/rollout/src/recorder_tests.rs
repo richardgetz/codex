@@ -211,6 +211,7 @@ async fn fast_resume_loads_latest_compaction_tail_without_old_heavy_events() -> 
             message: "summary checkpoint".to_string(),
             replacement_history: Some(vec![rollout_message("user", "compacted baseline").into()]),
             guardian_history: None,
+            retained_context: None,
             mcp_resource_origins: None,
             window_number: None,
             first_window_id: None,
@@ -218,6 +219,7 @@ async fn fast_resume_loads_latest_compaction_tail_without_old_heavy_events() -> 
             window_id: None,
             compaction_response_id: None,
             latest_token_usage_record: None,
+            resume_metadata: None,
         }),
     )?;
     write_rollout_line(
@@ -276,7 +278,7 @@ async fn opening_existing_rollout_preserves_modified_time() -> std::io::Result<(
     drop(open_log_file(&rollout_path)?);
     assert_eq!(fs::metadata(&rollout_path)?.modified()?, modified);
 
-    drop(open_rollout_for_append(&rollout_path, /*writer_lock*/ None).await?);
+    drop(open_rollout_for_append(&rollout_path).await?);
     assert_eq!(fs::metadata(&rollout_path)?.modified()?, modified);
     Ok(())
 }

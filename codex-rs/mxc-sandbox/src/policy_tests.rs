@@ -616,6 +616,7 @@ fn root_deny_keeps_only_narrow_explicit_grants() -> Result<()> {
                     .map(|name| child.join(name).to_str().unwrap().to_owned())
                     .to_vec(),
             ),
+            FileSystemAccessMode::None => unreachable!(),
             FileSystemAccessMode::Deny => unreachable!(),
         };
         assert_eq!(

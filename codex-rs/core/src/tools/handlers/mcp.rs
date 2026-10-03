@@ -26,7 +26,6 @@ use crate::tools::registry::ToolTelemetryTags;
 use codex_extension_api::McpToolContext;
 use codex_mcp::ToolInfo;
 use codex_mcp::tool_is_model_visible;
-
 use codex_protocol::mcp::is_node_repl_backed_connector;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ResponsesApiNamespace;
@@ -368,6 +367,7 @@ impl McpHandler {
             original_image_detail_supported: can_request_original_image_detail(turn.model_info()),
             result_metadata_capture_allowed,
             truncation_policy,
+            serialized_output_max_bytes: None,
         }))
     }
 
@@ -962,6 +962,7 @@ mod tests {
             original_image_detail_supported: true,
             result_metadata_capture_allowed: true,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
+            serialized_output_max_bytes: None,
         };
         let (session, turn) = make_session_and_context().await;
         let turn = Arc::new(turn);

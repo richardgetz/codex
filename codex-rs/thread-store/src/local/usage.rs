@@ -23,7 +23,7 @@ pub(super) async fn load_token_usage_records(
     } else {
         thread_rollout_resolver::resolve_current(store, params.thread_id).await?
     }
-    .ok_or_else(|| ThreadStoreError::ThreadNotFound {
+    .ok_or(ThreadStoreError::ThreadNotFound {
         thread_id: params.thread_id,
     })?;
     let meta = codex_rollout::read_session_meta_line(resolved.path.as_path())

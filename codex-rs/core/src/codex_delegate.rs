@@ -270,6 +270,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                         parent_turn_id: None,
                         root_turn_id: None,
                         residency_guard: None,
+                        handoff_admission: None,
                     })
                     .await;
                 child_cancel.cancel();

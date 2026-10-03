@@ -140,10 +140,8 @@ async fn fork_thread_twice_drops_to_first_message() {
     } = thread_manager
         .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(1),
-            config_for_fork.clone(),
+            codex_core::StartThreadOptions::new(config_for_fork.clone()),
             base_path.clone(),
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork 1");
@@ -169,10 +167,8 @@ async fn fork_thread_twice_drops_to_first_message() {
     } = thread_manager
         .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
-            config_for_fork.clone(),
+            codex_core::StartThreadOptions::new(config_for_fork.clone()),
             fork1_path.clone(),
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await
         .expect("fork 2");
@@ -309,6 +305,66 @@ async fn fork_thread_restores_history_selection_and_preserves_explicit_clear() -
             .disabled_plugin_ids,
         Vec::<String>::new()
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_restores_settings_snapshot_outside_paginated_model_context() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let test = test_codex()
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .build_with_auto_env(&server)
+        .await?;
+    let selected = vec!["slack@openai".to_string()];
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            disabled_plugin_ids: Some(selected.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let source_thread_id = test.session_configured.thread_id;
+    let settings_snapshot = test.codex.thread_settings_snapshot().await;
+    test.codex.ensure_rollout_materialized().await;
+    test.codex.flush_rollout().await?;
+    let rollout_path = test.codex.rollout_path();
+    test.codex.shutdown_and_wait().await?;
+
+    // Model context pagination can omit an older settings event. The trusted snapshot is passed
+    // separately, leaving the selected model history empty.
+    let model_history = Arc::new(Vec::new());
+    let resumed = test
+        .thread_manager
+        .resume_thread_with_history_and_settings(
+            test.config.clone(),
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: source_thread_id,
+                history: Arc::clone(&model_history),
+                rollout_path,
+            }),
+            test.thread_manager.auth_manager(),
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+            Some(ThreadSettingsAppliedEvent {
+                thread_id: Some(source_thread_id),
+                thread_settings: settings_snapshot,
+            }),
+        )
+        .await?;
+
+    assert_eq!(
+        resumed
+            .thread
+            .thread_settings_snapshot()
+            .await
+            .disabled_plugin_ids,
+        selected
+    );
+    assert!(model_history.is_empty());
+    resumed.thread.shutdown_and_wait().await?;
     Ok(())
 }
 

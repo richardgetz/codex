@@ -20,9 +20,29 @@ release or merge rules.
 
 ## Unreleased
 
+- Guardian conversation-history prompt overrides are capped at 8 KiB; oversized
+  values fall back to the complete built-in retrieval instructions instead of
+  injecting an unbounded or partially truncated security prompt.
+
+- When enabled, Guardian can retrieve only the parent's read-only
+  `user_message.search_messages` and `user_message.read_messages` tools through
+  its isolated reviewer context. Guardian history tool responses are bounded to
+  8 KiB after serialization; configured output limits are capped at 8,000, and
+  media and encrypted content is omitted with an explicit notice. Unknown MCP
+  content-block variants are rejected by the RMCP decoder before sanitization.
+
 - Built-in TUI API-equivalent rates recognize `gpt-6.1-sol` across Standard,
   Fast, and Flex/Batch tiers for short and long contexts, keeping its cached-
   input price distinct from `gpt-6-sol`.
+
+- Explicitly configured service tiers retain precedence when FastMode is
+  disabled, including Fast/Flex selections; unsupported tiers remain filtered
+  by model capability. FastMode and the enterprise opt-out gate inferred Fast
+  defaults.
+
+- `FileSystemAccessMode::None` remains distinct from explicit `Deny` in the
+  fork's four-value protocol/config enum and permission intersections; do not
+  collapse the fork value into upstream's legacy alias.
 
 - Team Leads can use the standalone `ask_worker_question` tool with either
   multi-agent backend to send a bounded, correlated question to a direct Worker.
@@ -87,12 +107,31 @@ release or merge rules.
   migrations already exist under stable's `0057`, `0058`, and `0064`–`0066`
   filenames and are not applied twice.
 
+- Stable refresh `rust-v0.160.0` preserves every shipped migration filename
+  and checksum through `0067`; upstream `0058_threads_archive_sort_indexes.sql`
+  is byte-identical to stable's `0067_upstream_threads_archive_sort_indexes.sql`
+  and is not applied again. TUI reconnect adopts upstream retries only for
+  queue entries proven unsent; uncertain submissions remain quarantined, and
+  managed reload/handoff continues to resume the exact thread without replaying
+  prompts or tool calls. Fork macOS Keychain ACL ownership remains backed by the
+  `core-foundation` dependency while `keyring-store/src/macos_acl.rs` uses it.
+  Both direct MCP OAuth credentials and the `McpOAuth` encrypted-file passphrase
+  retain the stable-signed executable access policy.
+  Agent-response telemetry still omits encrypted content and the fork-only
+  `MemoryExtraction` source. The upstream npm build/stage interfaces are adapted to
+  retain fork package, executable, repository, tag/version, and target-selection
+  settings. Hosted plugin extension metadata remains available through the
+  fork's `includeExtensions` discovery request; live backend acceptance of that
+  query is not verified.
+
 - Fork operations that start from rollout, loaded history, or prepared history
   preserve explicit per-thread startup options such as environment selection,
   thread instruction providers, MCP extensions, and thread extensions. The
   selected fork history replaces only the options' initial history; an
   explicitly inherited thread-settings snapshot remains authoritative even
-  when it clears previously disabled plugins.
+  when it clears previously disabled plugins. Cold recovery of a paginated root
+  also reverse-scans its canonical rollout for the latest owned snapshot and
+  carries it through fork persistence without changing model history.
 
 - Plain-name skill selection keeps the stable authority priority of executor,
   cloud, custom resource, then host. The upstream Orchestrator-to-Cloud source
@@ -1065,10 +1104,25 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Keep Guardian conversation-history prompt overrides bounded at 8 KiB. Oversized
+  values must use the complete built-in retrieval instructions rather than a
+  partial custom policy.
+- Keep Guardian history access limited to the parent's two read-only
+  `user_message` tools in the isolated reviewer context. Keep responses within
+  the hard 8 KiB serialized-output cap; token estimates alone do not bound media
+  or encrypted content. Unknown MCP content-block variants are rejected by the
+  RMCP decoder before sanitization.
+
 - Verify API-equivalent usage estimates recognize `gpt-6.1-sol` with its
   public Standard, Fast, and Flex/Batch rates for short and long contexts.
   Keep its cached-input price distinct from `gpt-6-sol` ($0.10 vs. $0.20 per
   1M tokens for short Standard context).
+
+- Verify explicit configured Fast/Flex service tiers remain selected with
+  FastMode disabled, subject to model support, while inferred enterprise Fast
+  defaults remain gated by FastMode and the opt-out. Verify the four filesystem
+  access values retain distinct `none` and `deny` semantics through protocol,
+  config schema, and permission intersection.
 
 - Verify `.github/blob-size-allowlist.txt` retains only the exact exception for
   `sdk/python/src/openai_codex/generated/v2_all.py` among Python SDK paths while
@@ -1109,6 +1163,10 @@ release or merge rules.
   thread extensions, and reserved IDs. Confirm selected history replaces only
   `initial_history`, and an explicitly inherited thread-settings snapshot can
   clear plugin selections without falling back to rollout metadata.
+- Verify cold paginated root handoff recovery restores the latest owned
+  `ThreadSettingsApplied` snapshot even when it is outside the selected model
+  context, ignores snapshots owned by another thread, and leaves model history
+  order unchanged.
 
 - Verify Python SDK sync and async `thread_start`, `thread_resume`, and
   `thread_fork` wrappers expose and serialize both `memory_policy` and
@@ -1132,7 +1190,11 @@ release or merge rules.
 
 - Verify the fork distribution/release contract (`@rickgetz/codex`,
   `codex-rick`, `-rick.<counter>` versions, `rick-v...` tags, stable-triggered
-  Apple Silicon releases) and migration-number policy remain intact.
+  Apple Silicon releases) and migration-number policy remain intact. On
+  `rust-v0.160.0`, confirm upstream npm build/stage interfaces continue to read
+  the fork release config and limit publication artifacts to its supported
+  targets. Preserve the macOS `core-foundation` dependency while the fork's
+  stable-signing Keychain ACL implementation remains in `keyring-store`.
 - Verify upstream migration collisions preserve every shipped stable filename,
   SQL body, and applied checksum. For `rust-v0.157.1`, keep migration `0056`
   Git-clear markers and `0057` thread-originator intact, plus fork migrations
@@ -1141,7 +1203,8 @@ release or merge rules.
   shipped filename and checksum through `0066`, do not reapply upstream
   migrations already represented by stable `0057`, `0058`, and `0064`–`0066`,
   and append only the archive-sort indexes as `0067` after checking SQL object
-  overlap.
+  overlap. For `rust-v0.160.0`, verify the incoming `0058` archive-sort SQL is
+  byte-identical to stable `0067` and is not added again.
 - Verify plain-name skill mentions preserve executor, cloud, custom-resource,
   and host priority after upstream changes the source kind from Orchestrator to
   Cloud; executor-owned skills must still win host-name collisions.
@@ -1205,6 +1268,13 @@ release or merge rules.
   request IDs, suppresses duplicate mutating requests while one handoff is
   pending, and queries `/reload status` after reconnect before clearing the
   client-side pending operation.
+- Verify ordinary TUI reconnect resumes only queued messages marked `Unsent`;
+  exact client submission IDs found in server history are removed, and pending
+  submissions without exact confirmation stay quarantined. Managed reload and
+  frontend refresh continue to resume the exact thread without replaying a
+  prompt or tool call.
+- Verify agent-response telemetry includes only bounded plaintext assistant
+  text, excluding encrypted content and fork-only `MemoryExtraction` sessions.
 - Verify app-server slash-command output retains the 200,000-character host
   cap, preserves the truncation marker beyond that bound, and stays aligned
   with Inbound's accepted response budget.

@@ -230,7 +230,6 @@ async fn settings_notifications_keep_their_commit_across_postcommit_work(
                         .submit(Op::ThreadSettings {
                             thread_settings,
                             usage_policy_update: None,
-
                             reply: None,
                         })
                         .await

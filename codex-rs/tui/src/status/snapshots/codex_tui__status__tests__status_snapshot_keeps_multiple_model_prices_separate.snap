@@ -1,27 +1,26 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 1795
 expression: rendered
 ---
 /status
 
-╭─────────────────────────────────────────────────────────────────────────────╮
-│  >_ OpenAI Codex (v0.154.0)                                                 │
-│                                                                             │
-│ Visit https://chatgpt.com/codex/settings/usage for up-to-date               │
-│ information on rate limits and credits                                      │
-│                                                                             │
-│  Model:            model-a (reasoning none, summaries auto)                 │
-│  Directory: [[workspace]]                                                   │
-│  Permissions:      Custom (workspace with network access, Ask for approval) │
-│  Agents.md:        <none>                                                   │
-│                                                                             │
-│  Token usage:      3M total  (3M input + 0 output)                          │
-│  Context window:   0% left (3M used / 272K)                                 │
-│  Limits:           data not available yet                                   │
-│                                                                             │
-│  Token usage:      3M API-equivalent tokens  ~$22.00                        │
-│    Input:          3M total, 0 cached, 3M billable  ~$22.00                 │
-│    Output:         0 total, 0 reasoning  ~$0.0000                           │
-│    Model:          model-a: 1M API-equivalent tokens  ~$2.00                │
-│    Model:          model-b: 2M API-equivalent tokens  ~$20.00               │
-╰─────────────────────────────────────────────────────────────────────────────╯
+  >_ OpenAI Codex (v0.160.0)
+
+  Visit https://chatgpt.com/codex/settings/usage for up-to-date
+  information on rate limits and credits
+
+  Model:           model-a (reasoning none, summaries auto)
+  Directory:       [[workspace]]
+  Permissions:     Custom (workspace with network access, Ask for approval)
+  Agents.md:       <none>
+
+  Token usage:     3M total  (3M input + 0 output)
+  Context window:  0% left (3M used / 272K)
+  Limits:          data not available yet
+
+  Token usage:     3M API-equivalent tokens  ~$22.00
+    Input:         3M total, 0 cached, 3M billable  ~$22.00
+    Output:        0 total, 0 reasoning  ~$0.0000
+    Model:         model-a: 1M API-equivalent tokens  ~$2.00
+    Model:         model-b: 2M API-equivalent tokens  ~$20.00

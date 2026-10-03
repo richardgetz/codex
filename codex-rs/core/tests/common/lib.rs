@@ -317,7 +317,6 @@ pub async fn submit_thread_settings(
         .submit(Op::ThreadSettings {
             thread_settings,
             usage_policy_update: None,
-
             reply: None,
         })
         .await?;

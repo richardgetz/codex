@@ -11,7 +11,6 @@ use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::emit_subagent_session_started;
-
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
@@ -39,7 +38,6 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -48,7 +46,6 @@ use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
 
-use futures::StreamExt;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -80,6 +77,7 @@ mod interrupt;
 mod legacy;
 mod residency;
 mod resume;
+mod root_handoff;
 mod runtime;
 mod runtime_context;
 mod sender_context;
@@ -152,11 +150,25 @@ impl LocalAgentControl {
         input: Vec<UserInput>,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
-        let _admission = self.begin_handoff_admission()?;
+        let admission = self.begin_handoff_admission()?;
+        self.send_input_with_admission(agent_id, input, start_options, &admission)
+            .await
+    }
+
+    pub(crate) async fn send_input_with_admission(
+        &self,
+        agent_id: ThreadId,
+        input: Vec<UserInput>,
+        start_options: TurnStartOptions,
+        _handoff_admission: &HandoffAdmissionGuard,
+    ) -> CodexResult<String> {
         let state = self.runtime.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         let result = match thread
-            .start_or_steer_turn(TurnInputRequest::user_input(input).on_start(start_options))
+            .start_or_steer_turn_with_admission(
+                TurnInputRequest::user_input(input).on_start(start_options),
+                _handoff_admission,
+            )
             .await
         {
             Ok(TurnInputSubmission::Started { turn_id }) => Ok(turn_id),
@@ -183,6 +195,13 @@ impl LocalAgentControl {
         agent_communication_context: AgentCommunicationContext,
         start_options: TurnStartOptions,
     ) -> CodexResult<String> {
+        let state = self.runtime.upgrade()?;
+        if communication.trigger_turn {
+            let thread = state.get_thread(agent_id).await?;
+            thread
+                .ensure_execution_capacity_for_turn_start(self)
+                .await?;
+        }
         self.send_inter_agent_communication_with_delivery_kind(
             agent_id,
             communication,
@@ -203,7 +222,7 @@ impl LocalAgentControl {
         status: &AgentStatus,
     ) -> CodexResult<String> {
         if matches!(status, AgentStatus::Completed(_))
-            && let Ok(state) = self.upgrade()
+            && let Ok(state) = self.runtime.upgrade()
             && let Ok(thread) = state.get_thread(agent_id).await
         {
             let config = thread.session.get_config().await;
@@ -213,6 +232,13 @@ impl LocalAgentControl {
                 communication.trigger_turn = false;
                 communication.content = crate::session::truncate_message(&communication.content);
             }
+        }
+        let state = self.runtime.upgrade()?;
+        if communication.trigger_turn {
+            let thread = state.get_thread(agent_id).await?;
+            thread
+                .ensure_execution_capacity_for_turn_start(self)
+                .await?;
         }
         self.send_inter_agent_communication_with_delivery_kind(
             agent_id,
@@ -321,13 +347,13 @@ impl LocalAgentControl {
                                     let agent_control = self.clone();
                                     tokio::spawn(async move {
                                         let admission = loop {
+                                            tokio::select! {
+                                                _ = agent_control.wait_for_handoff_admission_open() => {},
+                                                _ = session.wait_for_shutdown() => return,
+                                            }
                                             match agent_control.begin_handoff_admission() {
                                                 Ok(admission) => break admission,
-                                                Err(_) => {
-                                                    agent_control
-                                                        .wait_for_handoff_admission_open()
-                                                        .await;
-                                                }
+                                                Err(_) => continue,
                                             }
                                         };
                                         session
@@ -383,6 +409,7 @@ impl LocalAgentControl {
             context,
             start_options,
             team_lead_completion,
+            &_admission,
         )
         .await
     }
@@ -445,6 +472,7 @@ impl LocalAgentControl {
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
         team_lead_completion: bool,
+        handoff_admission: &HandoffAdmissionGuard,
     ) -> CodexResult<String> {
         self.submit_inter_agent_communication(
             agent_id,
@@ -453,6 +481,7 @@ impl LocalAgentControl {
             context,
             start_options,
             team_lead_completion,
+            handoff_admission,
         )
         .await
     }
@@ -465,6 +494,7 @@ impl LocalAgentControl {
         context: AgentCommunicationContext,
         start_options: TurnStartOptions,
         team_lead_completion: bool,
+        handoff_admission: &HandoffAdmissionGuard,
     ) -> CodexResult<String> {
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
@@ -476,26 +506,28 @@ impl LocalAgentControl {
         } else {
             (None, None)
         };
+        let op = if team_lead_completion {
+            Op::TeamLeadCompletion {
+                communication,
+                start_options,
+            }
+        } else {
+            Op::InterAgentCommunication {
+                communication,
+                start_options,
+            }
+        };
         let result = self
             .handle_thread_request_result(
                 agent_id,
                 state,
                 state
-                    .send_op(
+                    .send_op_with_admission(
                         agent_id,
-                        if team_lead_completion {
-                            Op::TeamLeadCompletion {
-                                communication,
-                                start_options,
-                            }
-                        } else {
-                            Op::InterAgentCommunication {
-                                communication,
-                                start_options,
-                            }
-                        },
+                        op,
                         parent_turn_id,
                         root_turn_id,
+                        handoff_admission,
                     )
                     .await,
             )

@@ -7,6 +7,7 @@ mod tool_policy;
 mod turn_admission;
 mod user_instructions;
 
+pub use session_isolation::IsolatedSessionExtensions;
 pub use session_isolation::SessionIsolation;
 pub use tool_policy::ToolPolicy;
 
@@ -84,10 +85,9 @@ pub use contributors::ToolFinishInput;
 pub use contributors::ToolLifecycleContributor;
 pub use contributors::ToolLifecycleFuture;
 pub use contributors::ToolStartInput;
-pub use contributors::ToolWaitInput;
-
 pub use contributors::ToolTimingBoundary;
 pub use contributors::ToolTimingInput;
+pub use contributors::ToolWaitInput;
 pub use contributors::TurnAbortInput;
 pub use contributors::TurnContextContributionInput;
 pub use contributors::TurnErrorInput;

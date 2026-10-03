@@ -20,6 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 fn test_daemon(home: &Path) -> Daemon {
     Daemon {
+        log_diagnostics: false,
         socket_path: home.join("app-server-control.sock"),
         pid_file: home.join("daemon.pid"),
         update_pid_file: home.join("daemon-updater.pid"),

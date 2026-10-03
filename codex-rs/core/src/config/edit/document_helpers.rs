@@ -139,7 +139,6 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> anyhow::Result<TomlTa
             McpServerSharingMode::Shared => "shared",
         });
     }
-
     if let Some(budget) = config.tool_input_schema_max_bytes {
         entry["tool_input_schema_max_bytes"] = value(i64::try_from(budget.get())?);
     }

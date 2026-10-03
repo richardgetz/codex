@@ -1568,7 +1568,7 @@ async fn fork_preserves_thread_instructions(
     let fork = match source {
         InstructionForkSource::LiveRollout => {
             test.thread_manager
-                .fork_thread_with_start_options(ForkSnapshot::Interrupted, options, rollout_path)
+                .fork_legacy_thread(ForkSnapshot::Interrupted, options, rollout_path)
                 .await?
         }
         InstructionForkSource::OfflineHistory => {
@@ -2340,10 +2340,8 @@ async fn fork_injects_changed_agents_md_once() -> Result<()> {
         .thread_manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            fork_config,
+            codex_core::StartThreadOptions::new(fork_config),
             rollout_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await?;
 

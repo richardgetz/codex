@@ -20,7 +20,6 @@ use codex_core::HandoffNodeState;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
 use codex_protocol::ThreadId;
-use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadPauseState;
@@ -505,31 +504,27 @@ impl HandoffCoordinator {
         if thread_is_loaded && !matches!(node.state, HandoffNodeState::Suspended) {
             return loaded_thread.ok_or(HandoffBlocker::Persistence);
         }
-        let multi_agent_version = if let Some(version) = loaded_thread
-            .as_ref()
-            .and_then(|thread| thread.multi_agent_version())
-        {
-            Some(version)
-        } else {
-            let rollout_path = node
-                .rollout_path
-                .as_deref()
-                .filter(|path| !path.is_empty())
-                .ok_or(HandoffBlocker::Persistence)?;
-            let initial_history = codex_core::RolloutRecorder::get_rollout_history_with_options(
-                &PathBuf::from(rollout_path),
-                self.config.resume_load_options(),
-            )
+        let rollout_path = node
+            .rollout_path
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .ok_or(HandoffBlocker::Persistence)?;
+        let (initial_history, thread_settings_event) = self
+            .thread_processor
+            .load_handoff_recovery_initial_history(thread_id, PathBuf::from(rollout_path))
             .await
             .map_err(|_| HandoffBlocker::Persistence)?;
-            initial_history.get_multi_agent_version().or_else(|| {
+        let multi_agent_version = loaded_thread
+            .as_ref()
+            .and_then(|thread| thread.multi_agent_version())
+            .or_else(|| initial_history.get_multi_agent_version())
+            .or_else(|| {
                 matches!(
                     &initial_history,
                     InitialHistory::Resumed(_) | InitialHistory::Forked(_)
                 )
                 .then_some(MultiAgentVersion::V1)
-            })
-        };
+            });
         // A partial old-runtime attempt can leave a closed Suspended thread in the manager map.
         // Remove that stale handle so the normal rollout/parent loader creates a live owner.
         if thread_is_loaded {
@@ -553,21 +548,14 @@ impl HandoffCoordinator {
                 .await
                 .map_err(|_| HandoffBlocker::ParentUnavailable)?;
         } else {
-            let rollout_path = node
-                .rollout_path
-                .as_deref()
-                .filter(|path| !path.is_empty())
-                .ok_or(HandoffBlocker::Persistence)?;
-            self.thread_manager
-                .resume_legacy_thread_from_rollout(
-                    self.config.as_ref().clone(),
-                    PathBuf::from(rollout_path),
-                    self.thread_manager.auth_manager(),
-                    None,
-                    ClientMcpExtensions::default(),
-                )
+            let resumed = self
+                .thread_processor
+                .resume_handoff_recovery_thread(initial_history, thread_settings_event)
                 .await
                 .map_err(|_| HandoffBlocker::Persistence)?;
+            if resumed.thread_id != thread_id {
+                return Err(HandoffBlocker::Persistence);
+            }
         }
         self.thread_manager
             .get_thread(thread_id)

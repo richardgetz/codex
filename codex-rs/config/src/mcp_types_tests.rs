@@ -684,7 +684,6 @@ fn deserialize_ignores_unknown_server_fields() {
             supports_parallel_tool_calls: false,
             startup: McpServerStartupMode::Auto,
             sharing: McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,

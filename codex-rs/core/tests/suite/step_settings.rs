@@ -493,7 +493,6 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                     ..Default::default()
                 },
                 usage_policy_update: None,
-
                 reply: None,
             })
             .await?;
@@ -592,10 +591,8 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
             .thread_manager
             .fork_legacy_thread(
                 ForkSnapshot::Interrupted,
-                replay_config,
+                codex_core::StartThreadOptions::new(replay_config),
                 rollout_path.clone(),
-                /*thread_source*/ None,
-                /*parent_trace*/ None,
             )
             .await?
             .thread;
@@ -608,7 +605,6 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                         ..Default::default()
                     },
                     usage_policy_update: None,
-
                     reply: None,
                 })
                 .await?;
@@ -730,10 +726,8 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
         .thread_manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            replay_config,
+            codex_core::StartThreadOptions::new(replay_config),
             rollout_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await?
         .thread;
@@ -793,7 +787,6 @@ async fn settings_updates_preserve_turn_identity_and_target(target: SettingsTarg
                         ..Default::default()
                     },
                     usage_policy_update: None,
-
                     reply: None,
                 })
                 .await?;
@@ -1920,7 +1913,6 @@ async fn sparse_updates_preserve_divergent_active_and_future_models() -> Result<
                 ..Default::default()
             },
             usage_policy_update: None,
-
             reply: None,
         })
         .await?;

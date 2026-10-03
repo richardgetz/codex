@@ -1,5 +1,4 @@
 use super::*;
-use crate::compact_remote::resolve_remote_compact_model_slug;
 use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolPayload;
@@ -230,7 +229,6 @@ fn user_message(text: &str) -> ResponseItem {
 fn compacted_user_message<'a>(text: &str, original: &'a ResponseItem) -> CompactedUserMessage<'a> {
     CompactedUserMessage {
         message: text.to_string(),
-        id: original.id().cloned(),
         original,
         harness_metadata: None,
     }
@@ -334,7 +332,7 @@ fn collect_annotated_user_messages_extracts_user_text_only(
         ResponseItemEnvelope::new(ResponseItem::Other),
     ];
 
-    let collected = collect_annotated_user_messages(&items, CompactedMessageIdentity::Preserve);
+    let collected = collect_annotated_user_messages(&items);
 
     if !preserve_content {
         item = user_message(expected_text);
@@ -347,7 +345,6 @@ fn collect_annotated_user_messages_extracts_user_text_only(
         collected,
         vec![CompactedUserMessage {
             message: expected_text.to_owned(),
-            id: items[0].item.id().cloned(),
             original: &items[0].item,
             harness_metadata: items[0].metadata.as_ref(),
         }]
@@ -409,18 +406,6 @@ do things
 }
 
 #[test]
-fn resolve_remote_compact_model_slug_falls_back_for_chatgpt_accounts() {
-    assert_eq!(
-        resolve_remote_compact_model_slug("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ true),
-        "gpt-5.3-codex-spark"
-    );
-    assert_eq!(
-        resolve_remote_compact_model_slug("gpt-5.3-codex-spark", /*is_chatgpt_auth*/ false),
-        "gpt-5.3-codex-spark"
-    );
-}
-
-#[test]
 fn collect_user_messages_filters_legacy_warnings() {
     let items = vec![
         user_message(
@@ -456,10 +441,7 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
     original.metadata = Some(CodexHarnessMetadata::default());
     let history = super::build_compacted_history_with_limit(
         Vec::new(),
-        &collect_annotated_user_messages(
-            std::slice::from_ref(&original),
-            CompactedMessageIdentity::Preserve,
-        ),
+        &collect_annotated_user_messages(std::slice::from_ref(&original)),
         "SUMMARY",
         max_tokens,
     );
@@ -497,24 +479,14 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
 }
 
 #[test]
-fn build_compacted_history_obeys_guardian_message_identity_policy() {
+fn build_compacted_history_preserves_collected_user_message_identity() {
     let mut original = ResponseItemEnvelope::new(user_message("retained user message"));
     let source_id = ResponseItemId::with_suffix("msg", "source");
     original.item.set_id(Some(source_id.clone()));
 
-    let preserve_identity = collect_annotated_user_messages(
-        std::slice::from_ref(&original),
-        CompactedMessageIdentity::Preserve,
-    );
-    let preserved = build_compacted_history(Vec::new(), &preserve_identity, "summary");
-    assert_eq!(preserved[0].id(), Some(&source_id));
-
-    let regenerate_identity = collect_annotated_user_messages(
-        std::slice::from_ref(&original),
-        CompactedMessageIdentity::Regenerate,
-    );
-    let regenerated = build_compacted_history(Vec::new(), &regenerate_identity, "summary");
-    assert_eq!(regenerated[0].id(), None);
+    let user_messages = collect_annotated_user_messages(std::slice::from_ref(&original));
+    let compacted = build_compacted_history(Vec::new(), &user_messages, "summary");
+    assert_eq!(compacted[0].id(), Some(&source_id));
 }
 
 #[test]
@@ -562,10 +534,7 @@ fn build_compacted_history_preserves_user_message_passthrough_metadata() {
     };
     let history = build_compacted_history(
         Vec::new(),
-        &collect_annotated_user_messages(
-            std::slice::from_ref(&original),
-            CompactedMessageIdentity::Preserve,
-        ),
+        &collect_annotated_user_messages(std::slice::from_ref(&original)),
         "summary text",
     );
 

@@ -2080,6 +2080,10 @@ impl AuthManagerConfig for TestAuthManagerConfig {
         self.0.codex_home.clone()
     }
 
+    fn auth_storage_home(&self) -> PathBuf {
+        self.0.auth_storage_home.clone()
+    }
+
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode {
         self.0.auth_credentials_store_mode
     }
@@ -2115,6 +2119,7 @@ impl AuthManagerConfig for TestAuthManagerConfig {
 fn test_auth_manager_config(codex_home: &Path) -> TestAuthManagerConfig {
     TestAuthManagerConfig(AuthConfig {
         codex_home: codex_home.to_path_buf(),
+        auth_storage_home: codex_home.to_path_buf(),
         auth_credentials_store_mode: AuthCredentialsStoreMode::File,
         keyring_backend_kind: AuthKeyringBackendKind::Direct,
         forced_login_method: Some(ForcedLoginMethod::Chatgpt),

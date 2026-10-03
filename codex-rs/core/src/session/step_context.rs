@@ -25,7 +25,6 @@ pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
     /// Monotonic ID for the sampled request; all of its tool calls share this value.
     pub(crate) passive_poll_sample_id: u64,
-
     /// Preempts this request and yields its code-mode observations when user input arrives.
     pub(crate) preempt: Option<CancellationToken>,
     /// Realtime call activity and instructions captured for this sampling request.

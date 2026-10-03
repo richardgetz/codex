@@ -264,6 +264,7 @@ impl PidBackend {
         } else {
             None
         };
+
         #[cfg(windows)]
         let child = super::super::windows::spawn_without_inheriting_stdio(&mut command);
         #[cfg(not(windows))]

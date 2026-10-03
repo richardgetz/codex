@@ -13,6 +13,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -279,7 +280,7 @@ async fn fork_version_stops_before_older_segments_once_resolved() {
         // The usable compaction should stop the scan before it reaches this missing segment.
         std::fs::remove_file(root_path).expect("remove older segment after resolving lineage");
 
-        let context = load_for_fork(lineage, /*history_base*/ None)
+        let context = load_for_fork(&store, child_id, lineage, /*history_base*/ None)
             .await
             .expect("resolve version without reading older segments");
         source_meta.meta.multi_agent_version = stored_version.or(Some(MultiAgentVersion::V2));

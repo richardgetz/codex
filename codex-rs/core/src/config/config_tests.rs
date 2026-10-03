@@ -189,7 +189,6 @@ fn stdio_mcp_with_args(command: &str, args: &[&str]) -> McpServerConfig {
         supports_parallel_tool_calls: false,
         startup: codex_config::McpServerStartupMode::Auto,
         sharing: codex_config::McpServerSharingMode::Auto,
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -222,7 +221,6 @@ fn http_mcp(url: &str) -> McpServerConfig {
         supports_parallel_tool_calls: false,
         startup: codex_config::McpServerStartupMode::Auto,
         sharing: codex_config::McpServerSharingMode::Auto,
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -8057,7 +8055,6 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: std::num::NonZeroUsize::new(8_000),
             omit_tools_from: None,
             disabled_reason: None,
@@ -8501,7 +8498,6 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8584,7 +8580,6 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8652,7 +8647,6 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8711,7 +8705,6 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8773,7 +8766,6 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8852,7 +8844,6 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8942,7 +8933,6 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8985,7 +8975,6 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9064,7 +9053,6 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 supports_parallel_tool_calls: false,
                 startup: codex_config::McpServerStartupMode::Auto,
                 sharing: codex_config::McpServerSharingMode::Auto,
-
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -9097,7 +9085,6 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 supports_parallel_tool_calls: false,
                 startup: codex_config::McpServerStartupMode::Auto,
                 sharing: codex_config::McpServerSharingMode::Auto,
-
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -9192,7 +9179,6 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9249,7 +9235,6 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9306,7 +9291,6 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9368,7 +9352,6 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             supports_parallel_tool_calls: false,
             startup: codex_config::McpServerStartupMode::Auto,
             sharing: codex_config::McpServerSharingMode::Auto,
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9655,6 +9638,8 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> s
             experimental_policy_template: Some(
                 "  Configured template: {{ tenant_policy_config }}  ".to_string(),
             ),
+            experimental_conversation_history_prompt: None,
+            conversation_history_max_output_tokens: None,
         }),
         ..Default::default()
     };
@@ -9686,6 +9671,36 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> s
 }
 
 #[tokio::test]
+async fn load_config_caps_guardian_history_tool_output_tokens() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            auto_review: Some(AutoReviewToml {
+                conversation_history_max_output_tokens: Some(
+                    std::num::NonZeroUsize::new(90_000).expect("positive limit"),
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config
+            .guardian_conversation_history_max_output_tokens
+            .map(std::num::NonZeroUsize::get),
+        Some(8_000)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     for (managed_extra, expected_extra) in [
@@ -9712,6 +9727,8 @@ async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()>
                 policy: Some("Use the user-configured guardian policy.".to_string()),
                 extra_policy: Some("Use the user-configured additional policy.".to_string()),
                 experimental_policy_template: None,
+                experimental_conversation_history_prompt: None,
+                conversation_history_max_output_tokens: None,
             }),
             ..Default::default()
         };
@@ -9751,6 +9768,8 @@ async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::
             policy: Some("   ".to_string()),
             extra_policy: Some("   ".to_string()),
             experimental_policy_template: None,
+            experimental_conversation_history_prompt: Some(String::new()),
+            conversation_history_max_output_tokens: None,
         }),
         ..Default::default()
     };
@@ -9766,8 +9785,12 @@ async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::
     .await?;
 
     assert_eq!(
-        (config.guardian_policy_config, config.guardian_extra_policy),
-        (None, None)
+        (
+            config.guardian_policy_config,
+            config.guardian_extra_policy,
+            config.guardian_conversation_history_prompt,
+        ),
+        (None, None, None)
     );
 
     Ok(())

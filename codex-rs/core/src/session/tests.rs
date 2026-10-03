@@ -302,8 +302,6 @@ impl StepContext {
         });
         settings.service_tier = turn.config.service_tier.clone();
         Arc::new(Self {
-            passive_poll_sample_id: turn.next_passive_poll_sample_id(),
-
             preempt: turn
                 .config
                 .features
@@ -318,6 +316,7 @@ impl StepContext {
             team_lead_work_policy: arc_swap::ArcSwap::from_pointee(
                 turn.config.effective_team_lead_work_policy(),
             ),
+            passive_poll_sample_id: turn.next_passive_poll_sample_id(),
             session_telemetry: turn.session_telemetry.clone(),
             realtime: RealtimeConversationSnapshot {
                 active: turn.realtime_active,
@@ -3990,16 +3989,19 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
 
 #[tokio::test]
 async fn turn_error_lifecycle_exposes_error_and_stores() {
+    use codex_protocol::error::CodexErrKind;
+
     struct SessionTurnErrorMarker;
     struct ThreadTurnErrorMarker;
 
-    #[derive(Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     struct RecordedTurnError {
         session_level_id: String,
         thread_level_id: String,
         turn_level_id: String,
         turn_id: String,
         error: CodexErrorInfo,
+        error_kind: CodexErrKind,
         saw_session_store: bool,
         saw_thread_store: bool,
     }
@@ -4023,6 +4025,7 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
                         turn_level_id: input.turn_store.level_id().to_string(),
                         turn_id: input.turn_id.to_string(),
                         error: input.error,
+                        error_kind: input.error_details.into(),
                         saw_session_store: input
                             .session_store
                             .get::<SessionTurnErrorMarker>()
@@ -4058,12 +4061,30 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
         turn_level_id: turn_context.sub_id.clone(),
         turn_id: turn_context.sub_id.clone(),
         error: CodexErrorInfo::UsageLimitExceeded,
+        error_kind: CodexErrKind::QuotaExceeded,
         saw_session_store: true,
         saw_thread_store: true,
     };
 
     session
-        .emit_turn_error_lifecycle(&turn_context, CodexErrorInfo::UsageLimitExceeded)
+        .emit_turn_error_lifecycle(
+            &turn_context,
+            CodexErrorInfo::UsageLimitExceeded,
+            &CodexErrorDetails::QuotaExceeded,
+        )
+        .await;
+
+    let expected_override = RecordedTurnError {
+        error: CodexErrorInfo::BadRequest,
+        error_kind: CodexErrKind::InvalidImageRequest,
+        ..expected.clone()
+    };
+    session
+        .emit_turn_error_lifecycle(
+            &turn_context,
+            CodexErrorInfo::BadRequest,
+            &CodexErrorDetails::InvalidImageRequest(),
+        )
         .await;
 
     let actual = records
@@ -4071,7 +4092,7 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
         .expect("turn error records lock")
         .drain(..)
         .collect::<Vec<_>>();
-    assert_eq!(vec![expected], actual);
+    assert_eq!(vec![expected, expected_override], actual);
 }
 
 #[tokio::test]
@@ -4473,10 +4494,8 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .thread_manager
         .fork_legacy_thread(
             usize::MAX,
-            fork_config.clone(),
+            core_test_support::test_codex::StartThreadOptions::new(fork_config.clone()),
             rollout_path,
-            /*thread_source*/ None,
-            /*parent_trace*/ None,
         )
         .await?;
 
@@ -6212,6 +6231,15 @@ fn get_service_tier_does_not_default_non_enterprise_or_disabled_fast_mode() {
         ),
         None
     );
+    assert_eq!(
+        get_service_tier(
+            Some(ServiceTier::Fast.request_value().to_string()),
+            /*fast_default_opt_out*/ false,
+            Some(AccountPlanType::Enterprise),
+            /*fast_mode_enabled*/ false,
+        ),
+        Some(ServiceTier::Fast.request_value().to_string())
+    );
 }
 
 #[tokio::test]
@@ -7649,16 +7677,17 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
     tx_sub
         .send(Submission {
             id: "settings".into(),
-            client_user_message_id: None,
             op: Op::ThreadSettings {
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides::default(),
                 usage_policy_update: None,
                 reply: Some(reply),
             },
+            client_user_message_id: None,
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
             residency_guard: None,
+            handoff_admission: None,
         })
         .await
         .expect("submit settings");
@@ -7682,6 +7711,86 @@ async fn standalone_settings_invalidate_continuation_before_delivering_acceptanc
         rx.recv().await.expect("receive settings event").msg,
         EventMsg::ThreadSettingsApplied(_)
     ));
+    drop(tx_sub);
+    submissions.await;
+}
+
+#[tokio::test]
+async fn queued_admitted_submission_survives_handoff_seal() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let (tx_event, rx_event) = async_channel::bounded(1);
+    session.tx_event = tx_event;
+    session.state.lock().await.last_started_turn_id = Some("superseded-turn".into());
+    session
+        .tx_event
+        .send(Event {
+            id: "occupied".into(),
+            msg: EventMsg::ThreadSettingsApplied(
+                codex_protocol::protocol::ThreadSettingsAppliedEvent {
+                    thread_id: Some(session.thread_id()),
+                    thread_settings: session.thread_settings_snapshot().await,
+                },
+            ),
+        })
+        .await
+        .expect("fill event channel");
+
+    let agent_control = session.services.local_agent_control();
+    let handoff_admission = agent_control
+        .begin_handoff_admission()
+        .expect("admit queued settings submission");
+    let (reply, mut accepted) = tokio::sync::oneshot::channel();
+    let (tx_sub, rx_sub) = async_channel::bounded(1);
+    tx_sub
+        .send(Submission {
+            id: "settings".into(),
+            op: Op::ThreadSettings {
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides::default(),
+                usage_policy_update: None,
+                reply: Some(reply),
+            },
+            client_user_message_id: None,
+            trace: None,
+            parent_turn_id: None,
+            root_turn_id: None,
+            residency_guard: None,
+            handoff_admission: Some(handoff_admission),
+        })
+        .await
+        .expect("queue admitted settings submission");
+    let handoff = agent_control
+        .begin_handoff()
+        .expect("seal after the admitted submission is queued");
+
+    let session = Arc::new(session);
+    let mut submissions = Box::pin(tokio::task::unconstrained(submission_loop(
+        Arc::clone(&session),
+        turn_context.config,
+        rx_sub,
+    )));
+    assert!(futures::poll!(submissions.as_mut()).is_pending());
+    accepted
+        .try_recv()
+        .expect("receive settings acceptance before the event is delivered")
+        .expect("queued admission should survive the seal");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), handoff.wait_for_admissions())
+            .await
+            .is_err(),
+        "the consumed permit must remain held until the blocked settings event is delivered"
+    );
+
+    rx_event.recv().await.expect("release event delivery");
+    assert!(futures::poll!(submissions.as_mut()).is_pending());
+    assert!(matches!(
+        rx_event.recv().await.expect("receive settings event").msg,
+        EventMsg::ThreadSettingsApplied(_)
+    ));
+    tokio::time::timeout(Duration::from_secs(1), handoff.wait_for_admissions())
+        .await
+        .expect("queued admission should finish after event delivery");
+
+    drop(handoff);
     drop(tx_sub);
     submissions.await;
 }
@@ -8453,7 +8562,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         client_mcp_extensions: ClientMcpExtensions::default(),
         local_agent_runtime: agent_control.runtime.clone(),
-        agent_control: Arc::new(agent_control.clone()),
+        agent_control: Arc::new(agent_control),
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
@@ -9784,6 +9893,7 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
             parent_turn_id: None,
             root_turn_id: None,
             residency_guard: None,
+            handoff_admission: None,
             trace: Some(submission_trace),
         })
     });
@@ -9814,6 +9924,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
         parent_turn_id: None,
         root_turn_id: None,
         residency_guard: None,
+        handoff_admission: None,
         trace: None,
     });
 
@@ -10246,6 +10357,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         parent_turn_id: None,
         root_turn_id: None,
         residency_guard: None,
+        handoff_admission: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
@@ -11015,7 +11127,7 @@ where
         mcp_thread_init: codex_extension_api::ExtensionDataInit::default(),
         client_mcp_extensions: ClientMcpExtensions::default(),
         local_agent_runtime: agent_control.runtime.clone(),
-        agent_control: Arc::new(agent_control.clone()),
+        agent_control: Arc::new(agent_control),
         network_proxy: arc_swap::ArcSwapOption::from(None),
         network_proxy_audit_metadata: crate::config::NetworkProxyAuditMetadata::default(),
         managed_network_requirements_configured: false,
@@ -11956,7 +12068,6 @@ async fn step_context_keeps_its_mcp_runtime_for_tools() -> anyhow::Result<()> {
             supports_parallel_tool_calls: false,
             startup: Default::default(),
             sharing: Default::default(),
-
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -15627,7 +15738,7 @@ async fn make_remote_compaction_session(
         move |config| {
             config.model = Some("gpt-5.2".to_string());
             config.model_provider = provider;
-            let _ = config.features.enable(Feature::RemoteCompactionV2);
+            config.chatgpt_base_url = server_uri.to_string();
             let _ = config.features.disable(Feature::TokenBudget);
         },
     )
@@ -16876,6 +16987,7 @@ async fn manager_completion_flush_reuses_dispatch_admission_during_handoff() {
             root_turn_id: None,
             trace: None,
             residency_guard: None,
+            handoff_admission: None,
         })
         .await
         .expect("settings dispatch should be queued");
@@ -17485,6 +17597,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&sess),
         turn_context: Arc::clone(&tc),
+        session_telemetry: tc.session_telemetry.clone(),
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),
         tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
         cancellation_token: CancellationToken::new(),

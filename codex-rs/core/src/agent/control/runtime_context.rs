@@ -1,6 +1,7 @@
 //! Local registry lookups for startup, legacy context and loaded descendant checks.
 //! These use the same local registry and thread manager as lifecycle operations.
 
+use super::LocalAgentControl;
 use super::LocalAgentRuntime;
 use crate::agent::types::AgentMetadata;
 use crate::session_prefix::format_subagent_context_line;
@@ -14,6 +15,45 @@ use std::sync::Arc;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
+
+fn bounded_environment_context_subagents(lines: impl IntoIterator<Item = String>) -> String {
+    let mut selected_lines = Vec::with_capacity(MAX_ENVIRONMENT_SUBAGENTS);
+    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
+    for line in lines {
+        if selected_lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
+            break;
+        }
+        let line_bytes = "    \n".len() + line.len();
+        if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
+            rendered_bytes += line_bytes;
+            selected_lines.push(line);
+        }
+    }
+    selected_lines.join("\n")
+}
+
+impl LocalAgentControl {
+    pub(crate) async fn format_environment_context_subagents(
+        &self,
+        parent_thread_id: ThreadId,
+        multi_agent_version: MultiAgentVersion,
+    ) -> String {
+        if multi_agent_version != MultiAgentVersion::V2 {
+            return self
+                .runtime
+                .format_legacy_environment_context_subagents(parent_thread_id)
+                .await;
+        }
+
+        let agent_paths =
+            crate::agent::api::AgentControl::child_agent_paths(self, parent_thread_id).await;
+        bounded_environment_context_subagents(
+            agent_paths
+                .into_iter()
+                .map(|agent_path| format!(r#"<agent name="{agent_path}" />"#)),
+        )
+    }
+}
 
 impl LocalAgentRuntime {
     pub(crate) fn register_session_root(
@@ -48,74 +88,14 @@ impl LocalAgentRuntime {
         let Ok(agents) = self.open_thread_spawn_children(parent_thread_id).await else {
             return String::new();
         };
-        agents
-            .into_iter()
-            .map(|(thread_id, metadata)| {
-                let reference = metadata
-                    .agent_path
-                    .as_ref()
-                    .map(|path| path.name().to_string())
-                    .unwrap_or_else(|| thread_id.to_string());
-                format_subagent_context_line(&reference, metadata.agent_nickname.as_deref())
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    pub(crate) async fn format_environment_context_subagents(
-        &self,
-        parent_thread_id: ThreadId,
-        multi_agent_version: MultiAgentVersion,
-    ) -> String {
-        if multi_agent_version != MultiAgentVersion::V2 {
-            return self
-                .format_legacy_environment_context_subagents(parent_thread_id)
-                .await;
-        }
-
-        let Some(parent_path) = self
-            .registry
-            .agent_metadata_for_thread(parent_thread_id)
-            .and_then(|metadata| metadata.agent_path)
-        else {
-            return String::new();
-        };
-        let parent_prefix = format!("{parent_path}/");
-        let mut agent_paths = self
-            .registry
-            .live_agents()
-            .into_iter()
-            .filter_map(|metadata| metadata.agent_path)
-            .filter(|path| {
-                path.as_str()
-                    .strip_prefix(&parent_prefix)
-                    .is_some_and(|name| !name.contains('/'))
-            })
-            .collect::<Vec<_>>();
-        let loaded_paths = self
-            .open_thread_spawn_children(parent_thread_id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|(_, metadata)| metadata.agent_path)
-            .collect::<std::collections::HashSet<_>>();
-        agent_paths.sort();
-        agent_paths.sort_by_key(|path| !loaded_paths.contains(path));
-
-        let mut lines = Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
-        let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
-        for agent_path in agent_paths {
-            if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
-                break;
-            }
-            let line = format!(r#"<agent name="{agent_path}" />"#);
-            let line_bytes = "    \n".len() + line.len();
-            if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
-                rendered_bytes += line_bytes;
-                lines.push(line);
-            }
-        }
-        lines.join("\n")
+        bounded_environment_context_subagents(agents.into_iter().map(|(thread_id, metadata)| {
+            let reference = metadata
+                .agent_path
+                .as_ref()
+                .map(|path| path.name().to_string())
+                .unwrap_or_else(|| thread_id.to_string());
+            format_subagent_context_line(&reference, metadata.agent_nickname.as_deref())
+        }))
     }
 
     pub(super) async fn open_thread_spawn_children(
@@ -195,3 +175,7 @@ impl LocalAgentRuntime {
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_context_tests.rs"]
+mod tests;

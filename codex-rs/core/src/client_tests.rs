@@ -2089,9 +2089,9 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         .send(Ok(ResponseEvent::Completed {
             response_id: "response".into(),
             token_usage: None,
+            service_tier: None,
             usage_metadata: None,
             end_turn: None,
-            service_tier: None,
         }))
         .await?;
     drop(tx_event);

@@ -780,7 +780,6 @@ async fn session_info_uses_availability_nux_tooltip_override() {
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -804,7 +803,6 @@ async fn session_info_availability_nux_tooltip_snapshot() {
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -826,7 +824,6 @@ async fn session_info_preserves_styled_tooltip_links() {
                 .to_string(),
         ),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let lines = cell.transcript_hyperlink_lines(/*width*/ 30);
@@ -876,7 +873,6 @@ async fn session_info_first_event_suppresses_tooltips_and_nux() {
         /*is_first_event*/ true,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -897,7 +893,6 @@ async fn session_info_hides_tooltips_when_disabled() {
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");

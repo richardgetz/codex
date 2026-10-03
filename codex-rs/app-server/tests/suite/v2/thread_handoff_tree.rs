@@ -51,7 +51,7 @@ async fn v1_parent_child_handoff_recovery_preserves_unfinished_turn_and_pause() 
 
     let spawn_args = serde_json::to_string(&json!({
         "message": CHILD_PROMPT,
-        "model": "gpt-5.4",
+        "model": "gpt-6.1-sol",
     }))?;
     let (release_pending_turn_a, pending_turn_a_gate) = oneshot::channel();
     let (release_pending_turn_b, pending_turn_b_gate) = oneshot::channel();

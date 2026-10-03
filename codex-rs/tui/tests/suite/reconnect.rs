@@ -409,8 +409,7 @@ async fn implicit_daemon_resume_picker_and_direct_id_reuse_authoritative_daemon(
             Ok::<_, anyhow::Error>((accepted, methods, resumed_thread_ids))
         });
 
-        let mut terminal =
-            PtyCodex::start_with_binary(&repo_root, codex_home, &extra_args, "codex")?;
+        let mut terminal = PtyCodex::start_cli(&repo_root, codex_home, &extra_args)?;
         if expected_lookup == "thread/list" {
             // The top-level resume picker has its own screen and does not render the normal
             // welcome banner that `wait_for_startup` expects.

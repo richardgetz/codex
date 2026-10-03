@@ -1570,6 +1570,60 @@ async fn status_card_token_usage_excludes_cached_tokens() {
 }
 
 #[tokio::test]
+async fn status_wraps_long_paths_and_session_ids_without_losing_text() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    let directory = test_path_buf("/workspace/projects/界界/ｶﾞﾞ/a-very-long-directory-name/codex");
+    set_workspace_cwd(&mut config, directory.abs());
+    let session =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("session id");
+    let usage = TokenUsage::default();
+    let (status, handle) = new_status_output_with_rate_limits_handle(
+        &config,
+        /*requires_openai_auth*/ true,
+        /*model_provider_id*/ None,
+        /*remote_connection*/ None,
+        /*account_display*/ None,
+        /*token_info*/ None,
+        &usage,
+        &Some(session),
+        Some("A thread with a long descriptive name".to_string()),
+        /*forked_from*/ None,
+        /*rate_limits*/ &[],
+        /*_plan_type*/ None,
+        Local::now(),
+        "gpt-5.5",
+        /*collaboration_mode*/ None,
+        /*reasoning_effort_override*/ None,
+        "<none>".to_string(),
+        /*refreshing_rate_limits*/ false,
+    );
+    let directory = directory.to_string_lossy();
+    for width in [7, 12, 17, 18, 24, 25, 40, 80] {
+        let lines = status.display_lines(width);
+        assert!(
+            lines.iter().all(|line| line.width() <= usize::from(width)),
+            "overwide row at width {width}: {:?}",
+            render_lines(&lines)
+        );
+        let joined = lines
+            .iter()
+            .map(|line| line.to_string().trim().to_string())
+            .collect::<String>();
+        assert!(
+            joined.contains(directory.as_ref()),
+            "path lost at width {width}: {joined}"
+        );
+        assert!(
+            joined.contains(&session.to_string()),
+            "session lost at width {width}: {joined}"
+        );
+    }
+    assert!(handle.copy_text().contains(directory.as_ref()));
+    assert!(handle.copy_text().contains(&session.to_string()));
+}
+
+#[tokio::test]
 async fn status_snapshot_includes_opt_in_api_equivalent_token_usage() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
@@ -1954,60 +2008,6 @@ async fn status_snapshot_shows_recursive_workers_and_unavailable_tree() {
 }
 
 #[tokio::test]
-async fn status_wraps_long_paths_and_session_ids_without_losing_text() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    let directory = test_path_buf("/workspace/projects/界界/ｶﾞﾞ/a-very-long-directory-name/codex");
-    set_workspace_cwd(&mut config, directory.abs());
-    let session =
-        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("session id");
-    let usage = TokenUsage::default();
-    let (status, handle) = new_status_output_with_rate_limits_handle(
-        &config,
-        /*requires_openai_auth*/ true,
-        /*model_provider_id*/ None,
-        /*remote_connection*/ None,
-        /*account_display*/ None,
-        /*token_info*/ None,
-        &usage,
-        &Some(session),
-        Some("A thread with a long descriptive name".to_string()),
-        /*forked_from*/ None,
-        /*rate_limits*/ &[],
-        /*_plan_type*/ None,
-        Local::now(),
-        "gpt-5.5",
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-        "<none>".to_string(),
-        /*refreshing_rate_limits*/ false,
-    );
-    let directory = directory.to_string_lossy();
-    for width in [7, 12, 17, 18, 24, 25, 40, 80] {
-        let lines = status.display_lines(width);
-        assert!(
-            lines.iter().all(|line| line.width() <= usize::from(width)),
-            "overwide row at width {width}: {:?}",
-            render_lines(&lines)
-        );
-        let joined = lines
-            .iter()
-            .map(|line| line.to_string().trim().to_string())
-            .collect::<String>();
-        assert!(
-            joined.contains(directory.as_ref()),
-            "path lost at width {width}: {joined}"
-        );
-        assert!(
-            joined.contains(&session.to_string()),
-            "session lost at width {width}: {joined}"
-        );
-    }
-    assert!(handle.copy_text().contains(directory.as_ref()));
-    assert!(handle.copy_text().contains(&session.to_string()));
-}
-
-#[tokio::test]
 async fn status_snapshot_wraps_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
@@ -2189,19 +2189,20 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         .expect("timestamp");
     for (is_remote, is_local_daemon, snapshot) in [
         (
-            true,
             false,
+            None,
             "status_snapshot_uses_default_reasoning_when_config_empty",
         ),
-        (false, true, "status_snapshot_local_background_server"),
+        (true, Some(false), "status_snapshot_remote_server"),
+        (false, Some(true), "status_snapshot_local_background_server"),
     ] {
-        let remote_connection = RemoteConnectionStatus {
+        let remote_connection = is_local_daemon.map(|is_local_daemon| RemoteConnectionStatus {
             address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock"
                 .to_string(),
             version: "v0.133.0".to_string(),
             is_remote,
             is_local_daemon,
-        };
+        });
 
         let model_slug = get_model_offline_for_tests(config.model.as_deref());
         let token_info = token_info_for(&model_slug, &config, &usage);
@@ -2209,7 +2210,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
             &config,
             /*requires_openai_auth*/ true,
             /*model_provider_id*/ None,
-            Some(&remote_connection),
+            remote_connection.as_ref(),
             account_display.as_ref(),
             Some(&token_info),
             &usage,

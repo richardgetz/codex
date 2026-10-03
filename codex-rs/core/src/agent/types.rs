@@ -2,11 +2,11 @@
 //! Backend operations and local admission policy live in the implementations.
 
 use crate::context::MultiAgentRoleInstructions;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::protocol::AgentStatus;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::turn_input::CyberAccessProgram;
 
 /// Registry identity shared by loaded and unloaded agents.
@@ -35,7 +35,8 @@ pub struct SpawnAgentOptions {
     /// Attribute delegated usage to the turn that initiated it.
     pub turn_trigger: Option<String>,
     pub root_turn_id: Option<String>,
-    pub environments: Option<Vec<TurnEnvironmentSelection>>,
+    /// Exact environment bindings from the step that requested the child.
+    pub environments: Option<TurnEnvironmentSnapshot>,
     pub multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
     pub cyber_access_program: Option<CyberAccessProgram>,
 }

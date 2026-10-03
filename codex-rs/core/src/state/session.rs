@@ -78,6 +78,7 @@ pub(crate) struct SessionState {
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
+    /// Original request effort for the current model while configuration updates remain active.
     pub(crate) reasoning_effort_pin: ReasoningEffortPin,
     /// Cancels work bound to discarded history or a superseded Guardian evidence policy.
     pub(crate) history_reset: CancellationToken,
@@ -100,8 +101,6 @@ pub(crate) struct SessionState {
     pub(crate) last_started_turn_id: Option<String>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
-    /// Startup prewarmed session prepared during session initialization.
-
     /// Set under the state lock before shutdown takes the last warmup handle.
     pub(crate) shutting_down: bool,
     /// Background model warmup scheduled at startup or while resuming an idle thread.

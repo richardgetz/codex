@@ -6,6 +6,7 @@ use crate::agent::LocalAgentControl;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
 use crate::agent::control::AgentControlInit;
+use crate::agent::control::HandoffAdmissionGuard;
 use crate::agents_md_manager::SessionInstructions;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
@@ -91,6 +92,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::ThreadUsagePolicy;
@@ -105,7 +107,6 @@ use codex_protocol::turn_input::HandoffBlocker;
 use codex_protocol::turn_input::NotSubmittedReason;
 use codex_protocol::turn_input::RecoverTurnRequest;
 use codex_protocol::turn_input::StartIfIdleSubmission;
-use codex_rollout::RolloutRecorder;
 use codex_rollout::state_db::StateDbHandle;
 use codex_skills_extension::HostSkillsService;
 use codex_state::ThreadActivityPauseSnapshot;
@@ -1506,30 +1507,6 @@ impl ThreadManager {
     pub async fn spawn_legacy_subagent(
         &self,
         forked_from_thread_id: ThreadId,
-        options: StartThreadOptions,
-    ) -> CodexResult<NewThread> {
-        self.spawn_subagent_inner(forked_from_thread_id, options, None)
-            .await
-    }
-
-    /// Spawn a subagent by forking persisted history with an explicit session source.
-    ///
-    /// The source is authoritative for the new thread and is used when the parent history would
-    /// otherwise make the child inherit a different source, such as assigning a detached review
-    /// to a team lead.
-    pub async fn spawn_subagent_with_source(
-        &self,
-        forked_from_thread_id: ThreadId,
-        options: StartThreadOptions,
-        session_source: SessionSource,
-    ) -> CodexResult<NewThread> {
-        self.spawn_subagent_inner(forked_from_thread_id, options, Some(session_source))
-            .await
-    }
-
-    async fn spawn_subagent_inner(
-        &self,
-        forked_from_thread_id: ThreadId,
         mut options: StartThreadOptions,
         session_source: Option<SessionSource>,
     ) -> CodexResult<NewThread> {
@@ -1587,6 +1564,17 @@ impl ThreadManager {
         .await
     }
 
+    /// Compatibility wrapper for [`Self::spawn_legacy_subagent`], the upstream replacement API.
+    pub async fn spawn_subagent_with_source(
+        &self,
+        forked_from_thread_id: ThreadId,
+        options: StartThreadOptions,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        self.spawn_legacy_subagent(forked_from_thread_id, options, Some(session_source))
+            .await
+    }
+
     /// Resume a legacy thread by reading its full rollout history.
     ///
     /// Paginated sources are rejected. Load their context with
@@ -1600,12 +1588,9 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
-        let _handoff_admission = self.begin_handoff_admission()?;
-        let initial_history = RolloutRecorder::get_rollout_history_with_options(
-            &rollout_path,
-            config.resume_load_options(),
-        )
-        .await?;
+        let initial_history = self
+            .legacy_initial_history_from_rollout_path(rollout_path)
+            .await?;
         Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
@@ -2188,7 +2173,6 @@ impl ThreadManager {
     /// Resumes a thread while preserving any model or reasoning-effort values
     /// explicitly supplied by the caller over a persisted single-model
     /// snapshot.
-    #[instrument(level = "trace", skip_all)]
     pub async fn resume_thread_with_history_with_overrides(
         &self,
         config: Config,
@@ -2198,11 +2182,68 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
         thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_with_overrides_and_settings(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            client_mcp_extensions,
+            thread_settings_override_flags,
+            None,
+        )
+        .await
+    }
+
+    /// Resumes a thread with an owned settings event that may sit outside paginated model history.
+    ///
+    /// The event is accepted only when it names the resumed conversation. Its snapshot is passed
+    /// through the inherited thread-settings path so Core restores thread-owned state without
+    /// inserting or reordering rollout history.
+    pub async fn resume_thread_with_history_and_settings(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        client_mcp_extensions: ClientMcpExtensions,
+        thread_settings_event: Option<ThreadSettingsAppliedEvent>,
+    ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_with_overrides_and_settings(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            client_mcp_extensions,
+            ThreadSettingsOverrideFlags::default(),
+            thread_settings_event,
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    async fn resume_thread_with_history_with_overrides_and_settings(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        client_mcp_extensions: ClientMcpExtensions,
+        thread_settings_override_flags: ThreadSettingsOverrideFlags,
+        thread_settings_event: Option<ThreadSettingsAppliedEvent>,
+    ) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
         let agent_control = self.agent_control_for_config(&config);
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        let inherited_thread_settings = match (&initial_history, thread_settings_event) {
+            (InitialHistory::Resumed(resumed), Some(event))
+                if event.thread_id == Some(resumed.conversation_id) =>
+            {
+                Some(event.thread_settings)
+            }
+            _ => None,
+        };
         if let InitialHistory::Resumed(resumed) = &initial_history
             && initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2)
             && !session_source.is_non_root_agent()
@@ -2221,6 +2262,12 @@ impl ThreadManager {
         };
         let mut request = ThreadSpawnRequest::new(options, auth_manager, agent_control);
         request.thread_settings_override_flags = thread_settings_override_flags;
+        request.fork_persistence = ForkPersistence::Copied {
+            inherited_usage_policy: inherited_thread_settings
+                .as_ref()
+                .map(|settings| settings.usage_policy),
+            inherited_thread_settings,
+        };
         Box::pin(self.state.spawn_thread(request)).await
     }
 
@@ -2238,19 +2285,6 @@ impl ThreadManager {
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
         request.user_shell_override = Some(user_shell_override);
-        Box::pin(self.state.spawn_thread(request)).await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn start_thread_with_agent_control_for_tests(
-        &self,
-        options: StartThreadOptions,
-        agent_control: LocalAgentControl,
-        parent_thread_id: ThreadId,
-    ) -> CodexResult<NewThread> {
-        let mut request =
-            ThreadSpawnRequest::new(options, Arc::clone(&self.state.auth_manager), agent_control);
-        request.parent_thread_id = Some(parent_thread_id);
         Box::pin(self.state.spawn_thread(request)).await
     }
 
@@ -2286,6 +2320,25 @@ impl ThreadManager {
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
         self.state.threads.write().await.remove(thread_id)
+    }
+
+    /// Removes a thread for a client request, leaving internal workers with their owner.
+    ///
+    /// The access check and removal share the same lock so a rejected worker stays registered.
+    pub async fn remove_thread_for_client(
+        &self,
+        thread_id: &ThreadId,
+    ) -> CodexResult<Option<Arc<CodexThread>>> {
+        let mut threads = self.state.threads.write().await;
+        if threads
+            .get(thread_id)
+            .is_some_and(|thread| thread.session_source.is_internal())
+        {
+            return Err(CodexErr::InvalidRequest(
+                "live internal threads can only be removed by their owner".to_owned(),
+            ));
+        }
+        Ok(threads.remove(thread_id))
     }
 
     /// Removes a thread only if `thread_id` still maps to `expected`.
@@ -2361,40 +2414,43 @@ impl ThreadManager {
 
     /// Fork a legacy thread by snapshotting its full rollout history according to
     /// `snapshot` and starting a new thread with identical configuration
-    /// (unless overridden by the caller's `config`). The new thread will have
-    /// a fresh id.
+    /// (unless overridden by the caller's options). The new thread has a fresh id.
+    /// Fork history replaces `options.initial_history`; hosts can supply the new
+    /// task's instruction provider through the same options as thread creation.
+    ///
+    /// Paginated sources are rejected. Use [`ThreadStore::prepare_fork`] and
+    /// [`Self::fork_prepared_thread`] for paginated thread forks.
     pub async fn fork_legacy_thread<S>(
         &self,
         snapshot: S,
-        config: Config,
+        options: StartThreadOptions,
         path: PathBuf,
-        thread_source: Option<ThreadSource>,
-        parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread>
     where
         S: Into<ForkSnapshot>,
     {
-        let _handoff_admission = self.begin_handoff_admission()?;
+        let handoff_admission = self.begin_handoff_admission()?;
         let snapshot = snapshot.into();
         let history = self.legacy_initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history(
-            snapshot,
-            config,
-            history,
-            thread_source,
-            parent_trace,
-            ClientMcpExtensions::default(),
-            /*reserved_thread_id*/ None,
-            /*inherited_usage_policy*/ None,
+        self.fork_thread_with_initial_history_admitted(
+            options,
+            ForkHistory {
+                snapshot,
+                initial_history: history,
+                persistence: ForkPersistence::Copied {
+                    inherited_usage_policy: None,
+                    inherited_thread_settings: None,
+                },
+                thread_settings_override_flags: ThreadSettingsOverrideFlags::default(),
+            },
+            handoff_admission,
         )
         .await
     }
 
-    /// Fork a rollout while preserving the caller's thread startup options.
+    /// Compatibility wrapper for [`Self::fork_legacy_thread`], the upstream replacement API.
     ///
-    /// This is for hosts that need to carry per-thread setup such as an
-    /// environment selection, an instruction provider, or extension data into
-    /// the fork. The forked history replaces `options.initial_history`.
+    /// Admission is acquired by `fork_legacy_thread` before the source rollout is read.
     pub async fn fork_thread_with_start_options<S>(
         &self,
         snapshot: S,
@@ -2404,10 +2460,7 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
-        let _handoff_admission = self.begin_handoff_admission()?;
-        let history = self.legacy_initial_history_from_rollout_path(path).await?;
-        self.fork_thread_from_history_with_start_options(snapshot, options, history)
-            .await
+        self.fork_legacy_thread(snapshot, options, path).await
     }
 
     async fn legacy_initial_history_from_rollout_path(
@@ -2642,10 +2695,20 @@ impl ThreadManager {
 
     async fn fork_thread_with_initial_history(
         &self,
-        mut options: StartThreadOptions,
+        options: StartThreadOptions,
         fork_history: ForkHistory,
     ) -> CodexResult<NewThread> {
-        let _handoff_admission = self.begin_handoff_admission()?;
+        let handoff_admission = self.begin_handoff_admission()?;
+        self.fork_thread_with_initial_history_admitted(options, fork_history, handoff_admission)
+            .await
+    }
+
+    async fn fork_thread_with_initial_history_admitted(
+        &self,
+        mut options: StartThreadOptions,
+        fork_history: ForkHistory,
+        _handoff_admission: ThreadManagerHandoffAdmissionGuard,
+    ) -> CodexResult<NewThread> {
         let config = options.config.clone();
         let ForkHistory {
             snapshot,
@@ -2877,6 +2940,42 @@ impl ThreadManagerState {
         parent_turn_id: Option<String>,
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
+        self.send_op_inner(
+            thread_id,
+            op,
+            parent_turn_id,
+            root_turn_id,
+            /*handoff_admission*/ None,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_op_with_admission(
+        &self,
+        thread_id: ThreadId,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        handoff_admission: &HandoffAdmissionGuard,
+    ) -> CodexResult<String> {
+        self.send_op_inner(
+            thread_id,
+            op,
+            parent_turn_id,
+            root_turn_id,
+            Some(handoff_admission),
+        )
+        .await
+    }
+
+    async fn send_op_inner(
+        &self,
+        thread_id: ThreadId,
+        op: Op,
+        parent_turn_id: Option<String>,
+        root_turn_id: Option<String>,
+        handoff_admission: Option<&HandoffAdmissionGuard>,
+    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
             thread
@@ -2896,6 +2995,19 @@ impl ThreadManagerState {
         }
         let is_team_lead_completion = matches!(&op, Op::TeamLeadCompletion { .. });
         if !is_team_lead_completion {
+            if let Some(handoff_admission) = handoff_admission {
+                return thread
+                    .io
+                    .submit_with_trace_and_admission(
+                        op,
+                        /*trace*/ None,
+                        parent_turn_id,
+                        root_turn_id,
+                        residency_guard,
+                        handoff_admission,
+                    )
+                    .await;
+            }
             return thread
                 .io
                 .submit_with_trace(
@@ -2920,6 +3032,7 @@ impl ThreadManagerState {
             parent_turn_id,
             root_turn_id,
             residency_guard,
+            handoff_admission: handoff_admission.map(HandoffAdmissionGuard::fork),
         };
         if let Err(err) = thread.io.submit_with_id(submission).await {
             thread
@@ -3206,16 +3319,11 @@ impl ThreadManagerState {
             None => self.client_mcp_extensions_for_child(parent_thread_id).await,
         };
         let thread_source = initial_history.get_resumed_thread_source();
-        let environments = environment_selections.or_else(|| {
-            inherited_environments
-                .as_ref()
-                .map(TurnEnvironmentSnapshot::to_selections)
-        });
         let options = StartThreadOptions {
             initial_history,
             session_source: Some(session_source),
             thread_source,
-            environments,
+            environments: environment_selections,
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
@@ -3319,20 +3427,43 @@ impl ThreadManagerState {
             environments,
             inherited_environments: captured_environments,
             user_instructions: supplied_user_instructions,
-            thread_extension_init,
+            mut thread_extension_init,
             client_mcp_extensions,
             mut reserved_thread_id,
             disabled_plugin_ids,
         } = options;
         let inherited_environments = captured_environments.or(inherited_environments);
         let session_source = session_source.unwrap_or_else(|| self.session_source.clone());
-        let environments = environments.unwrap_or_else(|| {
-            default_thread_environment_selections(
-                self.environment_manager.as_ref(),
-                &config.cwd,
-                &config.workspace_roots,
-            )
-        });
+        // Older callers and saved reviewers identify isolation through their source.
+        // New internal callers supply an explicit runtime policy before startup.
+        let isolation = thread_extension_init
+            .get::<codex_extension_api::SessionIsolation>()
+            .map(|policy| *policy)
+            .unwrap_or_else(|| {
+                if crate::guardian::is_basic_session_source(&session_source) {
+                    codex_extension_api::SessionIsolation::Isolated
+                } else {
+                    codex_extension_api::SessionIsolation::Inherit
+                }
+            });
+        thread_extension_init.insert(isolation);
+        let environments = environments
+            .or_else(|| {
+                let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) = &session_source
+                else {
+                    return None;
+                };
+                inherited_environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::inheritable_selections)
+            })
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.environment_manager.as_ref(),
+                    &config.cwd,
+                    &config.workspace_roots,
+                )
+            });
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if reserved_thread_id.is_some() && matches!(&initial_history, InitialHistory::Resumed(_)) {
             return Err(CodexErr::InvalidRequest(
@@ -3381,12 +3512,6 @@ impl ThreadManagerState {
                             .get_or_insert_with(|| local.runtime.generate_thread_id())
                     }
                 };
-                local.runtime.initialize_limits(
-                    config
-                        .effective_agent_max_threads(MultiAgentVersion::V2)
-                        .unwrap_or(usize::MAX),
-                    config.team.worker_max_concurrent,
-                );
                 AgentControlInit::Provided {
                     control: factory(thread_id).await?,
                     runtime: local.runtime,
@@ -3418,12 +3543,21 @@ impl ThreadManagerState {
                 .await;
         }
         let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
-            if crate::guardian::is_basic_session_source(&session_source) {
+            if isolation == codex_extension_api::SessionIsolation::Isolated {
+                let extensions = thread_extension_init
+                    .get::<codex_extension_api::IsolatedSessionExtensions<Config>>()
+                    .map(|extensions| Arc::clone(&extensions.0))
+                    .unwrap_or_else(empty_extension_registry);
+                let mcp_manager = McpManager::new_with_extensions(
+                    Arc::clone(&self.plugins_manager),
+                    Arc::clone(&extensions),
+                    CodexAppsToolsCache::default(),
+                );
                 (
                     inherited_instructions.unwrap_or_default(),
                     None,
-                    empty_extension_registry(),
-                    Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
+                    extensions,
+                    Arc::new(mcp_manager),
                     Some(MultiAgentVersion::Disabled),
                 )
             } else {

@@ -426,9 +426,8 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         required: false,
         startup_readiness: Default::default(),
         supports_parallel_tool_calls: false,
-        startup: codex_config::McpServerStartupMode::Auto,
-        sharing: codex_config::McpServerSharingMode::Auto,
-
+        startup: Default::default(),
+        sharing: Default::default(),
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,

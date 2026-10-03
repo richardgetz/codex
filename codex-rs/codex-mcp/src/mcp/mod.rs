@@ -674,7 +674,6 @@ fn mcp_server_config_for_url(
         supports_parallel_tool_calls: false,
         startup: McpServerStartupMode::default(),
         sharing: McpServerSharingMode::default(),
-
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,

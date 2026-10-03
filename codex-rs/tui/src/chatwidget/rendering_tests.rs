@@ -399,6 +399,7 @@ async fn initial_session_header_starts_at_the_top_of_the_viewport() {
         .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>");
 
     let cwd = widget.config.cwd.as_path().display().to_string();
+
     insta::assert_snapshot!(header.replace(&cwd, "/tmp/project"), @r"
       >_ OpenAI Codex (v<VERSION>)
          /tmp/project
