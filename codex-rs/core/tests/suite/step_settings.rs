@@ -105,6 +105,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
+use image::GenericImageView;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -112,8 +113,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use test_case::test_case;
-
-use image::GenericImageView;
 
 use super::rmcp_client::remote_aware_environment_id;
 use super::rmcp_client::remote_aware_stdio_server_bin;
@@ -133,8 +132,8 @@ fn step_settings_models() -> Vec<ModelInfo> {
         .expect("bundled models should parse")
         .models
         .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("bundled gpt-5.4 model");
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled gpt-5.5 model");
     [MODEL_A, MODEL_B, MODEL_C]
         .into_iter()
         .map(|slug| {
@@ -466,7 +465,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
         requests[2].function_call_output("call-a")
     );
 
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused_request.turn_id,
         TurnSettingsUpdate {
@@ -591,7 +590,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
             .thread_manager
             .fork_legacy_thread(
                 ForkSnapshot::Interrupted,
-                codex_core::StartThreadOptions::new(replay_config),
+                StartThreadOptions::new(replay_config),
                 rollout_path.clone(),
             )
             .await?
@@ -726,7 +725,7 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
         .thread_manager
         .fork_legacy_thread(
             ForkSnapshot::Interrupted,
-            codex_core::StartThreadOptions::new(replay_config),
+            StartThreadOptions::new(replay_config),
             rollout_path,
         )
         .await?
@@ -1020,7 +1019,7 @@ enum TokenBudgetScenario {
 #[test_case(TokenBudgetScenario::InitialWindowOnly)]
 #[test_case(TokenBudgetScenario::DestinationWithoutGuidance)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn active_model_switch_resolves_token_budget_from_original_preferences(
+async fn active_model_switch_updates_core_context_from_captured_settings(
     scenario: TokenBudgetScenario,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1139,18 +1138,15 @@ async fn active_model_switch_resolves_token_budget_from_original_preferences(
         test.codex.submit(Op::ReloadUserConfig).await?;
     }
 
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_B.to_string()),
-                ..Default::default()
-            },
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_B.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &request.turn_id).await?;
     let request = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::RequestUserInput(request) => Some(request.clone()),
@@ -1263,6 +1259,89 @@ async fn active_model_switch_resolves_token_budget_from_original_preferences(
             "preserve history and append the guidance transition only once"
         );
     }
+
+    Ok(())
+}
+
+#[test_case(Some(ReasoningEffort::Ultra); "selected effort")]
+#[test_case(None; "captured model default effort")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_model_switch_updates_multi_agent_policy_from_captured_effort(
+    effort: Option<ReasoningEffort>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let use_model_default = effort.is_none();
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            paused_response("resp-1", "pause-before-effort-switch"),
+            sse_completed("resp-2"),
+        ],
+    )
+    .await;
+    let test = step_settings_test()
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable multi-agent V2");
+            for model in &mut config
+                .model_catalog
+                .as_mut()
+                .expect("controlled model catalog")
+                .models
+            {
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("model messages")
+                    .multi_agent = None;
+                model
+                    .supported_reasoning_levels
+                    .push(ReasoningEffortPreset {
+                        effort: ReasoningEffort::Ultra,
+                        description: "Ultra".to_string(),
+                    });
+                model.default_reasoning_level =
+                    Some(if model.slug == MODEL_B && use_model_default {
+                        ReasoningEffort::Ultra
+                    } else {
+                        ReasoningEffort::Low
+                    });
+            }
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let request = start_paused_turn(&test.codex).await?;
+    assert_eq!(
+        submit_turn_settings(
+            &test.codex,
+            &request.turn_id,
+            TurnSettingsUpdate {
+                model: Some(MODEL_B.to_string()),
+                effort: Some(effort),
+                ..Default::default()
+            },
+        )
+        .await?,
+        TurnSettingsUpdateOutcome::Applied
+    );
+    answer_paused_turn(&test.codex, &request.turn_id).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].body_json()["model"], MODEL_A);
+    assert_eq!(requests[1].body_json()["model"], MODEL_B);
+    assert_eq!(requests[1].body_json()["reasoning"]["effort"], "xhigh");
+    let proactive_text = "Proactive multi-agent delegation is active.";
+    assert!(!requests[0].body_contains_text(proactive_text));
+    assert!(requests[1].body_contains_text(proactive_text));
 
     Ok(())
 }
@@ -1382,18 +1461,15 @@ async fn mcp_confirmation_policy_follows_step_model_changes() -> Result<()> {
     let request = start_paused_turn(&test.codex).await?;
     assert_eq!(request.call_id, "policy-a-pending");
     // The pending call must retain model A's policies after this settings update.
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_B.to_string()),
-                ..Default::default()
-            },
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied,
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_B.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     test.codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id.clone(),
@@ -1531,7 +1607,7 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1547,7 +1623,7 @@ async fn captured_model_replans_tools_and_retains_the_issuing_request_router() -
     })
     .await;
     assert_eq!(paused.call_id, "pause-b");
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1707,7 +1783,7 @@ async fn captured_model_enables_and_executes_code_mode() -> Result<()> {
         )
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -1884,19 +1960,16 @@ async fn sparse_updates_preserve_divergent_active_and_future_models() -> Result<
         },
     )
     .await?;
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_C.to_string()),
-                effort: Some(Some(ReasoningEffort::High)),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_C.to_string()),
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &request.turn_id).await?;
     let second_request = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::RequestUserInput(request) => Some(request.clone()),
@@ -1916,18 +1989,15 @@ async fn sparse_updates_preserve_divergent_active_and_future_models() -> Result<
             reply: None,
         })
         .await?;
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
+            ..Default::default()
+        },
+    )
+    .await?;
     let durable_settings = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::ThreadSettingsApplied(event) => Some(event.thread_settings.clone()),
         _ => None,
@@ -2108,18 +2178,15 @@ async fn model_activation_uses_destination_metadata_defaults(
         .await?;
     let request = start_paused_turn(&test.codex).await?;
 
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_B.to_string()),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_B.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &request.turn_id).await?;
     let paused = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::RequestUserInput(request) => Some(request.clone()),
@@ -2128,18 +2195,15 @@ async fn model_activation_uses_destination_metadata_defaults(
     .await;
     // B cannot use the requested tier. Switching back must recover that
     // selection and preserve an unset summary, not reuse B's effective values.
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_A.to_string()),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_A.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &paused.turn_id).await?;
     wait_for_event(&test.codex, |event| match event {
         EventMsg::Error(error) => panic!("model activation failed: {}", error.message),
@@ -2304,18 +2368,15 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &paused.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_B.to_string()),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &paused.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_B.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &paused.turn_id).await?;
     wait_for_event(&test.codex, |event| match event {
         EventMsg::Error(error) => panic!("model activation failed: {}", error.message),
@@ -2418,18 +2479,15 @@ async fn persistent_instructions_follow_mid_turn_model_changes() -> Result<()> {
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &paused.turn_id,
-            TurnSettingsUpdate {
-                model: Some(MODEL_B.to_string()),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &paused.turn_id,
+        TurnSettingsUpdate {
+            model: Some(MODEL_B.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &paused.turn_id).await?;
     wait_for_event(&test.codex, |event| match event {
         EventMsg::Error(error) => panic!("model activation failed: {}", error.message),
@@ -2597,18 +2655,15 @@ async fn request_preference_activation_keeps_admitted_model_metadata() -> Result
         .await;
     assert_eq!(refresh.requests().len(), 1);
 
-    assert_eq!(
-        submit_turn_settings(
-            &test.codex,
-            &request.turn_id,
-            TurnSettingsUpdate {
-                effort: Some(Some(ReasoningEffort::High)),
-                ..Default::default()
-            }
-        )
-        .await?,
-        TurnSettingsUpdateOutcome::Applied
-    );
+    apply_turn_settings(
+        &test.codex,
+        &request.turn_id,
+        TurnSettingsUpdate {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
     answer_paused_turn(&test.codex, &request.turn_id).await?;
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -2713,7 +2768,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2729,7 +2784,7 @@ async fn captured_step_controls_exec_completion_and_write_stdin_output() -> Resu
     })
     .await;
     assert_eq!(paused.call_id, "pause-b");
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -2867,7 +2922,7 @@ async fn captured_step_controls_mcp_output_limit(supports_images: bool) -> Resul
         .await?;
     wait_for_mcp_server(&test.codex, "calendar").await?;
     let paused = start_paused_turn(&test.codex).await?;
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -3006,7 +3061,7 @@ async fn captured_step_settings_and_history_reach_extension_executor(
         .build_with_auto_env(&server)
         .await?;
     let paused = start_paused_turn(&test.codex).await?;
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {
@@ -3131,7 +3186,7 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
         .await?;
     wait_for_mcp_server(&test.codex, "resources").await?;
     let paused = start_paused_turn(&test.codex).await?;
-    submit_turn_settings(
+    apply_turn_settings(
         &test.codex,
         &paused.turn_id,
         TurnSettingsUpdate {

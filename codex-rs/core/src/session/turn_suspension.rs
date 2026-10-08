@@ -113,11 +113,20 @@ async fn suspend_turn_and_shutdown_with_scope(
     }
 
     let live_thread = session
-        .live_thread_for_persistence("suspend an unfinished turn")
+        .live_thread_for_persistence(if scope == SuspensionScope::Root {
+            "suspend an unfinished root turn"
+        } else {
+            "suspend an unfinished turn"
+        })
         .map_err(|error| CodexErr::Fatal(error.to_string()))?;
+    let turn_label = if scope == SuspensionScope::Root {
+        "root turn"
+    } else {
+        "turn"
+    };
     // Flush before canceling execution so a persistence failure leaves the original turn running.
     live_thread.flush().await.map_err(|error| {
-        CodexErr::Fatal(format!("flush before turn suspension failed: {error}"))
+        CodexErr::Fatal(format!("flush before {turn_label} suspension failed: {error}"))
     })?;
 
     // The flush can yield while the active turn completes or changes. Recheck its
@@ -171,14 +180,24 @@ async fn suspend_turn_and_shutdown_with_scope(
             blockers.push(codex_protocol::turn_input::HandoffBlocker::SuspensionTimeout);
         }
     }
+    if !blockers.is_empty() && scope != SuspensionScope::Root {
+        // A failed task stop is a reversible handoff blocker. Keep the current process
+        // operational so the coordinator can reopen admission without routing new work into a
+        // half-shutdown session. The active turn has already been removed and the task stopped;
+        // leave its accepted input and session services with the source process for recovery.
+        return Ok(SuspendTurnOutcome::Blocked { blockers });
+    }
     // Pending accepted input and interactive waiters live only in this process. Handoff
     // intentionally drops that state; persisting or replaying it needs a separate protocol.
     session.input_queue.clear_pending(&turn).await;
 
     // Stop all producers before flushing their final history and closing its writer. Once the
-    // active task has been removed, any persistence failure makes this node non-transferable;
-    // the handoff coordinator must retain a NeedsAttention receipt instead of replacing it.
-    handlers::shutdown_session_runtime(session).await;
+    // active task has been removed, a handoff cannot transfer the node unless these writes close.
+    if scope == SuspensionScope::Root {
+        handlers::shutdown_session_runtime(session).await;
+    } else {
+        handlers::shutdown_session_runtime_for_handoff(session).await;
+    }
     if let Err(error) = live_thread.flush().await {
         warn!(thread_id = %session.thread_id, %error, "flush after turn suspension failed");
         if scope == SuspensionScope::Root {
@@ -198,15 +217,22 @@ async fn suspend_turn_and_shutdown_with_scope(
         blockers.push(codex_protocol::turn_input::HandoffBlocker::Persistence);
     }
     if !blockers.is_empty() && scope != SuspensionScope::Root {
-        return Ok(SuspendTurnOutcome::Blocked { blockers });
+        // Persistence failed after the session services shut down. The coordinator must
+        // terminate and remove this runtime before it reopens admission; the rollout remains the
+        // recovery source, while the blocked receipt prevents treating the node as transferred.
+        session
+            .deliver_event_raw(Event {
+                id: submission_id,
+                msg: EventMsg::ShutdownComplete,
+            })
+            .await;
+        return Ok(SuspendTurnOutcome::BlockedAndShutdown { turn_id, blockers });
     }
-    // Announce thread shutdown only after its writer closes so a replacement worker
-    // cannot write the same thread concurrently.
-    handlers::emit_thread_stop_lifecycle(session.as_ref()).await;
     if scope != SuspensionScope::Root {
-        // The normal shutdown event closes the session, but this turn remains resumable.
-        // Mark it before delivery so a detached V1 watcher cannot turn this lifecycle signal
-        // into a synthetic Worker completion for the replacement daemon.
+        handlers::emit_thread_stop_lifecycle(session.as_ref()).await;
+        // Run extension shutdown callbacks only after the rollout writer closes, then mark the
+        // graph state before announcing shutdown so a detached watcher cannot synthesize a
+        // Worker completion for this resumable turn.
         session
             .services
             .local_agent_control()
@@ -217,6 +243,6 @@ async fn suspend_turn_and_shutdown_with_scope(
             id: submission_id,
             msg: EventMsg::ShutdownComplete,
         })
-        .await;
+    .await;
     Ok(SuspendTurnOutcome::Suspended { turn_id })
 }

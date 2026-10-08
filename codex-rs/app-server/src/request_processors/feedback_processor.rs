@@ -268,10 +268,15 @@ impl FeedbackRequestProcessor {
 
         let session_source = self.thread_manager.session_source();
         let runtime_handle = tokio::runtime::Handle::current();
+        let codex_home = self.config.codex_home.clone();
 
         let upload_result = tokio::task::spawn_blocking(move || {
             // Cancelling the RPC waiter must not release a still-running upload's slot.
             let _permit = permit;
+            if include_logs {
+                extra_attachments
+                    .extend(codex_feedback::daemon_log_attachments(codex_home.as_path()));
+            }
             let tags = (!upload_tags.is_empty()).then_some(&upload_tags);
             runtime_handle.block_on(snapshot.upload_feedback(
                 FeedbackUploadOptions {
@@ -754,7 +759,6 @@ mod tests {
                 ordinal: None,
                 item: RolloutItem::TurnContext(TurnContextItem {
                     turn_id: Some((*turn_id).to_string()),
-                    trace_id: None,
                     root_turn_id: None,
                     disabled_plugin_ids: None,
                     cwd: AbsolutePathBuf::from_absolute_path(tempdir.path())
@@ -779,10 +783,6 @@ mod tests {
                     cyber_access_program: None,
                     effort: effort.clone(),
                     summary: ReasoningSummary::Auto,
-                    user_instructions: None,
-                    developer_instructions: None,
-                    final_output_json_schema: None,
-                    truncation_policy: None,
                 }),
             }
         }));

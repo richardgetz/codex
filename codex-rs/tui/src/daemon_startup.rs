@@ -1,11 +1,11 @@
 //! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
 //! optional attachment may fall back to embedded mode, while automatic launches
 //! require a compatible shared server and a successful connection, except when
-//! the Windows launcher forbids detaching a missing server.
+//! the Windows launcher forbids detaching a missing server. Elevated local
+//! Windows sessions use explicit embedded behavior before discovery or startup.
 
 use super::*;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 const SERVER_FEATURES: [Feature; 4] = [
     Feature::ApiKeyModelDiscovery,
@@ -15,6 +15,9 @@ const SERVER_FEATURES: [Feature; 4] = [
 ];
 
 pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
+
+#[cfg(any(windows, test))]
+pub(super) const ELEVATED_LAUNCH_WARNING: &str = "Running as administrator: shared background server disabled. To enable it, restart Codex in a terminal without administrator permissions.";
 
 #[derive(Debug, thiserror::Error)]
 #[error("Cannot use the shared background server: {reason}.\n{FAILURE_HINT}")]
@@ -177,87 +180,12 @@ pub(super) async fn compatibility_warning(
     .await;
     match check {
         Ok(()) => Ok(None),
-        Err(reason) => {
-            let daemon_identity = if matches!(
-                target,
-                AppServerTarget::LocalDaemon {
-                    endpoint: RemoteAppServerEndpoint::UnixSocket { .. },
-                    ..
-                }
-            ) {
-                codex_app_server_daemon::run(codex_app_server_daemon::LifecycleCommand::Version)
-                    .await
-                    .ok()
-                    .map(|output| {
-                        format!(
-                            "; daemon launcher {} is installed at version {}, while the running launcher version is {} (app-server version {})",
-                            output.managed_codex_path.display(),
-                            output.managed_codex_version.as_deref().unwrap_or("unknown"),
-                            output
-                                .running_managed_codex_version
-                                .as_deref()
-                                .unwrap_or("unknown"),
-                            output.app_server_version.as_deref().unwrap_or("unknown")
-                        )
-                    })
-            } else {
-                None
-            };
-            let reason = match daemon_identity {
-                Some(identity) => format!("{reason}{identity}"),
-                None => reason,
-            };
-            if *allow_embedded_fallback {
-                Ok(Some(format!(
-                    "Running without the shared background server: {reason}."
-                )))
-            } else {
-                Err(CompatibilityError {
-                    reason,
-                    restart_features,
-                })
-            }
-        }
-    }
-}
-
-pub(super) fn launcher_update_issue(
-    output: &codex_app_server_daemon::ApplyOutput,
-) -> CompatibilityError {
-    let launcher = output
-        .managed_codex_path
-        .as_deref()
-        .unwrap_or_else(|| Path::new("unknown"));
-    let error = output
-        .error
-        .as_deref()
-        .unwrap_or("daemon update reconciliation did not complete");
-    let recovery_guidance = match output.failure_kind {
-        Some(codex_app_server_daemon::ApplyFailureKind::HandoffJournalMissing) => {
-            "The matching handoff journal is missing; Codex preserved the receipt and did not replay or discard its saved sessions."
-        }
-        Some(codex_app_server_daemon::ApplyFailureKind::HandoffStorageMismatch) => {
-            "The daemon and handoff use different Codex homes; Codex preserved the handoff and did not mutate either home."
-        }
-        Some(codex_app_server_daemon::ApplyFailureKind::HandoffWorkPending) => {
-            "Codex preserved the pending handoff and its saved session ownership."
-        }
-        Some(codex_app_server_daemon::ApplyFailureKind::RunningLauncherMismatch) | None => {
-            "The selected launcher is not verified as the running fork build."
-        }
-    };
-    CompatibilityError {
-        reason: format!(
-            "safe daemon update returned {:?}; selected launcher {} (installed version {}) is running as version {} (app-server version {}). {recovery_guidance} {error}",
-            output.status,
-            launcher.display(),
-            output.managed_codex_version.as_deref().unwrap_or("unknown"),
-            output
-                .running_managed_codex_version
-                .as_deref()
-                .unwrap_or("unknown"),
-            output.app_server_version.as_deref().unwrap_or("unknown")
-        ),
-        restart_features: None,
+        Err(reason) if *allow_embedded_fallback => Ok(Some(format!(
+            "Running without the shared background server: {reason}."
+        ))),
+        Err(reason) => Err(CompatibilityError {
+            reason,
+            restart_features,
+        }),
     }
 }

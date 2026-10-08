@@ -1,6 +1,7 @@
 //! Reconstructs model context and preserves source runtime metadata across fork cutoffs.
 
 use std::io;
+use std::path::Path;
 
 use codex_protocol::protocol::HistoryPosition;
 use codex_protocol::protocol::SessionMetaLine;
@@ -48,18 +49,27 @@ pub(super) async fn load_latest_model_context(
                 message: format!("no rollout found for thread id {}", params.thread_id),
             })?;
 
-    let session_meta = codex_rollout::read_session_meta_line(path.as_path())
+    load_from_rollout_path(store, params.thread_id, &path).await
+}
+
+pub(super) async fn load_from_rollout_path(
+    store: &LocalThreadStore,
+    thread_id: codex_protocol::ThreadId,
+    path: &Path,
+) -> ThreadStoreResult<StoredModelContext> {
+    let before = super::history_revision::read(path).await;
+    let session_meta = codex_rollout::read_session_meta_line(path)
         .await
         .map_err(|err| ThreadStoreError::Internal {
             message: format!("failed to read session metadata {}: {err}", path.display()),
         })?;
-    if session_meta.meta.id != params.thread_id {
+    if session_meta.meta.id != thread_id {
         return Err(ThreadStoreError::InvalidRequest {
             message: format!(
                 "rollout at {} belongs to thread {}, not {}",
                 path.display(),
                 session_meta.meta.id,
-                params.thread_id
+                thread_id
             ),
         });
     }
@@ -71,27 +81,31 @@ pub(super) async fn load_latest_model_context(
             .is_some_and(|file_name| file_name.ends_with(".jsonl.zst"))
     {
         let lineage = store
-            .resolve_rollout_lineage_for_reference(params.thread_id)
+            .resolve_rollout_lineage_for_reference(thread_id)
             .await?;
         scan_model_context_from_lineage_with_retry(
             store,
-            params.thread_id,
+            thread_id,
             lineage,
             session_meta,
             /*history_base*/ None,
         )
         .await?
     } else if matches!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated) {
-        let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+        let lineage = store
+            .resolve_rollout_lineage(thread_id, Some(path.to_path_buf()))
+            .await?;
         scan_model_context_from_lineage(lineage, session_meta)
             .await
             .map_err(model_context_scan_error)?
     } else {
-        read_thread::load_history_items(path.as_path()).await?
+        read_thread::load_history_items(path).await?
     };
 
+    let after = super::history_revision::read(path).await;
     Ok(StoredModelContext {
-        thread_id: params.thread_id,
+        revision: before.filter(|revision| Some(revision) == after.as_ref()),
+        thread_id,
         items,
     })
 }

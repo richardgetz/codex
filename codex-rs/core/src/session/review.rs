@@ -1,8 +1,5 @@
 use super::step_settings::ResolvedStepSettings;
-use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
-use arc_swap::ArcSwap;
-use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
 pub(super) async fn spawn_review_thread(
@@ -12,17 +9,9 @@ pub(super) async fn spawn_review_thread(
     sub_id: String,
     resolved: crate::review_prompts::ResolvedReviewRequest,
 ) {
-    let team_worker_profile = (config.team_mode == codex_protocol::protocol::TeamMode::LeadWorker)
-        .then(|| {
-            config
-                .effective_team_profile(codex_config::TeamRole::Worker)
-                .cloned()
-        })
-        .flatten();
-    let model = team_worker_profile
-        .as_ref()
-        .map(|profile| profile.model.clone())
-        .or_else(|| config.review_model.clone())
+    let model = config
+        .review_model
+        .clone()
         .unwrap_or_else(|| parent_turn_context.model_info().slug.clone());
     let available_models = sess
         .services
@@ -37,105 +26,29 @@ pub(super) async fn spawn_review_thread(
         .models_manager
         .get_model_info(&model, &config.to_models_manager_config())
         .await;
-    if let Some(profile) = team_worker_profile.as_ref()
-        && (review_model_info.used_fallback_model_metadata
-            || !review_model_info
-                .supported_reasoning_levels
-                .iter()
-                .any(|preset| preset.effort == profile.reasoning_effort))
-    {
-        let message = format!(
-            "Configured team Worker review assignment is unavailable: model `{}` does not support reasoning effort `{}`",
-            profile.model, profile.reasoning_effort
-        );
-        sess.send_event(
-            &parent_turn_context,
-            EventMsg::Error(ErrorEvent {
-                misalignment: None,
-                message,
-                codex_error_info: Some(CodexErrorInfo::Other),
-            }),
-        )
-        .await;
-        return;
-    }
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
     let _ = review_features.disable(Feature::WebSearchCached);
     let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let goal_tools_supported = !config.ephemeral && parent_turn_context.tools_config.goal_tools;
-    let provider_capabilities = parent_turn_context.provider.capabilities();
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
         review_features.get(),
         crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
     );
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &review_model_info,
-        available_models: &available_models,
-        features: &review_features,
-        image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(Some(
-            sess.services.auth_manager.as_ref(),
-        )),
-        web_search_mode: Some(review_web_search_mode),
-        session_source: parent_turn_context.session_source.clone(),
-        permission_profile: &parent_turn_context.permission_profile,
-        windows_sandbox_level: parent_turn_context.windows_sandbox_level,
-    })
-    .with_namespace_tools_capability(provider_capabilities.namespace_tools)
-    .with_image_generation_capability(provider_capabilities.image_generation)
-    .with_web_search_capability(provider_capabilities.web_search)
-    .with_unified_exec_shell_mode(unified_exec_shell_mode.clone())
-    .with_web_search_config(/*web_search_config*/ None)
-    .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_environment_mode(parent_turn_context.tools_config.environment_mode)
-    .with_spawn_agent_usage_hint(review_features.enabled(Feature::MultiAgentV2))
-    .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
-    .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
-    .with_multi_agent_v2_tool_namespace(config.multi_agent_v2.tool_namespace.clone())
-    .with_multi_agent_v2_non_code_mode_only(config.multi_agent_v2.non_code_mode_only)
-    .with_goal_tools_allowed(goal_tools_supported)
-    .with_max_concurrent_threads_per_session(config.agent_max_threads)
-    .with_wait_agent_min_timeout_ms(
-        review_features
-            .enabled(Feature::MultiAgentV2)
-            .then_some(config.multi_agent_v2.min_wait_timeout_ms),
-    )
-    .with_wait_agent_max_timeout_ms(
-        review_features
-            .enabled(Feature::MultiAgentV2)
-            .then_some(config.multi_agent_v2.max_wait_timeout_ms),
-    )
-    .with_wait_agent_default_timeout_ms(
-        review_features
-            .enabled(Feature::MultiAgentV2)
-            .then_some(config.multi_agent_v2.default_wait_timeout_ms),
-    )
-    .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-        &config.agent_roles,
-    ));
 
     let review_prompt = resolved.prompt.clone();
-    let provider = parent_turn_context.provider.clone();
-    let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
     let mut selected = parent_turn_context.initial_settings.selected().clone();
-    let mut reasoning_effort = team_worker_profile
-        .as_ref()
-        .map(|profile| profile.reasoning_effort.clone())
-        .or_else(|| selected.collaboration_mode.reasoning_effort());
+    let mut reasoning_effort = selected.collaboration_mode.reasoning_effort();
 
     // Build per‑turn client with the requested model/family.
     let mut per_turn_config = (*parent_turn_context.config).clone();
     // Preserve configured overrides without carrying over the parent model's defaults.
     per_turn_config.token_budget = config.token_budget.clone();
     per_turn_config.features = review_features.clone();
-    if team_worker_profile.is_some() {
-        per_turn_config.team_persisted_role = Some(codex_protocol::protocol::TeamRole::Worker);
-    }
     if let Some(current_effort) = reasoning_effort.as_ref()
         && review_model_info.slug != parent_turn_context.model_info().slug
         && !review_model_info.used_fallback_model_metadata
@@ -160,8 +73,6 @@ pub(super) async fn spawn_review_thread(
         );
     }
 
-    let auth_manager_for_context = auth_manager.clone();
-    let provider_for_context = provider.clone();
     let session_source = parent_turn_context.session_source.clone();
     let (forked_from_thread_id, thread_source, service_tier) = {
         let state = sess.state.lock().await;
@@ -193,8 +104,6 @@ pub(super) async fn spawn_review_thread(
     per_turn_config.model = Some(model);
     per_turn_config.model_reasoning_effort = reasoning_effort;
     per_turn_config.service_tier = step_settings.service_tier.clone();
-    let session_telemetry_for_context =
-        step_settings.telemetry(&parent_turn_context.session_telemetry);
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     #[allow(deprecated)]
@@ -228,67 +137,14 @@ pub(super) async fn spawn_review_thread(
         &model_info,
     ));
 
-    let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
-        review_turn_id.clone(),
-    ));
-    extension_data.insert(parent_turn_context.skills_snapshot().as_ref().clone());
-
-    let review_turn_context = TurnContext {
-        sub_id: review_turn_id.clone(),
-        trace_id: current_span_trace_id(),
-        realtime_active: parent_turn_context.realtime_active,
-        realtime_handoff_admissions: Arc::clone(&parent_turn_context.realtime_handoff_admissions),
-        code_mode_available: parent_turn_context.code_mode_available,
-        configured_token_budget: per_turn_config.token_budget.clone(),
-        use_model_token_budget_defaults: per_turn_config.features.enabled(Feature::TokenBudget)
-            && !super::token_budget::has_explicit_settings(&per_turn_config),
-        config: per_turn_config,
-        auth_manager: auth_manager_for_context,
-        initial_settings: Arc::clone(&step_settings),
-        disabled_plugin_ids: parent_turn_context.disabled_plugin_ids.clone(),
-        active_host_plugin_identities: None,
-        next_step_settings: ArcSwap::from(step_settings),
-        session_telemetry: session_telemetry_for_context,
-        provider: provider_for_context,
-        session_source,
-        history_mode: parent_turn_context.history_mode,
-        parent_thread_id: parent_turn_context.parent_thread_id,
-        originator: parent_turn_context.originator.clone(),
-        initial_environments: parent_turn_context.initial_environments.clone(),
-        tools_config,
+    let review_turn_context = parent_turn_context.for_review(
+        review_turn_id,
+        per_turn_config,
+        step_settings,
         available_models,
         unified_exec_shell_mode,
-        current_date: parent_turn_context.current_date.clone(),
-        timezone: parent_turn_context.timezone.clone(),
-        app_server_client_name: parent_turn_context.app_server_client_name.clone(),
-        developer_instructions: None,
-        user_instructions: parent_turn_context.user_instructions.clone(),
-        mode: parent_turn_context.mode,
-        collaboration_mode_developer_instructions: parent_turn_context
-            .collaboration_mode_developer_instructions
-            .clone(),
-        multi_agent_version: MultiAgentVersion::Disabled,
-        personality: parent_turn_context.personality,
-        approval_policy: parent_turn_context.approval_policy.clone(),
-        permission_profile: parent_turn_context.permission_profile.clone(),
-        network: parent_turn_context.network.clone(),
-        windows_sandbox_level: parent_turn_context.windows_sandbox_level,
-        shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
-        #[allow(deprecated)]
-        cwd: parent_turn_context.cwd.clone(),
-        final_output_json_schema: None,
-        dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         turn_metadata_state,
-        extension_data,
-        turn_skills: parent_turn_context.turn_skills.clone(),
-        turn_timing_state: Arc::new(TurnTimingState::default()),
-        terminal_error: Arc::new(Mutex::new(None)),
-        server_model_warning_emitted: AtomicBool::new(false),
-        model_verification_emitted: AtomicBool::new(false),
-        cyber_access_program: None,
-        lead_passive_poll: Arc::new(crate::session::LeadPassivePollState::default()),
-        next_passive_poll_sample_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-    };
+    );
 
     // Seed the child task with the review prompt as the initial user message.
     let input = vec![TurnInput::UserInput {
@@ -312,13 +168,8 @@ pub(super) async fn spawn_review_thread(
     // TODO(ccunningham): Review turns currently rely on `spawn_task` for TurnComplete but do not
     // emit a parent TurnStarted. Consider giving review a full parent turn lifecycle
     // (TurnStarted + TurnComplete) for consistency with other standalone tasks.
-    if sess
-        .try_spawn_task(Arc::clone(&tc), input, ReviewTask::new())
-        .await
-        .is_err()
-    {
-        return;
-    }
+    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
+        .await;
 
     // Announce entering review mode so UIs can switch modes.
     let item = TurnItem::EnteredReviewMode(EnteredReviewModeItem {

@@ -45,7 +45,6 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
-
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -58,6 +57,9 @@ pub use self::handoff::HandoffGuard;
 pub(crate) use self::runtime::LocalAgentRuntime;
 pub(crate) use self::team::TerminalResultDeliveryGuard;
 pub(crate) use self::worker_limit::TeamWorkerLease;
+pub(crate) use self::runtime::AgentTreeMembership;
+pub(crate) use self::runtime::AgentTreeShutdownState;
+pub(crate) use self::runtime::AgentTreeTeardownGuard;
 
 pub(crate) use self::runtime::AgentControlInit;
 pub(crate) use self::watch::StatusSubscription;

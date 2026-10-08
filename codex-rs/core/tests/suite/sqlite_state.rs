@@ -156,7 +156,7 @@ async fn thread_creator_survives_resume_and_forks_use_current_auth() -> Result<(
             .thread_manager
             .fork_legacy_thread(
                 codex_core::ForkSnapshot::Interrupted,
-                codex_core::StartThreadOptions::new(resumed.config.clone()),
+                StartThreadOptions::new(resumed.config.clone()),
                 rollout_path,
             )
             .await?;
@@ -883,9 +883,9 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                 enabled: true,
                 required: false,
                 startup_readiness: Default::default(),
+                startup: Default::default(),
+                sharing: Default::default(),
                 supports_parallel_tool_calls: false,
-                startup: codex_config::McpServerStartupMode::Auto,
-                sharing: codex_config::McpServerSharingMode::Auto,
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,

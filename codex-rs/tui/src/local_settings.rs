@@ -7,9 +7,11 @@
 //! The selected transcript ownership and alternate-screen restrictions survive local reloads.
 
 use crate::legacy_core::config::Config;
+use crate::legacy_core::config::ConfigTomlLoadResult;
 use crate::legacy_core::config::TerminalResizeReflowConfig;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use crate::transcript_mode::TranscriptMode;
+use codex_config::ConfigLayerStack;
 use codex_config::types::CopyOnSelect;
 use codex_config::types::History;
 use codex_config::types::Notice;
@@ -20,6 +22,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LocalSettings {
+    pub(crate) audio: Result<codex_config::config_toml::RealtimeAudioToml, String>,
     pub(crate) tui: Tui,
     pub(crate) transcript_mode: TranscriptMode,
     pub(crate) history: History,
@@ -56,7 +59,8 @@ impl LocalSettings {
         } else {
             config.animations
         };
-        Self {
+        let mut settings = Self {
+            audio: Ok(Default::default()),
             transcript_mode: TranscriptMode::resolve(
                 config.tui_fullscreen_transcript,
                 config.tui_alternate_screen != codex_config::types::AltScreenMode::Never,
@@ -64,10 +68,9 @@ impl LocalSettings {
             tui: Tui {
                 notification_settings: config.tui_notifications.clone(),
                 animations: animations && system_motion == crate::motion::MotionMode::Animated,
-                whimsy: config.tui_whimsy,
                 screen_reader_detection_done: None,
                 effects: codex_config::types::TuiEffects {
-                    starfield: config.tui_effects.starfield || config.tui_whimsy,
+                    starfield: configured_starfield_enabled(&config.config_layer_stack),
                     ..config.tui_effects
                 },
                 rendering: config.tui_rendering,
@@ -108,8 +111,98 @@ impl LocalSettings {
                 .get_user_config_file()
                 .cloned()
                 .unwrap_or_else(|| config.codex_home.join("config.toml")),
+        };
+        settings.apply_host_preferences(
+            &config.config_layer_stack,
+            system_motion,
+            screen_reader_default,
+        );
+        settings
+    }
+
+    /// Read client preferences from bootstrap TOML before executable core config is loaded.
+    pub(crate) fn from_bootstrap(
+        bootstrap: &ConfigTomlLoadResult,
+        codex_home: AbsolutePathBuf,
+    ) -> Result<Self, toml::de::Error> {
+        let config = &bootstrap.config_toml;
+        let mut tui = match &config.tui {
+            Some(tui) => tui.clone(),
+            None => toml::Value::Table(Default::default()).try_into()?,
+        };
+        tui.disable_paste_burst = Some(
+            tui.disable_paste_burst
+                .or(config.disable_paste_burst)
+                .unwrap_or(false),
+        );
+        tui.session_picker_view = Some(tui.session_picker_view.unwrap_or_default());
+        tui.screen_reader_detection_done = None;
+        tui.effects.starfield = configured_starfield_enabled(&bootstrap.config_layer_stack);
+        let mut settings = Self {
+            audio: Ok(Default::default()),
+            transcript_mode: TranscriptMode::resolve(
+                tui.fullscreen_transcript,
+                tui.alternate_screen != codex_config::types::AltScreenMode::Never,
+            ),
+            tui,
+            history: config.history.clone().unwrap_or_default(),
+            notices: config.notice.clone().unwrap_or_default(),
+            user_config_path: bootstrap
+                .config_layer_stack
+                .get_user_config_file()
+                .cloned()
+                .unwrap_or_else(|| codex_home.join("config.toml")),
+            codex_home,
+        };
+        settings.apply_host_preferences(
+            &bootstrap.config_layer_stack,
+            crate::system_motion::mode(),
+            crate::screen_reader::animation_default(),
+        );
+        Ok(settings)
+    }
+
+    fn apply_host_preferences(
+        &mut self,
+        layers: &ConfigLayerStack,
+        system_motion: crate::motion::MotionMode,
+        screen_reader_default: crate::motion::MotionMode,
+    ) {
+        if screen_reader_default == crate::motion::MotionMode::Reduced {
+            self.tui.animations &= layers
+                .effective_config()
+                .get("tui")
+                .and_then(|tui| tui.get("animations"))
+                .is_some();
+        }
+        self.tui.animations &= system_motion == crate::motion::MotionMode::Animated;
+        let mut audio = toml::Value::Table(Default::default());
+        for layer in layers.layers_low_to_high() {
+            if !matches!(layer.name, codex_config::ConfigLayerSource::Project { .. })
+                && let Some(value) = layer.config.get("audio")
+            {
+                codex_config::merge_toml_values(&mut audio, value);
+            }
+        }
+        self.audio = audio
+            .try_into()
+            .map_err(|error: toml::de::Error| format!("Invalid machine audio settings: {error}"));
+    }
+}
+
+fn configured_starfield_enabled(layers: &ConfigLayerStack) -> bool {
+    let mut config = toml::Value::Table(Default::default());
+    for layer in layers.layers_low_to_high() {
+        if !matches!(layer.name, codex_config::ConfigLayerSource::PackagedDefaults { .. }) {
+            codex_config::merge_toml_values(&mut config, &layer.config);
         }
     }
+    config
+        .get("tui")
+        .and_then(|tui| tui.get("effects"))
+        .and_then(|effects| effects.get("starfield"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
 }
 
 impl LocalSettings {

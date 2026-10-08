@@ -137,38 +137,6 @@ fn streaming_agent_tail_blank_line_uses_one_viewport_row() {
     assert_eq!(cell.desired_height(/*width*/ 80), 3);
 }
 
-#[test]
-fn realtime_transcript_cell_renders_live_user_and_assistant_text() {
-    let user = RealtimeTranscriptCell::new(RealtimeTranscriptRole::User);
-    user.append("hello from the microphone");
-    let assistant = RealtimeTranscriptCell::new(RealtimeTranscriptRole::Assistant);
-    assistant.append("hello back from live voice");
-
-    let rendered = [
-        render_lines(&user.display_lines(/*width*/ 80)).join("\n"),
-        render_lines(&assistant.display_lines(/*width*/ 80)).join("\n"),
-    ]
-    .join("\n---\n");
-
-    insta::assert_snapshot!(rendered, @"› hello from the microphone
----
-• hello back from live voice");
-}
-
-#[test]
-fn realtime_transcript_cell_replaces_cumulative_or_duplicate_deltas() {
-    let cell = RealtimeTranscriptCell::new(RealtimeTranscriptRole::User);
-    cell.append("hello ");
-    cell.append("hello ");
-    cell.append("hello from the microphone");
-    cell.append("hello from the microphone");
-
-    assert_eq!(
-        render_lines(&cell.display_lines(/*width*/ 80)),
-        vec!["› hello from the microphone"]
-    );
-}
-
 fn stdio_server_config(
     command: &str,
     args: Vec<&str>,
@@ -437,7 +405,7 @@ fn proposed_plan_cell_preserves_wrapped_table_web_links() {
 
 #[test]
 fn composite_cell_preserves_child_web_links() {
-    let destination = "https://chatgpt.com/codex/settings/usage";
+    let destination = "https://chatgpt.com/settings/usage";
     let cell = CompositeHistoryCell::new(vec![
         Box::new(PlainHistoryCell::new(vec![Line::from("/status")])),
         Box::new(WebHyperlinkHistoryCell::new(vec![Line::from(destination)])),
@@ -635,6 +603,7 @@ fn image_generation_call_renders_saved_path() {
 
 fn session_configured_event(model: &str) -> ThreadSessionState {
     ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -652,8 +621,6 @@ fn session_configured_event(model: &str) -> ThreadSessionState {
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        team: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -951,6 +918,21 @@ fn cyber_policy_error_event_astra_snapshot() {
 fn cyber_policy_error_event_limited_snapshot() {
     let cell = new_cyber_policy_error_event(crate::daybreak::Notice::Limited);
     let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn cyber_policy_error_event_available_snapshot() {
+    let rendered = [
+        crate::daybreak::Notice::Disabled,
+        crate::daybreak::Notice::Enabled,
+    ]
+    .into_iter()
+    .map(|notice| {
+        render_lines(&new_cyber_policy_error_event(notice).display_lines(/*width*/ 80)).join("\n")
+    })
+    .collect::<Vec<_>>()
+    .join("\n\n");
     insta::assert_snapshot!(rendered);
 }
 
@@ -1554,7 +1536,7 @@ fn code_mode_tool_call_uses_title_and_preserves_full_transcript() {
       └ 012345678901234567890123456789012345
         678901234567890123456789012345678901
         234567890123456789012345678901234567
-        +1 line (ctrl+t to view transcript)
+        +1 line (⌃t to view transcript)
 
     transcript:
     • Called node_repl.js({"title":"Inspect Spotify workspace","code":"await tools.exec_command({ cmd: 'git status' })"})

@@ -2057,7 +2057,6 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
             started("child-turn"),
             RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("child-turn".to_string()),
-                trace_id: None,
                 root_turn_id: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(json!(home.path())).expect("absolute cwd"),
@@ -2081,10 +2080,6 @@ async fn migration_compacts_subagent_prefix_and_does_not_project_it() {
                 cyber_access_program: None,
                 effort: None,
                 summary: ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             user_message("child question"),
             agent_message("child answer"),

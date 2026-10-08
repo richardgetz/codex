@@ -17,10 +17,13 @@ use super::lead_idle::lead_progress_communication;
 use super::session::Session;
 use super::session::SessionConfiguration;
 use super::session::SessionSettingsUpdate;
+use super::submission::RealtimeHandoffInput;
 use super::thread_settings;
 use super::turn_context::NewTurnContextOptions;
 use super::turn_context::TurnContext;
+use crate::realtime_conversation::RealtimeHandoffAdmission;
 use crate::agent::control::HandoffAdmissionGuard;
+use crate::WithTurnExtensionData;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
@@ -57,6 +60,17 @@ enum TurnStartKind {
     Recovery,
 }
 
+enum SteerInputError {
+    NotSubmitted(NotSubmittedReason),
+    RealtimeHandoffAdmissionRetired,
+}
+
+impl From<NotSubmittedReason> for SteerInputError {
+    fn from(reason: NotSubmittedReason) -> Self {
+        Self::NotSubmitted(reason)
+    }
+}
+
 impl TurnStartKind {
     fn permits_mode(self, mode: ModeKind) -> bool {
         match self {
@@ -91,10 +105,14 @@ impl PreparedTurnInputSettings {
     /// leaves the thread unchanged.
     async fn prepare(
         session: &Session,
-        thread_settings: ThreadSettingsOverrides,
+        thread_settings: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
         start_options: TurnStartOptions,
     ) -> CodexResult<Self> {
-        let thread_settings_update = if thread_settings == ThreadSettingsOverrides::default() {
+        let thread_settings = thread_settings.into();
+        let thread_settings_update = if thread_settings.request
+            == ThreadSettingsOverrides::default()
+            && thread_settings.turn_extension_init.is_none()
+        {
             None
         } else {
             let updates = thread_settings::prepare_update(thread_settings);
@@ -122,6 +140,7 @@ impl PreparedTurnInputSettings {
         session: &Arc<Session>,
         submission_id: String,
         kind: TurnStartKind,
+        realtime_handoff_input: Option<&RealtimeHandoffInput>,
     ) -> CodexResult<Option<Arc<TurnContext>>> {
         let TurnStartOptions {
             turn_trigger,
@@ -148,23 +167,40 @@ impl PreparedTurnInputSettings {
         let options = NewTurnContextOptions {
             final_output_json_schema,
             cyber_access_program,
+            realtime_handoff_admission: realtime_handoff_input
+                .map(|input| Arc::clone(&input.admission)),
             ..Default::default()
         };
-        let turn_context = match kind {
-            TurnStartKind::User | TurnStartKind::Recovery => Some(
+        let turn_context = if let Some(effort) = realtime_handoff_input
+            .and_then(|input| input.transient_reasoning_effort.clone())
+        {
+            Some((
                 session
-                    .new_turn_with_sub_id(submission_id.clone(), updates, options)
-                    .await?,
-            ),
-            TurnStartKind::Automatic => {
-                session
-                    .new_turn_with_sub_id_if(
+                    .new_turn_with_transient_reasoning_effort(
                         submission_id.clone(),
-                        updates,
                         options,
-                        |current, proposed| kind.permits_settings(current, proposed),
+                        effort,
                     )
-                    .await?
+                    .await?,
+                session.thread_settings_snapshot().await,
+            ))
+        } else {
+            match kind {
+                TurnStartKind::User | TurnStartKind::Recovery => Some(
+                    session
+                        .new_turn_with_sub_id(submission_id.clone(), updates, options)
+                        .await?,
+                ),
+                TurnStartKind::Automatic => {
+                    session
+                        .new_turn_with_sub_id_if(
+                            submission_id.clone(),
+                            updates,
+                            options,
+                            |current, proposed| kind.permits_settings(current, proposed),
+                        )
+                        .await?
+                }
             }
         };
         let Some((turn_context, settings_snapshot)) = turn_context else {
@@ -224,19 +260,39 @@ impl PreparedTurnInputSettings {
     }
 }
 
+#[tracing::instrument(
+    name = "codex.turn_input",
+    level = "trace",
+    skip_all,
+    fields(conversation.id = %session.thread_id, turn.id)
+)]
 pub(super) async fn handle(
     session: &Arc<Session>,
-    request: TurnInputRequest,
+    request: impl Into<WithTurnExtensionData<TurnInputRequest>>,
     mode: TurnInputMode,
     submission_id: String,
     handoff_admission: Option<&HandoffAdmissionGuard>,
+    realtime_handoff_input: Option<RealtimeHandoffInput>,
 ) -> CodexResult<TurnInputSubmission> {
-    match mode {
+    let request = request.into();
+    let result = match mode {
         TurnInputMode::StartOrSteer => {
-            start_or_steer(session, request, submission_id, handoff_admission).await
+            start_or_steer(
+                session,
+                request,
+                submission_id,
+                handoff_admission,
+                realtime_handoff_input,
+            )
+            .await
         }
         TurnInputMode::StartIfIdle => {
-            let kind = match &request.input {
+            if realtime_handoff_input.is_some() {
+                return Err(CodexErr::InvalidRequest(
+                    "realtime handoff options require start-or-steer input".to_string(),
+                ));
+            }
+            let kind = match &request.request.input {
                 SubmittedTurnInput::UserInput { content, .. } if !content.is_empty() => {
                     TurnStartKind::User
                 }
@@ -256,7 +312,12 @@ pub(super) async fn handle(
         TurnInputMode::ContinueIfIdle {
             expected_previous_turn_id,
         } => {
-            if !matches!(&request.input, SubmittedTurnInput::ResponseItem(_)) {
+            if realtime_handoff_input.is_some() {
+                return Err(CodexErr::InvalidRequest(
+                    "realtime handoff options require start-or-steer input".to_string(),
+                ));
+            }
+            if !matches!(&request.request.input, SubmittedTurnInput::ResponseItem(_)) {
                 return Err(CodexErr::InvalidRequest(
                     "continuation requires internal response input".to_string(),
                 ));
@@ -271,6 +332,11 @@ pub(super) async fn handle(
             .await
         }
         TurnInputMode::Steer { expected_turn_id } => {
+            if realtime_handoff_input.is_some() {
+                return Err(CodexErr::InvalidRequest(
+                    "realtime handoff options require start-or-steer input".to_string(),
+                ));
+            }
             steer(
                 session,
                 request,
@@ -280,37 +346,66 @@ pub(super) async fn handle(
             )
             .await
         }
+    };
+    // Link this request's trace to the accepted turn, which may have an older trace.
+    if let Ok(TurnInputSubmission::Started { turn_id } | TurnInputSubmission::Steered { turn_id }) =
+        &result
+    {
+        tracing::Span::current().record("turn.id", turn_id);
     }
+    result
 }
 
+#[tracing::instrument(
+    name = "codex.turn_input",
+    level = "trace",
+    skip_all,
+    fields(conversation.id = %session.thread_id, turn.id)
+)]
 pub(super) async fn handle_recovery(
     session: &Arc<Session>,
-    thread_settings: ThreadSettingsOverrides,
+    thread_settings: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
     start_options: TurnStartOptions,
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
+    let WithTurnExtensionData {
+        request: thread_settings,
+        turn_extension_init,
+    } = thread_settings.into();
     let request = TurnInputRequest::user_input(Vec::new())
         .with_thread_settings(thread_settings)
         .on_start(TurnStartOptions {
             turn_trigger: Some("retry".to_string()),
             ..start_options
         });
-    start_if_idle(
+    let result = start_if_idle(
         session,
-        request,
+        WithTurnExtensionData {
+            request,
+            turn_extension_init,
+        },
         submission_id,
         TurnStartKind::Recovery,
         /*expected_previous_turn_id*/ None,
     )
-    .await
+    .await;
+    if let Ok(TurnInputSubmission::Started { turn_id }) = &result {
+        tracing::Span::current().record("turn.id", turn_id);
+    }
+    result
 }
 
 async fn start_or_steer(
     session: &Arc<Session>,
-    request: TurnInputRequest,
+    request: WithTurnExtensionData<TurnInputRequest>,
     submission_id: String,
     handoff_admission: Option<&HandoffAdmissionGuard>,
+    realtime_handoff_input: Option<RealtimeHandoffInput>,
 ) -> CodexResult<TurnInputSubmission> {
+    let WithTurnExtensionData {
+        request,
+        turn_extension_init,
+    } = request;
     let TurnInputRequest {
         mut input,
         thread_settings,
@@ -337,7 +432,15 @@ async fn start_or_steer(
         .parent_turn_id
         .as_ref()
         .map(|_| start.root_turn_id.clone());
-    let settings = PreparedTurnInputSettings::prepare(session, thread_settings, start).await?;
+    let settings = PreparedTurnInputSettings::prepare(
+        session,
+        WithTurnExtensionData {
+            request: thread_settings,
+            turn_extension_init,
+        },
+        start,
+    )
+    .await?;
     match session
         .steer_input_turn_input(
             &mut input,
@@ -347,6 +450,9 @@ async fn start_or_steer(
             responsesapi_client_metadata.clone(),
             incoming_root_turn_id,
             origin,
+            realtime_handoff_input
+                .as_ref()
+                .map(|input| Arc::clone(&input.admission)),
         )
         .await
     {
@@ -369,9 +475,14 @@ async fn start_or_steer(
             }
             Ok(TurnInputSubmission::Steered { turn_id })
         }
-        Err(NotSubmittedReason::NoActiveTurn) => {
+        Err(SteerInputError::NotSubmitted(NotSubmittedReason::NoActiveTurn)) => {
             let Some(turn_context) = settings
-                .apply_started(session, submission_id.clone(), TurnStartKind::User)
+                .apply_started(
+                    session,
+                    submission_id.clone(),
+                    TurnStartKind::User,
+                    realtime_handoff_input.as_ref(),
+                )
                 .await?
             else {
                 unreachable!("explicit user input can enter Plan mode");
@@ -408,7 +519,12 @@ async fn start_or_steer(
                 turn_id: submission_id,
             })
         }
-        Err(reason) => Ok(TurnInputSubmission::NotSubmitted { reason }),
+        Err(SteerInputError::NotSubmitted(reason)) => {
+            Ok(TurnInputSubmission::NotSubmitted { reason })
+        }
+        Err(SteerInputError::RealtimeHandoffAdmissionRetired) => Err(CodexErr::InvalidRequest(
+            "realtime handoff was rejected after its turn admission closed".to_string(),
+        )),
     }
 }
 
@@ -418,11 +534,15 @@ async fn start_or_steer(
 )]
 async fn start_if_idle(
     session: &Arc<Session>,
-    request: TurnInputRequest,
+    request: WithTurnExtensionData<TurnInputRequest>,
     submission_id: String,
     kind: TurnStartKind,
     expected_previous_turn_id: Option<String>,
 ) -> CodexResult<TurnInputSubmission> {
+    let WithTurnExtensionData {
+        request,
+        turn_extension_init,
+    } = request;
     let TurnInputRequest {
         input,
         thread_settings,
@@ -519,7 +639,16 @@ async fn start_if_idle(
         });
     }
 
-    let settings = match PreparedTurnInputSettings::prepare(session, thread_settings, start).await {
+    let settings = match PreparedTurnInputSettings::prepare(
+        session,
+        WithTurnExtensionData {
+            request: thread_settings,
+            turn_extension_init,
+        },
+        start,
+    )
+    .await
+    {
         Ok(settings) => settings,
         Err(error) => {
             session.clear_reserved_idle_turn(&turn_state).await;
@@ -527,7 +656,7 @@ async fn start_if_idle(
         }
     };
     let turn_context = match settings
-        .apply_started(session, submission_id.clone(), kind)
+        .apply_started(session, submission_id.clone(), kind, None)
         .await
     {
         Ok(Some(turn_context)) => turn_context,
@@ -607,11 +736,15 @@ async fn start_if_idle(
 
 async fn steer(
     session: &Arc<Session>,
-    request: TurnInputRequest,
+    request: WithTurnExtensionData<TurnInputRequest>,
     expected_turn_id: String,
     submission_id: String,
     handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> CodexResult<TurnInputSubmission> {
+    let WithTurnExtensionData {
+        request,
+        turn_extension_init,
+    } = request;
     let TurnInputRequest {
         mut input,
         thread_settings,
@@ -634,7 +767,15 @@ async fn steer(
         .parent_turn_id
         .as_ref()
         .map(|_| start.root_turn_id.clone());
-    let settings = PreparedTurnInputSettings::prepare(session, thread_settings, start).await?;
+    let settings = PreparedTurnInputSettings::prepare(
+        session,
+        WithTurnExtensionData {
+            request: thread_settings,
+            turn_extension_init,
+        },
+        start,
+    )
+    .await?;
     match session
         .steer_input_turn_input(
             &mut input,
@@ -644,6 +785,7 @@ async fn steer(
             responsesapi_client_metadata,
             incoming_root_turn_id,
             origin,
+            None,
         )
         .await
     {
@@ -667,7 +809,12 @@ async fn steer(
             }
             Ok(TurnInputSubmission::Steered { turn_id })
         }
-        Err(reason) => Ok(TurnInputSubmission::NotSubmitted { reason }),
+        Err(SteerInputError::NotSubmitted(reason)) => {
+            Ok(TurnInputSubmission::NotSubmitted { reason })
+        }
+        Err(SteerInputError::RealtimeHandoffAdmissionRetired) => Err(CodexErr::InvalidRequest(
+            "realtime handoff options require start-or-steer input".to_string(),
+        )),
     }
 }
 
@@ -706,14 +853,15 @@ impl Session {
         responsesapi_client_metadata: Option<HashMap<String, String>>,
         incoming_root_turn_id: Option<Option<String>>,
         origin: UserInputOrigin,
-    ) -> Result<String, NotSubmittedReason> {
+        realtime_handoff_admission: Option<Arc<RealtimeHandoffAdmission>>,
+    ) -> Result<String, SteerInputError> {
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
-            return Err(NotSubmittedReason::NoActiveTurn);
+            return Err(NotSubmittedReason::NoActiveTurn.into());
         };
 
         let Some(active_task) = active_turn.task.as_ref() else {
-            return Err(NotSubmittedReason::NoActiveTurn);
+            return Err(NotSubmittedReason::NoActiveTurn.into());
         };
         let active_turn_id = &active_task.turn_context.sub_id;
 
@@ -723,7 +871,8 @@ impl Session {
             return Err(NotSubmittedReason::ExpectedTurnMismatch {
                 expected: expected_turn_id.to_string(),
                 actual: active_turn_id.clone(),
-            });
+            }
+            .into());
         }
 
         match active_task.kind {
@@ -731,17 +880,19 @@ impl Session {
             crate::state::TaskKind::Review => {
                 return Err(NotSubmittedReason::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Review,
-                });
+                }
+                .into());
             }
             crate::state::TaskKind::Compact => {
                 return Err(NotSubmittedReason::ActiveTurnNotSteerable {
                     turn_kind: NonSteerableTurnKind::Compact,
-                });
+                }
+                .into());
             }
         }
 
         if matches!(input, SubmittedTurnInput::UserInput { content, .. } if content.is_empty()) {
-            return Err(NotSubmittedReason::EmptyInput);
+            return Err(NotSubmittedReason::EmptyInput.into());
         }
         // Compare JSON values directly instead of serialized schema text.
         // Value equality ignores object key order while preserving array and
@@ -749,7 +900,7 @@ impl Session {
         if let Some(required_schema) = required_final_output_json_schema
             && active_task.turn_context.final_output_json_schema.as_ref() != Some(required_schema)
         {
-            return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
+            return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch.into());
         }
         let mut pending_input = merge_additional_context_input(self, additional_context).await;
 
@@ -758,6 +909,16 @@ impl Session {
                 .turn_context
                 .turn_metadata_state
                 .set_responsesapi_client_metadata(responsesapi_client_metadata);
+        }
+
+        if let Some(admission) = realtime_handoff_admission
+            && !active_task
+                .turn_context
+                .realtime_handoff_admissions
+                .register(admission)
+                .await
+        {
+            return Err(SteerInputError::RealtimeHandoffAdmissionRetired);
         }
 
         let input = match input {

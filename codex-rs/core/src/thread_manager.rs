@@ -1,5 +1,8 @@
 mod managed;
 mod shared_instructions;
+mod shutdown;
+
+pub use shutdown::AgentTreeShutdown;
 
 use crate::CodexAppsToolsCache;
 use crate::agent::LocalAgentControl;
@@ -28,6 +31,8 @@ use crate::session::Submission;
 use crate::session::handoff_preflight::HandoffPreflight;
 use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
+use crate::session::startup::SessionStartup;
+use crate::session::startup::SessionStartupGuard;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use crate::thread_manager_handoff::ThreadManagerHandoffAdmissionGuard;
@@ -345,6 +350,8 @@ pub struct StartThreadOptions {
     /// Explicit instructions carried by an internal caller instead of loading them again.
     pub user_instructions: Option<LoadedUserInstructions>,
     pub thread_extension_init: ExtensionDataInit,
+    /// Host-supplied data captured by each new turn. This is not persisted.
+    pub turn_extension_init: ExtensionDataInit,
     pub client_mcp_extensions: ClientMcpExtensions,
     /// Thread ID reserved before startup so the caller can associate host-owned state with it.
     pub reserved_thread_id: Option<ThreadId>,
@@ -384,6 +391,7 @@ impl StartThreadOptions {
             inherited_environments: None,
             user_instructions: None,
             thread_extension_init: ExtensionDataInit::default(),
+            turn_extension_init: ExtensionDataInit::default(),
             client_mcp_extensions: ClientMcpExtensions::default(),
             reserved_thread_id: None,
             disabled_plugin_ids: None,
@@ -1903,9 +1911,9 @@ impl ThreadManager {
         stored_thread: &StoredThread,
     ) -> CodexResult<Option<MultiAgentVersion>> {
         let thread_id = stored_thread.thread_id;
-        let items = match stored_thread.history_mode {
+        let (items, history_revision) = match stored_thread.history_mode {
             ThreadHistoryMode::Legacy => {
-                self.state
+                let history = self.state
                     .thread_store
                     .load_history(LoadThreadHistoryParams {
                         thread_id,
@@ -1924,20 +1932,21 @@ impl ThreadManager {
                         error => CodexErr::Fatal(format!(
                             "failed to load persisted Team history for thread {thread_id}: {error}"
                         )),
-                    })?
-                    .items
+                    })?;
+                (history.items, None)
             }
             ThreadHistoryMode::Paginated => {
-                self.state
+                let history = self.state
                     .load_latest_model_context(LoadThreadHistoryParams {
                         thread_id,
                         include_archived: true,
                     })
-                    .await?
-                    .items
+                    .await?;
+                (history.items, history.revision)
             }
         };
         Ok(InitialHistory::Resumed(ResumedHistory {
+            history_revision,
             conversation_id: thread_id,
             history: Arc::new(items),
             rollout_path: stored_thread.rollout_path.clone(),
@@ -2617,6 +2626,7 @@ impl ThreadManager {
         inherited_usage_policy: ThreadUsagePolicy,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
+            history_revision: None,
             conversation_id: prepared.source_thread_id,
             history: Arc::clone(&prepared.model_context),
             rollout_path: None,
@@ -2661,6 +2671,7 @@ impl ThreadManager {
         thread_settings_override_flags: ThreadSettingsOverrideFlags,
     ) -> CodexResult<NewThread> {
         let history = InitialHistory::Resumed(ResumedHistory {
+            history_revision: None,
             conversation_id: prepared.source_thread_id,
             history: Arc::clone(&prepared.model_context),
             rollout_path: None,
@@ -3028,11 +3039,14 @@ impl ThreadManagerState {
             id: submission_id.clone(),
             op,
             client_user_message_id: None,
+            turn_extension_init: None,
             trace: None,
             parent_turn_id,
             root_turn_id,
             residency_guard,
             handoff_admission: handoff_admission.map(HandoffAdmissionGuard::fork),
+            realtime_handoff_input: None,
+            ordinary_slot_permit: None,
         };
         if let Err(err) = thread.io.submit_with_id(submission).await {
             thread
@@ -3394,8 +3408,19 @@ impl ThreadManagerState {
     }
 
     /// Spawn a new thread with optional history and register it with the manager.
-    async fn spawn_thread(&self, request: ThreadSpawnRequest) -> CodexResult<NewThread> {
+    async fn spawn_thread(&self, mut request: ThreadSpawnRequest) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
+        let runtime = request.agent_control.runtime().clone();
+        let membership = runtime.admit_start()?;
+        let owns_startup = request.startup.is_none();
+        let startup_state = Arc::clone(
+            request
+                .startup
+                .get_or_insert_with(|| Arc::new(SessionStartup::default())),
+        );
+        startup_state.hold_membership(membership);
+        let startup_guard =
+            owns_startup.then(|| SessionStartupGuard::new(Arc::clone(&startup_state)));
         let ThreadSpawnRequest {
             startup,
             options,
@@ -3428,6 +3453,7 @@ impl ThreadManagerState {
             inherited_environments: captured_environments,
             user_instructions: supplied_user_instructions,
             mut thread_extension_init,
+            turn_extension_init,
             client_mcp_extensions,
             mut reserved_thread_id,
             disabled_plugin_ids,
@@ -3490,10 +3516,13 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
-                    drop(threads);
                     let session_configured = thread
                         .startup_metadata()
                         .to_session_configured_event(initial_history.get_event_msgs());
+                    startup_state.release_membership();
+                    if let Some(startup_guard) = startup_guard {
+                        startup_guard.disarm();
+                    }
                     return Ok(NewThread {
                         thread_id: resumed.conversation_id,
                         session_configured,
@@ -3623,7 +3652,9 @@ impl ThreadManagerState {
         } else {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
-        let (session, io) = Session::spawn(SessionSpawnArgs {
+        let attachment_source =
+            forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
+        let spawn_result = Session::spawn(SessionSpawnArgs {
             startup,
             config,
             allow_provider_model_fallback,
@@ -3666,6 +3697,7 @@ impl ThreadManagerState {
             parent_trace,
             environment_selections: environments,
             thread_extension_init,
+            turn_extension_init,
             client_mcp_extensions,
             reserved_thread_id,
             analytics_events_client: self.analytics_events_client.clone(),
@@ -3684,7 +3716,31 @@ impl ThreadManagerState {
             },
             windows_sandbox_proxy_settings_mode,
         })
-        .await?;
+        .await;
+        let (session, io) = match spawn_result {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                if let Some(startup_guard) = startup_guard {
+                    startup_guard.cleanup().await;
+                }
+                return Err(error);
+            }
+        };
+        if let Some(source_thread_id) = attachment_source
+            && session.live_thread().is_some()
+            && self.thread_store.supports_thread_attachments()
+        {
+            // Fork initialization already handles persistence. Copy current membership before
+            // registration, but do not fail the conversation fork for attachment metadata errors.
+            let thread_id = session.thread_id();
+            if let Err(error) = self
+                .thread_store
+                .copy_thread_attachments(source_thread_id, thread_id)
+                .await
+            {
+                warn!(%thread_id, %source_thread_id, %error, "failed to copy fork attachments");
+            }
+        }
         let activity_control = session
             .services
             .local_agent_runtime
@@ -3700,7 +3756,7 @@ impl ThreadManagerState {
         {
             session.services.mcp_runtime.enable_full_access_form_input();
         }
-        let new_thread = self
+        let finalize_result = self
             .finalize_thread_spawn(
                 session,
                 io,
@@ -3708,13 +3764,26 @@ impl ThreadManagerState {
                 activity_control,
                 initial_host_config,
             )
-            .await?;
+            .await;
+        let new_thread = match finalize_result {
+            Ok(new_thread) => new_thread,
+            Err(error) => {
+                if let Some(startup_guard) = startup_guard {
+                    startup_guard.cleanup().await;
+                }
+                return Err(error);
+            }
+        };
         new_thread.thread.emit_thread_ready_lifecycle().await;
         if source_changed_during_startup.load(Ordering::Acquire) {
             new_thread.thread.session.request_mcp_runtime_refresh();
         }
         if is_resumed_thread {
             new_thread.thread.emit_thread_resume_lifecycle().await;
+        }
+        startup_state.release_membership();
+        if let Some(startup_guard) = startup_guard {
+            startup_guard.disarm();
         }
         Ok(new_thread)
     }
@@ -3757,6 +3826,14 @@ impl ThreadManagerState {
                     session_source,
                 ));
                 e.insert(thread.clone());
+                if session_configured.parent_thread_id.is_none() {
+                    let usage_policy = thread.thread_settings_snapshot().await.usage_policy;
+                    thread
+                        .session
+                        .services
+                        .local_agent_control()
+                        .set_root_usage_policy(usage_policy);
+                }
                 return Ok(NewThread {
                     thread_id,
                     thread,
@@ -3819,6 +3896,7 @@ fn stored_thread_to_initial_history(
         ))
     })?;
     Ok(InitialHistory::Resumed(ResumedHistory {
+        history_revision: history.revision,
         conversation_id: thread_id,
         history: Arc::new(history.items),
         rollout_path: rollout_path.or(stored_thread.rollout_path),

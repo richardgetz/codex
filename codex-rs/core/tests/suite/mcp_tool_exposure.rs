@@ -11,9 +11,6 @@ use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
-use codex_extension_api::ToolCall;
-use codex_extension_api::ToolContributor;
-use codex_extension_api::ToolExecutor;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -51,7 +48,6 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
-use core_test_support::stdio_server_bin;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
@@ -61,7 +57,6 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -121,12 +116,6 @@ struct AppsMcpServerContributor {
     root_resolved: Option<Arc<Semaphore>>,
 }
 
-struct BlockingToolContributor {
-    block_next: AtomicBool,
-    entered: Semaphore,
-    release: (Mutex<bool>, Condvar),
-}
-
 struct SessionSourceMcpContributor {
     observed_sources: Arc<Mutex<Vec<SessionSource>>>,
 }
@@ -139,52 +128,6 @@ impl CoalescingMcpContributor {
             release: Semaphore::new(0),
             observed_markers: Mutex::new(Vec::new()),
         }
-    }
-}
-
-impl BlockingToolContributor {
-    fn new() -> Self {
-        Self {
-            block_next: AtomicBool::new(false),
-            entered: Semaphore::new(0),
-            release: (Mutex::new(false), Condvar::new()),
-        }
-    }
-
-    fn arm(&self) {
-        self.block_next.store(true, Ordering::SeqCst);
-    }
-
-    fn release(&self) {
-        let (released, release_changed) = &self.release;
-        *released
-            .lock()
-            .expect("release lock should not be poisoned") = true;
-        release_changed.notify_all();
-    }
-}
-
-impl ToolContributor for BlockingToolContributor {
-    fn tools(
-        &self,
-        _session_store: &codex_extension_api::ExtensionData,
-        _thread_store: &codex_extension_api::ExtensionData,
-    ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        if self.block_next.swap(false, Ordering::SeqCst) {
-            self.entered.add_permits(1);
-            let (released, release_changed) = &self.release;
-            drop(
-                release_changed
-                    .wait_while(
-                        released
-                            .lock()
-                            .expect("release lock should not be poisoned"),
-                        |released| !*released,
-                    )
-                    .expect("release lock should not be poisoned"),
-            );
-        }
-        Vec::new()
     }
 }
 
@@ -358,20 +301,6 @@ fn config_with_mcp_marker(base: &Config, marker: &str) -> Config {
     config
 }
 
-fn config_with_enabled_mcp_marker(base: &Config, marker: &str) -> Config {
-    let mut config = base.clone();
-    let server = serde_json::from_value(json!({
-        "command": "missing-test-mcp-server",
-        "enabled": true,
-    }))
-    .expect("test MCP server config");
-    config
-        .mcp_servers
-        .set(HashMap::from([(marker.to_string(), server)]))
-        .expect("test config should allow MCP servers");
-    config
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn root_and_spawned_subagent_receive_distinct_mcp_session_sources() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -485,8 +414,13 @@ async fn rapid_mcp_refreshes_coalesce_to_the_latest_config() -> Result<()> {
         .await?;
 
     contributor.block_next.store(true, Ordering::SeqCst);
-    test.codex
-        .refresh_runtime_config(config_with_mcp_marker(&test.config, "config-a"))
+    let current_config = test.codex.config().await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(
+            current_config,
+            config_with_mcp_marker(&test.config, "config-a"),
+        )
         .await;
     tokio::time::timeout(Duration::from_secs(5), contributor.entered.acquire())
         .await
@@ -494,11 +428,21 @@ async fn rapid_mcp_refreshes_coalesce_to_the_latest_config() -> Result<()> {
         .expect("entered semaphore should remain open")
         .forget();
 
-    test.codex
-        .refresh_runtime_config(config_with_mcp_marker(&test.config, "config-b"))
+    let current_config = test.codex.config().await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(
+            current_config,
+            config_with_mcp_marker(&test.config, "config-b"),
+        )
         .await;
-    test.codex
-        .refresh_runtime_config(config_with_mcp_marker(&test.config, "config-c"))
+    let current_config = test.codex.config().await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(
+            current_config,
+            config_with_mcp_marker(&test.config, "config-c"),
+        )
         .await;
     contributor.release.add_permits(1);
 
@@ -530,104 +474,6 @@ async fn rapid_mcp_refreshes_coalesce_to_the_latest_config() -> Result<()> {
             .any(|marker| marker == "config-b")
     );
     response.single_request();
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sampling_request_keeps_mcp_inventory_captured_before_runtime_refresh() -> Result<()> {
-    const REFRESHED_SERVER: &str = "refreshed_inventory_server";
-    const CALL_ID: &str = "captured-mcp-call";
-
-    let rmcp_test_server_bin = stdio_server_bin()?;
-    let server = responses::start_mock_server().await;
-    let response = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
-                ev_function_call_with_namespace(
-                    CALL_ID,
-                    "mcp__notes",
-                    "echo",
-                    r#"{"message":"captured authority"}"#,
-                ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "done"),
-                ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-    let blocker = Arc::new(BlockingToolContributor::new());
-    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.tool_contributor(blocker.clone());
-    let test = Arc::new(
-        core_test_support::test_codex::test_codex()
-            .with_config(move |config| {
-                config.model_context_window = Some(128_000);
-                config
-                    .features
-                    .enable(Feature::TokenBudget)
-                    .expect("test config should allow token budget");
-                let notes = serde_json::from_value(json!({
-                    "command": rmcp_test_server_bin,
-                    "enabled": true,
-                }))
-                .expect("notes MCP server config");
-                config
-                    .mcp_servers
-                    .set(HashMap::from([("notes".to_string(), notes)]))
-                    .expect("test config should allow MCP servers");
-            })
-            .with_extensions(Arc::new(extensions.build()))
-            .build_with_auto_env(&server)
-            .await?,
-    );
-    wait_for_mcp_server(&test.codex, "notes").await?;
-
-    blocker.arm();
-    let turn_test = Arc::clone(&test);
-    let turn = tokio::spawn(async move {
-        turn_test
-            .submit_turn("use the MCP inventory captured for this request")
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(5), blocker.entered.acquire())
-        .await
-        .expect("tool construction should start after the MCP binding is captured")
-        .expect("entered semaphore should remain open")
-        .forget();
-
-    test.codex
-        .refresh_runtime_config(config_with_enabled_mcp_marker(
-            &test.config,
-            REFRESHED_SERVER,
-        ))
-        .await;
-    let _ = test
-        .codex
-        .read_mcp_resource(
-            REFRESHED_SERVER,
-            ReadResourceRequestParams::new("test://resource"),
-        )
-        .await;
-    blocker.release();
-    turn.await.expect("turn task should not panic")?;
-
-    let requests = response.requests();
-    let developer_context = requests[0].message_input_texts("developer").join("\n");
-    assert!(!developer_context.contains(REFRESHED_SERVER));
-    assert!(developer_context.contains("unstructured notes/thread_hint fixture result"));
-    assert!(
-        requests[1]
-            .function_call_output(CALL_ID)
-            .get("output")
-            .and_then(Value::as_str)
-            .is_some_and(|output| output.contains("ECHOING: captured authority"))
-    );
     Ok(())
 }
 
@@ -816,13 +662,17 @@ async fn timeout_refresh_replaces_pending_startup_and_reuses_ready_connection() 
         )
         .await?;
 
+    let current_config = test.codex.config().await;
     let mut refresh_config = test.config.clone();
     let mut servers = refresh_config.mcp_servers.get().clone();
     for config in servers.values_mut() {
         config.startup_timeout_sec = None;
     }
     refresh_config.mcp_servers.set(servers)?;
-    test.codex.refresh_mcp_config(refresh_config).await;
+    let _ = test
+        .codex
+        .refresh_mcp_config(current_config, refresh_config)
+        .await;
     // Publish without waiting for the held initialize to finish.
     let error = test
         .codex
@@ -1030,6 +880,7 @@ async fn out_of_band_resource_read_reconciles_the_published_mcp_runtime() -> Res
         .expect("thread start should capture the MCP resource client");
     assert!(!resource_client.has_server("refreshed").await);
 
+    let current_config = test.codex.config().await;
     let mut refresh_config = test.config.clone();
     let user_config_path = refresh_config.codex_home.join("config.toml");
     let user_config: toml::Value = toml::from_str(&format!(
@@ -1053,7 +904,10 @@ startup_timeout_sec = 0.1
     refresh_config.config_layer_stack = refresh_config
         .config_layer_stack
         .with_user_config(&user_config_path, user_config)?;
-    test.codex.refresh_runtime_config(refresh_config).await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(current_config, refresh_config)
+        .await;
     test.codex.submit(Op::RefreshMcpServers).await?;
 
     let _ = test
@@ -1314,17 +1168,17 @@ async fn deferred_tool_world_state_tracks_initial_unchanged_and_removed_namespac
     // Publish a new catalog revision with the same metadata from the ready client.
     test.codex.refresh_codex_apps_tools().await?;
     test.submit_turn("inspect unchanged deferred tools").await?;
-    let refreshed_captures = counters.binding_captures.load(Ordering::SeqCst);
     assert!(
-        refreshed_captures > initial_captures,
+        counters.binding_captures.load(Ordering::SeqCst) > initial_captures,
         "the follow-up must capture a new binding after the refresh"
     );
-    let refreshed_index_builds = counters.search_index_builds.load(Ordering::SeqCst);
-    assert!(
-        refreshed_index_builds > initial_index_builds,
-        "a new binding identity must invalidate its cached MCP handlers"
+    assert_eq!(
+        counters.search_index_builds.load(Ordering::SeqCst),
+        initial_index_builds,
+        "equivalent bindings must preserve MCP handlers and reuse the search index"
     );
 
+    let current_config = test.codex.config().await;
     let mut refresh_config = test.config.clone();
     let user_config_path = refresh_config.codex_home.join("config.toml");
     let user_config = toml::from_str(
@@ -1336,17 +1190,15 @@ enabled = false
     refresh_config.config_layer_stack = refresh_config
         .config_layer_stack
         .with_user_config(&user_config_path, user_config)?;
-    test.codex.refresh_runtime_config(refresh_config).await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(current_config, refresh_config)
+        .await;
     test.codex.submit(Op::RefreshMcpServers).await?;
     test.submit_turn("inspect removed deferred tools").await?;
 
     let requests = response.requests();
     assert_eq!(requests.len(), 3);
-    assert_eq!(
-        requests[0].body_json()["tools"],
-        requests[1].body_json()["tools"],
-        "unchanged MCP metadata must preserve model-visible tool schemas after binding refresh"
-    );
     assert!(
         requests[2].body_json()["tools"]
             .as_array()

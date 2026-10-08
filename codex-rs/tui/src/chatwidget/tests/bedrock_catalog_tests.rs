@@ -42,7 +42,7 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
             .find(|model| model.model == astra_model)
             .expect("Astra preset")
             .clone();
-        let (mut chat, _events, _ops) = make_chatwidget_manual(Some(default_model)).await;
+        let (mut chat, mut events, _ops) = make_chatwidget_manual(Some(default_model)).await;
         chat.thread_id = Some(ThreadId::new());
         chat.model_catalog = Arc::new(ModelCatalog::new(presets));
         chat.open_model_popup();
@@ -54,6 +54,63 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
         chat.open_reasoning_popup(astra);
         assert_chatwidget_snapshot!(
             format!("bedrock_{name}_astra_reasoning"),
+            render_bottom_popup(&chat, /*width*/ 100)
+        );
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char('5')));
+        let advanced =
+            std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+                AppEvent::OpenAdvancedReasoningPopup { model } => Some(model),
+                _ => None,
+            });
+        chat.open_advanced_reasoning_popup(advanced.expect("advanced reasoning popup"));
+        assert_chatwidget_snapshot!(
+            format!("bedrock_{name}_astra_advanced_reasoning"),
+            render_bottom_popup(&chat, /*width*/ 100)
+        );
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+        let selected =
+            std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+                AppEvent::AstraSelectedFromModelPicker {
+                    thread_id,
+                    model,
+                    action: AstraModelPickerAction::ApplyAdvancedReasoning { effort },
+                } => Some((thread_id, model, effort)),
+                _ => None,
+            });
+        assert_eq!(
+            selected,
+            Some((
+                chat.thread_id.expect("active thread"),
+                astra_model.to_string(),
+                ReasoningEffortConfig::Ultra,
+            ))
+        );
+    }
+}
+
+#[tokio::test]
+async fn bedrock_govcloud_model_pickers() {
+    for region in ["us-gov-west-1", "us-gov-east-1"] {
+        let mut provider_info =
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+        provider_info.base_url = Some(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"));
+        let presets = create_model_provider(provider_info, /*auth_manager*/ None)
+            .models_manager_without_cache(/*config_model_catalog*/ None)
+            .list_models(
+                RefreshStrategy::Offline,
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await;
+        let default_preset = presets
+            .iter()
+            .find(|preset| preset.is_default)
+            .expect("default Bedrock model");
+        let (mut chat, _events, _ops) = make_chatwidget_manual(Some(&default_preset.model)).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.model_catalog = Arc::new(ModelCatalog::new(presets));
+        chat.open_model_popup();
+        assert_chatwidget_snapshot!(
+            "bedrock_govcloud_models",
             render_bottom_popup(&chat, /*width*/ 100)
         );
     }

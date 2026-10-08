@@ -1216,6 +1216,7 @@ impl RolloutRecorder {
 
         info!("Resumed rollout successfully from {path:?}");
         Ok(InitialHistory::Resumed(ResumedHistory {
+            history_revision: None,
             conversation_id,
             history: Arc::new(items),
             rollout_path: Some(compression::plain_rollout_path(path)),
@@ -1368,6 +1369,7 @@ fn latest_compaction_history_blocking(
         parse_errors,
     );
     Ok(Some(InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: session_meta.id,
         history: items.into(),
         rollout_path: Some(path.to_path_buf()),

@@ -573,8 +573,10 @@ mod tests {
             compute_keyring_account(codex_home.path(), LocalSecretsNamespace::CodexAuth);
         assert_eq!(keyring.access_policy(&home_account), None);
         mcp_backend.set(&scope, &name, "mcp-value")?;
+        let mcp_account =
+            compute_keyring_account(codex_home.path(), LocalSecretsNamespace::McpOAuth);
         assert_eq!(
-            keyring.access_policy(&home_account),
+            keyring.access_policy(&mcp_account),
             Some(KeyringAccessPolicy::StableSignedCodex)
         );
         gateway_backend.set(&scope, &name, "gateway-value")?;

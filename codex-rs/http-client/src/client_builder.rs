@@ -362,11 +362,11 @@ impl HttpClientBuilder {
         if self.tls_backend == TlsBackend::Rustls || self.tls.client_identity.is_some() {
             ensure_rustls_crypto_provider();
             builder = builder.use_rustls_tls();
-        } else {
-            builder = builder.use_native_tls();
         }
         if let Some(certificate) = self.tls.root_certificate {
-            builder = builder.tls_certs_only([certificate]);
+            builder = builder
+                .tls_built_in_root_certs(false)
+                .add_root_certificate(certificate);
         }
         if let Some(identity) = self.tls.client_identity {
             builder = builder.identity(identity).https_only(true);

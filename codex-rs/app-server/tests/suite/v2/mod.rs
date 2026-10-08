@@ -9,7 +9,11 @@ mod app_list;
 mod app_read;
 mod application_network;
 mod attestation;
+#[path = "auth_storage_originator_tests.rs"]
+mod auth_storage_originator;
 mod auto_env;
+#[path = "bedrock_gov_cloud_tests.rs"]
+mod bedrock_gov_cloud;
 mod bedrock_setup;
 mod client_metadata;
 mod code_mode_host;
@@ -128,6 +132,7 @@ mod skills_list;
 mod slash_commands;
 mod sleep;
 mod thread_activity;
+mod sqlite_recovery;
 mod thread_archive;
 mod thread_attachments;
 mod thread_control;
@@ -147,6 +152,8 @@ mod thread_loaded_list;
 mod thread_memory_maintenance;
 mod thread_memory_mode_set;
 mod thread_metadata_update;
+mod thread_name_persistence;
+mod thread_name_persistence;
 mod thread_name_websocket;
 mod thread_queue;
 mod thread_read;

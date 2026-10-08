@@ -1,5 +1,6 @@
 use super::MultiAgentModeState;
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
@@ -92,13 +93,8 @@ impl TeamPolicyState {
         self.lead_work_policy = lead_work_policy;
         self
     }
-}
 
-impl WorldStateSection for TeamPolicyState {
-    const ID: &'static str = "team_policy";
-    type Snapshot = TeamPolicySnapshot;
-
-    fn snapshot(&self) -> Self::Snapshot {
+    fn snapshot(&self) -> TeamPolicySnapshot {
         TeamPolicySnapshot {
             role: self.role,
             worker_max_concurrent: self.worker_max_concurrent,
@@ -109,6 +105,11 @@ impl WorldStateSection for TeamPolicyState {
             multi_agent_usage_hint_hash: self.multi_agent_usage_hint_hash.clone(),
         }
     }
+}
+
+impl WorldStateSection for TeamPolicyState {
+    const ID: &'static str = "team_policy";
+    type Snapshot = TeamPolicySnapshot;
 
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "developer" && TeamInstructions::matches_text(text)
@@ -125,8 +126,9 @@ impl WorldStateSection for TeamPolicyState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
-        if matches!(previous, PreviousSectionState::Known(previous)
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.snapshot();
+        let unchanged = matches!(previous, PreviousSectionState::Known(previous)
             if previous.role == self.role
                 && previous.worker_max_concurrent == self.worker_max_concurrent
                 && previous.dynamic_handoff == self.dynamic_handoff
@@ -136,25 +138,26 @@ impl WorldStateSection for TeamPolicyState {
                     || previous.lead_work_policy == self.lead_work_policy)
                 && previous.multi_agent_mode == self.multi_agent_mode
                 && previous.multi_agent_usage_hint_hash == self.multi_agent_usage_hint_hash
-        ) {
-            return None;
+        );
+        if unchanged {
+            return (Some(current), None);
         }
-        match self.role {
+        let fragment = match self.role {
             Some(role) => Some(Box::new(
                 TeamInstructions::new(role, self.worker_max_concurrent)
                     .with_dynamic_handoff(self.dynamic_handoff)
                     .with_lead_balance(self.lead_balance)
                     .with_lead_work_policy(self.lead_work_policy),
-            )),
+            ) as Box<dyn ContextualUserFragment>),
             None if matches!(
                 previous,
                 PreviousSectionState::Known(previous) if previous.role.is_some()
-            ) || matches!(previous, PreviousSectionState::Unknown) =>
-            {
-                Some(Box::new(TeamInstructions::disabled()))
+            ) || matches!(previous, PreviousSectionState::Unknown) => {
+                Some(Box::new(TeamInstructions::disabled()) as Box<dyn ContextualUserFragment>)
             }
             None => None,
-        }
+        };
+        (Some(current), fragment)
     }
 }
 

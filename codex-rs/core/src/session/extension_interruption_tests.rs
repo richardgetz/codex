@@ -46,6 +46,10 @@ async fn interrupt_if_no_pending_input_handles_cancelled_submission() {
         Arc::clone(&session),
         SessionIo {
             tx_sub,
+            ordinary_submission_slots: Arc::new(tokio::sync::Semaphore::new(
+                crate::session::SUBMISSION_CHANNEL_CAPACITY,
+            )),
+            submission_lifecycle_gate: Arc::new(tokio::sync::RwLock::new(())),
             rx_event,
             agent_status: watch::channel(AgentStatus::PendingInit).1,
             session_loop_termination: completed_session_loop_termination(),

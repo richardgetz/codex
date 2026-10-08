@@ -463,7 +463,6 @@ impl InputQueue {
         self.activity_tx
             .send_replace(InputQueueActivity::ActivityPaused);
     }
-
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active turn checks and turn state updates must remain atomic"
@@ -472,9 +471,16 @@ impl InputQueue {
         &self,
         active_turn: &Mutex<Option<ActiveTurn>>,
         communication: InterAgentCommunication,
+        expected_turn_id: Option<&str>,
     ) -> bool {
         let active = active_turn.lock().await;
-        let Some(active_turn) = active.as_ref().filter(|turn| turn.task.is_some()) else {
+        let Some(active_turn) = active.as_ref().filter(|turn| {
+            turn.task.as_ref().is_some_and(|task| {
+                expected_turn_id.is_none_or(|id| {
+                    task.turn_context.sub_id == id && !task.cancellation_token.is_cancelled()
+                })
+            })
+        }) else {
             return false;
         };
         let mut turn_state = active_turn.turn_state.lock().await;
@@ -1024,7 +1030,6 @@ impl TurnInputQueue {
                 .any(|input| matches!(input, TurnInput::ResponseItem(_))),
         }
     }
-
     fn pending_activity(&self) -> Option<InputQueueActivity> {
         if self.items.iter().any(|input| {
             matches!(

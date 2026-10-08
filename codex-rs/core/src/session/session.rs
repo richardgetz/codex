@@ -31,8 +31,8 @@ use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
-use codex_memories_read::memory_root;
 use codex_model_provider::SharedModelProvider;
+use codex_memories_read::memory_root;
 use codex_prompts::render_model_instructions;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -57,7 +57,6 @@ use codex_protocol::protocol::ThreadUsagePolicyUpdate;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_sandboxing::SandboxType;
 use codex_skills::SkillError;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_git_discovery::GitRootDiscovery;
 use codex_utils_path::replace_path_and_deduplicate;
 use std::path::Path;
@@ -68,7 +67,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Notify;
-use tokio::sync::RwLock;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
 
@@ -166,6 +164,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Desired configured inputs inherited by future turns.
     pub(super) step_settings: Arc<StepSettings>,
+    /// Host-supplied extension data inherited by future turns.
+    pub(super) turn_extension_init: ExtensionDataInit,
     /// Ordered environments inherited by future turns.
     pub(super) environments: Vec<TurnEnvironmentSelection>,
     /// Explicit startup overrides used when resolving effective model metadata.
@@ -244,9 +244,6 @@ impl SessionConfiguration {
     pub(super) fn inferred_environment_config(&self) -> EnvironmentConfig {
         EnvironmentConfig {
             allow_login_shell: self.allow_login_shell,
-            // The environment attachment boundary adds the session temporary root only to
-            // local environments. Keeping this inherited config rootless prevents a remote
-            // executor from receiving a host-local writable path.
             workspace_roots: Vec::new(),
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -386,6 +383,7 @@ impl SessionConfiguration {
             .map(|config| config.permission_profile.clone())
             .unwrap_or_else(|| self.permission_profile_snapshot(&environment_selections));
         ThreadConfigSnapshot {
+            turn_extension_init: self.turn_extension_init.clone(),
             model: self.step_settings.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.step_settings.service_tier.clone(),
@@ -497,6 +495,7 @@ impl SessionConfiguration {
                 ),
             ),
             disabled_plugin_ids: Some(self.disabled_plugin_ids.clone()),
+            turn_extension_init: Some(self.turn_extension_init.clone()),
             ..Default::default()
         }
     }
@@ -537,6 +536,12 @@ impl SessionConfiguration {
         current_environments: &[TurnEnvironmentSelection],
     ) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
+        if let Some(turn_extension_init) = &updates.turn_extension_init {
+            next_configuration.turn_extension_init = turn_extension_init.clone();
+        }
+        if let Some(disabled_plugin_ids) = &updates.disabled_plugin_ids {
+            next_configuration.disabled_plugin_ids = disabled_plugin_ids.clone();
+        }
         let current_file_system_sandbox_policy =
             self.file_system_sandbox_policy(current_environments);
         let file_system_policy_has_rebindable_project_root_write =
@@ -558,9 +563,6 @@ impl SessionConfiguration {
         }
         if let Some(policy) = updates.user_preferences_memory_policy.clone() {
             next_configuration.user_preferences_memory_policy = policy;
-        }
-        if let Some(disabled_plugin_ids) = updates.disabled_plugin_ids.clone() {
-            next_configuration.disabled_plugin_ids = disabled_plugin_ids;
         }
         let mut usage_policy = updates.usage_policy.unwrap_or(self.usage_policy);
         if let Some(update) = updates.usage_policy_update {
@@ -640,13 +642,9 @@ impl SessionConfiguration {
                 config
                     .permissions
                     .set_permission_profile_from_session_snapshot(
-                        PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                        PermissionProfileSnapshot::active(
                             permission_profile,
                             active_permission_profile,
-                            next_configuration
-                                .permission_profile_state
-                                .profile_workspace_roots()
-                                .to_vec(),
                         ),
                     )?;
                 next_configuration.original_config_do_not_use = Arc::new(config);
@@ -968,6 +966,8 @@ pub(crate) struct SessionSettingsCommit {
 #[derive(Default, Clone)]
 pub(crate) struct SessionSettingsUpdate {
     pub(crate) step_settings: StepSettingsUpdate,
+    /// Omission preserves the current data; an empty initializer clears it.
+    pub(crate) turn_extension_init: Option<ExtensionDataInit>,
     pub(crate) environments: Option<TurnEnvironmentSelections>,
     pub(crate) runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) profile_workspace_roots: Option<Vec<ProfileWorkspaceRoot>>,
@@ -978,9 +978,9 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) service_tier_for_turn: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) disabled_plugin_ids: Option<Vec<String>>,
     pub(crate) memory_policy: Option<MemoryAccessPolicy>,
     pub(crate) user_preferences_memory_policy: Option<UserPreferencesMemoryBucketPolicy>,
-    pub(crate) disabled_plugin_ids: Option<Vec<String>>,
     pub(crate) usage_policy: Option<ThreadUsagePolicy>,
     pub(crate) usage_policy_update: Option<ThreadUsagePolicyUpdate>,
     pub(crate) team: Option<ThreadTeamSettingsUpdate>,
@@ -998,7 +998,12 @@ async fn warm_plugins_and_skills_for_session_init(
     skills_service: Arc<HostSkillsService>,
     turn_environments: &TurnEnvironmentSnapshot,
     extensions: &codex_extension_api::ExtensionRegistry<Config>,
+    session_source: &SessionSource,
 ) -> Vec<SkillError> {
+    // Guardian does not consume skills, including the legacy empty-registry catalog.
+    if crate::guardian::is_basic_session_source(session_source) {
+        return Vec::new();
+    }
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     if config.features.enabled(Feature::SkipHostSkillDiscovery)
@@ -1026,19 +1031,15 @@ impl Session {
         self.thread_id
     }
 
-    /// Requests an immediate account usage check for an active usage wait.
-    ///
-    /// Returns `true` only when this thread is currently parked by the
-    /// reset-aware continuation scheduler. A request made while a model turn
-    /// is running or after a manual cancellation is intentionally ignored.
+    /// Returns the identity shared by the root thread and all descendant threads.
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.services.agent_control.identity()
+    }
+
     pub(crate) fn request_usage_resume_check(&self) -> bool {
         if !self.usage_resume_waiting.load(Ordering::Acquire) {
             return false;
         }
-        // `notify_one` retains a permit when the scheduler is between setting
-        // its waiting flag and registering the `notified()` future, so a manual
-        // `/continue` cannot be lost at that boundary. There is at most one
-        // usage wait per session, and repeated nudges intentionally coalesce.
         self.usage_resume_check_notify.notify_one();
         true
     }
@@ -1049,11 +1050,6 @@ impl Session {
 
     pub(crate) async fn wait_for_usage_resume_check(&self) {
         self.usage_resume_check_notify.notified().await;
-    }
-
-    /// Returns the identity shared by the root thread and all descendant threads.
-    pub(crate) fn session_id(&self) -> SessionId {
-        self.services.agent_control.identity()
     }
 
     pub(crate) fn session_tmp_agent_root(&self) -> Option<&Path> {
@@ -1130,11 +1126,7 @@ impl Session {
         CodexResponsesMetadata {
             window_number: Some(window_number),
             context_window_id: Some(context_window_id),
-            mcp_attribution: self
-                .services
-                .executed_tool_calls
-                .as_ref()
-                .map(|executed_tool_calls| executed_tool_calls.mcp_attribution_snapshot()),
+            mcp_attribution: Some(self.services.executed_tool_calls.mcp_attribution_snapshot()),
             analytics_enabled: Some(self.services.analytics_events_client.is_enabled()),
             history_ingest_requested: turn_context
                 .config
@@ -1244,9 +1236,9 @@ impl Session {
                             _ => None,
                         })
                     }
-                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
-                        None
-                    }
+                    InitialHistory::New
+                    | InitialHistory::Cleared
+                    | InitialHistory::Forked(_) => None,
                 }
             }
         }
@@ -1283,66 +1275,6 @@ impl Session {
                 ));
             }
         };
-        let persisted_usage_policy =
-            initial_history
-                .get_rollout_items()
-                .iter()
-                .rev()
-                .find_map(|item| match item {
-                    RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
-                        if event.thread_id == Some(thread_id) =>
-                    {
-                        Some(event.thread_settings.usage_policy)
-                    }
-                    _ => None,
-                });
-        if let Some(usage_policy) = persisted_usage_policy {
-            session_configuration.usage_policy = usage_policy;
-        } else {
-            match &fork_persistence {
-                ForkPersistence::Copied {
-                    inherited_usage_policy: Some(inherited_usage_policy),
-                    ..
-                }
-                | ForkPersistence::CopiedDeferred {
-                    inherited_usage_policy: Some(inherited_usage_policy),
-                    ..
-                } => {
-                    // A copied fork may resume a source history whose settings event belongs to
-                    // the source thread. Apply the trusted inherited policy unless the child
-                    // already has a matching persisted settings event.
-                    session_configuration.usage_policy = *inherited_usage_policy;
-                }
-                ForkPersistence::Referenced {
-                    inherited_usage_policy,
-                    ..
-                } => {
-                    // Reference-backed paginated forks may not include the source settings event
-                    // in their model-context prefix. Carry the source snapshot explicitly.
-                    session_configuration.usage_policy = *inherited_usage_policy;
-                }
-                ForkPersistence::Copied {
-                    inherited_usage_policy: None,
-                    ..
-                }
-                | ForkPersistence::CopiedDeferred {
-                    inherited_usage_policy: None,
-                    ..
-                } => {}
-            }
-        }
-        if parent_thread_id.is_none() {
-            agent_control
-                .runtime()
-                .set_root_usage_policy(session_configuration.usage_policy);
-            agent_control.runtime().set_root_service_tier(
-                session_configuration
-                    .step_settings
-                    .service_tier
-                    .clone()
-                    .or_else(|| config.service_tier.clone()),
-            );
-        }
         let isolation = thread_extension_init
             .get::<codex_extension_api::SessionIsolation>()
             .map(|policy| *policy)
@@ -1392,21 +1324,6 @@ impl Session {
                 SessionId::from(thread_id)
             }
         });
-        let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
-        let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
-            && session_configuration.session_source.is_non_root_agent()
-            && config.features.enabled(Feature::TokenBudget);
-        if restore_child_window && let InitialHistory::Forked(items) = &mut initial_history {
-            let child_window_id = initial_auto_compact_window_ids.window_id.to_string();
-            for item in items {
-                if let RolloutItem::Compacted(checkpoint) = item {
-                    checkpoint.window_number = Some(0);
-                    checkpoint.first_window_id = Some(child_window_id.clone());
-                    checkpoint.previous_window_id = None;
-                    checkpoint.window_id = Some(child_window_id.clone());
-                }
-            }
-        }
         let session_tmp_config = codex_session_tmp::SessionTmpConfig {
             enabled: config.session_tmp.enabled,
             root: config
@@ -1487,7 +1404,21 @@ impl Session {
             .as_ref()
             .map(|manager| AbsolutePathBuf::from_absolute_path(manager.agent_root()))
             .transpose()?;
-
+        let initial_auto_compact_window_ids = AutoCompactWindowIds::new_initial();
+        let restore_child_window = matches!(&initial_history, InitialHistory::Forked(_))
+            && session_configuration.session_source.is_non_root_agent()
+            && config.features.enabled(Feature::TokenBudget);
+        if restore_child_window && let InitialHistory::Forked(items) = &mut initial_history {
+            let child_window_id = initial_auto_compact_window_ids.window_id.to_string();
+            for item in items {
+                if let RolloutItem::Compacted(checkpoint) = item {
+                    checkpoint.window_number = Some(0);
+                    checkpoint.first_window_id = Some(child_window_id.clone());
+                    checkpoint.previous_window_id = None;
+                    checkpoint.window_id = Some(child_window_id.clone());
+                }
+            }
+        }
         let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
             AgentControlInit::Local(control) => {
                 let control = control.with_session_id(
@@ -1566,9 +1497,10 @@ impl Session {
         let mcp_auth = persistence_auth.clone();
         let thread_persistence_fut = async {
             if config.ephemeral {
-                Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None)))
+                Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None), None))
             } else {
                 let mut local_guard = LiveThreadInitGuard::default();
+                let mut resume_context = None;
                 let mut managed_guard = match &startup {
                     Some(startup) => Some(startup.persistence.lock().await),
                     None => None,
@@ -1593,9 +1525,6 @@ impl Session {
                                 provenance: base_instructions_provenance.clone(),
                             },
                             dynamic_tools: session_configuration.dynamic_tools.clone(),
-                            runtime_workspace_roots: Some(
-                                session_configuration.runtime_workspace_roots.clone(),
-                            ),
                             selected_capability_roots: selected_capability_roots.clone(),
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
@@ -1608,6 +1537,7 @@ impl Session {
                             initial_window_id: initial_auto_compact_window_ids
                                 .window_id
                                 .to_string(),
+                            runtime_workspace_roots: Some(config.workspace_roots.clone()),
                             metadata: ThreadPersistenceMetadata {
                                 cwd: Some(config.cwd.to_path_buf()),
                                 model_provider: config.model_provider_id.clone(),
@@ -1641,6 +1571,7 @@ impl Session {
                     }
                     InitialHistory::Resumed(resumed_history) => {
                         let params = ResumeThreadParams {
+                            history_revision: resumed_history.history_revision.clone(),
                             thread_id: resumed_history.conversation_id,
                             rollout_path: resumed_history.rollout_path.clone(),
                             history: Some(resumed_history.history.clone()),
@@ -1655,16 +1586,23 @@ impl Session {
                                 },
                             },
                         };
-                        guard
-                            .acquire(LiveThread::resume(
-                                Arc::clone(&thread_store),
-                                session_configuration.history_mode,
-                                params,
-                            ))
-                            .await?
+                        let store = Arc::clone(&thread_store);
+                        let history_mode = session_configuration.history_mode;
+                        let (context_tx, context_rx) = tokio::sync::oneshot::channel();
+                        let live_thread = guard
+                            .acquire(async move {
+                                let (live_thread, history) =
+                                    LiveThread::resume(store, history_mode, params).await?;
+                                // Cancellation still leaves the writer with the acquisition guard.
+                                let _ = context_tx.send(history);
+                                Ok(live_thread)
+                            })
+                            .await?;
+                        resume_context = Some(context_rx.await?);
+                        live_thread
                     }
                 };
-                Ok((Some(live_thread), local_guard))
+                Ok((Some(live_thread), local_guard, resume_context))
             }
         }
         .instrument(info_span!(
@@ -1746,41 +1684,18 @@ impl Session {
         let (thread_persistence_result, state_db_ctx, (auth, mcp_projection)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
-        let root_thread_id = codex_protocol::ThreadId::from(agent_control.identity());
-        if session_id == SessionId::from(thread_id)
-            && let Some(state_db) = state_db_ctx.as_ref()
-        {
-            // A replacement that observed a pause or continue marker mid-flight must require a
-            // fresh explicit /continue. Re-arm it before restoring the gate so startup never
-            // runs retained work implicitly.
-            state_db
-                .recover_thread_activity_pause(root_thread_id)
-                .await?;
-        }
-        let durable_activity_pause = if let Some(state_db) = state_db_ctx.as_ref() {
-            state_db
-                .get_thread_activity_pause(root_thread_id)
-                .await?
-                .is_some()
-        } else {
-            false
-        };
-        if durable_activity_pause {
-            // Restore the shared root gate before any resumed worker or automatic continuation
-            // can be admitted. The marker is cleared only after an explicit ContinueActivity
-            // acknowledgement, so a replacement that stops halfway through reconstruction stays
-            // paused and can retry without replaying work.
-            local_agent_runtime
-                .control(agent_control.identity())
-                .pause_activity_for_subtree()
-                .await;
-        }
-
-        let (live_thread, mut live_thread_init) = thread_persistence_result.map_err(|e| {
-            error!("failed to initialize thread persistence: {e:#}");
-            e
-        })?;
+        let (live_thread, mut live_thread_init, resume_context) = thread_persistence_result
+            .map_err(|e| {
+                error!("failed to initialize thread persistence: {e:#}");
+                e
+            })?;
         let session_result: anyhow::Result<Arc<Self>> = async {
+            if let InitialHistory::Resumed(resumed) = &mut initial_history
+                && let Some(history) = resume_context
+            {
+                resumed.history = history;
+                resumed.history_revision = None;
+            }
             let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
             } else {
@@ -1876,6 +1791,7 @@ impl Session {
                 session_configuration.session_source.clone(),
             )
             .with_auth_env(auth_env_telemetry.to_otel_metadata())
+            .with_user_id(telemetry_auth.and_then(CodexAuth::get_chatgpt_user_id))
             .with_tool_result_log_config(config.otel.tool_result);
             if let Some(metrics) = thread_extension_data.get::<codex_otel::MetricsClient>() {
                 session_telemetry = session_telemetry.with_metrics(metrics.as_ref().clone());
@@ -1895,17 +1811,25 @@ impl Session {
                 slug: Some(session_model),
             };
             crate::config::emit_session_start_metrics(config.as_ref(), &session_telemetry);
+            let is_worktree = session_configuration.cwd().canonicalize().ok().and_then(|cwd| {
+                codex_git_utils::repository_identity(&cwd).and_then(|_| {
+                    get_git_repo_root(&cwd).map(|root| root.join(".git").is_file())
+                })
+            });
+            let is_worktree_tag = match is_worktree {
+                Some(true) => "true",
+                Some(false) => "false",
+                None => "unknown",
+            };
+            let is_git_tag = if get_git_repo_root(session_configuration.cwd()).is_some() {
+                "true"
+            } else {
+                "false"
+            };
             session_telemetry.counter(
                 THREAD_STARTED_METRIC,
                 /*inc*/ 1,
-                &[(
-                    "is_git",
-                    if get_git_repo_root(session_configuration.cwd()).is_some() {
-                        "true"
-                    } else {
-                        "false"
-                    },
-                )],
+                &[("is_git", is_git_tag), ("is_worktree", is_worktree_tag)],
             );
 
             let mcp_server_names =
@@ -2027,9 +1951,6 @@ impl Session {
                 config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(environment_selections);
-            if let Some(root) = session_configuration.session_tmp_agent_root.as_ref() {
-                turn_environments.add_local_writable_root(root);
-            }
             session_configuration.environments = turn_environments.selections();
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(instructions));
@@ -2039,6 +1960,7 @@ impl Session {
                 Arc::clone(&skills_service),
                 &resolved_environments,
                 extensions.as_ref(),
+                &session_configuration.session_source,
             )
             .instrument(info_span!(
                 "session_init.plugin_skill_warmup",
@@ -2078,8 +2000,6 @@ impl Session {
                 );
             }
             session_configuration.thread_name = thread_name.clone();
-            validate_config_lock_if_configured(&session_configuration).await?;
-            export_config_lock_if_configured(&session_configuration, thread_id).await?;
             let mut state = SessionState::new_with_auto_compact_window_ids(
                 session_configuration.clone(),
                 initial_auto_compact_window_ids,
@@ -2088,18 +2008,6 @@ impl Session {
                     &config.features,
                 ),
             );
-            if let Some(state_db_ctx) = state_db_ctx.as_ref() {
-                let active_thread_control = state_db_ctx
-                    .get_active_thread_control(thread_id)
-                    .await?;
-                state.set_active_thread_control(active_thread_control);
-            }
-            state.last_started_turn_id = initial_history.get_rollout_items().iter().rev().find_map(|item| {
-                match item {
-                    RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.clone()),
-                    _ => None,
-                }
-            });
             state.base_instructions_provenance = base_instructions_provenance.clone();
             state.active_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
             let managed_network_requirements_configured = config
@@ -2246,6 +2154,7 @@ impl Session {
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             session_extension_data.insert(analytics_events_client.clone());
+            session_extension_data.insert(session_telemetry.clone());
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
             let extension_metrics =
                 extension_metrics::from_session_telemetry(session_telemetry.clone());
@@ -2305,6 +2214,7 @@ impl Session {
                 git_root_discovery,
                 tool_approvals: Mutex::new(ApprovalStore::default()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
+                granted_permissions_by_environment_id: Arc::default(),
                 runtime_handle: tokio::runtime::Handle::current(),
                 skills_service,
                 agents_md_manager,
@@ -2367,19 +2277,19 @@ impl Session {
                     .or(fork_cache_key),
                     tx_event.clone(),
                     codex_responses_headers,
+                    crate::cyber_access_program::ApiKeyCyberAccessPrograms::from_config(&config),
                 ),
-                executed_tool_calls: Some(Arc::new(executed_tool_calls.clone())),
+                executed_tool_calls: executed_tool_calls.clone(),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(
                     thread_id,
                     Arc::clone(&code_mode_session_provider),
                     &config.code_mode,
-                    executed_tool_calls.clone(),
+                    executed_tool_calls,
                 ),
                 orchestrator_memory_generation: AtomicU64::new(0),
-                orchestrator_supervision:
-                    crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
-                        config.codex_home.clone(),
-                    ),
+                orchestrator_supervision: crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                    config.codex_home.clone(),
+                ),
                 tool_search_handler_cache: Default::default(),
                 turn_environments: Arc::clone(&turn_environments),
             };
@@ -2531,10 +2441,15 @@ impl Session {
             sess.schedule_startup_prewarm(super::startup_prewarm::PrewarmInput::Base)
                 .await;
             let session_start_source = match &initial_history {
-                InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
-                InitialHistory::New | InitialHistory::Forked(_) => {
-                    codex_hooks::SessionStartSource::Startup
+                InitialHistory::Forked(_) if forked_from_id.is_some() => {
+                    codex_hooks::SessionStartSource::Fork
                 }
+                // `thread/resume` with supplied history uses `Forked` internally
+                // without a fork parent, so it should still report `resume`.
+                InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
+                    codex_hooks::SessionStartSource::Resume
+                }
+                InitialHistory::New => codex_hooks::SessionStartSource::Startup,
                 InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
             };
 
@@ -2553,15 +2468,8 @@ impl Session {
             }
             {
                 let mut state = sess.state.lock().await;
-                state.set_pending_session_start_source(Some(session_start_source));
+                state.queue_pending_session_start_source(session_start_source);
             }
-
-            crate::orchestrator_memory::start_scheduled_cleanup_task(
-                &sess,
-                &config,
-                &session_configuration.session_source,
-            );
-
             Ok(sess)
         }
         .await;
@@ -2571,7 +2479,11 @@ impl Session {
                 Ok(sess)
             }
             Err(err) => {
-                live_thread_init.discard().await;
+                if let Err(error) = live_thread_init.discard().await {
+                    tracing::warn!(
+                        "failed to discard thread persistence for failed session init: {error}"
+                    );
+                }
                 Err(err)
             }
         }

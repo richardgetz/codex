@@ -520,7 +520,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 root_turn_id: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(
@@ -549,10 +548,6 @@ mod tests {
                 cyber_access_program: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );
@@ -575,7 +570,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 root_turn_id: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(
@@ -604,10 +598,6 @@ mod tests {
                 cyber_access_program: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );
@@ -630,7 +620,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 root_turn_id: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(&fallback_cwd))
@@ -655,10 +644,6 @@ mod tests {
                 cyber_access_program: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );
@@ -674,7 +659,6 @@ mod tests {
             &mut metadata,
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
-                trace_id: None,
                 root_turn_id: None,
                 disabled_plugin_ids: None,
                 cwd: serde_json::from_value(serde_json::json!(
@@ -703,10 +687,6 @@ mod tests {
                 cyber_access_program: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
-                user_instructions: None,
-                developer_instructions: None,
-                final_output_json_schema: None,
-                truncation_policy: None,
             }),
             "test-provider",
         );

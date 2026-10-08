@@ -65,8 +65,12 @@ async fn materialize_to_sqlite_with_state_db(
         .as_ref()
         .map_or(initial_ordinal, |state| state.next_ordinal);
     let path = rollout_path.to_path_buf();
+    let span = tracing::Span::current();
     let file =
-        tokio::task::spawn_blocking(move || codex_rollout::open_rollout_seekable_reader(&path))
+        tokio::task::spawn_blocking(move || {
+            let _entered = span.enter();
+            codex_rollout::open_rollout_seekable_reader(&path)
+        })
             .await
             .map_err(|err| ThreadStoreError::Internal {
                 message: format!("failed to join rollout projection read: {err}"),
@@ -152,10 +156,7 @@ async fn read_projection_steps(
     let mut projections = Vec::new();
     let mut next_ordinal = expected_ordinal;
     let mut next_offset = start_offset;
-    let mut pending_rejected_line_count = 0_u64;
     let mut line_start_offset = start_offset;
-    // Keep rejected lines pending until a later valid ordinal proves whether they consumed history.
-    // This lets a same-ordinal retry replace a failed write without advancing only one checkpoint.
     loop {
         if next_offset > start_offset
             && line_start_offset.saturating_sub(start_offset) >= PROJECTION_BATCH_BYTES
@@ -226,16 +227,14 @@ async fn read_projection_steps(
                 line_end_byte_offset = line_end_offset,
                 expected_ordinal = next_ordinal,
                 max_line_bytes = MAX_ROLLOUT_LINE_BYTES,
-                "deferring oversized rollout line until a later ordinal resolves it"
+                "skipping oversized rollout line during projection"
             );
-            pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
+            next_offset = line_end_offset;
             line_start_offset = line_end_offset;
             continue;
         }
         if line_bytes.iter().all(u8::is_ascii_whitespace) {
-            if pending_rejected_line_count == 0 {
-                next_offset = line_end_offset;
-            }
+            next_offset = line_end_offset;
             line_start_offset = line_end_offset;
             continue;
         }
@@ -252,7 +251,7 @@ async fn read_projection_steps(
                     "skipping malformed rollout line during projection"
                 );
                 record_projection_anomaly(ProjectionAnomaly::MalformedJson);
-                pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
+                next_offset = line_end_offset;
                 line_start_offset = line_end_offset;
                 continue;
             }
@@ -278,7 +277,7 @@ async fn read_projection_steps(
         let ordinal = match line.as_ref().and_then(|line| line.ordinal).or(raw_ordinal) {
             Some(ordinal) => ordinal,
             None if line.is_none() => {
-                pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
+                next_offset = line_end_offset;
                 line_start_offset = line_end_offset;
                 continue;
             }
@@ -292,34 +291,31 @@ async fn read_projection_steps(
                     "skipping paginated rollout line without an ordinal"
                 );
                 record_projection_anomaly(ProjectionAnomaly::MissingOrdinal);
-                return Err(ThreadStoreError::Internal {
-                    message: format!(
-                        "paginated rollout line for {thread_id} is missing an ordinal"
-                    ),
-                });
+                next_offset = line_end_offset;
+                line_start_offset = line_end_offset;
+                continue;
             }
         };
         if ordinal < next_ordinal {
+            warn!(
+                thread_id = %thread_id,
+                rollout_path = %rollout_path.display(),
+                line_start_byte_offset = line_start_offset,
+                line_end_byte_offset = line_end_offset,
+                expected_ordinal = next_ordinal,
+                line_ordinal = ordinal,
+                "skipping duplicate or regressed rollout ordinal during projection"
+            );
             record_projection_anomaly(ProjectionAnomaly::DuplicateOrRegressedOrdinal);
-            return Err(ThreadStoreError::Internal {
-                message: format!(
-                    "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}"
-                ),
-            });
+            next_offset = line_end_offset;
+            line_start_offset = line_end_offset;
+            continue;
         }
         let Some(line) = line else {
-            pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
+            next_offset = line_end_offset;
             line_start_offset = line_end_offset;
             continue;
         };
-        let skipped_ordinal_count = ordinal - next_ordinal;
-        if skipped_ordinal_count > pending_rejected_line_count {
-            return Err(ThreadStoreError::Internal {
-                message: format!(
-                    "thread history projection for {thread_id} expected ordinal {next_ordinal}, got {ordinal}; {pending_rejected_line_count} rejected rollout lines cannot cover that gap"
-                ),
-            });
-        }
         let is_inherited_subagent_history =
             subagent_history_start_ordinal.is_some_and(|start| ordinal < start);
         let changes = if is_inherited_subagent_history {
@@ -348,7 +344,17 @@ async fn read_projection_steps(
                         "skipping rollout line with invalid timestamp during projection"
                     );
                     record_projection_anomaly(ProjectionAnomaly::InvalidTimestamp);
-                    pending_rejected_line_count = pending_rejected_line_count.saturating_add(1);
+                    let end_ordinal_exclusive = ordinal.checked_add(1).ok_or_else(|| {
+                        ThreadStoreError::Internal {
+                            message: "rollout ordinal exceeds SQLite integer range".to_string(),
+                        }
+                    })?;
+                    projections.push(RolloutProjectionStep::SkippedOrdinalRange {
+                        start_ordinal: next_ordinal,
+                        end_ordinal_exclusive,
+                    });
+                    next_ordinal = end_ordinal_exclusive;
+                    next_offset = line_end_offset;
                     line_start_offset = line_end_offset;
                     continue;
                 }
@@ -356,7 +362,7 @@ async fn read_projection_steps(
         } else {
             None
         };
-        if skipped_ordinal_count > 0 {
+        if ordinal > next_ordinal {
             warn!(
                 thread_id = %thread_id,
                 rollout_path = %rollout_path.display(),
@@ -374,7 +380,6 @@ async fn read_projection_steps(
                 end_ordinal_exclusive: ordinal,
             });
         }
-        pending_rejected_line_count = 0;
         let next_line_ordinal =
             ordinal
                 .checked_add(1)

@@ -36,6 +36,7 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
     })
 };
 
+mod abort_lifecycle;
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod additional_context;
@@ -54,7 +55,8 @@ mod approvals;
 mod audio_truncation;
 mod auth_recovery_policy;
 mod auto_review;
-mod capacity_retry;
+#[path = "bedrock_multi_agent_tests.rs"]
+mod bedrock_multi_agent;
 mod catalog_permission_messages;
 mod cli_stream;
 mod client;
@@ -70,15 +72,12 @@ mod compact;
 mod compact_remote;
 mod compact_resume_fork;
 mod context_annotations;
-mod continuous_scratchpad;
 mod current_time_reminder;
 mod cyber_access_program;
 mod cyber_exec_policy;
 mod daybreak_access;
-mod decision_provenance;
 mod deprecation_notice;
 mod direct_tool_metadata;
-mod eta;
 mod exec;
 mod exec_policy;
 #[cfg(not(target_os = "windows"))]
@@ -198,8 +197,6 @@ mod safety_buffering;
 mod safety_check_downgrade;
 mod scenarios;
 mod search_tool;
-mod send_user_message_async;
-mod session_tmp;
 mod settings_commits;
 mod settings_constraints;
 mod shell_snapshot;
@@ -215,7 +212,6 @@ mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
 mod subagent_service_tier;
-mod team;
 mod token_budget;
 mod token_usage_rollout;
 mod tool_harness;
@@ -226,6 +222,7 @@ mod truncation;
 #[path = "turn_error_details_tests.rs"]
 mod turn_error_details;
 mod turn_input_submission;
+mod turn_phase_trace;
 mod turn_state;
 mod unified_exec;
 #[path = "unified_exec_launch_failure_tests.rs"]
@@ -239,7 +236,6 @@ mod unified_exec_stdin_review_size;
 #[cfg(unix)]
 mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
-mod usage_policy;
 mod user_notification;
 mod user_shell_cmd;
 mod view_image;

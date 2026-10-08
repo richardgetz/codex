@@ -106,6 +106,174 @@ fn parse_non_app_mcp_tool_name_preserves_legacy_flat_names() {
 }
 
 #[test]
+fn parse_non_app_mcp_tool_name_rejects_apps_and_malformed_flat_names() {
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::namespaced("codex_apps", "search")),
+        None
+    );
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp__codex_apps__search")),
+        None
+    );
+    assert_eq!(parse_non_app_mcp_tool_name(&ToolName::plain("mcp__server")), None);
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp____server__bad_name")),
+        None
+    );
+}
+
+#[test]
+fn configured_placeholder_requires_an_unambiguous_raw_tool_name() {
+    let mut config: McpServerConfig = serde_json::from_value(json!({"command": "test"}))
+        .expect("deserialize MCP server configuration");
+
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "readitem"),
+        Some("readitem".to_string())
+    );
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "read_item"),
+        None
+    );
+
+    config.enabled_tools = Some(vec!["read-item".to_string()]);
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "read_item"),
+        Some("read-item".to_string())
+    );
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "blocked"),
+        None
+    );
+
+    config
+        .enabled_tools
+        .as_mut()
+        .expect("enabled tools set above")
+        .push("read_item".to_string());
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "read_item"),
+        None
+    );
+
+    config.enabled_tools = None;
+    config.disabled_tools = Some(vec!["readitem".to_string()]);
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "readitem"),
+        None
+    );
+    config.enabled_tools = Some(vec!["read_abcdef123456".to_string()]);
+    config.disabled_tools = None;
+    assert_eq!(
+        recoverable_raw_mcp_tool_name(&config, "mcp__server", "read_abcdef123456"),
+        None
+    );
+}
+
+#[test]
+fn configured_catalog_identity_requires_unique_namespace_or_exact_hashed_server() {
+    let config: McpServerConfig = serde_json::from_value(json!({"command": "test"}))
+        .expect("deserialize MCP server configuration");
+    let callable_namespace = "mcp__my_server";
+    assert!(configured_mcp_server_namespace_matches(
+        callable_namespace,
+        "my-server"
+    ));
+    assert!(configured_mcp_server_namespace_matches(
+        callable_namespace,
+        "my_server"
+    ));
+    assert!(!configured_mcp_server_namespace_matches(
+        "mcp__my_server_abcdef123456",
+        "my_server"
+    ));
+
+    let matches = vec![
+        ("my-server".to_string(), config.clone()),
+        ("my_server".to_string(), config.clone()),
+    ]
+    .into_iter();
+    assert!(unique_configured_mcp_server_for_namespace(callable_namespace, matches).is_none());
+    let colliding_servers = vec![
+        ("my-server".to_string(), config.clone()),
+        ("my_server".to_string(), config.clone()),
+    ];
+    assert!(!configured_mcp_catalog_tool_matches_identity(
+        "mcp__my_server",
+        "my_server",
+        &colliding_servers,
+        &colliding_servers[1..],
+    ));
+
+    let unique_server = vec![("my_server".to_string(), config.clone())];
+    assert!(configured_mcp_catalog_tool_matches_identity(
+        "mcp__my_server",
+        "my_server",
+        &unique_server,
+        &unique_server,
+    ));
+
+    assert!(configured_mcp_catalog_tool_matches_identity(
+        "mcp__my_server_abcdef123456",
+        "my_server",
+        &colliding_servers,
+        &colliding_servers[1..],
+    ));
+
+    let disabled_alias: McpServerConfig = serde_json::from_value(json!({
+        "command": "test",
+        "enabled": false
+    }))
+    .expect("deserialize disabled MCP server configuration");
+    let enabled_server = vec![("my_server".to_string(), config.clone())];
+    let configured_with_disabled_alias = vec![
+        ("my-server".to_string(), disabled_alias),
+        enabled_server[0].clone(),
+    ];
+    assert!(unique_configured_mcp_server_for_namespace(
+        callable_namespace,
+        configured_with_disabled_alias.iter().cloned(),
+    )
+    .is_none());
+    assert!(!configured_mcp_catalog_tool_matches_identity(
+        "mcp__my_server",
+        "my_server",
+        &configured_with_disabled_alias,
+        &enabled_server,
+    ));
+
+    let hash_suffixed_server = "my_server_abcdef123456";
+    let hash_suffixed_namespace = "mcp__my_server_abcdef123456";
+    let literal_server = vec![(hash_suffixed_server.to_string(), config)];
+    assert!(!configured_mcp_server_namespace_matches(
+        hash_suffixed_namespace,
+        hash_suffixed_server,
+    ));
+    assert!(configured_mcp_catalog_tool_matches_identity(
+        hash_suffixed_namespace,
+        hash_suffixed_server,
+        &literal_server,
+        &literal_server,
+    ));
+
+    let disabled_hash_alias: McpServerConfig = serde_json::from_value(json!({
+        "command": "test",
+        "enabled": false
+    }))
+    .expect("deserialize disabled MCP server configuration");
+    let configured_with_hash_alias = vec![
+        ("my_server".to_string(), disabled_hash_alias),
+        literal_server[0].clone(),
+    ];
+    assert!(!configured_mcp_catalog_tool_matches_identity(
+        hash_suffixed_namespace,
+        hash_suffixed_server,
+        &configured_with_hash_alias,
+        &literal_server,
+    ));
+}
+
+#[test]
 fn guardian_elicitation_review_request_defaults_missing_tool_params() {
     let request = form_request(guardian_meta(/*tool_params*/ None));
 

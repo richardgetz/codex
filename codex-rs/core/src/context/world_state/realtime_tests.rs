@@ -72,7 +72,8 @@ fn preamble_transition_emits_the_current_policy() {
     let suppressed = enabled.clone().suppress_preambles();
 
     let suppressed_fragment = suppressed
-        .render_diff(PreviousSectionState::Known(&enabled.snapshot()))
+        .render_diff(PreviousSectionState::Known(&enabled.snapshot))
+        .1
         .expect("suppression transition should update realtime instructions");
     assert!(
         suppressed_fragment
@@ -81,7 +82,8 @@ fn preamble_transition_emits_the_current_policy() {
     );
 
     let reenabled_fragment = enabled
-        .render_diff(PreviousSectionState::Known(&suppressed.snapshot()))
+        .render_diff(PreviousSectionState::Known(&suppressed.snapshot))
+        .1
         .expect("re-enable transition should update realtime instructions");
     assert!(
         reenabled_fragment

@@ -909,7 +909,7 @@ impl UnifiedExecProcessManager {
         };
         let _interaction_guard = locked_process.interaction_lock().lock_owned().await;
         // A queued write must observe strict review enabled while it was waiting.
-        let strict_auto_review = context.session.strict_auto_review_enabled().await;
+        let strict_auto_review = context.step_context.turn.strict_auto_review_enabled();
         let approval = {
             let store = self.process_store.lock().await;
             let entry = store
@@ -1475,7 +1475,6 @@ impl UnifiedExecProcessManager {
             policy: exec_env_policy_from_shell_policy(shell_environment_policy),
             local_policy_env,
         };
-        let shell_snapshot = shell_snapshot_request(request, &cwd, context);
         let mut orchestrator = ToolOrchestrator::new();
         let file_system_sandbox_policy = context
             .step_context
@@ -1484,10 +1483,11 @@ impl UnifiedExecProcessManager {
             .permissions
             .file_system_sandbox_policy();
         let browser_cwd = request.cwd.to_abs_path().ok();
-        let allow_browser = context.step_context.turn.config.permissions.allow_browser
+        let browser_command = if context.step_context.turn.config.permissions.allow_browser
             && !request.turn_environment.environment.is_remote()
             && browser_runtime_allowed(request)
-            && browser_cwd.as_ref().is_some_and(|cwd| {
+        {
+            browser_cwd.as_ref().and_then(|cwd| {
                 resolve_direct_playwright_cli_script(
                     &request.hook_command,
                     context
@@ -1500,8 +1500,17 @@ impl UnifiedExecProcessManager {
                     &file_system_sandbox_policy,
                     cwd,
                 )
-                .is_some()
-            });
+            })
+        } else {
+            None
+        };
+        let allow_browser = browser_command.is_some();
+        let command = browser_command.unwrap_or_else(|| request.command.clone());
+        let shell_snapshot = if allow_browser {
+            None
+        } else {
+            shell_snapshot_request(request, &cwd, context)
+        };
         let mut runtime = if allow_browser {
             UnifiedExecRuntime::for_browser_command(self, request.shell_mode.clone())
         } else {
@@ -1526,7 +1535,7 @@ impl UnifiedExecProcessManager {
             .exec_policy
             .create_exec_approval_requirement_for_shell(
                 ExecApprovalRequest {
-                    command: &request.command,
+                    command: &command,
                     approval_policy: context.step_context.settings.approval_policy(),
                     permission_profile: request.turn_environment.permission_profile().clone(),
                     environment_policy: request.turn_environment.config().exec_policy.as_ref(),
@@ -1548,8 +1557,8 @@ impl UnifiedExecProcessManager {
             )
             .await;
         let req = UnifiedExecToolRequest {
-            command: request.command.clone(),
-            shell_type: request.shell_type,
+            command,
+            shell: request.shell.clone(),
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,

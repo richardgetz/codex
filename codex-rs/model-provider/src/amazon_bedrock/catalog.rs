@@ -10,7 +10,6 @@ use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::MultiAgentVersion;
 
@@ -131,15 +130,11 @@ fn bedrock_model(
     model.slug = bedrock_slug.to_string();
     model.display_name = display_name.to_string();
     model.priority = priority;
-    model.default_reasoning_level = Some(ReasoningEffort::High);
     model.visibility = ModelVisibility::List;
     model.availability_nux = None;
     model.upgrade = None;
     model.use_responses_lite = false;
     model.tool_mode = None;
-    model
-        .supported_reasoning_levels
-        .retain(|level| level.effort != ReasoningEffort::Ultra);
     model
 }
 
@@ -252,21 +247,31 @@ mod tests {
 
     #[test]
     fn configured_bedrock_catalogs_normalize_unsupported_model_capabilities() {
-        let model = bundled_openai_model(GPT_5_5_OPENAI_MODEL_ID);
-        let mut expected = model.clone();
-        expected.additional_speed_tiers.clear();
-        expected.service_tiers.clear();
-        expected.default_service_tier = None;
-        expected.web_search_tool_type = WebSearchToolType::Text;
-        expected.multi_agent_version = Some(MultiAgentVersion::V1);
+        let models = [
+            Some(MultiAgentVersion::V2),
+            Some(MultiAgentVersion::V1),
+            Some(MultiAgentVersion::Disabled),
+            None,
+        ]
+        .into_iter()
+        .map(|version| {
+            let mut model = bundled_openai_model(GPT_5_5_OPENAI_MODEL_ID);
+            model.multi_agent_version = version;
+            model
+        })
+        .collect::<Vec<_>>();
+        let mut expected = models.clone();
+        for model in &mut expected {
+            model.additional_speed_tiers.clear();
+            model.service_tiers.clear();
+            model.default_service_tier = None;
+            model.web_search_tool_type = WebSearchToolType::Text;
+            model.multi_agent_version = Some(MultiAgentVersion::V1);
+        }
 
         assert_eq!(
-            normalize_bedrock_catalog(ModelsResponse {
-                models: vec![model],
-            }),
-            ModelsResponse {
-                models: vec![expected],
-            }
+            normalize_bedrock_catalog(ModelsResponse { models }),
+            ModelsResponse { models: expected }
         );
     }
 
@@ -339,15 +344,11 @@ mod tests {
             expected.slug = slug.to_string();
             expected.display_name = display_name.to_string();
             expected.priority = priority;
-            expected.default_reasoning_level = Some(ReasoningEffort::High);
             expected.visibility = ModelVisibility::List;
             expected.availability_nux = None;
             expected.upgrade = None;
             expected.use_responses_lite = false;
             expected.tool_mode = None;
-            expected
-                .supported_reasoning_levels
-                .retain(|level| level.effort != ReasoningEffort::Ultra);
             expected.additional_speed_tiers.clear();
             expected.service_tiers.clear();
             expected.default_service_tier = None;

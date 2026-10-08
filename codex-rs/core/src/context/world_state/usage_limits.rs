@@ -1,4 +1,5 @@
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
 use crate::context::UsageLimitsContext;
@@ -70,6 +71,10 @@ impl UsageLimitsState {
         Self { snapshot, body }
     }
 
+    fn snapshot(&self) -> UsageLimitsSnapshot {
+        self.snapshot.clone()
+    }
+
     fn limit(rate_limits: &RateLimitSnapshot) -> UsageLimitSnapshot {
         UsageLimitSnapshot {
             limit_id: rate_limits
@@ -101,10 +106,6 @@ impl WorldStateSection for UsageLimitsState {
     const ID: &'static str = "usage_limits";
     type Snapshot = UsageLimitsSnapshot;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        self.snapshot.clone()
-    }
-
     fn should_persist(&self) -> bool {
         self.snapshot.policy != ThreadUsagePolicy::default()
             || self
@@ -131,25 +132,29 @@ impl WorldStateSection for UsageLimitsState {
     fn render_diff(
         &self,
         previous: PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = self.snapshot();
         let current_should_persist = self.should_persist();
         if current_should_persist
-            && matches!(&previous, PreviousSectionState::Known(previous) if *previous == &self.snapshot)
+            && matches!(&previous, PreviousSectionState::Known(previous) if *previous == &current)
         {
-            return None;
+            return (None, None);
         }
         let previous_had_status = !matches!(&previous, PreviousSectionState::Absent);
+        if !current_should_persist && !previous_had_status {
+            return (None, None);
+        }
         let body = if !current_should_persist {
-            if !previous_had_status {
-                return None;
-            }
             REMOVAL_NOTICE.to_string()
         } else if previous_had_status {
             format!("{REPLACEMENT_NOTICE}\n\n{}", self.body)
         } else {
             self.body.clone()
         };
-        Some(Box::new(UsageLimitsContext::new(body)))
+        (
+            Some(current),
+            Some(Box::new(UsageLimitsContext::new(body))),
+        )
     }
 }
 

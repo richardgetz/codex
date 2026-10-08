@@ -49,7 +49,7 @@ pub(super) async fn update_thread_metadata(
     // A live local recorder owns this cross-process lock already. Unloaded threads need to take
     // it here so their compatibility append cannot race an archive, delete, or revert in another
     // Codex process after the local lifecycle reservation has been acquired.
-    let _writer_lock = match live_writer::rollout_path(store, thread_id).await {
+    let mut unloaded_writer_lock = match live_writer::rollout_path(store, thread_id).await {
         Ok(_) => None,
         Err(ThreadStoreError::ThreadNotFound { .. }) => Some(store.acquire_writer_lock(thread_id)?),
         Err(err) => return Err(err),
@@ -107,6 +107,37 @@ pub(super) async fn update_thread_metadata(
         None
     };
     let paginated = matches!(history_mode, Some(ThreadHistoryMode::Paginated));
+    if paginated
+        && patch.name.is_some()
+        && live_writer::rollout_path(store, thread_id).await.is_ok()
+    {
+        // Naming saves a new thread even before its first turn. Persist its live recorder before
+        // updating SQLite so the named thread can be resumed immediately or after a restart.
+        live_writer::persist_thread(store, thread_id).await?;
+    }
+    let needs_rollout_compat = requires_rollout_compat || patch.name.is_some();
+    // Reject competing writers before committing any part of a legacy rollout patch to SQLite.
+    let writer_lock = if !paginated
+        && needs_rollout_compat
+        && (patch.memory_mode.is_some() || patch.git_info.is_some())
+    {
+        let live = store
+            .live_recorders
+            .lock()
+            .await
+            .get(&thread_id)
+            .map(|entry| entry.writer_lock.clone());
+        Some(match live {
+            Some(guard) => guard,
+            // An unloaded thread already holds this lock from the admission check above.
+            None => match unloaded_writer_lock.take() {
+                Some(guard) => guard,
+                None => store.acquire_writer_lock(thread_id)?,
+            },
+        })
+    } else {
+        None
+    };
     let require_sqlite_write =
         pending_patch.is_some() || sqlite_write_failure_should_block(&patch) || paginated;
     let mut updated = apply_metadata_update(
@@ -951,6 +982,7 @@ fn rollout_path_is_archived(store: &LocalThreadStore, path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::ThreadHistoryMode;
@@ -1297,6 +1329,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metadata_patch_completes_before_concurrent_shutdown()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let home = TempDir::new()?;
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::new_v4();
+        let thread_id = ThreadId::from_string(&uuid.to_string())?;
+        let path = write_session_file(home.path(), "2025-01-03T12-00-00", uuid)?;
+        store
+            .resume_thread(ResumeThreadParams {
+                history_revision: None,
+                thread_id,
+                rollout_path: Some(path.clone()),
+                history: None,
+                include_archived: true,
+                metadata: test_thread_metadata(),
+            })
+            .await?;
+        let writer_lock = store.live_recorders.lock().await[&thread_id]
+            .writer_lock
+            .clone();
+        let (mut expected, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
+        let mut metadata = read_session_meta_line(&path).await?;
+        metadata.meta.memory_mode = Some("disabled".into());
+        expected.push(RolloutItem::SessionMeta(metadata));
+
+        let mut shutdown = Box::pin(store.shutdown_thread(thread_id));
+        update_rollout_metadata(&store, thread_id, &path, &writer_lock, |meta| {
+            meta.meta.memory_mode = Some("disabled".into());
+            // Poll shutdown in the read/append gap; the writer mutex must keep it pending.
+            assert!(
+                tokio::task::unconstrained(shutdown.as_mut())
+                    .now_or_never()
+                    .is_none()
+            );
+        })
+        .await?;
+        shutdown.await?;
+
+        let (actual, _, _) = RolloutRecorder::load_rollout_items(&path).await?;
+        assert_eq!(json!(actual), json!(expected));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn update_thread_metadata_updates_paginated_git_info_in_sqlite_only() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
@@ -1482,6 +1558,7 @@ mod tests {
 
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(path.clone()),
                 history: None,
@@ -2369,6 +2446,7 @@ mod tests {
         .await;
         store
             .resume_thread(ResumeThreadParams {
+                history_revision: None,
                 thread_id,
                 rollout_path: Some(archived_path.clone()),
                 history: None,

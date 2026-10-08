@@ -734,9 +734,9 @@ async fn run_code_mode_turn_with_rmcp_config(
                 enabled: true,
                 required: false,
                 startup_readiness: Default::default(),
+                startup: Default::default(),
+                sharing: Default::default(),
                 supports_parallel_tool_calls: false,
-                startup: codex_config::McpServerStartupMode::Auto,
-                sharing: codex_config::McpServerSharingMode::Auto,
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -922,7 +922,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
             "exec".to_string(),
             "wait".to_string(),
             "request_user_input".to_string(),
-            "web_search".to_string(),
+            "web_search".to_string()
         ]
     );
 
@@ -2332,11 +2332,11 @@ async fn result_metadata_preserves_results_within_request_budget(
             "payload": "l".repeat(31 * 1024),
             "openai/resource_access": resource_access,
         }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
         serde_json::json!({
             "payload": "o".repeat(40 * 1024),
             "openai/resource_access": {
@@ -2351,8 +2351,8 @@ async fn result_metadata_preserves_results_within_request_budget(
         .iter()
         .map(|metadata| serde_json::to_vec(metadata).unwrap().len())
         .collect::<Vec<_>>();
-    assert!(metadata_sizes.iter().sum::<usize>() > 128 * 1024);
-    assert!(metadata_sizes.iter().sum::<usize>() < 1024 * 1024);
+    assert!(metadata_sizes.iter().sum::<usize>() > 2 * 1024 * 1024);
+    assert!(metadata_sizes.iter().sum::<usize>() < 15 * 1024 * 1024);
     assert!(serde_json::to_vec(&result_metadata[6]["openai/resource_access"])?.len() > 32 * 1024);
     for (arguments, metadata) in arguments.iter().zip(&result_metadata) {
         let result = serde_json::json!({
@@ -2490,7 +2490,7 @@ async fn result_metadata_preserves_results_within_request_budget(
             .iter()
             .map(codex_protocol::models::executed_tool_call_metadata_bytes)
             .sum::<usize>()
-            <= 2 * 1024 * 1024
+            > 2 * 1024 * 1024
     );
     let captured = serde_json::to_value(captured)?;
     for (input, expected_metadata) in [
@@ -2744,12 +2744,16 @@ async fn code_mode_result_metadata_follows_runtime_recording_enablement() -> Res
     );
     for (call_id, enabled) in [("call-off", false), ("call-on", true)] {
         if enabled {
+            let current_config = test.codex.config().await;
             let mut config = test.config.clone();
             config
                 .features
                 .enable(Feature::ExecutedToolCallMetadata)
                 .unwrap();
-            test.codex.refresh_runtime_config(config).await;
+            let _ = test
+                .codex
+                .refresh_runtime_config(current_config, config)
+                .await;
             // Runtime recording changes without updating the session's execution features.
             assert!(
                 !test
@@ -2912,7 +2916,11 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
             /*originator*/ None,
         )),
     };
-    test.codex.refresh_runtime_config(test.config.clone()).await;
+    let current_config = test.codex.config().await;
+    let _ = test
+        .codex
+        .refresh_runtime_config(current_config, test.config.clone())
+        .await;
     release_tx.send(()).unwrap();
     let wait = responses::mount_function_call_agent_response(
         &server,
@@ -3687,7 +3695,7 @@ if (!tool) {
             "exec".to_string(),
             "wait".to_string(),
             "request_user_input".to_string(),
-            "web_search".to_string(),
+            "web_search".to_string()
         ]
     );
 
@@ -3845,7 +3853,7 @@ async fn code_mode_only_can_call_nested_tools() -> Result<()> {
                 "exec",
                 r#"
 const output = await tools.exec_command({ cmd: "printf code_mode_only_nested_tool_marker" });
-text(output.output.trim().split(/\n/).at(-1) ?? "");
+text(output.output);
 "#,
             ),
             ev_completed("resp-1"),
@@ -7865,7 +7873,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
+            "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file.\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
         })
     );
 
@@ -8282,8 +8290,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "codex_app_hidden_dynamic_tool");
-const out = await tools.codex_app_hidden_dynamic_tool({ city: "Paris" });
+const tool = ALL_TOOLS.find(({ name }) => name === "codex_app__hidden_dynamic_tool");
+const out = await tools.codex_app__hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,
@@ -8387,7 +8395,7 @@ text(
     )?;
     assert_eq!(
         parsed.get("name"),
-        Some(&Value::String("codex_app_hidden_dynamic_tool".to_string()))
+        Some(&Value::String("codex_app__hidden_dynamic_tool".to_string()))
     );
     assert_eq!(
         parsed.get("out"),
@@ -8401,7 +8409,7 @@ text(
                 description.contains("Codex app tools.")
                     && description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
-                    && description.contains("codex_app_hidden_dynamic_tool(args:")
+                    && description.contains("codex_app__hidden_dynamic_tool(args:")
             })
     );
 

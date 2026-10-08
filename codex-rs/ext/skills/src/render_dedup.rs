@@ -51,7 +51,6 @@ impl<'a> PreparedSkillCatalog<'a> {
 
         self.entries
             .retain(|entry| !cloud_names.contains(entry.name.as_str()));
-        self.alias_plan = build_alias_plan(&self.entries);
     }
 
     pub(super) fn unaliased(&self) -> CatalogLines<'a> {

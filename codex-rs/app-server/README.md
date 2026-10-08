@@ -16,7 +16,7 @@ and background refreshes skip the old endpoint. Requirement load failures also b
 operations. Checks apply even when the catalog is cached. Existing startup provider selection
 and caching behavior remain in effect while the provider satisfies current requirements.
 
-## MCP App UI
+# MCP App UI
 
 `mcpToolCall.mcpAppUi` records the invoked descriptor's `resourceUri`
 and explicit `preferredModelDisplayMode` (`inline` or `fullscreen`). Missing or
@@ -29,7 +29,7 @@ The field is null for older history and tools that declare widgets only in
 result metadata; clients retain catalog discovery for those calls. Existing
 resource URI fields remain available for older clients.
 
-## Initial Daybreak choice (experimental)
+# Initial Daybreak choice (experimental)
 
 Persistent threads accept `daybreakEnabled` on `thread/start` with the
 `experimentalApi` opt-in. The response and `thread/started` notification both
@@ -40,7 +40,7 @@ the choice unset. Ephemeral threads cannot save it.
 Use `thread/metadata/update` for later changes. This preference does not select
 `turn/start.cyberAccessProgram` or grant access to an access program.
 
-## Application network policy
+# Application network policy
 
 App-server loads application network policy at startup and existing explicit
 config/account reloads. Local requirements-file edits take effect on
@@ -52,7 +52,7 @@ it constructs. The embedding TUI and exec runtime install the same policy before
 creating their telemetry providers, background HTTP clients, and executor
 connections. TUI worktree cloud loaders retain that shared policy on reload.
 
-## User verification cancellation (experimental)
+# User verification cancellation (experimental)
 
 Local UI clients can cancel a native user-verification RPC by sending
 `userVerification/cancel` with `{requestId}` and the `experimentalApi` opt-in.
@@ -76,7 +76,7 @@ late proofs after the approval is canceled or resolved. Only one native worker
 runs per app-server; if an OS call remains active after cancellation or timeout,
 subsequent local operations return `failed/providerError` until that worker exits.
 
-## Hosted Codex Apps MCP protocol
+# Hosted Codex Apps MCP protocol
 
 The host-owned HTTP `codex_apps` server uses Legacy by default in app-server and
 standalone Codex. To discover the 2026-07-28 protocol, set
@@ -94,14 +94,14 @@ App-server does not persist this selection.
 
 `originCallId` with `threadId` takes precedence and retains the originating app/account scope. Requests without `target` retain discovery; `connectorId` continues to restrict reads to that connector. Direct targets require backend support for app/account resource reads.
 
-## Project trust
+# Project trust
 
 `thread/start` does not persist project trust for a directory where configuration
 discovery finds no project-root marker, Git checkout, or project-local `.codex`
 directory. Starting a task there does not preapprove project configuration added
 later. Existing trust decisions and permission checks for projects are unchanged.
 
-## Thread removal
+# Thread removal
 
 `thread/archive` and `thread/delete` reject attempts to remove a live internal
 worker with JSON-RPC error `-32600`. The worker's owner controls its shutdown.
@@ -110,6 +110,15 @@ after a client tries to archive or delete it.
 
 After the owner releases the worker, its saved conversation can be archived or
 deleted normally. Ordinary client-controlled threads keep their existing behavior.
+
+## Environment information (experimental)
+
+`environment/info` connects to a configured environment by `environmentId` and
+returns its detected `shell` plus its default `cwd` as a canonical
+environment-native `file:` URI. Connection failures are returned as request
+errors. After connecting, the live metadata request has a 30-second timeout. A
+timeout closes the probed connection and starts normal session recovery without
+retrying the failed request.
 
 ## User verification (experimental)
 
@@ -209,7 +218,7 @@ updates. Realtime connections use separate routing configuration and are not che
 Interrupt, realtime stop, and goal pause/clear remain available. User and project
 configuration changes alone do not invalidate existing threads.
 
-## Amazon Bedrock authentication
+# Amazon Bedrock authentication
 
 If `model_providers.amazon-bedrock.aws.credential_export` is configured, Bedrock setup and
 Bedrock login return an error without changing configuration or saved credentials. Remove the
@@ -221,6 +230,18 @@ the Bedrock destination. Static access keys with an explicit region need no cred
 AWS profile `credential_process` commands are run by the AWS SDK; their network traffic is outside
 the application's HTTP policy. Configured credential exporters and AWS reauthentication commands
 require unrestricted application policy; policy revocation cancels their active work.
+
+After Bedrock login or setup, clients can call the experimental
+`account/bedrock/checkGovCloudRequirements` with `{}`. The server reloads configuration and
+requirements and returns `{ isGovCloud, shouldWarn }`. An explicitly configured official
+Bedrock endpoint hostname determines the region; with no URL or a custom proxy URL, the check
+resolves the AWS region using the current authentication state. It does not reload saved
+credentials or change login policy.
+For GovCloud, the advisory check requires API-only login and enabled managed application
+network restrictions with an explicit allow entry for the active Bedrock endpoint's domain.
+Non-Bedrock providers and commercial regions return both fields as `false`. Configuration or
+region resolution failures return an RPC error. This check does not block login or certify
+the entire network configuration.
 
 ## Stored thread attachments
 
@@ -287,7 +308,7 @@ A non-ephemeral fork copies the source thread's current attachments, even when f
 
 Attachment creation and deletion requests using the same thread ID are serialized across connections. The requesting client receives its response before the compact update is broadcast, and duplicate creates or absent deletes do not emit updates. Deleting the owning thread removes its attachments under the same lifecycle exclusion; queued attachment mutations then report that the thread was not found.
 
-## Thread plugin settings
+# Thread plugin settings
 
 `thread/settings/update` and `turn/start` accept `disabledPluginIds`, a list of
 `PluginSummary.id` values from `plugin/list`, in the
@@ -301,7 +322,7 @@ Read the selection from `threadSettings.disabledPluginIds` in
 across resume. Forks restore the selection from the history retained at the
 requested fork boundary.
 
-## Deprecated thread personality setting
+# Deprecated thread personality setting
 
 `thread/start`, `thread/resume`, `thread/settings/update`, and `turn/start` still
 accept `personality`, but `friendly` and `pragmatic` no longer select a style.
@@ -314,7 +335,7 @@ switching models. Setting `friendly` or `pragmatic` can replace a previous
 thread's existing instructions or change explicitly supplied base instructions.
 The old `features.personality` flag is ignored.
 
-## MCP server capabilities
+# MCP server capabilities
 
 `mcpServerStatus/list` returns `serverCapabilities` for each initialized MCP server
 in both `full` and `toolsAndAuthOnly` detail modes, including thread-scoped reads.
@@ -333,7 +354,7 @@ Omitting `serverName` preserves full-inventory discovery.
 `mcpServer/oauth/login` only returns HTTP(S) authorization URLs. Authorization
 endpoints with other schemes fail before client registration or URL return.
 
-## Thread rollback
+# Thread rollback
 
 `thread/rollback` has been removed from the API, including its request and response
 types. Requests use the generic unknown-method rejection path. Use `thread/revert`
@@ -344,7 +365,24 @@ and migration remain supported so resuming, reading, and forking those threads
 preserves the surviving history. This disk compatibility does not require restoring
 support for new `thread/rollback` requests.
 
-## Selected workspace routing
+# MCP configuration reload
+
+`config/mcpServer/reload` returns an error when a loaded thread rejects the
+refreshed enterprise policy. The rejected thread retains its previous configuration
+layers with enterprise MCP disabled. Other planned thread refreshes are processed
+before the rejection is reported, so an error does not imply that no changes were
+applied. Correct the policy before retrying the reload.
+
+# Enterprise sign-in
+
+Call `mcpServer/oauth/login` with a directly configured server's `name` and its
+connected `threadId`. Open the returned `authorizationUrl` and match
+`mcpServer/oauthLogin/completed` by `loginId`. Starting another enterprise sign-in
+cancels the previous attempt and waits for its callback listener to close. Use
+`account/login/cancel` to cancel explicitly. Start a fresh session after success to
+use the saved grant.
+
+# Selected workspace routing
 
 The experimental `account/read.workspaceRouting` response field returns the selected ChatGPT workspace's `chatgptAccountId`, resolved HTTPS `backendOrigin`, and backend-provided `accountRoutingOverride`. The routing value is `us`, `us_cr`, or the explicit `NO_CONSTRAINT` value. API-only and signed-out accounts return `null` and do not need `accounts/check`.
 

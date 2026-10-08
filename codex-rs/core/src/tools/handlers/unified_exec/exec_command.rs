@@ -12,13 +12,11 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
-use crate::tools::handlers::browser_exception_allowed;
 use crate::tools::handlers::file_system_sandbox_policy_context_for_cwd;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
-use crate::tools::handlers::parse_arguments_with_integral_float_fallback;
 use crate::tools::handlers::resolve_sandbox_permissions;
 use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::rewrite_function_string_argument;
@@ -28,7 +26,6 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::runtimes::resolve_direct_playwright_cli_script;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -40,14 +37,12 @@ use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
-use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_shell_command::shell_detect::detect_shell_type;
 use codex_tools::JsonSchema;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathConvention;
-use codex_utils_path_uri::PathUri;
 use codex_utils_string::truncate_middle_chars;
 
 use super::super::shell_spec::CommandToolOptions;
@@ -246,7 +241,7 @@ impl ExecCommandHandler {
             None => {
                 // Foreign executor cwd values cannot seed this host's AbsolutePathBufGuard.
                 // Sandbox intent and URI-native roots are still sent to the executor.
-                parse_arguments_with_integral_float_fallback(&arguments)?
+                parse_arguments(&arguments)?
             }
         };
         if args.tty && !session.features().enabled(Feature::UnifiedExecTty) {
@@ -301,41 +296,7 @@ impl ExecCommandHandler {
             turn_environment.config().allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
-        // Resolve sticky session/turn permissions before selecting the browser
-        // exception so an existing writable grant cannot invalidate the path
-        // validation below.
-        let requested_additional_permissions = args.additional_permissions.clone();
-        let permission_cwd =
-            PathUri::from_abs_path(native_cwd.as_ref().unwrap_or(&turn.config.cwd));
-        let effective_additional_permissions = apply_granted_turn_permissions(
-            context.session.as_ref(),
-            turn_environment,
-            &permission_cwd,
-            sandbox_permissions,
-            requested_additional_permissions.clone(),
-        )
-        .await;
-        let browser_command = if turn.config.permissions.allow_browser
-            && !environment.is_remote()
-            && browser_exception_allowed(&effective_additional_permissions)
-        {
-            let file_system_sandbox_policy = effective_file_system_sandbox_policy(
-                &turn.config.permissions.file_system_sandbox_policy(),
-                effective_additional_permissions
-                    .additional_permissions
-                    .as_ref(),
-            );
-            resolve_direct_playwright_cli_script(
-                &args.cmd,
-                turn.config.permissions.playwright_cli_path.as_ref(),
-                &file_system_sandbox_policy,
-                native_cwd.as_ref().unwrap_or(&turn.config.cwd),
-            )
-        } else {
-            None
-        };
-        let command = browser_command.unwrap_or(resolved_command.command);
-        let shell_type = resolved_command.shell_type;
+        let command = resolved_command.command;
         let ExecCommandArgs {
             mut tty,
             yield_time_ms,
@@ -356,6 +317,7 @@ impl ExecCommandHandler {
                 ))
             }
         };
+
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
         let requested_additional_permissions = additional_permissions.clone();
@@ -363,13 +325,12 @@ impl ExecCommandHandler {
             turn_environment.sandbox_context(/*additional_permissions*/ None);
         let permission_context = file_system_sandbox_policy_context_for_cwd(&sandbox_context, &cwd);
         let effective_additional_permissions = apply_granted_turn_permissions(
-            context.session.as_ref(),
+            &context.step_context,
             turn_environment,
             &cwd,
             sandbox_permissions,
             additional_permissions,
-        )
-        .await;
+        );
         let additional_permissions_allowed = exec_permission_approvals_enabled
             || (session.features().enabled(Feature::RequestPermissionsTool)
                 && effective_additional_permissions.permissions_preapproved);
@@ -455,7 +416,7 @@ impl ExecCommandHandler {
         let process_id = manager.allocate_process_id().await;
         let request = ExecCommandRequest {
             command,
-            shell_type,
+            shell: resolved_command.shell,
             hook_command: hook_command.clone(),
             process_id,
             yield_time_ms,
@@ -559,7 +520,7 @@ impl CoreToolRuntime for ExecCommandHandler {
             return None;
         };
 
-        parse_arguments_with_integral_float_fallback::<ExecCommandArgs>(arguments)
+        parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
             .map(|args| PreToolUsePayload {
                 tool_name: HookToolName::bash(),

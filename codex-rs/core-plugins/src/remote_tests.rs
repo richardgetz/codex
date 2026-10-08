@@ -164,6 +164,48 @@ async fn remote_installed_plugins_paginate_across_all_scopes_without_download_ur
     );
 }
 
+#[test]
+fn unsupported_optional_plugin_extensions_do_not_invalidate_installed_inventory() {
+    let mut plugin = serde_json::to_value(directory_plugin("plugin-future", "future"))
+        .expect("directory plugin should serialize");
+    plugin["enabled"] = serde_json::json!(true);
+    plugin["extensions"] = serde_json::json!({
+        "entrypoints": [{"type": "futureOptionalEntrypoint"}]
+    });
+
+    let installed: RemotePluginInstalledItem = serde_json::from_value(plugin)
+        .expect("unsupported optional extension should not invalidate installed inventory");
+
+    assert_eq!(installed.extensions, None);
+}
+
+#[test]
+fn hosted_plugin_extensions_survive_installed_and_marketplace_summaries() {
+    let mut plugin = serde_json::to_value(directory_plugin("plugin-calendar", "calendar"))
+        .expect("directory plugin should serialize");
+    plugin["enabled"] = serde_json::json!(true);
+    plugin["extensions"] = serde_json::json!({
+        "search_mention_providers": [{
+            "app_id": "calendar",
+            "tool_name": "search",
+            "link_id": "calendar-search",
+            "title": "Search calendar"
+        }]
+    });
+    let installed: RemotePluginInstalledItem = serde_json::from_value(plugin)
+        .expect("known extension should deserialize");
+    let extensions = installed.extensions.clone();
+
+    let installed = remote_installed_plugin_to_cache_entry(&installed)
+        .expect("installed plugin should be valid");
+    assert_eq!(installed.extensions, extensions);
+    let marketplaces = group_remote_installed_plugins_by_marketplaces(
+        &[installed],
+        &[REMOTE_GLOBAL_MARKETPLACE_NAME],
+    );
+    assert_eq!(marketplaces[0].plugins[0].extensions, extensions);
+}
+
 #[tokio::test]
 async fn remote_catalog_cache_modes_control_refresh_and_persist_fetched_results() {
     let server = MockServer::start().await;

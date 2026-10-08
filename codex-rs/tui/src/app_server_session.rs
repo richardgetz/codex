@@ -528,12 +528,27 @@ impl AppServerSession {
                     })
             })
             .transpose()?;
-        let thread_start_params = thread_start_params_from_config(
+        let mut thread_start_params = thread_start_params_from_config(
             &config,
             self.thread_params_mode(),
             self.remote_cwd_override(),
             /*session_start_source*/ None,
         );
+        let daybreak_launch_override = config
+            .config_layer_stack
+            .layers_high_to_low()
+            .find(|layer| layer.config.get("daybreak").is_some())
+            .is_some_and(|layer| {
+                matches!(
+                    layer.name,
+                    codex_config::ConfigLayerSource::SessionFlags
+                        | codex_config::ConfigLayerSource::User {
+                            profile: Some(_),
+                            ..
+                        }
+                )
+            });
+        thread_start_params.daybreak_enabled = daybreak_launch_override.then_some(config.daybreak_enabled);
         self.dynamic_tool_mcp = Some(Arc::new(
             DynamicToolMcpServer::start(
                 self.request_handle(),
@@ -830,6 +845,7 @@ impl AppServerSession {
             .model_provider_override
             .clone()
             .or(params.model_provider);
+        params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
         if let Some(selected_profile) = selected_profile {
             params.runtime_workspace_roots = None;
             params.permissions = Some(PermissionProfileSelectionParams::new(
@@ -2167,6 +2183,7 @@ pub(crate) async fn start_thread_with_request_handle(
         /*session_start_source*/ None,
     );
     params.model_provider = model_provider_override.or(params.model_provider);
+    params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
     thread_tool_transport.configure(&mut params);
     let (response, _history_support, task_tools_available) =
         request_thread_start_with_history_fallback(&request_handle, request_id, params)
@@ -2806,7 +2823,7 @@ async fn thread_session_state_from_thread_start_response(
         config,
         thread_params_mode,
     );
-    thread_session_state_from_thread_response_with_team(
+    let mut session = thread_session_state_from_thread_response_with_team(
         &response.thread.id,
         crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
@@ -2827,7 +2844,12 @@ async fn thread_session_state_from_thread_start_response(
         config.personality,
         local_settings,
     )
-    .await
+    .await?;
+    session.daybreak_enabled = response
+        .thread
+        .daybreak_enabled
+        .unwrap_or(response.thread.ephemeral && config.daybreak_enabled);
+    Ok(session)
 }
 
 async fn thread_session_state_from_thread_resume_response(
@@ -2865,6 +2887,7 @@ async fn thread_session_state_from_thread_resume_response(
     .await?;
     session.team = response.team.clone();
     session.collaboration_mode = response.collaboration_mode.clone().map(Box::new);
+    session.daybreak_enabled = response.thread.daybreak_enabled.unwrap_or(false);
     Ok(session)
 }
 
@@ -2880,7 +2903,7 @@ async fn thread_session_state_from_thread_fork_response(
         config,
         thread_params_mode,
     );
-    thread_session_state_from_thread_response_with_team(
+    let mut session = thread_session_state_from_thread_response_with_team(
         &response.thread.id,
         crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
@@ -2901,7 +2924,12 @@ async fn thread_session_state_from_thread_fork_response(
         config.personality,
         local_settings,
     )
-    .await
+    .await?;
+    session.daybreak_enabled = response
+        .thread
+        .daybreak_enabled
+        .unwrap_or(config.daybreak_enabled && !response.thread.ephemeral);
+    Ok(session)
 }
 
 fn display_permission_profile_from_thread_response(
@@ -2966,6 +2994,7 @@ async fn thread_session_state_from_thread_response(
     );
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host,
         thread_id,
         forked_from_id,

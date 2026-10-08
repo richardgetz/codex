@@ -6,7 +6,6 @@ use std::sync::Mutex;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Constrained;
 use codex_features::Feature;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -15,7 +14,6 @@ use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::recorded_apps_tool_calls;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
-use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -34,13 +32,11 @@ const CUSTOM_HISTORY_PROMPT: &str =
 enum HistoryScenario {
     BoundedHistory,
     SmallerReviewerBudget,
-    HardSerializedOutputCap,
     PermissionChanges,
 }
 
 #[test_case(HistoryScenario::BoundedHistory; "parent_connection_identity_and_output_limit")]
 #[test_case(HistoryScenario::SmallerReviewerBudget; "preserves_smaller_reviewer_output_budget")]
-#[test_case(HistoryScenario::HardSerializedOutputCap; "hard_serialized_output_cap_omits_media")]
 #[test_case(HistoryScenario::PermissionChanges; "reused_reviewer_honors_permission_changes")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Result<()> {
@@ -49,7 +45,6 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
     let history_server = MockServer::start().await;
     let large = !matches!(scenario, HistoryScenario::PermissionChanges);
     let smaller_reviewer_budget = matches!(scenario, HistoryScenario::SmallerReviewerBudget);
-    let hard_serialized_output_cap = matches!(scenario, HistoryScenario::HardSerializedOutputCap);
     let actions = [
         ("search_messages", json!({"query": "workspace"})),
         ("read_messages", json!({"message_id": "scope"})),
@@ -71,25 +66,14 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
         .and(body_partial_json(json!({"method": "tools/call"})))
         .respond_with(move |request: &Request| {
             let body: Value = serde_json::from_slice(&request.body).expect("history call JSON");
-            let result = if body["params"]["name"] == "user_message.search_messages" {
-                json!({"content": [{"type": "text", "text": "history-search-evidence"}], "isError": false})
-            } else if hard_serialized_output_cap {
-                json!({
-                    "content": [
-                        {"type": "text", "text": read_text.as_str()},
-                        {"type": "image", "mimeType": "image/png", "data": "image-payload".repeat(5_000)},
-                        {"type": "audio", "mimeType": "audio/wav", "data": "audio-payload".repeat(5_000)},
-                        {"type": "text", "text": "encrypted-payload", "_meta": {"codex/encryptedContent": true}},
-                    ],
-                    "structuredContent": {"large": "structured-payload".repeat(5_000)},
-                    "isError": false
-                })
+            let text = if body["params"]["name"] == "user_message.search_messages" {
+                "history-search-evidence"
             } else {
-                json!({"content": [{"type": "text", "text": read_text.as_str()}], "isError": false})
+                &read_text
             };
             ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc": "2.0", "id": body["id"],
-                "result": result
+                "result": {"content": [{"type": "text", "text": text}], "isError": false}
             }))
         })
         .with_priority(/*priority*/ 1)
@@ -107,10 +91,7 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
             if large {
                 std::fs::write(
                     home.join("config.toml"),
-                    format!(
-                        "[auto_review]\nexperimental_conversation_history_prompt = {CUSTOM_HISTORY_PROMPT:?}\nconversation_history_max_output_tokens = {}\n",
-                        if hard_serialized_output_cap { 8_000 } else { 800 }
-                    ),
+                    format!("[auto_review]\nexperimental_conversation_history_prompt = {CUSTOM_HISTORY_PROMPT:?}\nconversation_history_max_output_tokens = 800\n"),
                 ).expect("write history prompt config");
             }
         })
@@ -133,7 +114,6 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
         })
         .build_with_auto_env(&server)
         .await?;
-    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
     test.submit_text_turn("Check the workspace.").await?;
 
     let requests = mock.requests();
@@ -192,36 +172,15 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
         let output = evidence
             .function_call_output("initial-read_messages")
             .to_string();
-        if hard_serialized_output_cap {
-            let output_value = evidence.function_call_output("initial-read_messages");
-            assert!(
-                serde_json::to_vec(&output_value["output"])?.len() <= 8_192,
-                "serialized Guardian history payload exceeded 8 KiB"
-            );
-            assert!(
-                output.contains(
-                    "Some non-text, encrypted, or unknown hosted history content was omitted"
-                ),
-                "omission notice missing from serialized output: {}",
-                output.chars().take(1_000).collect::<String>()
-            );
-            assert!(output.contains("Earlier user instructions."));
-            assert!(!output.contains("structured-payload"));
-            assert!(!output.contains("image-payload"));
-            assert!(!output.contains("audio-payload"));
-            assert!(!output.contains("encrypted-payload"));
-            assert!(output.len() < 9_000);
+        let max_output_bytes = if smaller_reviewer_budget {
+            3_000
         } else {
-            let max_output_bytes = if smaller_reviewer_budget {
-                3_000
-            } else {
-                5_000
-            };
-            assert!(
-                output.contains("truncated") && output.len() < max_output_bytes,
-                "{output}"
-            );
-        }
+            5_000
+        };
+        assert!(
+            output.contains("truncated") && output.len() < max_output_bytes,
+            "{output}"
+        );
     } else {
         for (label, policy, expected_error) in [
             (
@@ -235,12 +194,18 @@ async fn guardian_conversation_history(scenario: HistoryScenario) -> anyhow::Res
                 "requires approval on the parent",
             ),
         ] {
+            let current_config = test.codex.config().await;
             let mut config = test.config.clone();
             config.config_layer_stack = config.config_layer_stack.with_user_config(
                 &config.codex_home.join("config.toml"),
                 toml::from_str(policy)?,
             )?;
-            test.codex.refresh_runtime_config(config).await;
+            assert_eq!(
+                test.codex
+                    .refresh_runtime_config(current_config, config)
+                    .await,
+                codex_core::ConfigRefreshOutcome::Published
+            );
             let followup =
                 responses::mount_sse_sequence(&server, review_responses(label, &actions[1..]))
                     .await;

@@ -130,13 +130,7 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
             ),
         );
     }
-    // A locally remembered profile may have been removed since selection.
-    let stale_selection = crate::app_event::PermissionProfileSelection {
-        profile_id: "removed-profile".into(),
-        approval_policy: None,
-        approvals_reviewer: None,
-        display_label: "removed-profile".into(),
-    };
+    // With no new selection, remote forks retain the saved profile.
     let forked = server
         .fork_thread_at(
             &local_settings,
@@ -145,7 +139,7 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
             /*last_turn_id*/ None,
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
-            Some(&stale_selection),
+            /*selected_profile*/ None,
         )
         .await?;
     assert_eq!(
@@ -165,7 +159,12 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
         codex_protocol::config_types::ApprovalsReviewer::AutoReview
     );
     let side = server
-        .fork_side_thread(&local_settings, client_config, thread_id)
+        .fork_side_thread(
+            &local_settings,
+            client_config,
+            thread_id,
+            /*selected_profile*/ None,
+        )
         .await?;
     assert_eq!(
         side.session.active_permission_profile.unwrap().id,
@@ -326,7 +325,8 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
         [(false, false), (false, true), (true, false), (true, true)]
     {
         let codex_home = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&codex_home).await;
+        // Keep the large setup futures off the test thread's stack.
+        let config = Box::pin(build_config(&codex_home)).await;
         let legacy_thread_id = ThreadId::from_string(
             &create_fake_rollout(
                 codex_home.path(),
@@ -350,38 +350,23 @@ async fn cached_legacy_resume_revalidates_history_across_migration_settings() ->
                 .features
                 .enable(Feature::BackgroundPaginatedRolloutMigration)?;
         }
-        // State DB initialization performs rollout metadata backfill under a shared maintenance
-        // lock. Initialize it before taking the exclusive guard that keeps the legacy rollout
-        // intact until the picker has selected it.
-        let state_db = crate::init_state_db_for_app_server_target(
-            &startup_config,
-            &crate::AppServerTarget::Embedded,
-        )
-        .await?;
         // Keep the real startup worker from migrating the legacy fixture before selection.
         let maintenance_guard =
             codex_rollout::try_acquire_rollout_maintenance_lock(codex_home.path())?
                 .expect("acquire rollout maintenance lock");
-        let mut app_server = crate::start_app_server_for_picker(
-            &startup_config,
-            &crate::AppServerTarget::Embedded,
-            Vec::new(),
-            codex_config::LoaderOverrides::without_managed_config_for_tests(),
-            state_db,
-            std::sync::Arc::new(crate::EnvironmentManager::default_for_tests()),
-        )
-        .await?;
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&startup_config)).await?;
         app_server.remember_thread_history_mode(legacy_thread_id, ThreadHistoryMode::Legacy);
         let local_settings = crate::local_settings::LocalSettings::from(&resume_config);
         let next_request_id = app_server.next_request_id;
         let legacy = {
-            let resume = app_server.resume_thread(
+            // Keep the large resume future off the Windows test thread's stack.
+            let mut resume = Box::pin(app_server.resume_thread(
                 &local_settings,
                 resume_config.clone(),
                 legacy_thread_id,
                 ResumeModelSettings::RestoreFromThread,
-            );
-            tokio::pin!(resume);
+            ));
             drop(maintenance_guard);
             // This current-thread test polls resume before yielding to the startup worker.
             // Resume must acquire its guard before waiting for metadata revalidation.

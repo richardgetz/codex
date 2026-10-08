@@ -16,26 +16,20 @@ use tracing::trace_span;
 use crate::function_tool::FunctionCallError;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use crate::session::team::effective_role_for_session_source;
 use crate::tools::call_trace;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolPayload;
-use crate::tools::lead_passive_poll::observe_lead_passive_poll_dispatch;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
-use crate::tools::registry::ToolActivityKind;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
-use crate::tools::router::ToolRouter;
-use codex_config::TeamRole as ConfigTeamRole;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ToolResultMetadata;
-use codex_protocol::protocol::TeamMode;
 
 struct ToolCallTimingGuard {
     started_at: Option<Instant>,
@@ -52,7 +46,6 @@ pub(crate) struct ToolCallRuntime {
     session: Arc<Session>,
     // Tool calls may run later, so retain the step whose tool list advertised them.
     step_context: Arc<StepContext>,
-    tool_router: Arc<ToolRouter>,
     tracker: SharedTurnDiffTracker,
     parallel_execution: Arc<RwLock<()>>,
 }
@@ -61,13 +54,11 @@ impl ToolCallRuntime {
     pub(crate) fn new(
         session: Arc<Session>,
         step_context: Arc<StepContext>,
-        tool_router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Self {
         Self {
             session,
             step_context,
-            tool_router,
             tracker,
             parallel_execution: Arc::new(RwLock::new(())),
         }
@@ -77,7 +68,9 @@ impl ToolCallRuntime {
         &self,
         tool_name: &codex_tools::ToolName,
     ) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
-        self.tool_router.create_diff_consumer(tool_name)
+        self.step_context
+            .tool_router
+            .create_diff_consumer(tool_name)
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -89,19 +82,8 @@ impl ToolCallRuntime {
         let error_call = call.clone();
         let source = call.direct_source();
         let recorder = self.session.services.executed_tool_calls.clone();
+        let recorded_call = recorder.prepare_direct_call(&call, &source, &self.step_context);
         let step_context = Arc::clone(&self.step_context);
-        let recorded_call = if step_context
-            .turn
-            .config
-            .features
-            .enabled(codex_features::Feature::ExecutedToolCallMetadata)
-        {
-            recorder
-                .as_ref()
-                .and_then(|recorder| recorder.prepare_direct_call(&call, &source, &step_context))
-        } else {
-            None
-        };
         let call_state = Arc::new(ToolCallState::default());
         let future = self.handle_tool_call_with_source(
             step_context,
@@ -134,12 +116,9 @@ impl ToolCallRuntime {
                     .get_or_insert_default()
                     .delivered_assistant_message = Some(text.clone());
             }
-            if let Some(recorder) = recorder {
-                recorder.attach_direct_call_to_output(&mut response.item, recorded_call);
-            }
+            recorder.attach_direct_call_to_output(&mut response.item, recorded_call);
             Ok(response)
         }
-        .in_current_span()
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -151,54 +130,21 @@ impl ToolCallRuntime {
         cancellation_token: CancellationToken,
         call_state: Arc<ToolCallState>,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
-        let sampled_team_lead_work_policy = *step_context.team_lead_work_policy.load_full();
-        let is_team_lead = step_context.turn.config.team_mode == TeamMode::LeadWorker
-            && effective_role_for_session_source(
-                &step_context.turn.config,
-                &step_context.turn.session_source,
-            ) == Some(ConfigTeamRole::Lead);
         let message_admission =
             super::user_messaging::admit_code_mode_send(&self.session, &source, &call.tool_name);
-        if step_context
-            .turn
-            .config
-            .features
-            .enabled(codex_features::Feature::ExecutedToolCallMetadata)
-            && let Some(executed_tool_calls) = self.session.services.executed_tool_calls.as_ref()
-        {
-            executed_tool_calls.record_tool_call(&call, &source, &step_context);
-        }
+        self.session
+            .services
+            .executed_tool_calls
+            .record_tool_call(&call, &source, &step_context);
         let router = &step_context.tool_router;
         let supports_parallel = router.tool_supports_parallel(&call);
         let tool_runtime = router.tool_runtime(&call.tool_name);
-        let activity_operation_kind = tool_runtime
-            .as_ref()
-            .map(|runtime| runtime.activity_operation_kind())
-            // A runtime absent from the plan can only be recovered by the registry as a
-            // configured MCP placeholder. Its approval flow must remain quiescent until the
-            // actual MCP request admits its own execution guard.
-            .unwrap_or(ToolActivityKind::Quiescent);
         let wait_for_runtime_cancellation = router.tool_waits_for_runtime_cancellation(&call);
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&step_context.turn);
-        let dispatch_turn = Arc::clone(&turn);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
-        // Register every spawned sibling before readiness or the parallel gate can delay it. The
-        // built-in collaboration wait is the one exception: counting this coordination call
-        // would make its own dependency-free handoff wait on itself. Other quiescent runtimes,
-        // including exec and MCP wrappers, remain visible to the handoff guard until completion.
-        let handoff_dispatch = match (
-            call.tool_name.namespace.as_deref(),
-            call.tool_name.name.as_str(),
-        ) {
-            // V2 exposes the coordination wait as a plain tool name; V1 retains its
-            // namespaced legacy surface. Neither call should count itself as pending work.
-            (None, "wait_agent")
-            | (Some("collaboration") | Some("multi_agent_v1"), "wait_agent") => Ok(None),
-            _ => session.begin_handoff_dispatch().map(Some),
-        };
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
         let mut tool_call_timing_guard = ToolCallTimingGuard::capture(
@@ -226,7 +172,6 @@ impl ToolCallRuntime {
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
         let dispatch_call_state = Arc::clone(&call_state);
-        let terminal_outcome_reached = Arc::clone(&dispatch_call_state);
         let dispatch_call = call.clone();
         let thread_id = session.thread_id;
         let trace_source = match &source {
@@ -238,6 +183,7 @@ impl ToolCallRuntime {
         let dispatch_tool_name = call.tool_name.clone();
         let dispatch_call_id = call.call_id.clone();
 
+        // Code-mode callbacks can resume outside the turn's local span ancestry.
         let dispatch_span = trace_span!(
             "dispatch_tool_call_with_code_mode_result",
             otel.name = %call.tool_name,
@@ -250,11 +196,6 @@ impl ToolCallRuntime {
 
         let mut dispatch_handle = AbortOnDropHandle::new(tokio::spawn(
             async move {
-                let handoff_dispatch = match handoff_dispatch {
-                    Ok(handoff_dispatch) => handoff_dispatch,
-                    Err(err) => return Err(FunctionCallError::Fatal(err.to_string())),
-                };
-                let _handoff_dispatch = handoff_dispatch;
                 let _message_admission = message_admission?;
                 if let Some(tool_runtime) = tool_runtime
                     && let Some(readiness) = tool_runtime.wait_until_ready(&session)
@@ -262,49 +203,13 @@ impl ToolCallRuntime {
                     readiness.await;
                 }
 
-                let _parallel_guard = if supports_parallel {
+                let _guard = if supports_parallel {
                     Either::Left(lock.read().await)
                 } else {
                     Either::Right(lock.write().await)
                 };
-                // Readiness and the parallel gate can await while a pause request is accepted.
-                // Recheck at the final dispatch boundary so no handler starts after the pause.
-                if let Err(err) = session
-                    .wait_for_activity_resume(&invocation_cancellation_token)
-                    .await
-                {
-                    return Err(FunctionCallError::Fatal(err.to_string()));
-                }
-                if is_team_lead {
-                    // This is the linearization point for Team Lead tool admission. A policy
-                    // commit before it rejects a stale sampled call; a commit after it leaves
-                    // this admitted operation intact, even if pause admission delays its start.
-                    let _team_lead_turn_admission = session.team_lead_turn_admission.lock().await;
-                    let current_team_lead_work_policy =
-                        session.get_config().await.effective_team_lead_work_policy();
-                    if current_team_lead_work_policy != sampled_team_lead_work_policy {
-                        return Err(FunctionCallError::RespondToModel(
-                            "The Team Lead work policy changed after this tool call was sampled. No tool action was started; reassess the latest policy before continuing."
-                                .to_string(),
-                        ));
-                    }
-                }
-                let _activity_operation = match activity_operation_kind {
-                    ToolActivityKind::Execution => Some(
-                        session
-                            .begin_activity_operation(&invocation_cancellation_token)
-                            .await
-                            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?,
-                    ),
-                    ToolActivityKind::Quiescent => None,
-                };
-                observe_lead_passive_poll_dispatch(
-                    dispatch_turn.as_ref(),
-                    &dispatch_call,
-                    step_context.passive_poll_sample_id,
-                );
-                // Admission through both the parallel-execution gate and the activity gate marks
-                // the end of dispatch waiting and the start of handler execution.
+                // Admission through the parallel-execution gate marks the end
+                // of dispatch waiting and the start of handler execution.
                 if let Some(execution_started_at) = execution_started_at {
                     let _ = execution_started_at.set(Instant::now());
                 }
@@ -330,18 +235,12 @@ impl ToolCallRuntime {
             let mut result = tokio::select! {
                 biased;
                 _ = cancellation_token.cancelled() => {
-                    // Cancellation owns a ready/ready race at the pre-admission boundary. For
-                    // runtimes that wait for cancellation cleanup, atomically claim the terminal
-                    // outcome before emitting the normal aborted response. Other runtimes keep
-                    // the registry's finish callback authoritative: a dispatch can complete
-                    // between this branch and its callback, and aborting/awaiting it lets that
-                    // callback claim the result without leaving stale lifecycle state.
                     let terminal_outcome_claimed = if wait_for_runtime_cancellation {
-                        terminal_outcome_reached
+                        call_state
                             .terminal_outcome_reached
                             .swap(true, Ordering::AcqRel)
                     } else {
-                        terminal_outcome_reached
+                        call_state
                             .terminal_outcome_reached
                             .load(Ordering::Acquire)
                     };
@@ -351,8 +250,6 @@ impl ToolCallRuntime {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
                         abort_dispatch_span.record("aborted", true);
                         let dispatch_result = if wait_for_runtime_cancellation {
-                            // The abort owns the terminal outcome; await only so
-                            // the runtime can finish process teardown.
                             match dispatch_handle.await {
                                 Ok(_) => {}
                                 Err(err) if err.is_cancelled() => {}
@@ -362,11 +259,6 @@ impl ToolCallRuntime {
                         } else {
                             dispatch_handle.abort();
                             match dispatch_handle.await {
-                                // A dispatch that is still waiting at an activity boundary can
-                                // observe the same cancellation and return TurnAborted as a
-                                // fatal tool error. The outer cancellation branch owns this
-                                // terminal outcome, so preserve the normal aborted response
-                                // instead of surfacing that internal boundary error.
                                 Ok(Ok(result)) => Some(result),
                                 Ok(Err(_)) => None,
                                 Err(err) if err.is_cancelled() => None,
@@ -400,6 +292,8 @@ impl ToolCallRuntime {
                     trace_source,
                 );
             }
+            // Use one completion measurement for logging and response formatting.
+            // Measuring inside a handler would omit routing and output processing.
             if let Some(timing) = tool_call_timing_guard.as_mut()
                 && let Some(handler_duration_ms) = timing.finish()
                 && let Ok(result) = &mut result
@@ -493,11 +387,10 @@ impl ToolCallTimingGuard {
             extensions,
         })
     }
-}
 
-impl ToolCallTimingGuard {
-    /// Log call timing once and return handler duration in milliseconds.
+    /// Log call timing once and return the handler duration in milliseconds.
     fn finish(&mut self) -> Option<u64> {
+        // Taking the start instant keeps normal completion and Drop from logging twice.
         let started_at = self.started_at.take()?;
         let completed_at = Instant::now();
         // Snapshot once so a concurrently-starting dispatch cannot make one
@@ -565,6 +458,7 @@ impl ToolCallTimingGuard {
 
 impl Drop for ToolCallTimingGuard {
     fn drop(&mut self) {
+        // Cancellation can drop the outer future before its normal completion path runs.
         let _ = self.finish();
     }
 }
@@ -587,7 +481,6 @@ mod tests {
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::openai_models::ToolMode;
-    use futures::future::BoxFuture;
     use pretty_assertions::assert_eq;
     use tokio::sync::Notify;
     use tokio::sync::oneshot;
@@ -692,12 +585,7 @@ mod tests {
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            session,
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
         let execution_gate = Arc::clone(&runtime.parallel_execution);
         let execution_gate_guard = execution_gate
             .try_write_owned()
@@ -786,78 +674,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn cancellation_wins_when_pre_admission_dispatch_is_already_finished()
-    -> anyhow::Result<()> {
-        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-        let tool_name = codex_tools::ToolName::plain("test_tool");
-        let handler = Arc::new(ImmediateHandler {
-            tool_name: tool_name.clone(),
-        }) as Arc<dyn CoreToolRuntime>;
-        let step_context = StepContext::for_test(Arc::clone(&turn_context));
-        let router = Arc::new(ToolRouter::from_parts(
-            ToolRegistry::from_tools([handler]),
-            Vec::new(),
-            ToolMode::Direct,
-            BTreeMap::new(),
-            /*tool_namespaces_info*/ None,
-            &[],
-        ));
-        let step_context = step_context.with_tool_router_for_test(router);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            Arc::clone(&session),
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
-        session
-            .services
-            .local_agent_control()
-            .pause_activity_for_subtree()
-            .await;
-
-        // Establish both sides of the race before polling the outer future: the dispatch task
-        // observes cancellation at the paused activity boundary and exits, while the caller's
-        // cancellation future is already ready. The old unbiased select can choose the finished
-        // dispatch and leak its internal TurnAborted error; repeat the ready/ready check to make
-        // that random arbitration overwhelmingly visible without relying on sleeps.
-        for attempt in 0..32 {
-            let cancellation_token = CancellationToken::new();
-            let call = ToolCall {
-                tool_name: tool_name.clone(),
-                call_id: format!("cancel-race-{attempt}"),
-                payload: ToolPayload::Function {
-                    arguments: "{}".to_string(),
-                },
-                encrypted_function_args: None,
-            };
-            let response = runtime
-                .clone()
-                .handle_tool_call(call, cancellation_token.clone());
-            cancellation_token.cancel();
-
-            tokio::time::timeout(Duration::from_secs(1), async {
-                loop {
-                    if session.pending_handoff_dispatches() == 0 {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("pre-admission dispatch should finish before arbitration");
-
-            response
-                .await
-                .expect("cancellation should own a finished pre-admission dispatch");
-        }
-
-        Ok(())
-    }
-
     struct ImmediateHandler {
         tool_name: codex_tools::ToolName,
     }
@@ -892,309 +708,6 @@ mod tests {
     }
 
     impl CoreToolRuntime for ImmediateHandler {}
-
-    struct ActivityGateHandler {
-        tool_name: codex_tools::ToolName,
-        started: Arc<Notify>,
-        release: Arc<Notify>,
-    }
-
-    impl ToolExecutor<ToolInvocation> for ActivityGateHandler {
-        fn tool_name(&self) -> codex_tools::ToolName {
-            self.tool_name.clone()
-        }
-
-        fn spec(&self) -> codex_tools::ToolSpec {
-            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
-                name: self.tool_name.name.clone(),
-                description: "Activity gate test tool.".to_string(),
-                strict: false,
-                defer_loading: None,
-                parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
-            })
-        }
-
-        fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
-        where
-            ToolInvocation: 'a,
-        {
-            let started = Arc::clone(&self.started);
-            let release = Arc::clone(&self.release);
-            Box::pin(async move {
-                started.notify_one();
-                release.notified().await;
-                Ok(
-                    Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
-                        as Box<dyn crate::tools::context::ToolOutput>,
-                )
-            })
-        }
-    }
-
-    impl CoreToolRuntime for ActivityGateHandler {}
-
-    struct ReadinessGateHandler {
-        tool_name: codex_tools::ToolName,
-        readiness_started: Arc<Notify>,
-        readiness_release: Arc<Notify>,
-    }
-
-    impl ToolExecutor<ToolInvocation> for ReadinessGateHandler {
-        fn tool_name(&self) -> codex_tools::ToolName {
-            self.tool_name.clone()
-        }
-
-        fn spec(&self) -> codex_tools::ToolSpec {
-            codex_tools::ToolSpec::Function(codex_tools::ResponsesApiTool {
-                name: self.tool_name.name.clone(),
-                description: "Readiness gate test tool.".to_string(),
-                strict: false,
-                defer_loading: None,
-                parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
-            })
-        }
-
-        fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
-        where
-            ToolInvocation: 'a,
-        {
-            Box::pin(async {
-                Ok(
-                    Box::new(FunctionToolOutput::from_text("ok".to_string(), Some(true)))
-                        as Box<dyn crate::tools::context::ToolOutput>,
-                )
-            })
-        }
-    }
-
-    impl CoreToolRuntime for ReadinessGateHandler {
-        fn wait_until_ready<'a>(&'a self, _session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
-            let readiness_started = Arc::clone(&self.readiness_started);
-            let readiness_release = Arc::clone(&self.readiness_release);
-            Some(Box::pin(async move {
-                readiness_started.notify_one();
-                readiness_release.notified().await;
-            }))
-        }
-    }
-
-    #[tokio::test]
-    async fn tool_dispatch_waits_for_activity_resume_and_reports_execution() -> anyhow::Result<()> {
-        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-        let tool_name = codex_tools::ToolName::plain("activity_gate");
-        let started = Arc::new(Notify::new());
-        let release = Arc::new(Notify::new());
-        let handler = Arc::new(ActivityGateHandler {
-            tool_name: tool_name.clone(),
-            started: Arc::clone(&started),
-            release: Arc::clone(&release),
-        }) as Arc<dyn CoreToolRuntime>;
-        let step_context = StepContext::for_test(Arc::clone(&turn_context));
-        let router = Arc::new(ToolRouter::from_parts(
-            ToolRegistry::from_tools([handler]),
-            Vec::new(),
-            ToolMode::Direct,
-            BTreeMap::new(),
-            /*tool_namespaces_info*/ None,
-            &[],
-        ));
-        let step_context = step_context.with_tool_router_for_test(router);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            Arc::clone(&session),
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
-        session
-            .services
-            .local_agent_control()
-            .pause_activity_for_subtree()
-            .await;
-
-        let call = ToolCall {
-            tool_name,
-            call_id: "activity-gate-call".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-            encrypted_function_args: None,
-        };
-        let cancellation_token = CancellationToken::new();
-        let dispatch = tokio::spawn(runtime.handle_tool_call(call, cancellation_token));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), started.notified())
-                .await
-                .is_err(),
-            "a paused thread must not start a tool handler"
-        );
-
-        session
-            .services
-            .local_agent_control()
-            .continue_activity_for_subtree()
-            .await;
-        tokio::time::timeout(Duration::from_secs(1), started.notified())
-            .await
-            .expect("continuing should admit the waiting tool");
-        let state = session.activity_state().await;
-        assert_eq!(state.in_flight_operations, 1);
-        assert_eq!(
-            state.activity,
-            codex_protocol::protocol::ThreadActivity::Working
-        );
-
-        release.notify_one();
-        tokio::time::timeout(Duration::from_secs(1), dispatch)
-            .await
-            .expect("tool should finish after the execution gate is released")??;
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                if session.activity_state().await.in_flight_operations == 0 {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("activity guard should drain after tool completion");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn pending_sibling_dispatch_blocks_handoff_quiescence_before_activity_admission()
-    -> anyhow::Result<()> {
-        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-        let tool_name = codex_tools::ToolName::plain("readiness_gate");
-        let readiness_started = Arc::new(Notify::new());
-        let readiness_release = Arc::new(Notify::new());
-        let handler = Arc::new(ReadinessGateHandler {
-            tool_name: tool_name.clone(),
-            readiness_started: Arc::clone(&readiness_started),
-            readiness_release: Arc::clone(&readiness_release),
-        }) as Arc<dyn CoreToolRuntime>;
-        let step_context = StepContext::for_test(Arc::clone(&turn_context));
-        let router = Arc::new(ToolRouter::from_parts(
-            ToolRegistry::from_tools([handler]),
-            Vec::new(),
-            ToolMode::Direct,
-            BTreeMap::new(),
-            /*tool_namespaces_info*/ None,
-            &[],
-        ));
-        let step_context = step_context.with_tool_router_for_test(router);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            Arc::clone(&session),
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
-
-        // This models a response that schedules `wait_agent` beside a sibling execution call:
-        // the sibling has been spawned and is blocked in readiness before its activity guard.
-        let call = ToolCall {
-            tool_name,
-            call_id: "readiness-gate-call".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-            encrypted_function_args: None,
-        };
-        let cancellation_token = CancellationToken::new();
-        let dispatch = tokio::spawn(runtime.handle_tool_call(call, cancellation_token));
-        tokio::time::timeout(Duration::from_secs(1), readiness_started.notified())
-            .await
-            .expect("execution sibling should reach readiness gate");
-        assert_eq!(session.pending_handoff_dispatches(), 1);
-        assert_eq!(session.activity_in_flight.load(Ordering::Acquire), 0);
-
-        let waiter_session = Arc::clone(&session);
-        let waiter_cancellation = CancellationToken::new();
-        let waiter = tokio::spawn(async move {
-            waiter_session
-                .wait_for_activity_quiescence(&waiter_cancellation)
-                .await
-        });
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished());
-
-        readiness_release.notify_one();
-        tokio::time::timeout(Duration::from_secs(1), dispatch)
-            .await
-            .expect("execution sibling should finish after readiness release")
-            .expect("execution sibling task should join")?;
-        tokio::time::timeout(Duration::from_secs(1), waiter)
-            .await
-            .expect("handoff quiescence should wake after sibling completion")
-            .expect("handoff quiescence task should join")
-            .expect("handoff quiescence should succeed");
-        assert_eq!(session.pending_handoff_dispatches(), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn plain_v2_wait_agent_is_not_counted_as_pending_handoff_dispatch() -> anyhow::Result<()>
-    {
-        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-        let tool_name = codex_tools::ToolName::plain("wait_agent");
-        let readiness_started = Arc::new(Notify::new());
-        let readiness_release = Arc::new(Notify::new());
-        let handler = Arc::new(ReadinessGateHandler {
-            tool_name: tool_name.clone(),
-            readiness_started: Arc::clone(&readiness_started),
-            readiness_release: Arc::clone(&readiness_release),
-        }) as Arc<dyn CoreToolRuntime>;
-        let step_context = StepContext::for_test(Arc::clone(&turn_context));
-        let router = Arc::new(ToolRouter::from_parts(
-            ToolRegistry::from_tools([handler]),
-            Vec::new(),
-            ToolMode::Direct,
-            BTreeMap::new(),
-            /*tool_namespaces_info*/ None,
-            &[],
-        ));
-        let step_context = step_context.with_tool_router_for_test(router);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            Arc::clone(&session),
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
-
-        // V2 exposes wait_agent as a plain tool name. Keep it out of the pending dispatch count
-        // so the handoff future does not wait on its own coordination call.
-        let call = ToolCall {
-            tool_name,
-            call_id: "plain-wait-agent-call".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-            encrypted_function_args: None,
-        };
-        let dispatch = tokio::spawn(runtime.handle_tool_call(call, CancellationToken::new()));
-        tokio::time::timeout(Duration::from_secs(1), readiness_started.notified())
-            .await
-            .expect("wait_agent dispatch should reach readiness gate");
-        assert_eq!(session.pending_handoff_dispatches(), 0);
-
-        readiness_release.notify_one();
-        tokio::time::timeout(Duration::from_secs(1), dispatch)
-            .await
-            .expect("wait_agent dispatch should finish after readiness release")
-            .expect("wait_agent dispatch task should join")?;
-        Ok(())
-    }
 
     struct CancellationCleanupHandler {
         tool_name: codex_tools::ToolName,
@@ -1232,21 +745,21 @@ mod tests {
             &self,
             invocation: ToolInvocation,
         ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-            let started = self
+            if let Some(started) = self
                 .started
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(started) = started {
+                .take()
+            {
                 let _ = started.send(());
             }
             invocation.cancellation_token.cancelled().await;
-            let cleanup_started = self
+            if let Some(cleanup_started) = self
                 .cleanup_started
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(cleanup_started) = cleanup_started {
+                .take()
+            {
                 let _ = cleanup_started.send(());
             }
             self.allow_cleanup.notified().await;
@@ -1281,6 +794,85 @@ mod tests {
                     .push(outcome);
             })
         }
+    }
+
+    #[tokio::test]
+    async fn cancellation_waiting_for_runtime_cleanup_emits_only_aborted_lifecycle()
+    -> anyhow::Result<()> {
+        let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
+        let records = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut builder =
+            codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+        builder.tool_lifecycle_contributor(Arc::new(FinishRecorder {
+            records: Arc::clone(&records),
+        }));
+        session.services.extensions = Arc::new(builder.build());
+
+        let session = Arc::new(session);
+        let turn_context = Arc::new(turn_context);
+        let tool_name = codex_tools::ToolName::plain("cleanup_tool");
+        let (started_tx, started_rx) = oneshot::channel();
+        let (cleanup_started_tx, cleanup_started_rx) = oneshot::channel();
+        let allow_cleanup = Arc::new(Notify::new());
+        let handler = Arc::new(CancellationCleanupHandler {
+            tool_name: tool_name.clone(),
+            started: std::sync::Mutex::new(Some(started_tx)),
+            cleanup_started: std::sync::Mutex::new(Some(cleanup_started_tx)),
+            allow_cleanup: Arc::clone(&allow_cleanup),
+        }) as Arc<dyn CoreToolRuntime>;
+        let step_context = StepContext::for_test(Arc::clone(&turn_context));
+        let router = Arc::new(ToolRouter::from_parts(
+            ToolRegistry::from_tools([handler]),
+            Vec::new(),
+            ToolMode::Direct,
+            BTreeMap::new(),
+            /*tool_namespaces_info*/ None,
+            &[],
+        ));
+        let step_context = step_context.with_tool_router_for_test(router);
+        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
+        let cancellation_token = CancellationToken::new();
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            encrypted_function_args: None,
+        };
+
+        let response_task =
+            tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
+        started_rx.await.expect("handler should start");
+        cancellation_token.cancel();
+        cleanup_started_rx
+            .await
+            .expect("handler should start cleanup");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        allow_cleanup.notify_one();
+
+        let response = tokio::time::timeout(Duration::from_secs(1), response_task)
+            .await
+            .expect("timed out waiting for tool response")
+            .expect("tool response task should join")?;
+        let codex_protocol::models::ResponseItem::FunctionCallOutput { output, .. } = response.item
+        else {
+            anyhow::bail!("cancelled tool should return function output");
+        };
+        let FunctionCallOutputBody::Text(text) = output.body else {
+            anyhow::bail!("cancelled tool output should be text");
+        };
+        assert!(text.contains("aborted by user"));
+
+        let actual = records
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect::<Vec<_>>();
+        assert_eq!(vec![ToolCallOutcome::Aborted], actual);
+
+        Ok(())
     }
 
     struct BlockingFinishContributor {
@@ -1348,12 +940,7 @@ mod tests {
         ));
         let step_context = step_context.with_tool_router_for_test(router);
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            session,
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
+        let runtime = ToolCallRuntime::new(session, step_context, tracker);
         let cancellation_token = CancellationToken::new();
         let call = ToolCall {
             tool_name,
@@ -1396,89 +983,6 @@ mod tests {
             .drain(..)
             .collect::<Vec<_>>();
         assert_eq!(vec![ToolCallOutcome::Completed { success: true }], actual);
-
-        Ok(())
-    }
-    #[tokio::test]
-    async fn cancellation_waiting_for_runtime_cleanup_emits_only_aborted_lifecycle()
-    -> anyhow::Result<()> {
-        let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;
-        let records = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut builder =
-            codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
-        builder.tool_lifecycle_contributor(Arc::new(FinishRecorder {
-            records: Arc::clone(&records),
-        }));
-        session.services.extensions = Arc::new(builder.build());
-
-        let session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-        let tool_name = codex_tools::ToolName::plain("cleanup_tool");
-        let (started_tx, started_rx) = oneshot::channel();
-        let (cleanup_started_tx, cleanup_started_rx) = oneshot::channel();
-        let allow_cleanup = Arc::new(Notify::new());
-        let handler = Arc::new(CancellationCleanupHandler {
-            tool_name: tool_name.clone(),
-            started: std::sync::Mutex::new(Some(started_tx)),
-            cleanup_started: std::sync::Mutex::new(Some(cleanup_started_tx)),
-            allow_cleanup: Arc::clone(&allow_cleanup),
-        }) as Arc<dyn CoreToolRuntime>;
-        let step_context = StepContext::for_test(Arc::clone(&turn_context));
-        let router = Arc::new(ToolRouter::from_parts(
-            ToolRegistry::from_tools([handler]),
-            Vec::new(),
-            ToolMode::Direct,
-            BTreeMap::new(),
-            /*tool_namespaces_info*/ None,
-            &[],
-        ));
-        let step_context = step_context.with_tool_router_for_test(router);
-        let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let runtime = ToolCallRuntime::new(
-            session,
-            Arc::clone(&step_context),
-            Arc::clone(&step_context.tool_router),
-            tracker,
-        );
-        let cancellation_token = CancellationToken::new();
-        let call = ToolCall {
-            tool_name,
-            call_id: "call-1".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-            encrypted_function_args: None,
-        };
-
-        let response_task =
-            tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
-        started_rx.await.expect("handler should start");
-        cancellation_token.cancel();
-        cleanup_started_rx
-            .await
-            .expect("handler should start cleanup");
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        allow_cleanup.notify_one();
-
-        let response = tokio::time::timeout(Duration::from_secs(1), response_task)
-            .await
-            .expect("timed out waiting for tool response")
-            .expect("tool response task should join")?;
-        let codex_protocol::models::ResponseItem::FunctionCallOutput { output, .. } = response.item
-        else {
-            anyhow::bail!("cancelled tool should return function output");
-        };
-        let FunctionCallOutputBody::Text(text) = output.body else {
-            anyhow::bail!("cancelled tool output should be text");
-        };
-        assert!(text.contains("aborted by user"));
-
-        let actual = records
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .drain(..)
-            .collect::<Vec<_>>();
-        assert_eq!(vec![ToolCallOutcome::Aborted], actual);
 
         Ok(())
     }

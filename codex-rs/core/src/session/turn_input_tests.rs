@@ -18,21 +18,14 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ErrorEvent;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::protocol::ThreadUsagePolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::turn_input::TurnInput as SubmittedTurnInput;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::test_codex::local_selections;
 use pretty_assertions::assert_eq;
-use std::sync::atomic::Ordering;
 use test_case::test_case;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -91,6 +84,7 @@ async fn submit_start_only(
         TurnInputMode::StartIfIdle,
         "test-submission".to_string(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await
     .expect("start-only submission should be valid")
@@ -112,6 +106,7 @@ async fn submit_steer_only(
         },
         "test-submission".to_string(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await
     .expect("steer-only submission should be valid")
@@ -161,6 +156,7 @@ async fn steering_does_not_wait_for_realtime_history() {
                 mode,
                 "steer-submission".to_string(),
                 /*handoff_admission*/ None,
+                /*realtime_handoff_input*/ None,
             ),
         )
         .await
@@ -207,6 +203,7 @@ async fn accepted_input_applies_thread_settings() {
         TurnInputMode::StartOrSteer,
         "sub-1".to_string(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await
     .expect("submit user turn");
@@ -314,22 +311,6 @@ async fn recovery_rejects_active_turn_without_injecting_or_applying_settings() {
     );
 
     session.abort_all_tasks(TurnAbortReason::Interrupted).await;
-    session
-        .turn_finalization_in_flight
-        .store(1, Ordering::Release);
-    assert_eq!(
-        handle_recovery(
-            &session,
-            ThreadSettingsOverrides::default(),
-            TurnStartOptions::default(),
-            "recovered-turn".to_string(),
-        )
-        .await
-        .expect("recovery should return a typed rejection"),
-        TurnInputSubmission::NotSubmitted {
-            reason: NotSubmittedReason::NotIdle,
-        }
-    );
 }
 
 #[tokio::test]
@@ -360,6 +341,7 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
         TurnInputMode::StartIfIdle,
         "automatic-plan-submission".to_string(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await
     .expect("current Plan must reject before settings validation");
@@ -392,6 +374,7 @@ async fn start_only_rejects_current_plan_before_validating_settings() {
         TurnInputMode::StartIfIdle,
         "invalid-automatic-submission".to_string(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await;
     let error = result.expect_err("invalid automatic settings must be rejected");
@@ -465,6 +448,7 @@ async fn prepared_user_updates_merge_with_settings_at_turn_start() {
                 &session,
                 "sparse-user-start".to_string(),
                 TurnStartKind::User,
+                /*realtime_handoff_input*/ None,
             )
             .await
             .expect("apply prepared settings")
@@ -523,6 +507,7 @@ async fn automatic_admission_uses_current_candidate_after_plan_preview() {
             &session,
             "automatic-after-plan-preview".to_string(),
             TurnStartKind::Automatic,
+            /*realtime_handoff_input*/ None,
         )
         .await
         .expect("automatic admission should succeed")
@@ -538,49 +523,6 @@ async fn automatic_admission_uses_current_candidate_after_plan_preview() {
         turn_context.initial_settings.selected_collaboration_mode(),
         &expected
     );
-}
-
-#[tokio::test]
-async fn automatic_admission_rejects_below_usage_floor_without_reserving() {
-    let (session, _turn_context, _rx) = make_session_and_context_with_rx().await;
-    let usage_policy = ThreadUsagePolicy {
-        auto_resume: false,
-        minimum_remaining_percent: Some(20),
-    };
-    {
-        let mut state = session.state.lock().await;
-        state.session_configuration.usage_policy = usage_policy;
-        state.set_rate_limits(RateLimitSnapshot {
-            limit_id: None,
-            limit_name: None,
-            normal_model_slug: None,
-            primary: Some(RateLimitWindow {
-                used_percent: 85.0,
-                window_minutes: None,
-                resets_at: None,
-            }),
-            secondary: None,
-            credits: None,
-            individual_limit: None,
-            spend_control_reached: None,
-            plan_type: None,
-            rate_limit_reached_type: None,
-        });
-    }
-
-    let submission = submit_start_only(
-        &session,
-        SubmittedTurnInput::ResponseItem(user_message("automatic continuation")),
-    )
-    .await;
-
-    assert_eq!(
-        submission,
-        TurnInputSubmission::NotSubmitted {
-            reason: NotSubmittedReason::UsageLimitFloor,
-        }
-    );
-    assert!(session.active_turn.lock().await.is_none());
 }
 
 #[tokio::test]
@@ -684,6 +626,7 @@ async fn automatic_admission_rechecks_plan_mode_without_committing_sparse_settin
                 &session,
                 submission_id.to_string(),
                 TurnStartKind::Automatic,
+                /*realtime_handoff_input*/ None,
             )
             .await
             .expect("automatic admission should return a typed rejection");
@@ -765,7 +708,12 @@ async fn admission_revalidates_constraints_before_committing(kind: TurnStartKind
     let desired_settings = session.thread_settings_snapshot().await;
     let submission_id = "constraints-after-preview";
     let result = prepared
-        .apply_started(&session, submission_id.to_string(), kind)
+        .apply_started(
+            &session,
+            submission_id.to_string(),
+            kind,
+            /*realtime_handoff_input*/ None,
+        )
         .await;
     let Err(error) = result else {
         panic!("commit-time constraint failure must return InvalidRequest");
@@ -928,6 +876,53 @@ async fn steer_only_requires_active_turn() {
 }
 
 #[tokio::test]
+async fn realtime_handoff_is_rejected_when_turn_admission_was_retired() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    turn_context
+        .realtime_handoff_admissions
+        .retire_all()
+        .await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+    let mut input = SubmittedTurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "realtime handoff".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    };
+    let result = session
+        .steer_input_turn_input(
+            &mut input,
+            Default::default(),
+            None,
+            None,
+            None,
+            None,
+            UserInputOrigin::default(),
+            Some(Arc::new(RealtimeHandoffAdmission::new())),
+        )
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(SteerInputError::RealtimeHandoffAdmissionRetired)
+    ));
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}
+
+#[tokio::test]
 async fn steer_only_enforces_expected_turn_id() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
     turn_context
@@ -988,6 +983,7 @@ async fn steer_only_enforces_expected_turn_id() {
         TurnInputMode::StartOrSteer,
         "test-submission".to_string(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await
     .expect("standalone output should steer the active turn");
@@ -1054,7 +1050,6 @@ async fn rejects_non_regular_turns() {
             )
             .await;
 
-        assert_eq!(session.pause_activity_snapshot().await.turn_id, None);
         let steer_input = vec![UserInput::Text {
             text: "steer".to_string(),
             text_elements: Vec::new(),
@@ -1072,6 +1067,7 @@ async fn rejects_non_regular_turns() {
             TurnInputMode::StartOrSteer,
             "test-submission".to_string(),
             /*handoff_admission*/ None,
+            /*realtime_handoff_input*/ None,
         )
         .await
         .expect("start-or-steer submission should be valid");
@@ -1127,6 +1123,7 @@ async fn steer_preserves_request_origin(
         },
         "steer-submission".to_owned(),
         /*handoff_admission*/ None,
+        /*realtime_handoff_input*/ None,
     )
     .await
     .unwrap();

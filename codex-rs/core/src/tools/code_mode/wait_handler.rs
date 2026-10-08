@@ -147,11 +147,10 @@ impl CodeModeWaitHandler {
                     };
                     tracing::Span::current().record("cell.id", trace_id(runtime_cell_id.as_str()));
                     telemetry.cell_id = Some(runtime_cell_id.to_string());
-                    if let Some(executed_tool_calls) =
-                        exec.session.services.executed_tool_calls.as_ref()
-                    {
-                        executed_tool_calls.register_cell(runtime_cell_id, &call_id);
-                    }
+                    exec.session
+                        .services
+                        .executed_tool_calls
+                        .register_cell(runtime_cell_id, &call_id);
                     if !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. }) {
                         exec.session
                             .services

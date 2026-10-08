@@ -88,6 +88,7 @@ impl App {
             session
         } else {
             ThreadSessionState {
+                daybreak_enabled: self.chat_widget.daybreak_enabled,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id,
                 forked_from_id: None,
@@ -117,6 +118,7 @@ impl App {
         session.windows_sandbox_host =
             crate::windows_sandbox::host_from_environments(thread.environments.as_deref());
         session.thread_id = thread_id;
+        session.daybreak_enabled = thread.daybreak_enabled.unwrap_or(session.daybreak_enabled);
         session.thread_name = thread.name.clone();
         session.model_provider_id = thread.model_provider.clone();
         session.set_cwd_retargeting_implicit_runtime_workspace_root(thread.cwd.clone());
@@ -174,6 +176,7 @@ mod tests {
 
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
+            daybreak_enabled: false,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             thread_id,
             forked_from_id: None,

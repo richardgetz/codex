@@ -45,6 +45,7 @@ mod decision_provenance;
 mod external_agent_config_imports;
 mod goals;
 mod logs;
+mod logs_maintenance;
 mod memories;
 mod memory_versions;
 mod projects;
@@ -61,6 +62,7 @@ mod thread_activity;
 mod thread_attachments;
 mod thread_control;
 mod thread_inbound_messages;
+mod thread_metadata;
 mod thread_section_order;
 mod thread_sections;
 mod threads;
@@ -76,9 +78,9 @@ pub use goals::GoalUpdate;
 pub use memories::MemoryStore;
 pub use queued_items::SqliteQueueStore;
 pub use recovery::backup_runtime_db_for_fresh_start;
+pub use recovery::collect_runtime_db_backups;
 pub use recovery::is_sqlite_corruption_error;
 pub use recovery::runtime_db_path_for_corruption_error;
-pub use recovery::sqlite_error_detail_is_corruption;
 pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use task_estimates::TaskEstimateStore;
@@ -148,6 +150,7 @@ impl StateRuntime {
         let goals_path = sqlite.goals_db_path();
         let memories_path = sqlite.memories_db_path();
         let queue_path = sqlite.queue_db_path();
+        let has_memories_v2 = tokio::fs::try_exists(sqlite.memories_v2_db_path()).await?;
         let pool = match sqlite
             .open_state_db(&state_migrator, telemetry_override)
             .await
@@ -308,6 +311,17 @@ impl StateRuntime {
                 logs_path.display(),
             );
         }
+        // Existing v2 state must participate in startup corruption recovery.
+        // Keep creation lazy for users who have never used v2.
+        if has_memories_v2
+            && let Err(err) = runtime
+                .memories_for_version(codex_protocol::MemoryVersion::V2)
+                .await
+        {
+            runtime.close().await;
+            return Err(err);
+        }
+        runtime.start_periodic_logs_maintenance(std::time::Duration::from_secs(30 * 60));
         Ok(runtime)
     }
 

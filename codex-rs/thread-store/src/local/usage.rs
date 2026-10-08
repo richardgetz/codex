@@ -61,7 +61,9 @@ pub(super) async fn load_token_usage_records(
         return Ok(enrich_token_usage_records(records, &items, None));
     }
 
-    let lineage = store.resolve_rollout_lineage(params.thread_id).await?;
+    let lineage = store
+        .resolve_rollout_lineage(params.thread_id, /*initial_path*/ None)
+        .await?;
     let mut records = Vec::new();
     let mut items = Vec::new();
     for segment in lineage.segments() {

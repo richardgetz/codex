@@ -6,7 +6,6 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
-use codex_protocol::config_types::Personality;
 
 async fn build_config_on_runtime_worker(
     builder: ConfigBuilder,
@@ -53,49 +52,6 @@ pub(super) fn resume_model_settings_for_overrides(
     } else {
         crate::app_server_session::ResumeModelSettings::RestoreFromThread
     }
-}
-
-fn has_explicit_session_config_override(config: &Config) -> bool {
-    config.config_layer_stack.layers_high_to_low().any(|layer| {
-        matches!(&layer.name, ConfigLayerSource::SessionFlags)
-            && layer
-                .config
-                .as_table()
-                .is_some_and(|table| !table.is_empty())
-    })
-}
-
-pub(super) fn resume_model_settings_for_target(
-    config: &Config,
-    harness_overrides: &ConfigOverrides,
-    app_server_target: &crate::AppServerTarget,
-) -> crate::app_server_session::ResumeModelSettings {
-    let settings = resume_model_settings_for_overrides(config, harness_overrides);
-    if settings != crate::app_server_session::ResumeModelSettings::RestoreFromThread
-        || !matches!(
-            app_server_target,
-            crate::AppServerTarget::LocalDaemon { .. }
-        )
-    {
-        return settings;
-    }
-
-    // A local daemon owns the live thread settings. Rejoining with an empty set of
-    // client overrides avoids making the server tear down an idle thread and reopen
-    // its session storage under this process. Keep explicit launch settings on the
-    // existing restore path so they retain their documented override semantics.
-    if has_explicit_resume_permission_override(config, harness_overrides)
-        || has_explicit_session_config_override(config)
-        || harness_overrides.bypass_hook_trust.is_some()
-        || harness_overrides.cwd.is_some()
-        || harness_overrides.personality.is_some()
-        || harness_overrides.service_tier.is_some()
-        || harness_overrides.tools_web_search_request.is_some()
-    {
-        return settings;
-    }
-
-    crate::app_server_session::ResumeModelSettings::PreserveExistingThread
 }
 
 pub(super) fn has_explicit_resume_permission_override(
@@ -157,6 +113,7 @@ impl App {
         .await
     }
 
+    #[cfg(test)]
     pub(super) async fn rebuild_config_for_permission_profile(
         &self,
         profile_id: &str,
@@ -180,6 +137,8 @@ impl App {
         .await
     }
 
+    // Local setup for startup fixtures; connected selections always use the server below.
+    #[cfg(test)]
     pub(super) async fn apply_permission_profile_selection(
         &mut self,
         selection: PermissionProfileSelection,
@@ -291,13 +250,11 @@ impl App {
                 approvals_reviewer,
                 Some(permission_profile.clone()),
                 active_permission_profile,
-                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
-                /*personality*/ None,
             )));
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
             history_cell::new_info_event(
@@ -311,23 +268,9 @@ impl App {
     pub(super) async fn select_permission_profile(
         &mut self,
         app_server: &mut AppServerSession,
-        selection: PermissionProfileSelection,
+        mut selection: PermissionProfileSelection,
     ) {
         if self.reject_pending_permission_change() {
-            return;
-        }
-        if (self.chat_widget.thread_id().is_none() && selection.profile_id.starts_with(':'))
-            || (app_server.thread_params_mode()
-                == crate::app_server_session::ThreadParamsMode::Embedded
-                && self
-                    .config
-                    .custom_permission_profiles
-                    .iter()
-                    .any(|profile| profile.id == selection.profile_id))
-        {
-            if self.apply_permission_profile_selection(selection).await {
-                self.chat_widget.submit_initial_user_message_if_pending();
-            }
             return;
         }
         let Some(thread_id) = self.chat_widget.thread_id() else {
@@ -338,21 +281,16 @@ impl App {
             );
             return;
         };
-        if !selection.profile_id.starts_with(':')
-            && self.chat_widget.is_user_turn_pending_or_running()
-        {
-            self.chat_widget
-                .retain_input_after_failed_permission_selection();
-            self.chat_widget.add_error_message(
-                "Wait for the current turn to finish before changing permissions.".into(),
-            );
-            return;
-        }
         let config = self.chat_widget.config_ref();
-        if config
-            .permissions
-            .active_permission_profile()
-            .is_some_and(|profile| profile.id == selection.profile_id)
+        if !self
+            .agents_overview
+            .requested_permission_profiles
+            .contains_key(&thread_id)
+            && selection.profile_id.starts_with(':')
+            && config
+                .permissions
+                .active_permission_profile()
+                .is_some_and(|profile| profile.id == selection.profile_id)
             && selection
                 .approval_policy
                 .is_none_or(|policy| config.permissions.approval_policy.value() == policy.to_core())
@@ -375,10 +313,25 @@ impl App {
         };
         match app_server.thread_settings_update(params).await {
             Ok(true) => {
+                // Omission preserves the active value on update, but uses defaults on start.
+                // Retain effective intent across consecutive requests before confirmation.
+                let previous = self
+                    .agents_overview
+                    .requested_permission_profiles
+                    .get(&thread_id);
+                selection.approval_policy = selection
+                    .approval_policy
+                    .or_else(|| previous.and_then(|profile| profile.approval_policy))
+                    .or(Some(config.permissions.approval_policy.value().into()));
+                selection.approvals_reviewer = selection
+                    .approvals_reviewer
+                    .or_else(|| previous.and_then(|profile| profile.approvals_reviewer))
+                    .or(Some(config.approvals_reviewer));
                 self.agents_overview
                     .selected_permission_profiles
                     .insert(thread_id, selection.profile_id.clone());
-                self.pending_server_profiles
+                self.agents_overview
+                    .requested_permission_profiles
                     .insert(thread_id, selection.clone());
                 self.chat_widget.add_info_message(
                     format!(
@@ -431,18 +384,35 @@ impl App {
         true
     }
 
-    pub(super) fn confirmed_server_profile(
+    pub(super) fn selected_server_profile(
         &self,
         thread_id: ThreadId,
     ) -> Option<PermissionProfileSelection> {
         if self.chat_widget.thread_id() != Some(thread_id) {
             return None;
         }
+        if let Some(selection) = self
+            .agents_overview
+            .requested_permission_profiles
+            .get(&thread_id)
+        {
+            return Some(selection.clone());
+        }
+        if self.app_server_target.thread_params_mode()
+            == crate::app_server_session::ThreadParamsMode::Remote
+        {
+            return None;
+        }
         let config = self.chat_widget.config_ref();
         let active = config.permissions.active_permission_profile()?;
         if active.id.starts_with(':')
-            || (self.app_server_target.thread_params_mode()
-                == crate::app_server_session::ThreadParamsMode::Embedded
+            || (self
+                .agents_overview
+                .selected_permission_profiles
+                .get(&thread_id)
+                != Some(&active.id)
+                && self.app_server_target.thread_params_mode()
+                    == crate::app_server_session::ThreadParamsMode::Embedded
                 && self
                     .config
                     .custom_permission_profiles
@@ -459,8 +429,45 @@ impl App {
         })
     }
 
+    /// Adopt authoritative widget settings before deriving overrides for subsequent turns.
+    pub(super) fn adopt_server_permissions(&mut self) {
+        self.chat_widget.set_permission_network(/*network*/ None);
+        self.config.permissions = self.chat_widget.config_ref().permissions.clone();
+        self.config.approvals_reviewer = self.chat_widget.config_ref().approvals_reviewer;
+        self.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Explicit(
+            self.config.permissions.approval_policy.value().into(),
+        ));
+        self.runtime_approvals_reviewer_override = if self
+            .config
+            .permissions
+            .active_permission_profile()
+            .is_some_and(|profile| profile.id.starts_with(':'))
+        {
+            Some(self.config.approvals_reviewer)
+        } else {
+            self.runtime_approvals_reviewer_override
+                .filter(|reviewer| *reviewer == self.config.approvals_reviewer)
+        };
+        self.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&self.config));
+    }
+
+    pub(super) fn adopt_inherited_server_selection(&mut self) {
+        if let Some(thread_id) = self.chat_widget.thread_id()
+            && let Some(active) = self
+                .chat_widget
+                .config_ref()
+                .permissions
+                .active_permission_profile()
+        {
+            self.agents_overview
+                .selected_permission_profiles
+                .insert(thread_id, active.id);
+        }
+        self.adopt_server_permissions();
+    }
+
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
-        let _active_account_alias = self.config.accounts.active.clone();
         let mut config = self
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
@@ -892,13 +899,11 @@ impl App {
                 approvals_reviewer_override,
                 permission_profile_override,
                 active_permission_profile_override,
-                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
-                /*personality*/ None,
             );
             let replay_state_op =
                 ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
@@ -973,7 +978,6 @@ impl App {
         use_memories: bool,
         generate_memories: bool,
     ) {
-        let previous_use_memories = self.config.memories.use_memories;
         let previous_generate_memories = self.config.memories.generate_memories;
         if !self
             .update_memory_settings(app_server, use_memories, generate_memories)
@@ -990,24 +994,6 @@ impl App {
         let Some(thread_id) = self.current_displayed_thread_id() else {
             return;
         };
-
-        if previous_use_memories != use_memories || previous_generate_memories != generate_memories
-        {
-            let policy = codex_protocol::config_types::MemoryAccessPolicy::new(
-                use_memories,
-                generate_memories,
-            );
-            if let Err(err) = app_server.thread_memory_policy_set(thread_id, policy).await {
-                tracing::error!(error = ?err, "failed to update current thread memory policy");
-                self.chat_widget.add_error_message(format!(
-                    "Failed to update current thread memory policy: {err}"
-                ));
-            }
-        }
-
-        if previous_generate_memories == generate_memories {
-            return;
-        }
 
         let mode = if generate_memories {
             ThreadMemoryMode::Enabled
@@ -1141,11 +1127,7 @@ impl App {
     }
 
     pub(super) fn resume_model_settings(&self) -> crate::app_server_session::ResumeModelSettings {
-        resume_model_settings_for_target(
-            &self.config,
-            &self.harness_overrides,
-            &self.app_server_target,
-        )
+        resume_model_settings_for_overrides(&self.config, &self.harness_overrides)
     }
 
     pub(super) fn reject_remote_resume_permission_override(&mut self, config: &Config) -> bool {
@@ -1174,11 +1156,6 @@ impl App {
             return true;
         }
         false
-    }
-
-    pub(super) fn on_update_personality(&mut self, personality: Personality) {
-        self.config.personality = Some(personality);
-        self.chat_widget.set_personality(personality);
     }
 
     pub(super) fn sync_tui_theme_selection(&mut self, name: String) {
@@ -1324,13 +1301,11 @@ impl App {
             Some(self.config.approvals_reviewer),
             /*permission_profile*/ None,
             Some(auto_review_preset.active_permission_profile),
-            /*windows_sandbox_level*/ None,
             /*model*/ None,
             /*effort*/ None,
             /*summary*/ None,
             /*service_tier*/ None,
             /*collaboration_mode*/ None,
-            /*personality*/ None,
         );
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
@@ -1722,50 +1697,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_daemon_resume_preserves_owner_settings_without_explicit_overrides() {
-        let mut app = make_test_app().await;
-        app.app_server_target = crate::AppServerTarget::LocalDaemon {
-            allow_embedded_fallback: false,
-            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
-                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
-            },
-        };
-
-        assert_eq!(
-            app.resume_model_settings(),
-            crate::app_server_session::ResumeModelSettings::PreserveExistingThread
-        );
-    }
-
-    #[tokio::test]
-    async fn local_daemon_resume_keeps_explicit_session_overrides() {
-        let mut app = make_test_app().await;
-        app.app_server_target = crate::AppServerTarget::LocalDaemon {
-            allow_embedded_fallback: false,
-            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
-                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
-            },
-        };
-        app.config.config_layer_stack = ConfigLayerStack::new(
-            vec![ConfigLayerEntry::new(
-                ConfigLayerSource::SessionFlags,
-                TomlValue::Table(toml::map::Map::from_iter([(
-                    "web_search".to_string(),
-                    TomlValue::String("live".to_string()),
-                )])),
-            )],
-            Default::default(),
-            Default::default(),
-        )
-        .expect("session flags layer stack");
-
-        assert_eq!(
-            app.resume_model_settings(),
-            crate::app_server_session::ResumeModelSettings::RestoreFromThread
-        );
-    }
-
-    #[tokio::test]
     async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
@@ -1861,25 +1792,6 @@ enabled = false
             Some(false)
         );
         assert_cloud_requirements(&app);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn refresh_in_memory_config_from_disk_preserves_session_account_alias() -> Result<()> {
-        let mut app = make_test_app().await;
-        let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.accounts.active = Some("personal".to_string());
-        app.chat_widget
-            .set_active_account_alias(Some("personal".to_string()));
-
-        app.refresh_in_memory_config_from_disk().await?;
-
-        assert_eq!(app.config.accounts.active.as_deref(), Some("personal"));
-        assert_eq!(
-            app.chat_widget.config_ref().active_account_alias(),
-            Some("personal")
-        );
         Ok(())
     }
 
@@ -1980,6 +1892,7 @@ enabled = false
 
         app.chat_widget
             .handle_thread_session(crate::session_state::ThreadSessionState {
+                daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id: ThreadId::new(),
                 forked_from_id: None,
@@ -1997,8 +1910,6 @@ enabled = false
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: None,
                 collaboration_mode: None,
-                team: None,
-                personality: None,
                 message_history: None,
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),

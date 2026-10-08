@@ -140,6 +140,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         // Transient, non-durable events.
         EventMsg::Error(_)
         | EventMsg::ThreadEtaUpdated(_)
+        | EventMsg::ThreadActivityUpdated(_)
         | EventMsg::ThreadQueueChanged(_)
         | EventMsg::GuardianAssessment(_)
         | EventMsg::ExecCommandEnd(_)
@@ -203,6 +204,5 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode) 
         | EventMsg::CollabWaitingBegin(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_) => false,
-        EventMsg::ThreadActivityUpdated(_) => false,
     }
 }

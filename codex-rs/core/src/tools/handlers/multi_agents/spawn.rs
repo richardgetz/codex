@@ -72,14 +72,7 @@ async fn handle_spawn_agent(
     let prompt = render_input_preview(&input_items);
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
-    let mut depth_config = turn.config.as_ref().clone();
-    crate::session::team::prepare_spawn_depth_for_child(
-        &mut depth_config,
-        child_depth,
-        Some(turn.multi_agent_version),
-    )
-    .map_err(FunctionCallError::RespondToModel)?;
-    let max_depth = depth_config.agent_max_depth;
+    let max_depth = turn.config.agent_max_depth;
     if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
         return Err(FunctionCallError::RespondToModel(
             "Agent depth limit reached. Solve the task yourself.".to_string(),
@@ -132,10 +125,10 @@ async fn handle_spawn_agent(
                 /*task_name*/ None,
             )?,
             options: SpawnAgentOptions {
-                initial_collaboration_mode: None,
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                 fork_mode: fork_mode.clone(),
                 parent_thread_id: Some(session.thread_id),
+                initial_collaboration_mode: None,
                 parent_turn_id: Some(turn.sub_id.clone()),
                 root_turn_id: turn.turn_metadata_state.root_turn_id(),
                 turn_trigger: turn.turn_metadata_state.current_turn_trigger(),

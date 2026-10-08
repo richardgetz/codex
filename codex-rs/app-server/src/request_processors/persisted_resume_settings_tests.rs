@@ -81,7 +81,6 @@ fn turn_context_item(
 ) -> RolloutItem {
     RolloutItem::TurnContext(TurnContextItem {
         turn_id: Some(turn_id.to_string()),
-        trace_id: None,
         root_turn_id: None,
         disabled_plugin_ids: None,
         cwd: cwd(),
@@ -105,10 +104,6 @@ fn turn_context_item(
         cyber_access_program: None,
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: None,
     })
 }
 

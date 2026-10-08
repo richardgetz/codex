@@ -1,8 +1,6 @@
-use super::UsageRollupStatus;
 use super::new_status_output;
 use super::new_status_output_with_rate_limits;
 use super::new_status_output_with_rate_limits_handle;
-use super::new_status_output_with_rate_limits_handle_with_sources;
 use super::rate_limit_snapshot_display;
 use super::rate_limits::RateLimitSnapshotDisplay;
 use super::rate_limits::RateLimitWindowDisplay;
@@ -23,7 +21,6 @@ use crate::test_support::PathBufExt;
 use crate::test_support::test_path_buf;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
-use crate::usage_rollup::UsageRollupSource;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_models_cache;
@@ -55,14 +52,11 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::TOKEN_USAGE_SHORT_CONTEXT;
-use codex_protocol::protocol::TOKEN_USAGE_STANDARD_SERVICE_TIER;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -168,80 +162,6 @@ fn test_status_account_display() -> Option<StatusAccountDisplay> {
     None
 }
 
-#[tokio::test]
-async fn status_renders_alias_email_and_plan_for_managed_account() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    config.cwd = test_path_buf("/workspace/tests").abs();
-    let account_display = Some(StatusAccountDisplay::ChatGpt {
-        alias: Some("secondary".to_string()),
-        email: Some("person@example.com".to_string()),
-        plan: Some("Pro".to_string()),
-    });
-    let usage = TokenUsage::default();
-    let model_slug = get_model_offline_for_tests(config.model.as_deref());
-
-    let output = new_status_output(
-        &config,
-        account_display.as_ref(),
-        /*token_info*/ None,
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        Local::now(),
-        &model_slug,
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let rendered = sanitize_directory(render_lines(&output.display_lines(/*width*/ 90)));
-    let joined = rendered.join("\n");
-
-    assert!(
-        joined.contains("secondary - person@example.com - (Pro)"),
-        "rendered: {joined}"
-    );
-}
-
-#[tokio::test]
-async fn status_renders_email_and_plan_without_alias() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    config.cwd = test_path_buf("/workspace/tests").abs();
-    let account_display = Some(StatusAccountDisplay::ChatGpt {
-        alias: None,
-        email: Some("person@example.com".to_string()),
-        plan: Some("Pro".to_string()),
-    });
-    let usage = TokenUsage::default();
-    let model_slug = get_model_offline_for_tests(config.model.as_deref());
-
-    let output = new_status_output(
-        &config,
-        account_display.as_ref(),
-        /*token_info*/ None,
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        Local::now(),
-        &model_slug,
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let rendered = sanitize_directory(render_lines(&output.display_lines(/*width*/ 90)));
-    let joined = rendered.join("\n");
-
-    assert!(
-        joined.contains("person@example.com (Pro)"),
-        "rendered: {joined}"
-    );
-}
-
 fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> TokenUsageInfo {
     let context_window =
         construct_model_info_offline_for_tests(model_slug, &config.to_models_manager_config())
@@ -249,10 +169,6 @@ fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> Toke
     TokenUsageInfo {
         total_token_usage: usage.clone(),
         last_token_usage: usage.clone(),
-        usage_by_service_tier: Default::default(),
-        usage_by_service_tier_and_context_length: Default::default(),
-        usage_by_model: Default::default(),
-        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: context_window,
     }
 }
@@ -367,7 +283,6 @@ async fn status_snapshot_includes_reasoning_details() {
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
-        cache_write_tokens: 0,
         output_tokens: 900,
         reasoning_output_tokens: 150,
         total_tokens: 2_250,
@@ -488,7 +403,6 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
     assert_eq!(
         account_display,
         StatusAccountDisplay::ChatGpt {
-            alias: None,
             email: None,
             plan: Some("Enterprise (Automation)".to_string()),
         }
@@ -921,10 +835,7 @@ async fn status_uses_server_provider_id_and_auth_requirement() {
             .flat_map(|line| line.hyperlinks.into_iter())
             .map(|link| link.destination)
             .collect();
-        assert_eq!(
-            destinations,
-            vec!["https://chatgpt.com/codex/settings/usage"]
-        );
+        assert_eq!(destinations, vec!["https://chatgpt.com/settings/usage"]);
     }
 
     let narrow_destinations: Vec<String> = composite
@@ -1042,7 +953,6 @@ async fn status_snapshot_includes_forked_from() {
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 400,
         reasoning_output_tokens: 0,
         total_tokens: 1_200,
@@ -1097,7 +1007,6 @@ async fn status_snapshot_includes_monthly_limit() {
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 400,
         reasoning_output_tokens: 0,
         total_tokens: 1_200,
@@ -1164,7 +1073,6 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 400,
         reasoning_output_tokens: 0,
         total_tokens: 1_200,
@@ -1243,7 +1151,6 @@ async fn status_snapshot_uses_generic_limit_labels_for_unsupported_windows() {
     let usage = TokenUsage {
         input_tokens: 800,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 400,
         reasoning_output_tokens: 0,
         total_tokens: 1_200,
@@ -1533,7 +1440,6 @@ async fn status_card_token_usage_excludes_cached_tokens() {
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
-        cache_write_tokens: 0,
         output_tokens: 900,
         reasoning_output_tokens: 0,
         total_tokens: 2_100,
@@ -1624,390 +1530,6 @@ async fn status_wraps_long_paths_and_session_ids_without_losing_text() {
 }
 
 #[tokio::test]
-async fn status_snapshot_includes_opt_in_api_equivalent_token_usage() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    config.model = Some("gpt-5.3-codex".to_string());
-    config.model_provider_id = "openai".to_string();
-    config.tui_status_token_usage.enabled = true;
-    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
-
-    let account_display = test_status_account_display();
-    let usage = TokenUsage {
-        input_tokens: 151_800,
-        cached_input_tokens: 119_400,
-        cache_write_tokens: 0,
-        output_tokens: 32_400,
-        reasoning_output_tokens: 8_700,
-        total_tokens: 184_200,
-    };
-
-    let captured_at = chrono::Local
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .single()
-        .expect("timestamp");
-    let model_slug = get_model_offline_for_tests(config.model.as_deref());
-    let token_info = token_info_for(&model_slug, &config, &usage);
-    let composite = new_status_output(
-        &config,
-        account_display.as_ref(),
-        Some(&token_info),
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        captured_at,
-        &model_slug,
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let rendered =
-        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
-
-    assert_snapshot!(rendered);
-}
-
-#[tokio::test]
-async fn status_snapshot_prices_fast_usage_with_priority_rates() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    config.model = Some("gpt-5.5".to_string());
-    config.model_provider_id = "openai".to_string();
-    config.tui_status_token_usage.enabled = true;
-    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
-
-    let account_display = test_status_account_display();
-    let usage = TokenUsage {
-        input_tokens: 23_300,
-        cached_input_tokens: 2_400,
-        cache_write_tokens: 0,
-        output_tokens: 36,
-        reasoning_output_tokens: 27,
-        total_tokens: 23_336,
-    };
-
-    let captured_at = chrono::Local
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .single()
-        .expect("timestamp");
-    let model_slug = get_model_offline_for_tests(config.model.as_deref());
-    let mut token_info = token_info_for(&model_slug, &config, &usage);
-    token_info
-        .usage_by_service_tier
-        .insert("priority".to_string(), usage.clone());
-    let composite = new_status_output(
-        &config,
-        account_display.as_ref(),
-        Some(&token_info),
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        captured_at,
-        &model_slug,
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let rendered =
-        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
-
-    assert_snapshot!(rendered);
-}
-
-#[tokio::test]
-async fn status_snapshot_keeps_multiple_model_prices_separate() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    config.model = Some("model-a".to_string());
-    config.model_provider_id = "custom".to_string();
-    config.tui_status_token_usage.enabled = true;
-    config.tui_status_token_usage.model_rates = BTreeMap::from([
-        (
-            "model-a".to_string(),
-            codex_config::types::TuiStatusTokenUsageRate {
-                input_usd_per_1m: 2.0,
-                cached_input_usd_per_1m: 1.0,
-                cache_write_usd_per_1m: 0.0,
-                output_usd_per_1m: 4.0,
-                service_tiers: BTreeMap::new(),
-            },
-        ),
-        (
-            "model-b".to_string(),
-            codex_config::types::TuiStatusTokenUsageRate {
-                input_usd_per_1m: 10.0,
-                cached_input_usd_per_1m: 5.0,
-                cache_write_usd_per_1m: 0.0,
-                output_usd_per_1m: 20.0,
-                service_tiers: BTreeMap::new(),
-            },
-        ),
-    ]);
-    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
-
-    let account_display = test_status_account_display();
-    let model_a_usage = TokenUsage {
-        input_tokens: 1_000_000,
-        total_tokens: 1_000_000,
-        ..TokenUsage::default()
-    };
-    let model_b_usage = TokenUsage {
-        input_tokens: 2_000_000,
-        total_tokens: 2_000_000,
-        ..TokenUsage::default()
-    };
-    let usage = TokenUsage {
-        input_tokens: 3_000_000,
-        total_tokens: 3_000_000,
-        ..TokenUsage::default()
-    };
-    let mut token_info = token_info_for("model-a", &config, &usage);
-    token_info.usage_by_model = BTreeMap::from([
-        ("model-a".to_string(), model_a_usage),
-        ("model-b".to_string(), model_b_usage),
-    ]);
-
-    let composite = new_status_output(
-        &config,
-        account_display.as_ref(),
-        Some(&token_info),
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        Local
-            .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-            .single()
-            .expect("timestamp"),
-        "model-a",
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let rendered =
-        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 120))).join("\n");
-
-    assert_snapshot!(rendered);
-}
-
-fn recursive_status_source(
-    thread_id: ThreadId,
-    parent_thread_id: ThreadId,
-    response_id: &str,
-    usage: TokenUsage,
-) -> UsageRollupSource {
-    UsageRollupSource {
-        thread_id,
-        parent_thread_id: Some(parent_thread_id),
-        forked_from_id: None,
-        model_provider_id: Some("openai".to_string()),
-        model: Some("gpt-5.4".to_string()),
-        service_tier: None,
-        context_length: Some(TOKEN_USAGE_SHORT_CONTEXT.to_string()),
-        usage: usage.clone(),
-        usage_by_service_tier: BTreeMap::from([(
-            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
-            usage.clone(),
-        )]),
-        usage_by_service_tier_and_context_length: BTreeMap::from([(
-            TOKEN_USAGE_STANDARD_SERVICE_TIER.to_string(),
-            BTreeMap::from([(TOKEN_USAGE_SHORT_CONTEXT.to_string(), usage)]),
-        )]),
-        response_ids: vec![response_id.to_string()],
-    }
-}
-
-#[tokio::test]
-async fn status_snapshot_shows_recursive_workers_and_unavailable_tree() {
-    let temp_home = TempDir::new().expect("temp home");
-    let mut config = test_config(&temp_home).await;
-    config.model = Some("gpt-5.4".to_string());
-    config.model_provider_id = "openai".to_string();
-    config.tui_status_token_usage.enabled = true;
-    config.tui_status_token_usage.model_rates = BTreeMap::from([(
-        "gpt-5.4".to_string(),
-        codex_config::types::TuiStatusTokenUsageRate {
-            input_usd_per_1m: 1.0,
-            cached_input_usd_per_1m: 0.5,
-            cache_write_usd_per_1m: 0.0,
-            output_usd_per_1m: 2.0,
-            service_tiers: BTreeMap::new(),
-        },
-    )]);
-    set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
-
-    let root_thread_id =
-        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cc").expect("valid thread");
-    let worker_a_thread_id =
-        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cd").expect("valid thread");
-    let worker_b_thread_id =
-        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1ce").expect("valid thread");
-    let empty_fork_thread_id =
-        ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cf").expect("valid thread");
-    let worker_a_usage = TokenUsage {
-        input_tokens: 100_000,
-        total_tokens: 100_000,
-        ..TokenUsage::default()
-    };
-    let worker_b_usage = TokenUsage {
-        input_tokens: 200_000,
-        total_tokens: 200_000,
-        ..TokenUsage::default()
-    };
-    let sources = vec![
-        recursive_status_source(
-            worker_a_thread_id,
-            root_thread_id,
-            "worker-a-response",
-            worker_a_usage,
-        ),
-        recursive_status_source(
-            worker_b_thread_id,
-            root_thread_id,
-            "worker-b-response",
-            worker_b_usage,
-        ),
-        UsageRollupSource {
-            thread_id: empty_fork_thread_id,
-            parent_thread_id: None,
-            forked_from_id: Some(root_thread_id),
-            model_provider_id: Some("openai".to_string()),
-            model: Some("gpt-5.4".to_string()),
-            service_tier: None,
-            context_length: Some(TOKEN_USAGE_SHORT_CONTEXT.to_string()),
-            usage: TokenUsage::default(),
-            usage_by_service_tier: BTreeMap::new(),
-            usage_by_service_tier_and_context_length: BTreeMap::new(),
-            response_ids: Vec::new(),
-        },
-    ];
-    let total_usage = TokenUsage {
-        input_tokens: 300_000,
-        total_tokens: 300_000,
-        ..TokenUsage::default()
-    };
-    let now = Local
-        .with_ymd_and_hms(2024, 1, 1, 0, 0, 0)
-        .single()
-        .expect("timestamp");
-    let (complete, _) = new_status_output_with_rate_limits_handle_with_sources(
-        &config,
-        /*requires_openai_auth*/ config.model_provider.requires_openai_auth,
-        /*model_provider_id*/ None,
-        /*remote_connection*/ None,
-        /*account_display*/ None,
-        /*token_info*/ None,
-        &total_usage,
-        &Some(root_thread_id),
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ &[],
-        None,
-        now,
-        "gpt-5.4",
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-        UsageRollupStatus::Complete(&sources),
-        "<none>".to_string(),
-        /*refreshing_rate_limits*/ false,
-    );
-    let complete =
-        sanitize_directory(render_lines(&complete.display_lines(/*width*/ 120))).join("\n");
-
-    let (live, _) = new_status_output_with_rate_limits_handle_with_sources(
-        &config,
-        /*requires_openai_auth*/ config.model_provider.requires_openai_auth,
-        /*model_provider_id*/ None,
-        /*remote_connection*/ None,
-        /*account_display*/ None,
-        /*token_info*/ None,
-        &total_usage,
-        &Some(root_thread_id),
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ &[],
-        None,
-        now,
-        "gpt-5.4",
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-        UsageRollupStatus::Live(&sources),
-        "<none>".to_string(),
-        /*refreshing_rate_limits*/ false,
-    );
-    let live = sanitize_directory(render_lines(&live.display_lines(/*width*/ 120))).join("\n");
-
-    let direct_usage = TokenUsage {
-        input_tokens: 42,
-        total_tokens: 42,
-        ..TokenUsage::default()
-    };
-    let (unavailable, _) = new_status_output_with_rate_limits_handle_with_sources(
-        &config,
-        /*requires_openai_auth*/ config.model_provider.requires_openai_auth,
-        /*model_provider_id*/ None,
-        /*remote_connection*/ None,
-        /*account_display*/ None,
-        /*token_info*/ None,
-        &direct_usage,
-        &Some(root_thread_id),
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ &[],
-        None,
-        now,
-        "gpt-5.4",
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-        UsageRollupStatus::Unavailable,
-        "<none>".to_string(),
-        /*refreshing_rate_limits*/ false,
-    );
-    let unavailable =
-        sanitize_directory(render_lines(&unavailable.display_lines(/*width*/ 120))).join("\n");
-
-    let inherited_direct_usage = TokenUsageInfo {
-        total_token_usage: direct_usage,
-        ..TokenUsageInfo::default()
-    };
-    let (known_empty, _) = new_status_output_with_rate_limits_handle_with_sources(
-        &config,
-        /*requires_openai_auth*/ config.model_provider.requires_openai_auth,
-        /*model_provider_id*/ None,
-        /*remote_connection*/ None,
-        /*account_display*/ None,
-        Some(&inherited_direct_usage),
-        &TokenUsage::default(),
-        &Some(empty_fork_thread_id),
-        /*thread_name*/ None,
-        Some(root_thread_id),
-        /*rate_limits*/ &[],
-        None,
-        now,
-        "gpt-5.4",
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-        UsageRollupStatus::Complete(&[]),
-        "<none>".to_string(),
-        /*refreshing_rate_limits*/ false,
-    );
-    let known_empty =
-        sanitize_directory(render_lines(&known_empty.display_lines(/*width*/ 120))).join("\n");
-
-    assert_snapshot!(
-        "status_recursive_usage_states",
-        format!(
-            "complete:\n{complete}\n\nlive:\n{live}\n\nunavailable:\n{unavailable}\n\nknown_empty:\n{known_empty}"
-        )
-    );
-}
-
-#[tokio::test]
 async fn status_snapshot_wraps_in_narrow_terminal() {
     let temp_home = TempDir::new().expect("temp home");
     let mut config = test_config(&temp_home).await;
@@ -2020,7 +1542,6 @@ async fn status_snapshot_wraps_in_narrow_terminal() {
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
-        cache_write_tokens: 0,
         output_tokens: 900,
         reasoning_output_tokens: 150,
         total_tokens: 2_250,
@@ -2084,7 +1605,6 @@ async fn status_snapshot_wraps_halfwidth_kana_in_narrow_terminal() {
     set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
 
     let account = StatusAccountDisplay::ChatGpt {
-        alias: None,
         email: Some("ｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ@example.com".to_string()),
         plan: Some("ｶﾞﾊﾟ plan".to_string()),
     };
@@ -2128,7 +1648,6 @@ async fn status_snapshot_shows_missing_limits_message() {
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 250,
         reasoning_output_tokens: 0,
         total_tokens: 750,
@@ -2177,7 +1696,6 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 250,
         reasoning_output_tokens: 0,
         total_tokens: 750,
@@ -2187,20 +1705,18 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         .with_ymd_and_hms(2024, 2, 3, 4, 5, 6)
         .single()
         .expect("timestamp");
-    for (is_remote, is_local_daemon, snapshot) in [
+    for (is_local_daemon, snapshot) in [
         (
-            false,
             None,
             "status_snapshot_uses_default_reasoning_when_config_empty",
         ),
-        (true, Some(false), "status_snapshot_remote_server"),
-        (false, Some(true), "status_snapshot_local_background_server"),
+        (Some(false), "status_snapshot_remote_server"),
+        (Some(true), "status_snapshot_local_background_server"),
     ] {
         let remote_connection = is_local_daemon.map(|is_local_daemon| RemoteConnectionStatus {
             address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock"
                 .to_string(),
             version: "v0.133.0".to_string(),
-            is_remote,
             is_local_daemon,
         });
 
@@ -2247,7 +1763,6 @@ async fn status_snapshot_shows_refreshing_limits_notice() {
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 250,
         reasoning_output_tokens: 0,
         total_tokens: 750,
@@ -2402,7 +1917,6 @@ async fn status_snapshot_includes_credits_and_limits() {
     let usage = TokenUsage {
         input_tokens: 1_500,
         cached_input_tokens: 100,
-        cache_write_tokens: 0,
         output_tokens: 600,
         reasoning_output_tokens: 0,
         total_tokens: 2_200,
@@ -2476,7 +1990,6 @@ async fn status_snapshot_shows_unavailable_limits_message() {
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 250,
         reasoning_output_tokens: 0,
         total_tokens: 750,
@@ -2537,7 +2050,6 @@ async fn status_snapshot_treats_refreshing_empty_limits_as_unavailable() {
     let usage = TokenUsage {
         input_tokens: 500,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 250,
         reasoning_output_tokens: 0,
         total_tokens: 750,
@@ -2600,7 +2112,6 @@ async fn status_snapshot_shows_stale_limits_message() {
     let usage = TokenUsage {
         input_tokens: 1_200,
         cached_input_tokens: 200,
-        cache_write_tokens: 0,
         output_tokens: 900,
         reasoning_output_tokens: 150,
         total_tokens: 2_250,
@@ -2671,7 +2182,6 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
     let usage = TokenUsage {
         input_tokens: 900,
         cached_input_tokens: 200,
-        cache_write_tokens: 0,
         output_tokens: 350,
         reasoning_output_tokens: 0,
         total_tokens: 1_450,
@@ -2745,7 +2255,6 @@ async fn status_context_window_uses_last_usage() {
     let total_usage = TokenUsage {
         input_tokens: 12_800,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 879,
         reasoning_output_tokens: 0,
         total_tokens: 102_000,
@@ -2753,7 +2262,6 @@ async fn status_context_window_uses_last_usage() {
     let last_usage = TokenUsage {
         input_tokens: 12_800,
         cached_input_tokens: 0,
-        cache_write_tokens: 0,
         output_tokens: 879,
         reasoning_output_tokens: 0,
         total_tokens: 13_679,
@@ -2768,10 +2276,6 @@ async fn status_context_window_uses_last_usage() {
     let token_info = TokenUsageInfo {
         total_token_usage: total_usage.clone(),
         last_token_usage: last_usage,
-        usage_by_service_tier: Default::default(),
-        usage_by_service_tier_and_context_length: Default::default(),
-        usage_by_model: Default::default(),
-        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: config.model_context_window,
     };
     let composite = new_status_output(

@@ -9,9 +9,7 @@ mod executed_tool_calls;
 pub(crate) mod handlers;
 pub(crate) mod hook_names;
 pub(crate) mod hosted_spec;
-mod lead_passive_poll;
 pub(crate) mod lifecycle;
-mod manager_only;
 pub(crate) mod metadata_metrics;
 mod multi_agent_tool;
 pub(crate) mod network_approval;
@@ -40,7 +38,6 @@ use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_text;
 pub(crate) use executed_tool_calls::ExecutedToolCalls;
-pub(crate) type ExecutedToolCallRecorder = ExecutedToolCalls;
 pub(crate) use multi_agent_tool::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 pub use router::ToolRouter;
 

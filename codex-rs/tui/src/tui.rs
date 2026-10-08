@@ -56,7 +56,6 @@ use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
-use crate::tui::mac_keyboard::MacRightOptionMonitor;
 use crate::tui::screen_size::ScreenSizePolicy;
 use crate::tui::scrollback::ScrollbackStrategy;
 use codex_config::types::NotificationCondition;
@@ -72,7 +71,6 @@ mod input_boundary;
 mod job_control;
 mod keyboard_modes;
 mod link_pointer;
-mod mac_keyboard;
 #[cfg(test)]
 #[path = "tui/owned_screen_tests.rs"]
 mod owned_screen_tests;
@@ -104,7 +102,6 @@ pub(crate) struct InitializedTerminal {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) terminal_app_over_ssh: bool,
     pub(crate) stderr_guard: terminal_stderr::TerminalStderrGuard,
-    pub(crate) mac_right_option_monitor: Option<MacRightOptionMonitor>,
 }
 
 pub(crate) use keyboard_modes::VscodeDetection;
@@ -461,16 +458,13 @@ fn flush_terminal_input_buffer() {
 pub(crate) fn flush_terminal_input_buffer() {}
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
-pub(crate) fn init(realtime_voice_enabled: bool) -> Result<InitializedTerminal> {
+pub(crate) fn init() -> Result<InitializedTerminal> {
     if !stdin().is_terminal() {
         return Err(std::io::Error::other("stdin is not a terminal"));
     }
     if !stdout().is_terminal() {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
-    let mac_right_option_monitor = MacRightOptionMonitor::new(realtime_voice_enabled);
-    keyboard_modes::set_right_option_monitor_enabled(mac_right_option_monitor.is_some());
-    keyboard_modes::set_realtime_voice_enabled(realtime_voice_enabled);
     let mut restore_guard = TerminalInitializationGuard { active: true };
     set_modes()?;
 
@@ -560,7 +554,6 @@ pub(crate) fn init(realtime_voice_enabled: bool) -> Result<InitializedTerminal> 
         #[cfg(not(unix))]
         terminal_app_over_ssh: false,
         stderr_guard,
-        mac_right_option_monitor,
     };
     restore_guard.active = false;
     Ok(initialized_terminal)
@@ -676,7 +669,6 @@ pub struct Tui {
     alt_screen_active: Arc<AtomicBool>,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
-    mac_right_option_monitor: Option<MacRightOptionMonitor>,
     enhanced_keys_supported: bool,
     // Cache the startup result so later configuration loads use the same terminal policy.
     pub(crate) terminal_app_over_ssh: bool,
@@ -720,7 +712,6 @@ impl Tui {
         terminal: Terminal,
         enhanced_keys_supported: bool,
         stderr_guard: terminal_stderr::TerminalStderrGuard,
-        mac_right_option_monitor: Option<MacRightOptionMonitor>,
     ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
@@ -753,7 +744,6 @@ impl Tui {
             suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
-            mac_right_option_monitor,
             enhanced_keys_supported,
             terminal_app_over_ssh: false,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
@@ -862,29 +852,12 @@ impl Tui {
         self.enhanced_keys_supported
     }
 
-    pub(crate) fn reconfigure_realtime_hotkey(&mut self) {
-        keyboard_modes::reconfigure_keyboard_enhancement();
-    }
-
-    pub(crate) fn configure_realtime_voice(&mut self, enabled: bool) {
-        let monitor = MacRightOptionMonitor::new(enabled);
-        let monitor_enabled = monitor.is_some();
-        self.mac_right_option_monitor = monitor;
-        keyboard_modes::set_right_option_monitor_enabled(monitor_enabled);
-        keyboard_modes::set_realtime_voice_enabled(enabled);
-        keyboard_modes::reconfigure_keyboard_enhancement();
-    }
-
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active.load(Ordering::Relaxed)
     }
 
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
     pub fn pause_events(&mut self) {
-        if let Some(monitor) = &self.mac_right_option_monitor {
-            monitor.pause();
-        }
-
         self.link_hover.mouse = None;
         self.event_broker.pause_events();
     }
@@ -893,9 +866,6 @@ impl Tui {
     // Inverse of `pause_events`.
     pub fn resume_events(&mut self) {
         self.event_broker.resume_events();
-        if let Some(monitor) = &self.mac_right_option_monitor {
-            monitor.resume();
-        }
     }
 
     /// Discover the visible Windows theme only after protected startup decisions have completed.
@@ -1058,35 +1028,10 @@ impl Tui {
     }
 
     pub fn event_stream(&self) -> Pin<Box<dyn Stream<Item = TuiEvent> + Send + 'static>> {
-        let mac_right_option_events = self
-            .mac_right_option_monitor
-            .as_ref()
-            .map(MacRightOptionMonitor::subscribe);
-        let mac_right_option_focus = self
-            .mac_right_option_monitor
-            .as_ref()
-            .map(MacRightOptionMonitor::focus_handle);
-        let mac_right_option_cmux_focus = self
-            .mac_right_option_monitor
-            .as_ref()
-            .and_then(MacRightOptionMonitor::cmux_focus_probe);
-        let mac_right_option_paused = self
-            .mac_right_option_monitor
-            .as_ref()
-            .map(MacRightOptionMonitor::pause_handle);
-        let mac_right_option_release_pending = self
-            .mac_right_option_monitor
-            .as_ref()
-            .map(MacRightOptionMonitor::release_pending_handle);
         #[cfg(unix)]
         let stream = TuiEventStream::new(
             self.event_broker.clone(),
             self.draw_tx.subscribe(),
-            mac_right_option_events,
-            mac_right_option_focus,
-            mac_right_option_cmux_focus,
-            mac_right_option_paused,
-            mac_right_option_release_pending,
             self.terminal_focused.clone(),
             self.suspend_context.clone(),
             self.alt_screen_active.clone(),
@@ -1095,11 +1040,6 @@ impl Tui {
         let stream = TuiEventStream::new(
             self.event_broker.clone(),
             self.draw_tx.subscribe(),
-            mac_right_option_events,
-            mac_right_option_focus,
-            mac_right_option_cmux_focus,
-            mac_right_option_paused,
-            mac_right_option_release_pending,
             self.terminal_focused.clone(),
         );
         Box::pin(stream)

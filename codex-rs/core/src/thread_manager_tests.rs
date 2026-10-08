@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::LocalAgentControl;
 use crate::agent::types::SpawnAgentOptions;
 use crate::config::RolloutBudgetConfig;
 use crate::config::test_config;
@@ -110,6 +109,7 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
         .await
         .expect("start source");
     let history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: source.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -119,13 +119,11 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
     // lookups. Tokio's fair RwLock makes this ordering deterministic.
     let fork = manager.fork_thread_from_history(
         ForkSnapshot::Interrupted,
-        config,
+        StartThreadOptions {
+            environments: Some(Vec::new()),
+            ..StartThreadOptions::new(config)
+        },
         history,
-        /*thread_source*/ None,
-        /*parent_trace*/ None,
-        ClientMcpExtensions::default(),
-        /*reserved_thread_id*/ None,
-        /*inherited_usage_policy*/ None,
     );
     tokio::pin!(fork);
     {
@@ -326,6 +324,7 @@ async fn reserved_thread_id_is_used_without_changing_normal_id_generation() {
         .expect("start reserved thread");
     let mut resumed_options = StartThreadOptions::new(config.clone());
     resumed_options.initial_history = InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: reserved.thread_id,
         history: Arc::new(Vec::new()),
         rollout_path: None,
@@ -407,11 +406,7 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
         .await
         .expect("spawn actual child agent");
     let fork = manager
-        .spawn_legacy_subagent(
-            root.thread_id,
-            StartThreadOptions::new(config),
-            /*session_source*/ None,
-        )
+        .spawn_legacy_subagent(root.thread_id, StartThreadOptions::new(config))
         .await
         .expect("fork root thread");
 
@@ -845,8 +840,9 @@ async fn ignores_session_prefix_messages_when_truncating() {
     let world_state = build_world_state_from_turn_context(&session, &turn_context).await;
     let step_context = StepContext::for_test(turn_context);
     let mut items = session
-        .build_initial_context_with_world_state(step_context.turn.as_ref(), &world_state)
-        .await;
+        .build_initial_context_with_world_state(&step_context, &world_state)
+        .await
+        .0;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
     items.push(user_msg("second question"));
@@ -1460,8 +1456,9 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
     let reviewer_context = reviewer
         .thread
         .session
-        .build_initial_context_with_world_state(reviewer_step.turn.as_ref(), &reviewer_world_state)
-        .await;
+        .build_initial_context_with_world_state(&reviewer_step, &reviewer_world_state)
+        .await
+        .0;
     assert!(
         !serde_json::to_string(&reviewer_context)
             .expect("reviewer context should serialize")
@@ -1524,7 +1521,6 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
                 },
                 originator: reviewer_config.originator.clone(),
                 inherited_instructions: None,
-                inherited_usage_policy: None,
             }),
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,
@@ -2467,6 +2463,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         .resume_thread_with_history(
             config.clone(),
             InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: source.thread_id,
                 history: Arc::new(vec![RolloutItem::ResponseItem(user_msg("hello").into())]),
                 rollout_path: Some(rollout_path.clone()),

@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agent::control::AgentControl;
+use crate::session::OrdinarySubmissionPermit;
 use crate::session::Submission;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
@@ -11,6 +13,8 @@ use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db;
 use serde::Deserialize;
 use serde::Serialize;
+use tokio::sync::Semaphore;
+use tokio::sync::RwLock;
 use tracing::warn;
 
 const THREAD_INBOUND_MESSAGE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -101,6 +105,8 @@ pub(super) fn start_thread_inbound_message_poller(
     thread_id: ThreadId,
     state_db: state_db::StateDbHandle,
     tx_sub: Sender<Submission>,
+    ordinary_submission_slots: Arc<Semaphore>,
+    submission_lifecycle_gate: Arc<RwLock<()>>,
     agent_control: AgentControl,
 ) {
     tokio::spawn(async move {
@@ -143,8 +149,16 @@ pub(super) fn start_thread_inbound_message_poller(
                     continue;
                 }
             };
-            if !enqueue_claimed_messages(thread_id, &messages, &state_db, &tx_sub, &agent_control)
-                .await
+            if !enqueue_claimed_messages(
+                thread_id,
+                &messages,
+                &state_db,
+                &tx_sub,
+                &ordinary_submission_slots,
+                &submission_lifecycle_gate,
+                &agent_control,
+            )
+            .await
             {
                 return;
             }
@@ -157,6 +171,8 @@ async fn enqueue_claimed_messages(
     messages: &[codex_state::ThreadInboundMessage],
     state_db: &state_db::StateDbHandle,
     tx_sub: &Sender<Submission>,
+    ordinary_submission_slots: &Arc<Semaphore>,
+    submission_lifecycle_gate: &Arc<RwLock<()>>,
     agent_control: &AgentControl,
 ) -> bool {
     for (index, message) in messages.iter().enumerate() {
@@ -230,15 +246,27 @@ async fn enqueue_claimed_messages(
                 continue;
             }
         };
+        let gate_read = Arc::clone(submission_lifecycle_gate).read_owned().await;
+        let slot = Arc::clone(ordinary_submission_slots)
+            .acquire_owned()
+            .await
+            .expect("ordinary submission slots remain open");
         let submission = Submission {
             id: message.id.clone(),
             client_user_message_id: None,
             op,
+            turn_extension_init: None,
             parent_turn_id,
             trace: None,
             root_turn_id,
             residency_guard: None,
             handoff_admission: None,
+            realtime_handoff_input: None,
+            ordinary_slot_permit: Some(OrdinarySubmissionPermit {
+                slot,
+                gate_read: Some(gate_read),
+                gate_write: None,
+            }),
         };
         if tx_sub.send(submission).await.is_err() {
             for pending in &messages[index..] {
@@ -273,9 +301,20 @@ mod tests {
     use codex_protocol::user_input::UserInput;
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::RwLock;
+    use tokio::sync::Semaphore;
     use tokio::time::timeout;
     use uuid::Uuid;
+
+    fn ordinary_submission_slots() -> Arc<Semaphore> {
+        Arc::new(Semaphore::new(crate::session::SUBMISSION_CHANNEL_CAPACITY))
+    }
+
+    fn submission_lifecycle_gate() -> Arc<RwLock<()>> {
+        Arc::new(RwLock::new(()))
+    }
 
     async fn create_poller_fixture(
         thread_id: ThreadId,
@@ -361,7 +400,14 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(1200)).await;
             drop(handoff);
         });
-        start_thread_inbound_message_poller(thread_id, runtime, tx_sub, control);
+        start_thread_inbound_message_poller(
+            thread_id,
+            runtime,
+            tx_sub,
+            ordinary_submission_slots(),
+            submission_lifecycle_gate(),
+            control,
+        );
         let submission = timeout(Duration::from_secs(/*secs*/ 4), rx_sub.recv())
             .await
             .expect("receive queued message")
@@ -423,7 +469,15 @@ mod tests {
         let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
         let control = AgentControl::default();
         assert!(
-            enqueue_claimed_messages(target_thread_id, &claimed, &runtime, &tx_sub, &control,)
+            enqueue_claimed_messages(
+                target_thread_id,
+                &claimed,
+                &runtime,
+                &tx_sub,
+                &ordinary_submission_slots(),
+                &submission_lifecycle_gate(),
+                &control,
+            )
                 .await
         );
         let submission = rx_sub.recv().await.expect("receive handoff communication");
@@ -465,7 +519,18 @@ mod tests {
             .expect("claim unsupported message");
         let (tx_sub, _rx_sub) = async_channel::bounded(/*cap*/ 1);
         let control = AgentControl::default();
-        assert!(enqueue_claimed_messages(thread_id, &claimed, &runtime, &tx_sub, &control,).await);
+        assert!(
+            enqueue_claimed_messages(
+                thread_id,
+                &claimed,
+                &runtime,
+                &tx_sub,
+                &ordinary_submission_slots(),
+                &submission_lifecycle_gate(),
+                &control,
+            )
+            .await
+        );
         assert!(control.handoff_inbound_unsupported());
         let pending = runtime
             .claim_pending_thread_inbound_messages(thread_id, /*limit*/ 1)
@@ -506,16 +571,26 @@ mod tests {
                 id: "sentinel".to_string(),
                 client_user_message_id: None,
                 op: Op::Shutdown,
+                turn_extension_init: None,
                 parent_turn_id: None,
                 trace: None,
                 root_turn_id: None,
                 residency_guard: None,
                 handoff_admission: None,
+                realtime_handoff_input: None,
+                ordinary_slot_permit: None,
             })
             .await
             .expect("fill submission channel");
         let control = AgentControl::default();
-        start_thread_inbound_message_poller(thread_id, runtime, tx_sub, control.clone());
+        start_thread_inbound_message_poller(
+            thread_id,
+            runtime,
+            tx_sub,
+            ordinary_submission_slots(),
+            submission_lifecycle_gate(),
+            control.clone(),
+        );
         // The full channel holds the poller after it claims both rows and sends the first one.
         // Sealing here exercises the post-claim branch; the second row must be unclaimed and
         // delivered after the reversible handoff releases.
@@ -580,7 +655,18 @@ mod tests {
             tokio::task::yield_now().await;
             drop(handoff);
         });
-        assert!(enqueue_claimed_messages(thread_id, &claimed, &runtime, &tx_sub, &control,).await);
+        assert!(
+            enqueue_claimed_messages(
+                thread_id,
+                &claimed,
+                &runtime,
+                &tx_sub,
+                &ordinary_submission_slots(),
+                &submission_lifecycle_gate(),
+                &control,
+            )
+            .await
+        );
         release_handoff.await.expect("release handoff");
         assert!(rx_sub.try_recv().is_err());
 
@@ -620,7 +706,14 @@ mod tests {
             .begin_recovery_pending()
             .expect("begin failed recovery attempt");
         let (tx_sub, rx_sub) = async_channel::bounded(/*cap*/ 1);
-        start_thread_inbound_message_poller(thread_id, runtime.clone(), tx_sub, control);
+        start_thread_inbound_message_poller(
+            thread_id,
+            runtime.clone(),
+            tx_sub,
+            ordinary_submission_slots(),
+            submission_lifecycle_gate(),
+            control,
+        );
 
         tokio::time::sleep(Duration::from_millis(2200)).await;
         let claimed = runtime

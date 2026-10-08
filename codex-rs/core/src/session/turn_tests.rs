@@ -110,3 +110,29 @@ fn realtime_user_verification_notice_excludes_request_payload() {
         )),
     );
 }
+
+#[test]
+fn continuous_run_block_message_points_back_to_scratchpad_policy() {
+    let message = build_continuous_run_block_message(&serde_json::json!({
+        "scratchpad_id": "thread-123",
+        "action_policy": {
+            "repos": {
+                "persona-api": {
+                    "forbidden_base_branches": ["main"]
+                }
+            }
+        },
+        "next_steps": ["finish registry"],
+        "pending_waits": [{
+            "id": "keepalive",
+            "description": "Stop keepalive",
+            "details": "session_id=abc"
+        }]
+    }));
+    assert!(message.contains("Scratchpad: thread-123"));
+    assert!(message.contains("Action policy:\n```json\n"));
+    assert!(message.contains("\"persona-api\""));
+    assert!(message.contains("\"forbidden_base_branches\""));
+    assert!(message.contains("Next up:\n- finish registry"));
+    assert!(message.contains("Waiting:\n- Stop keepalive (id: keepalive; details: session_id=abc)"));
+}

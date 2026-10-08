@@ -531,7 +531,7 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
     let tools = tool_names(&body);
     assert!(
         tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "explicit app mentions should keep tool_search available: {tools:?}"
+        "explicit app mentions should leave app tools deferred: {tools:?}"
     );
     assert!(
         namespace_child_tool(
@@ -539,12 +539,12 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_some(),
-        "explicit app mentions should directly expose create tool, got tools: {tools:?}"
+        .is_none(),
+        "explicit app mentions should not directly expose create tool, got tools: {tools:?}"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
-        "explicit app mentions should directly expose list tool, got tools: {tools:?}"
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
+        "explicit app mentions should not directly expose list tool, got tools: {tools:?}"
     );
 
     Ok(())
@@ -1327,8 +1327,8 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
                     enabled: true,
                     required: false,
                     startup_readiness: Default::default(),
-                    startup: codex_config::McpServerStartupMode::Auto,
-                    sharing: codex_config::McpServerSharingMode::Auto,
+                    startup: Default::default(),
+                    sharing: Default::default(),
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
@@ -1353,7 +1353,7 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
-        "Find the echo and image tools.",
+        "Find the rmcp echo and image tools.",
         AskForApproval::Never,
         PermissionProfile::Disabled,
     )
@@ -1424,7 +1424,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
                 ev_tool_search_call(
                     search_call_id,
                     &json!({
-                        "query": "exercise the rmcp test server",
+                        "query": "Echo back the provided message and include environment data.",
                         "limit": 8,
                     }),
                 ),
@@ -1533,7 +1533,7 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
     );
     assert!(
         !first_request_tools.iter().any(|name| name == "mcp__rmcp"),
-        "unmentioned rmcp namespace should stay deferred before search: {first_request_tools:?}"
+        "deferred rmcp namespace should not be directly exposed before search: {first_request_tools:?}"
     );
 
     assert!(
@@ -1582,7 +1582,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                 ev_tool_search_call(
                     search_call_id,
                     &json!({
-                        "query": "exercise the rmcp test server",
+                        "query": "Echo back the provided message and include environment data.",
                         "limit": 8,
                     }),
                 ),
@@ -1617,8 +1617,8 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
                     enabled: true,
                     required: false,
                     startup_readiness: Default::default(),
-                    startup: codex_config::McpServerStartupMode::Auto,
-                    sharing: codex_config::McpServerSharingMode::Auto,
+                    startup: Default::default(),
+                    sharing: Default::default(),
                     disabled_reason: None,
                     startup_timeout_sec: Some(Duration::from_secs(10)),
                     tool_timeout_sec: None,
@@ -1643,7 +1643,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.submit_turn_with_approval_and_permission_profile(
-        "Find the echo tool.",
+        "Find the rmcp echo tool.",
         AskForApproval::Never,
         PermissionProfile::Disabled,
     )
@@ -1656,7 +1656,7 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
     let rmcp_namespace = tools
         .iter()
         .find(|tool| tool.get("name").and_then(Value::as_str) == Some("mcp__rmcp"))
-        .unwrap_or_else(|| panic!("tool_search should return the rmcp namespace, got {tools:?}"));
+        .expect("tool_search should return the rmcp namespace");
     assert_eq!(
         rmcp_namespace.get("description").and_then(Value::as_str),
         Some("Use these tools to exercise the rmcp test server.")

@@ -742,6 +742,12 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
         ServiceTier::Fast.request_value()
     );
     assert!(
+        request.body_json()["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "scratchpad")),
+        "review should expose Default-mode scratchpad tools instead of inheriting Plan-mode visibility"
+    );
+    assert!(
         request
             .message_input_texts("developer")
             .iter()

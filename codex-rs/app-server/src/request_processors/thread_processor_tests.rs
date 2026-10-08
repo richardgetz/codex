@@ -801,6 +801,7 @@ mod thread_processor_behavior_tests {
             initial_turns_page: None,
         };
         let config_snapshot = ThreadConfigSnapshot {
+            turn_extension_init: Default::default(),
             service_tier: Some("flex".to_string()),
             ..test_thread_config_snapshot(cwd)
         };

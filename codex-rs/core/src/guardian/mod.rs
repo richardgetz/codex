@@ -3,18 +3,17 @@
 //! review requirements. Each approval retains its issuing context and cancellation.
 
 mod approval_request;
-mod assessment;
 mod coverage;
 mod decision;
 mod feedback;
 mod input_budget;
 mod permissions;
 mod prompt;
-mod request_budget;
 pub(crate) use input_budget::PendingReviewContext;
 pub(crate) use input_budget::check_pending as check_pending_guardian_input;
 pub(crate) use input_budget::finalize as finalize_guardian_input;
 pub(crate) use permissions::for_tool as tool_permission_context;
+mod request_budget;
 pub(crate) use request_budget::ExhaustedReviewBudget;
 pub(crate) use request_budget::observe as observe_guardian_request;
 pub(crate) use request_budget::prepare_prompt as prepare_guardian_prompt;
@@ -28,20 +27,15 @@ pub(crate) mod test_host;
 
 use codex_protocol::items::ModelInvocationContext;
 use std::sync::Arc;
-use std::time::Duration;
 
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 
-#[cfg(test)]
-use codex_prompts::ResolvedModelMessages;
-
-#[cfg(test)]
-use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
@@ -62,15 +56,14 @@ pub(crate) use review::new_guardian_review_id;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub use review_session::GuardianReviewSession;
 pub(crate) use review_session::GuardianReviewSessionManager;
-#[cfg(test)]
-pub(crate) use review_session::GuardianReviewSessionManagerTestExt;
 pub use review_session::GuardianReviewState;
 pub use review_session::PreparedGuardianContext;
 pub use review_session::prepare_review_prewarm;
+
 pub(crate) use review_session::prompt_cache_key_override_for_review_session;
 pub(crate) use runtime::ReviewAction;
 
-pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
+pub(crate) use codex_guardian_reviewer::REVIEW_TIMEOUT as GUARDIAN_REVIEW_TIMEOUT;
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
 pub(crate) const MAX_CONSECUTIVE_CYBER_GUARDIAN_DENIALS_PER_TURN: u32 = 1;
 pub(crate) const MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN: u32 = 3;
@@ -79,15 +72,12 @@ pub(crate) const MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN: u32 = 10;
 pub(crate) const AUTO_REVIEW_DENIAL_WINDOW_SIZE: usize = 50;
 pub(crate) const AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX: &str =
     codex_guardian_context::MANUAL_APPROVAL_DEVELOPER_PREFIX;
-const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 20_000;
-const GUARDIAN_MAX_TOOL_TRANSCRIPT_TOKENS: usize = 10_000;
-const GUARDIAN_MAX_MESSAGE_ENTRY_TOKENS: usize = 5_000;
-const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = 1_000;
+const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = codex_guardian_context::ContextProfile::synchronous()
+    .transcript
+    .entry_limits
+    .tool_tokens;
 pub(crate) const GUARDIAN_MAX_ROOT_MESSAGE_TOKENS: usize = 900;
 pub(crate) const GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS: usize = 6_000;
-pub(crate) const GUARDIAN_MAX_ACTION_BYTES: usize = 50_000 * 4;
-const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
-const GUARDIAN_RECENT_ENTRY_LIMIT: usize = 40;
 
 /// Captures review inputs from the issuing step without retaining its MCP bindings or tool router.
 /// Background network approvals and Unix interception use the active task's resolved settings.
@@ -101,12 +91,10 @@ pub(crate) struct GuardianReviewContext {
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,
     // Model and reasoning inputs are carried for the follow-up Guardian and V2 migrations.
-    #[expect(dead_code)]
     pub(crate) model_info: Arc<ModelInfo>,
-    #[expect(dead_code)]
     pub(crate) reasoning_effort: Option<ReasoningEffort>,
-    #[expect(dead_code)]
     pub(crate) reasoning_summary: ReasoningSummary,
+    pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) approvals_reviewer: ApprovalsReviewer,
 }
@@ -137,6 +125,7 @@ impl GuardianReviewContext {
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
             reasoning_summary: settings.reasoning_summary,
+            personality: settings.personality(),
             approval_policy: settings.approval_policy(),
             approvals_reviewer: settings.approvals_reviewer(),
             turn,
@@ -165,6 +154,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
             model_info: Arc::clone(&step.settings.model_info),
             reasoning_effort: step.settings.reasoning_effort().cloned(),
             reasoning_summary: step.settings.reasoning_summary,
+            personality: step.settings.personality(),
             approval_policy: step.settings.approval_policy(),
             approvals_reviewer: step.settings.approvals_reviewer(),
         }
@@ -182,6 +172,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
             model_info: Arc::clone(turn.model_info()),
             reasoning_effort: turn.reasoning_effort().cloned(),
             reasoning_summary: turn.reasoning_summary(),
+            personality: turn.personality(),
             approval_policy: turn.approval_policy(),
             approvals_reviewer: turn.config.approvals_reviewer,
             turn,
@@ -274,6 +265,9 @@ impl GuardianRejectionCircuitBreaker {
     }
 }
 
+#[cfg(test)]
+use codex_guardian_reviewer::guardian_output_schema;
+
 pub(crate) use approval_request::format_guardian_action_pretty;
 #[cfg(test)]
 use approval_request::guardian_assessment_action;
@@ -293,27 +287,8 @@ use prompt::build_guardian_prompt_items_with_parent_turn;
 use prompt::render_guardian_transcript_entries;
 #[cfg(test)]
 use review::run_guardian_review_session_with_retry as run_guardian_review_session_for_test;
-
 #[cfg(test)]
-fn build_guardian_review_session_config_for_test(
-    parent_config: Config,
-    live_network_config: Option<codex_network_proxy::NetworkProxyConfig>,
-    active_model: &str,
-    reasoning_effort: Option<ReasoningEffort>,
-    reasoning_summary: ReasoningSummary,
-    personality: Option<codex_protocol::config_types::Personality>,
-    model_messages: ResolvedModelMessages<'_>,
-) -> anyhow::Result<Config> {
-    reviewer_config::build_guardian_review_session_config(
-        parent_config,
-        live_network_config,
-        active_model,
-        reasoning_effort,
-        reasoning_summary,
-        personality,
-        model_messages,
-    )
-}
+use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
 
 #[cfg(test)]
 mod tests;

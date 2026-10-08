@@ -45,6 +45,20 @@ impl ChatWidget {
             self.restore_retry_status_header_if_present();
         }
         match notification {
+            ServerNotification::McpServerOauthLoginCompleted(notification) => {
+                if notification.success {
+                    self.add_info_message(
+                        format!("Signed in to {}.", notification.name),
+                        /*hint*/ None,
+                    );
+                } else {
+                    self.add_error_message(
+                        notification
+                            .error
+                            .unwrap_or_else(|| "MCP sign-in failed.".to_string()),
+                    );
+                }
+            }
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 let info = token_usage_info_from_app_server(notification.token_usage);
                 let current_model = self.current_model().to_string();
@@ -399,6 +413,7 @@ impl ChatWidget {
             | ServerNotification::ThreadActivityUpdated(_)
             | ServerNotification::ThreadReverted(_)
             | ServerNotification::ThreadQueueChanged(_)
+            | ServerNotification::ThreadPredictionUpdated(_)
             | ServerNotification::ThreadArchived(_)
             | ServerNotification::ThreadDeleted(_)
             | ServerNotification::ThreadUnarchived(_)
@@ -410,7 +425,6 @@ impl ChatWidget {
             | ServerNotification::McpServerEventStream(_)
             | ServerNotification::FileChangePatchUpdated(_)
             | ServerNotification::McpToolCallProgress(_)
-            | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::EnvironmentConnected(_)
             | ServerNotification::EnvironmentDisconnected(_)

@@ -17,7 +17,8 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
-        if self.config.explicit_permission_profile_mode
+        if self.thread_id.is_some()
+            || self.config.explicit_permission_profile_mode
             || self.permission_profiles_menu_opened
             || self
                 .config
@@ -39,9 +40,9 @@ impl ChatWidget {
         let current_permission_profile = self.config.permissions.permission_profile().clone();
         let guardian_approval_enabled = self.config.features.enabled(Feature::GuardianApproval);
         let current_review_policy = self.config.approvals_reviewer;
-        let restorable_selection = self.restorable_current_permission_selection();
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+
         #[cfg(target_os = "windows")]
         let windows_sandbox_level = self.windows_sandbox_config.level();
         #[cfg(target_os = "windows")]
@@ -99,10 +100,6 @@ impl ChatWidget {
                 /*profile_selection*/ None,
                 /*return_to_permissions*/ !include_read_only,
             );
-            let default_actions = Self::with_restorable_permission_action(
-                default_actions,
-                restorable_selection.clone(),
-            );
             if preset.id == "auto" {
                 items.push(SelectionItem {
                     name: base_name.clone(),
@@ -136,15 +133,12 @@ impl ChatWidget {
                                     .config_layer_stack
                                     .requirements()
                                     .auto_review_required_for_model(self.current_model()))),
-                        actions: Self::with_restorable_permission_action(
-                            self.permission_mode_actions(
-                                &preset,
-                                APPROVE_FOR_ME_LABEL.to_string(),
-                                ApprovalsReviewer::AutoReview,
-                                /*profile_selection*/ None,
-                                /*return_to_permissions*/ !include_read_only,
-                            ),
-                            restorable_selection.clone(),
+                        actions: self.permission_mode_actions(
+                            &preset,
+                            APPROVE_FOR_ME_LABEL.to_string(),
+                            ApprovalsReviewer::AutoReview,
+                            /*profile_selection*/ None,
+                            /*return_to_permissions*/ !include_read_only,
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
@@ -168,36 +162,6 @@ impl ChatWidget {
                     ..Default::default()
                 });
             }
-        }
-
-        if let Some(previous_selection) = self.previous_custom_permission_selection.clone()
-            && !self.permission_selection_matches_current(&previous_selection)
-        {
-            let disabled_reason = self
-                .config
-                .permissions
-                .approval_policy
-                .can_set(&previous_selection.approval_policy.to_core())
-                .err()
-                .map(|err| err.to_string())
-                .or_else(|| {
-                    self.config
-                        .permissions
-                        .can_set_permission_profile(&previous_selection.permission_profile)
-                        .err()
-                        .map(|err| err.to_string())
-                });
-            items.push(SelectionItem {
-                name: "Previous Custom".to_string(),
-                description: Some(
-                    "Return to the custom permissions used before switching presets.".to_string(),
-                ),
-                is_current: false,
-                actions: Self::restorable_permission_actions(previous_selection),
-                dismiss_on_select: true,
-                disabled_reason,
-                ..Default::default()
-            });
         }
 
         let footer_note = show_elevate_sandbox_hint.then(|| {
@@ -301,100 +265,6 @@ impl ChatWidget {
         );
     }
 
-    fn restorable_current_permission_selection(&self) -> Option<RestorablePermissionSelection> {
-        let selection = RestorablePermissionSelection {
-            approval_policy: AskForApproval::from(self.config.permissions.approval_policy.value()),
-            permission_profile: self.config.permissions.permission_profile().clone(),
-            approvals_reviewer: self.config.approvals_reviewer,
-        };
-
-        (!Self::is_builtin_permission_selection(&selection)).then_some(selection)
-    }
-
-    fn is_builtin_permission_selection(selection: &RestorablePermissionSelection) -> bool {
-        builtin_approval_presets().into_iter().any(|preset| {
-            let preset_approval = AskForApproval::from(preset.approval);
-            if selection.approval_policy != preset_approval
-                || selection.permission_profile != preset.permission_profile
-            {
-                return false;
-            }
-
-            match preset.id {
-                "auto" => matches!(
-                    selection.approvals_reviewer,
-                    ApprovalsReviewer::User | ApprovalsReviewer::AutoReview
-                ),
-                _ => selection.approvals_reviewer == ApprovalsReviewer::User,
-            }
-        })
-    }
-
-    fn permission_selection_matches_current(
-        &self,
-        selection: &RestorablePermissionSelection,
-    ) -> bool {
-        selection.approval_policy
-            == AskForApproval::from(self.config.permissions.approval_policy.value())
-            && selection.permission_profile == self.config.permissions.permission_profile().clone()
-            && selection.approvals_reviewer == self.config.approvals_reviewer
-    }
-
-    fn with_restorable_permission_action(
-        actions: Vec<SelectionAction>,
-        selection: Option<RestorablePermissionSelection>,
-    ) -> Vec<SelectionAction> {
-        let Some(selection) = selection else {
-            return actions;
-        };
-
-        let mut actions_with_remember: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::RememberCustomPermissionSelection(
-                selection.clone(),
-            ));
-        })];
-        actions_with_remember.extend(actions);
-        actions_with_remember
-    }
-
-    fn restorable_permission_actions(
-        selection: RestorablePermissionSelection,
-    ) -> Vec<SelectionAction> {
-        vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context_with_permission_profile(
-                    /*cwd*/ None,
-                    Some(selection.approval_policy),
-                    Some(selection.approvals_reviewer),
-                    /*active_permission_profile*/ None,
-                    Some(selection.permission_profile.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                ),
-            ));
-            tx.send(AppEvent::UpdateAskForApprovalPolicy(
-                selection.approval_policy,
-            ));
-            tx.send(AppEvent::UpdatePermissionProfile(
-                selection.permission_profile.clone(),
-            ));
-            tx.send(AppEvent::UpdateApprovalsReviewer(
-                selection.approvals_reviewer,
-            ));
-            tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(
-                    "Permissions updated to Previous Custom".to_string(),
-                    /*hint*/ None,
-                ),
-            )));
-        })]
-    }
-
     pub(super) fn approval_preset_actions(
         approval: AskForApproval,
         permission_profile: PermissionProfile,
@@ -403,26 +273,19 @@ impl ChatWidget {
         approvals_reviewer: ApprovalsReviewer,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
-            tx.send(AppEvent::CodexOp(
-                AppCommand::override_turn_context_with_permission_profile(
-                    /*cwd*/ None,
-                    Some(approval),
-                    Some(approvals_reviewer),
-                    /*active_permission_profile*/ Some(active_permission_profile.clone()),
-                    Some(permission_profile.clone()),
-                    /*windows_sandbox_level*/ None,
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                ),
-            ));
+            tx.send(AppEvent::CodexOp(AppCommand::override_turn_context(
+                /*cwd*/ None,
+                Some(approval),
+                Some(approvals_reviewer),
+                Some(permission_profile.clone()),
+                Some(active_permission_profile.clone()),
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+            )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-            tx.send(AppEvent::UpdatePermissionProfile(
-                permission_profile.clone(),
-            ));
             tx.send(AppEvent::UpdateActivePermissionProfile(
                 active_permission_profile.clone(),
             ));

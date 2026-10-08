@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::Weak;
 
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_connectors::AppToolPolicyInput;
@@ -20,24 +19,27 @@ const MAX_AGENT_PLUGIN_MCP_SPEC_BYTES: usize = 8_000;
 const MAX_AGENT_PLUGIN_MCP_TOTAL_BYTES: usize = 64_000;
 
 use crate::config::Config;
-use crate::connectors;
+use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::mcp::McpToolRecovery;
 use crate::tools::registry::ToolRegistry;
+
+pub(crate) fn recovered_mcp_namespace_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.provider.capabilities().namespace_tools
+        && turn_context.tools_config.namespace_tools
+}
 
 #[derive(Default)]
 pub(crate) struct McpHandlerCache {
-    cached: Mutex<Option<CachedMcpHandlers>>,
-}
-
-struct CachedMcpHandlers {
-    binding: Weak<McpBinding>,
-    handlers: HashMap<ToolName, CachedMcpHandler>,
+    handlers: Mutex<HashMap<ToolName, CachedMcpHandler>>,
 }
 
 struct CachedMcpHandler {
     tool_info: McpToolInfo,
     agent_plugin: bool,
     schema_max_bytes: Option<NonZeroUsize>,
+    recovery: McpToolRecovery,
+    namespace_tools_enabled: bool,
     handler: Arc<McpHandler>,
 }
 
@@ -45,37 +47,48 @@ impl McpHandlerCache {
     pub(crate) fn append_mcp_tools(
         &self,
         binding: &Arc<McpBinding>,
-        mcp_tools: &[McpToolInfo],
         config: &Config,
         apps_enabled: bool,
         mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
         search_tool_enabled: bool,
         registry: &mut ToolRegistry,
     ) -> HashSet<ToolName> {
-        let mut cached = self
-            .cached
+        self.append_mcp_tools_with_recovery(
+            binding.tools(),
+            config,
+            apps_enabled,
+            mcp_server_catalog,
+            search_tool_enabled,
+            &HashMap::new(),
+            /*namespace_tools_enabled*/ true,
+            registry,
+        )
+    }
+
+    pub(crate) fn append_mcp_tools_with_recovery(
+        &self,
+        mcp_tools: &[McpToolInfo],
+        config: &Config,
+        apps_enabled: bool,
+        mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
+        search_tool_enabled: bool,
+        recovered_tools: &HashMap<ToolName, McpToolRecovery>,
+        namespace_tools_enabled: bool,
+        registry: &mut ToolRegistry,
+    ) -> HashSet<ToolName> {
+        let mut handlers = self
+            .handlers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if cached.as_ref().is_none_or(|cached| {
-            cached
-                .binding
-                .upgrade()
-                .is_none_or(|cached_binding| !Arc::ptr_eq(&cached_binding, binding))
-        }) {
-            *cached = None;
-        }
-
-        let cached = cached.get_or_insert_with(|| CachedMcpHandlers {
-            binding: Arc::downgrade(binding),
-            handlers: HashMap::new(),
-        });
-        append_mcp_tools(
+        append_mcp_tools_with_recovery(
             mcp_tools,
             config,
             apps_enabled,
             mcp_server_catalog,
             search_tool_enabled,
-            &mut cached.handlers,
+            recovered_tools,
+            namespace_tools_enabled,
+            &mut handlers,
             registry,
         )
     }
@@ -91,57 +104,28 @@ fn append_mcp_tools(
     handlers: &mut HashMap<ToolName, CachedMcpHandler>,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
-    append_mcp_tools_with_selection(
+    append_mcp_tools_with_recovery(
         all_mcp_tools,
-        None,
-        &[],
-        &HashSet::new(),
         config,
         apps_enabled,
         mcp_server_catalog,
         search_tool_enabled,
+        &HashMap::new(),
+        /*namespace_tools_enabled*/ true,
         handlers,
         registry,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn append_mcp_tools_for_input(
+#[instrument(level = "trace", skip_all)]
+fn append_mcp_tools_with_recovery(
     all_mcp_tools: &[McpToolInfo],
-    connectors: Option<&[connectors::AppInfo]>,
-    explicitly_enabled_connectors: &[connectors::AppInfo],
-    explicitly_referenced_mcp_servers: &HashSet<String>,
     config: &Config,
     apps_enabled: bool,
     mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
     search_tool_enabled: bool,
-    registry: &mut ToolRegistry,
-) -> HashSet<ToolName> {
-    let mut handlers = HashMap::new();
-    append_mcp_tools_with_selection(
-        all_mcp_tools,
-        connectors,
-        explicitly_enabled_connectors,
-        explicitly_referenced_mcp_servers,
-        config,
-        apps_enabled,
-        mcp_server_catalog,
-        search_tool_enabled,
-        &mut handlers,
-        registry,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_mcp_tools_with_selection(
-    all_mcp_tools: &[McpToolInfo],
-    connectors: Option<&[connectors::AppInfo]>,
-    explicitly_enabled_connectors: &[connectors::AppInfo],
-    explicitly_referenced_mcp_servers: &HashSet<String>,
-    config: &Config,
-    apps_enabled: bool,
-    mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
-    search_tool_enabled: bool,
+    recovered_tools: &HashMap<ToolName, McpToolRecovery>,
+    namespace_tools_enabled: bool,
     handlers: &mut HashMap<ToolName, CachedMcpHandler>,
     registry: &mut ToolRegistry,
 ) -> HashSet<ToolName> {
@@ -153,74 +137,54 @@ fn append_mcp_tools_with_selection(
 
     // Keep regular MCP tools first; Apps tools also require connector and policy checks.
     let non_app_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
-    let direct_only_app_tools = apps_enabled
-        .then(|| {
-            filter_codex_apps_mcp_tools(all_mcp_tools, None, config)
-                .filter(|tool| is_direct_only_namespace(tool, config))
-        })
+    let app_tools = apps_enabled
+        .then(|| filter_codex_apps_mcp_tools(all_mcp_tools, config))
         .into_iter()
         .flatten();
-    let selected_app_tools = apps_enabled
-        .then(|| filter_codex_apps_mcp_tools(all_mcp_tools, connectors, config))
-        .into_iter()
-        .flatten();
-    let mut exposed_tools = non_app_tools
-        .chain(direct_only_app_tools)
-        .chain(selected_app_tools)
-        .cloned()
-        .collect::<Vec<_>>();
-    let direct_tool_names = if search_tool_enabled {
-        let mut names =
-            filter_codex_apps_mcp_tools(all_mcp_tools, Some(explicitly_enabled_connectors), config)
-                .map(codex_mcp::ToolInfo::canonical_tool_name)
-                .collect::<HashSet<_>>();
-        names.extend(
-            filter_explicitly_referenced_non_app_mcp_tools(
-                all_mcp_tools,
-                explicitly_referenced_mcp_servers,
-            )
-            .into_iter()
-            .map(|tool| tool.canonical_tool_name()),
-        );
-        names
+    let exposure = if search_tool_enabled {
+        ToolExposure::Deferred
     } else {
-        HashSet::new()
-    };
-    if !apps_enabled {
-        exposed_tools.retain(|tool| tool.server_name != CODEX_APPS_MCP_SERVER_NAME);
-    }
-    let exposure = |tool: &McpToolInfo| {
-        if search_tool_enabled
-            && !is_direct_only_namespace(tool, config)
-            && !direct_tool_names.contains(&tool.canonical_tool_name())
-        {
-            ToolExposure::Deferred
-        } else {
-            ToolExposure::Direct
-        }
+        ToolExposure::Direct
     };
     let mut registered_tools = HashSet::new();
     let mut agent_plugin_bytes = 0usize;
-    for tool in exposed_tools {
+    for tool in non_app_tools.chain(app_tools) {
         let tool_name = tool.canonical_tool_name();
+        let recovery = recovered_tools
+            .get(&tool_name)
+            .copied()
+            .unwrap_or_default();
         let server = mcp_server_catalog.server(&tool.server_name);
         let agent_plugin = server.is_some_and(|server| server.source().is_agent_plugin());
         let tool_input_schema_max_bytes =
             server.and_then(|server| server.config().tool_input_schema_max_bytes);
+        // Handlers contain immutable tool metadata, not a connection or authorization snapshot.
+        // Preserve their identity across equivalent bindings so the search index can also be reused.
         let handler = if let Some(cached) = handlers.get(&tool_name).filter(|cached| {
-            cached.tool_info == tool
+            cached.tool_info == *tool
                 && cached.agent_plugin == agent_plugin
                 && cached.schema_max_bytes == tool_input_schema_max_bytes
+                && cached.recovery == recovery
+                && (recovery == McpToolRecovery::None
+                    || cached.namespace_tools_enabled == namespace_tools_enabled)
         }) {
             Arc::clone(&cached.handler)
         } else {
             handlers.remove(&tool_name);
-            let handler = if agent_plugin {
+            let handler = if recovery != McpToolRecovery::None {
+                McpHandler::new_recovered_placeholder(
+                    tool.clone(),
+                    namespace_tools_enabled,
+                    recovery,
+                    agent_plugin,
+                    tool_input_schema_max_bytes.map(NonZeroUsize::get),
+                )
+            } else if agent_plugin {
                 McpHandler::new_agent_plugin(tool.clone())
             } else if let Some(budget) = tool_input_schema_max_bytes {
                 McpHandler::new_with_schema_max_bytes(tool.clone(), budget.get())
             } else {
-                McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
+                McpHandler::new(tool.clone())
             };
 
             let handler = match handler {
@@ -236,6 +200,8 @@ fn append_mcp_tools_with_selection(
                     tool_info: tool.clone(),
                     agent_plugin,
                     schema_max_bytes: tool_input_schema_max_bytes,
+                    recovery,
+                    namespace_tools_enabled,
                     handler: Arc::clone(&handler),
                 },
             );
@@ -259,7 +225,7 @@ fn append_mcp_tools_with_selection(
             true
         };
         let tool_exposure = if fits_agent_budget {
-            exposure(&tool)
+            exposure
         } else {
             ToolExposure::Hidden
         };
@@ -268,38 +234,6 @@ fn append_mcp_tools_with_selection(
         }
     }
     registered_tools
-}
-
-fn is_direct_only_namespace(tool: &McpToolInfo, config: &Config) -> bool {
-    tool.canonical_tool_name()
-        .namespace
-        .as_deref()
-        .is_some_and(|namespace| {
-            config
-                .code_mode
-                .direct_only_tool_namespaces
-                .iter()
-                .any(|configured_namespace| configured_namespace == namespace)
-        })
-}
-
-fn filter_explicitly_referenced_non_app_mcp_tools(
-    mcp_tools: &[McpToolInfo],
-    explicitly_referenced_mcp_servers: &HashSet<String>,
-) -> Vec<McpToolInfo> {
-    if explicitly_referenced_mcp_servers.is_empty() {
-        return Vec::new();
-    }
-
-    mcp_tools
-        .iter()
-        .filter(|tool| {
-            tool.server_name != CODEX_APPS_MCP_SERVER_NAME
-                && tool_is_model_visible(tool)
-                && explicitly_referenced_mcp_servers.contains(&tool.server_name)
-        })
-        .cloned()
-        .collect()
 }
 
 fn filter_non_codex_apps_mcp_tools_only(
@@ -312,16 +246,9 @@ fn filter_non_codex_apps_mcp_tools_only(
 
 fn filter_codex_apps_mcp_tools<'a>(
     mcp_tools: &'a [McpToolInfo],
-    connectors: Option<&'a [connectors::AppInfo]>,
     config: &'a Config,
 ) -> impl Iterator<Item = &'a McpToolInfo> + 'a {
     let app_tool_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
-    let allowed = connectors.map(|connectors| {
-        connectors
-            .iter()
-            .map(|connector| connector.id.as_str())
-            .collect::<HashSet<_>>()
-    });
 
     mcp_tools.iter().filter(move |tool| {
         if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
@@ -333,11 +260,6 @@ fn filter_codex_apps_mcp_tools<'a>(
         let Some(connector_id) = tool.connector_id.as_deref() else {
             return false;
         };
-        if let Some(allowed) = &allowed
-            && !allowed.contains(connector_id)
-        {
-            return false;
-        }
         let annotations = tool.tool.annotations.as_ref();
         app_tool_policy
             .policy(AppToolPolicyInput {

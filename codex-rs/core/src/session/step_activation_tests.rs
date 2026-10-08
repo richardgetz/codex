@@ -494,6 +494,7 @@ fn settings_submission(
     (
         Submission {
             id: id.to_string(),
+            turn_extension_init: None,
             op: Op::TurnSettings {
                 turn_id: turn_id.to_string(),
                 update,
@@ -505,6 +506,8 @@ fn settings_submission(
             root_turn_id: None,
             residency_guard: None,
             handoff_admission: None,
+            realtime_handoff_input: None,
+            ordinary_slot_permit: None,
         },
         receiver,
     )
@@ -571,6 +574,7 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         Arc::clone(&session),
         session.get_config().await,
         receiver,
+        Arc::new(tokio::sync::RwLock::new(())),
     ));
     let before = session
         .capture_step_context(Arc::clone(&turn), &CancellationToken::new())
