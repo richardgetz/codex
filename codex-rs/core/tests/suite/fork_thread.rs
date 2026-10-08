@@ -343,6 +343,7 @@ async fn resume_restores_settings_snapshot_outside_paginated_model_context() -> 
         .resume_thread_with_history_and_settings(
             test.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
+                history_revision: None,
                 conversation_id: source_thread_id,
                 history: Arc::clone(&model_history),
                 rollout_path,
