@@ -3466,6 +3466,10 @@ async fn manager_only_keeps_normal_tools_and_exposes_worker_capacity_in_code_mod
     let manager_only = probe_with(
         |turn| {
             configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::ManagerOnly, None);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).apply_patch_tool_type =
+                    Some(ApplyPatchToolType::Freeform);
+            });
             use_chatgpt_auth(turn);
             set_web_search_mode(turn, WebSearchMode::Live);
         },

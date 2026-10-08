@@ -122,7 +122,11 @@ async fn update_eta_tool_is_registered_and_records_explicit_lifecycle() -> Resul
     assert!(
         registered["description"]
             .as_str()
-            .is_some_and(|description| description.contains("Completion is explicit"))
+            .is_some_and(|description| {
+                description.contains(
+                    "Completion or cancellation is explicit; idle or elapsed time never completes a task.",
+                )
+            })
     );
 
     let created = &eta_call_output(&requests, "eta-create")["changed_tasks"][0];
