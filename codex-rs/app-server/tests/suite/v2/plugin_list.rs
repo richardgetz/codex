@@ -639,6 +639,7 @@ async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_
             path: Some(valid_marketplace_path),
             interface: None,
             plugins: vec![PluginSummary {
+                extensions: None,
                 id: "valid-plugin@valid-marketplace".to_string(),
                 remote_plugin_id: None,
                 version: None,
@@ -760,6 +761,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
             interface: None,
             plugins: vec![
                 PluginSummary {
+                    extensions: None,
                     id: "valid-plugin@alternate-marketplace".to_string(),
                     remote_plugin_id: None,
                     version: None,
@@ -803,6 +805,7 @@ async fn plugin_list_uses_alternate_discoverable_manifest_and_keeps_undiscoverab
                     keywords: Vec::new(),
                 },
                 PluginSummary {
+                    extensions: None,
                     id: "missing-plugin@alternate-marketplace".to_string(),
                     remote_plugin_id: None,
                     version: None,

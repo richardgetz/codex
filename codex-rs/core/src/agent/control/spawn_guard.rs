@@ -1,7 +1,6 @@
 //! Owns a spawned child until its initial input is accepted.
 
 use super::AgentTreeMembership;
-use super::AgentTreeTeardownGuard;
 use crate::agent::control::HandoffAdmissionGuard;
 use crate::thread_manager::ThreadManagerState;
 use codex_agent_graph_store::ThreadSpawnEdgeStatus;

@@ -179,7 +179,6 @@ pub use user_goal::UserGoalUpdate;
 pub(crate) use user_instructions::UserInstructions;
 pub(crate) use user_shell_command::UserShellCommand;
 pub(crate) use user_verification_notice::UserVerificationNotice;
-pub(crate) use worker_question::WorkerQuestionAnswered;
 pub(crate) use worker_question::WorkerQuestionReply;
 pub(crate) use worker_question::WorkerQuestionRequest;
 pub(crate) use world_state::ManagedDeveloperInstructions;

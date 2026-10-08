@@ -1,7 +1,7 @@
 use super::AGENT_FINAL_MESSAGE_PREFIX;
 use super::ConversationState;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
-use super::REALTIME_HANDOFF_DEDUPE_CAPACITY;
+use super::handoff::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::RealtimeConversationManager;
 use super::RealtimeConversationManagerState;
 use super::RealtimeHandoffAdmission;

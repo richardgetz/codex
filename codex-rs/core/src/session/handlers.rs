@@ -9,7 +9,6 @@ use crate::session::lead_idle::lead_progress_communication;
 use crate::session::fork_ops;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
-use codex_protocol::AgentPath;
 use codex_protocol::turn_input::SuspendTurnOutcome;
 use tracing::Instrument;
 use tracing::debug_span;

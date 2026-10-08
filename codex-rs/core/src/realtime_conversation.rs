@@ -108,7 +108,6 @@ use self::handoff::handle_realtime_fanout_event;
 use self::sideband::spawn_webrtc_sideband_input_task;
 pub(crate) use self::handoff::RealtimeHandoffAdmission;
 pub(crate) use self::handoff::RealtimeHandoffAdmissions;
-use self::handoff::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const TEXT_IN_QUEUE_CAPACITY: usize = 64;

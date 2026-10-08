@@ -383,9 +383,8 @@ impl MessageProcessor {
                     thread_state_manager.clone(),
                 )),
                 Some({
-                    let time_provider =
-                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
-                    time_provider
+
+                    (app_server_time_provider(outgoing.clone(), thread_state_manager.clone())) as _
                 }),
             );
             match code_mode_session_provider {

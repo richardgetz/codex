@@ -237,7 +237,6 @@ use crate::codex_thread::ThreadConfigSnapshot;
 #[cfg(test)]
 use crate::compact::collect_user_messages;
 use crate::config::Config;
-use crate::config::Constrained;
 use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES;
@@ -326,8 +325,6 @@ mod usage_policy;
 mod worker_handoff;
 mod world_state;
 use self::code_mode_warning::unsupported_code_mode_warning;
-use self::config_lock::export_config_lock_if_configured;
-use self::config_lock::validate_config_lock_if_configured;
 pub(crate) use self::environment::ThreadEnvironmentDefaults;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
@@ -360,10 +357,7 @@ use self::turn::collect_explicit_app_ids_from_skill_items;
 use self::turn::filter_connectors_for_input;
 use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
-pub(crate) use self::usage_policy::MAX_USAGE_LIMIT_RETRIES;
 pub(crate) use self::usage_policy::automatic_continuation_allowed;
-pub(crate) use self::usage_policy::wait_for_usage_limit_floor;
-pub(crate) use self::usage_policy::wait_for_usage_limit_reset;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 
