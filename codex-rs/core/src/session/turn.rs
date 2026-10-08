@@ -183,6 +183,15 @@ pub(crate) async fn run_turn(
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
+    let user_input = turn_user_input(&input);
+    let provenance_advisory = crate::session::turn_provenance::record_turn_provenance_preflight(
+        &sess,
+        turn_context.as_ref(),
+        &user_input,
+    )
+    .await
+    .advisory;
+
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
@@ -230,7 +239,6 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
-    let user_input = turn_user_input(&input);
     let allow_plugin_mentions =
         !crate::guardian::is_basic_session_source(&turn_context.session_source);
     let McpStartupRequirements {
@@ -316,7 +324,7 @@ pub(crate) async fn run_turn(
     );
     let mut world_state = world_state?;
 
-    let Some((injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
+    let Some((mut injection_items, explicitly_enabled_connectors)) = build_skills_and_plugins(
         &sess,
         first_step_context.as_ref(),
         &user_input,
@@ -327,6 +335,10 @@ pub(crate) async fn run_turn(
     else {
         return Ok(None);
     };
+    if let Some(advisory) = provenance_advisory {
+        let advisory: ResponseItem = ContextualUserFragment::into(advisory);
+        injection_items.push(advisory);
+    }
 
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return Ok(None);
