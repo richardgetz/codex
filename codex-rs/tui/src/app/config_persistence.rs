@@ -6,6 +6,7 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
+use codex_features::Feature;
 use codex_protocol::config_types::Personality;
 
 async fn build_config_on_runtime_worker(
@@ -56,12 +57,55 @@ pub(super) fn resume_model_settings_for_overrides(
 }
 
 fn has_explicit_session_config_override(config: &Config) -> bool {
+    let terminal_visualization_enabled = config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions);
+    let local_settings = LocalSettings::from(config);
     config.config_layer_stack.layers_high_to_low().any(|layer| {
-        matches!(&layer.name, ConfigLayerSource::SessionFlags)
-            && layer
+        if !matches!(&layer.name, ConfigLayerSource::SessionFlags) {
+            return false;
+        }
+
+        [
+            "allow_login_shell",
+            "default_permissions",
+            "features",
+            "model_reasoning_summary",
+            "model_verbosity",
+            "network",
+            "permissions",
+            "sandbox_workspace_write",
+            "service_tier",
+            "shell_environment_policy",
+            "suppress_unstable_features_warning",
+            "web_search",
+        ]
+        .iter()
+        .any(|key| layer.config.get(*key).is_some())
+            || (config.personality == Some(Personality::None)
+                && layer.config.get("personality").is_some())
+            || (config.bypass_hook_trust && layer.config.get("bypass_hook_trust").is_some())
+            || (terminal_visualization_enabled
+                && layer.config.get("developer_instructions").is_some())
+            || layer
                 .config
-                .as_table()
-                .is_some_and(|table| !table.is_empty())
+                .get("user_preferences_memory")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.get("bucket_policy").is_some())
+            || layer
+                .config
+                .get("memories")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| {
+                    table.get("use_memories").is_some()
+                        || table.get("generate_memories").is_some()
+                })
+            || (local_settings.notices.fast_default_opt_out == Some(true)
+                && layer
+                    .config
+                    .get("notices")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|table| table.get("fast_default_opt_out").is_some()))
     })
 }
 
@@ -77,12 +121,51 @@ pub(super) fn resume_model_settings_for_target(
         return settings;
     }
 
+    let origins = config.config_layer_stack.origins();
+    let has_profile_origin = |key: &str| {
+        origins.get(key).is_some_and(|origin| {
+            matches!(
+                &origin.name,
+                ConfigLayerSource::User {
+                    profile: Some(_),
+                    ..
+                }
+            )
+        })
+    };
+    let local_settings = LocalSettings::from(config);
+    let terminal_visualization_enabled = config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions);
+    let has_explicit_profile_override = [
+        "service_tier",
+        "web_search",
+        "model_reasoning_summary",
+        "model_verbosity",
+        "user_preferences_memory.bucket_policy",
+        "memories.use_memories",
+        "memories.generate_memories",
+    ]
+    .iter()
+    .any(|key| has_profile_origin(key))
+        || (config.personality == Some(Personality::None)
+            && has_profile_origin("personality"))
+        || (config.bypass_hook_trust && has_profile_origin("bypass_hook_trust"))
+        || (config.realtime.enabled
+            && has_profile_origin("features.realtime_conversation.enabled"))
+        || (terminal_visualization_enabled
+            && (has_profile_origin("features.terminal_visualization_instructions.enabled")
+                || has_profile_origin("developer_instructions")))
+        || (local_settings.notices.fast_default_opt_out == Some(true)
+            && has_profile_origin("notices.fast_default_opt_out"));
+
     // A local daemon owns the live thread settings. Rejoining with an empty set of
     // client overrides avoids making the server tear down an idle thread and reopen
     // its session storage under this process. Keep explicit launch settings on the
     // existing restore path so they retain their documented override semantics.
     if has_explicit_resume_permission_override(config, harness_overrides)
         || has_explicit_session_config_override(config)
+        || has_explicit_profile_override
         || harness_overrides.bypass_hook_trust.is_some()
         || harness_overrides.cwd.is_some()
         || harness_overrides.personality.is_some()
@@ -1797,6 +1880,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_daemon_resume_preserves_owner_settings_for_local_only_session_overrides() {
+        let mut app = make_test_app().await;
+        app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::from_str("[tui]\ntheme = 'dark'").expect("TUI session config"),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("session flags layer stack");
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::PreserveExistingThread
+        );
+    }
+
+    #[tokio::test]
     async fn local_daemon_resume_keeps_explicit_session_overrides() {
         let mut app = make_test_app().await;
         app.app_server_target = crate::AppServerTarget::LocalDaemon {
@@ -1817,6 +1925,38 @@ mod tests {
             Default::default(),
         )
         .expect("session flags layer stack");
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_keeps_profile_service_tier_override() {
+        let mut app = make_test_app().await;
+        app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        app.config.service_tier = Some("fast".to_string());
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: test_path_buf("/tmp/codex-profile.config.toml").abs(),
+                    profile: Some("work".to_string()),
+                },
+                TomlValue::Table(toml::map::Map::from_iter([(
+                    "service_tier".to_string(),
+                    TomlValue::String("fast".to_string()),
+                )])),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("profile layer stack");
 
         assert_eq!(
             app.resume_model_settings(),
