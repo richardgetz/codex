@@ -247,7 +247,14 @@ fn team_config_defaults_and_loads_lead_work_policy() {
 #[test]
 fn team_lead_work_policy_uses_snake_case_config_values() {
     let config = toml::from_str::<TeamToml>(
-        "[lead]\nmodel = \"gpt-lead\"\nreasoning_effort = \"high\"\nwork_policy = \"manager_only\"\n",
+        r#"[lead]
+model = "gpt-lead"
+reasoning_effort = "high"
+work_policy = "manager_only"
+[worker]
+model = "gpt-worker"
+reasoning_effort = "high"
+"#,
     )
     .expect("manager_only config value should deserialize");
     let profiles = TeamConfig::try_from(config)
