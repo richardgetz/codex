@@ -91,14 +91,14 @@ impl AgentRunner {
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))?;
         let options = StartThreadOptions {
-            session_source,
+            session_source: session_source.clone(),
             parent_trace: parent_trace.clone(),
             ..StartThreadOptions::new(config)
         };
         let NewThread {
             thread_id, thread, ..
         } = thread_manager
-            .spawn_legacy_subagent(parent_thread_id, options)
+            .spawn_legacy_subagent(parent_thread_id, options, session_source)
             .await?;
         let turn_id = match thread
             .start_turn_if_idle(
