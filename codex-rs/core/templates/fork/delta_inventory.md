@@ -20,6 +20,10 @@ release or merge rules.
 
 ## Unreleased
 
+- The TUI composer tracks overall turn activity separately from slash-command
+  availability. Normal turn state updates both; background status work can gate
+  unavailable slash commands without changing the task-running footer state.
+
 - When explicitly enabled, the direct Playwright CLI exception accepts only one
   plain local Unix command, resolves it to a canonical executable matching the
   configured path or trusted install roots, and rejects agent-writable paths.
@@ -1800,6 +1804,10 @@ release or merge rules.
   `is_running`/`is_closed`, preserve active-turn semantics and the closed/idle
   distinction, and keep labels, row width, keyboard navigation, and the
   no-polling/no-inference boundary unchanged.
+  Verify the TUI composer keeps overall turn activity separate from
+  slash-command availability: normal turn updates synchronize both, while
+  background status updates can gate unavailable slash commands without
+  changing the task-running footer state.
   Verify the running two-row Team/Workers/Subagents layout, direct Worker cap
   denominator, nested parent metadata hydration, and 30-second ordinary-wait
   grace: repeated waits must not extend it, expiry must redraw without a new
