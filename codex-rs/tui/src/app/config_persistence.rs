@@ -60,7 +60,7 @@ fn has_explicit_session_config_override(config: &Config) -> bool {
     let terminal_visualization_enabled = config
         .features
         .enabled(Feature::TerminalVisualizationInstructions);
-    let local_settings = LocalSettings::from(config);
+    let local_settings = crate::local_settings::LocalSettings::from(config);
     config.config_layer_stack.layers_high_to_low().any(|layer| {
         if !matches!(&layer.name, ConfigLayerSource::SessionFlags) {
             return false;
@@ -133,7 +133,7 @@ pub(super) fn resume_model_settings_for_target(
             )
         })
     };
-    let local_settings = LocalSettings::from(config);
+    let local_settings = crate::local_settings::LocalSettings::from(config);
     let terminal_visualization_enabled = config
         .features
         .enabled(Feature::TerminalVisualizationInstructions);
@@ -1905,6 +1905,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_daemon_resume_keeps_explicit_harness_overrides() {
+        let app = make_test_app().await;
+        let target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        let overrides = [
+            (
+                "cwd",
+                ConfigOverrides {
+                    cwd: Some(std::path::PathBuf::from("/tmp/work")),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "personality",
+                ConfigOverrides {
+                    personality: Some(Personality::None),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "service_tier",
+                ConfigOverrides {
+                    service_tier: Some(Some("fast".to_string())),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "tools_web_search_request",
+                ConfigOverrides {
+                    tools_web_search_request: Some(true),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "bypass_hook_trust",
+                ConfigOverrides {
+                    bypass_hook_trust: Some(true),
+                    ..ConfigOverrides::default()
+                },
+            ),
+        ];
+
+        for (name, overrides) in overrides {
+            assert_eq!(
+                resume_model_settings_for_target(&app.config, &overrides, &target),
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+                "explicit {name} override should restore thread settings"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn local_daemon_resume_keeps_explicit_session_overrides() {
         let mut app = make_test_app().await;
         app.app_server_target = crate::AppServerTarget::LocalDaemon {
@@ -1961,6 +2017,144 @@ mod tests {
         assert_eq!(
             app.resume_model_settings(),
             crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_keeps_selected_profile_permission_overrides() {
+        let mut app = make_test_app().await;
+        let target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        let profile_path = test_path_buf("/tmp/codex-profile.config.toml").abs();
+        let cases = [
+            (
+                "approval_policy",
+                toml::from_str("approval_policy = 'never'").expect("approval policy config"),
+                crate::resume_permissions::ResumePermissions {
+                    approval_policy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "approvals_reviewer",
+                toml::from_str("approvals_reviewer = 'auto_review'")
+                    .expect("approvals reviewer config"),
+                crate::resume_permissions::ResumePermissions {
+                    approvals_reviewer: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "default_permissions",
+                toml::from_str("default_permissions = ':read-only'")
+                    .expect("default permissions config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "sandbox_mode",
+                toml::from_str("sandbox_mode = 'workspace-write'")
+                    .expect("sandbox mode config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "sandbox_workspace_write",
+                toml::from_str(
+                    "[sandbox_workspace_write]\nwritable_roots = ['/tmp/profile-root']",
+                )
+                .expect("workspace write config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    workspace_roots: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "empty_sandbox_workspace_write_roots",
+                toml::from_str("[sandbox_workspace_write]\nwritable_roots = []")
+                    .expect("empty workspace roots config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    workspace_roots: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "permissions",
+                toml::from_str(
+                    "default_permissions = 'safe'\n[permissions.safe]\nextends = ':read-only'",
+                )
+                    .expect("named permissions config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, profile_config, expected_permissions) in cases {
+            app.config.config_layer_stack = ConfigLayerStack::new(
+                vec![ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: profile_path.clone(),
+                        profile: Some("work".to_string()),
+                    },
+                    profile_config,
+                )],
+                Default::default(),
+                Default::default(),
+            )
+            .expect("selected profile layer stack");
+
+            assert_eq!(
+                crate::resume_permissions::ResumePermissions::from_overrides(
+                    &app.config,
+                    &ConfigOverrides::default()
+                ),
+                expected_permissions,
+                "selected profile {name} should be recognized as a permission override"
+            );
+            assert_eq!(
+                resume_model_settings_for_target(&app.config, &ConfigOverrides::default(), &target),
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+                "selected profile {name} should restore explicit thread settings"
+            );
+        }
+
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: profile_path,
+                    profile: None,
+                },
+                toml::from_str("sandbox_mode = 'workspace-write'")
+                    .expect("ordinary user sandbox config"),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("ordinary user layer stack");
+
+        assert_eq!(
+            crate::resume_permissions::ResumePermissions::from_overrides(
+                &app.config,
+                &ConfigOverrides::default()
+            ),
+            crate::resume_permissions::ResumePermissions::default(),
+            "ordinary user defaults should not override saved permissions"
+        );
+        assert_eq!(
+            resume_model_settings_for_target(&app.config, &ConfigOverrides::default(), &target),
+            crate::app_server_session::ResumeModelSettings::PreserveExistingThread
         );
     }
 
