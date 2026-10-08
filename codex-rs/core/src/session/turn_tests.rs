@@ -70,10 +70,10 @@ async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     let item = assistant_output_text("original assistant text");
 
     let turn_context = Arc::new(turn_context);
+    let step_context = StepContext::for_test(Arc::clone(&turn_context));
     let handled = handle_assistant_item_done_in_plan_mode(
         &session,
-        turn_context.as_ref(),
-        &turn_context.session_telemetry,
+        &step_context,
         &turn_store,
         &item,
         &mut state,

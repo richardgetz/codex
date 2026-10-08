@@ -1251,7 +1251,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     .expect("config layer stack");
 
     let command = [vec!["rm".to_string()]];
-    let parent_exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
+    let parent_exec_policy = ExecPolicyManager::load(&config)
         .await
         .expect("load parent exec policy");
     assert_eq!(
@@ -1310,7 +1310,10 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         disabled_plugin_ids: None,
         initial_collaboration_mode: None,
         requested_history_mode: None,
-        fork_persistence: ForkPersistence::Copied,
+        fork_persistence: ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
         )),

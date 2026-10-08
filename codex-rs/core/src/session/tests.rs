@@ -236,6 +236,7 @@ use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration as StdDuration;
@@ -4986,145 +4987,93 @@ fn session_telemetry(
     )
 }
 
-fn model_with_default_service_tier(default_service_tier: Option<&str>) -> ModelInfo {
+fn model_with_fast_service_tier() -> ModelInfo {
     let mut model_info = model_info::model_info_from_slug("gpt-5.4");
     model_info.service_tiers = vec![ModelServiceTier {
         id: ServiceTier::Fast.request_value().to_string(),
         name: "Fast".to_string(),
         description: "Priority processing.".to_string(),
     }];
-    model_info.default_service_tier = default_service_tier.map(str::to_string);
     model_info
 }
 
 #[test]
-fn get_service_tier_does_not_use_model_default_when_absent_and_fast_mode_enabled() {
-    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
-
+fn get_service_tier_does_not_infer_fast_without_an_enterprise_plan() {
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            /*account_plan_type*/ Some(codex_protocol::account::PlanType::Plus),
             /*fast_mode_enabled*/ true,
-            &model_info,
         ),
         None
     );
 }
 
 #[test]
-fn get_service_tier_does_not_use_model_default_when_fast_mode_disabled() {
-    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
-
+fn get_service_tier_infers_fast_for_enterprise_when_fast_mode_is_enabled() {
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
-            /*fast_mode_enabled*/ false,
-            &model_info,
-        ),
-        None
-    );
-}
-
-#[test]
-fn get_service_tier_keeps_supported_explicit_tier() {
-    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
-
-    assert_eq!(
-        get_service_tier(
-            Some(ServiceTier::Fast.request_value().to_string()),
+            /*fast_default_opt_out*/ false,
+            /*account_plan_type*/ Some(codex_protocol::account::PlanType::Enterprise),
             /*fast_mode_enabled*/ true,
-            &model_info,
         ),
         Some(ServiceTier::Fast.request_value().to_string())
     );
 }
 
 #[test]
-fn get_service_tier_does_not_default_when_model_has_no_default() {
-    let model_info = model_with_default_service_tier(/*default_service_tier*/ None);
-
+fn get_service_tier_respects_fast_default_opt_out() {
     assert_eq!(
         get_service_tier(
             /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ true,
+            /*account_plan_type*/ Some(codex_protocol::account::PlanType::Enterprise),
             /*fast_mode_enabled*/ true,
-            &model_info,
         ),
         None
     );
 }
 
 #[test]
-fn get_service_tier_drops_unsupported_configured_tier_when_fast_mode_enabled() {
-    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
-
+fn get_service_tier_does_not_infer_fast_when_fast_mode_is_disabled() {
     assert_eq!(
         get_service_tier(
-            Some("unsupported".to_string()),
-            /*fast_mode_enabled*/ true,
-            &model_info,
+            /*configured_service_tier*/ None,
+            /*fast_default_opt_out*/ false,
+            /*account_plan_type*/ Some(codex_protocol::account::PlanType::Enterprise),
+            /*fast_mode_enabled*/ false,
         ),
         None
-    );
-    assert_eq!(
-        get_service_tier(
-            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
-            /*fast_mode_enabled*/ true,
-            &model_info,
-        ),
-        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
     );
 }
 
 #[test]
-fn get_service_tier_preserves_flex_without_catalog_support_or_fast_mode() {
-    let model_info = model_with_default_service_tier(/*default_service_tier*/ None);
-    for fast_mode_enabled in [false, true] {
+fn get_service_tier_preserves_explicit_tiers_when_fast_mode_is_disabled() {
+    for service_tier in [ServiceTier::Fast, ServiceTier::Flex] {
         assert_eq!(
             get_service_tier(
-                Some(ServiceTier::Flex.request_value().to_string()),
-                fast_mode_enabled,
-                &model_info,
+                /*configured_service_tier*/ Some(service_tier.request_value().to_string()),
+                /*fast_default_opt_out*/ true,
+                /*account_plan_type*/ None,
+                /*fast_mode_enabled*/ false,
             ),
-            Some(ServiceTier::Flex.request_value().to_string())
+            Some(service_tier.request_value().to_string())
         );
     }
 }
 
 #[test]
-fn get_service_tier_ignores_non_flex_tiers_when_fast_mode_disabled() {
-    let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
-
+fn unsupported_service_tiers_are_filtered_by_model_support() {
+    let model_info = model_with_fast_service_tier();
     assert_eq!(
-        get_service_tier(
-            Some(ServiceTier::Fast.request_value().to_string()),
-            /*fast_mode_enabled*/ false,
-            &model_info,
+        (
+            service_tier_supported_by_model(ServiceTier::Fast.request_value(), &model_info),
+            service_tier_supported_by_model("unsupported", &model_info),
+            service_tier_supported_by_model(SERVICE_TIER_DEFAULT_REQUEST_VALUE, &model_info),
         ),
-        None
-    );
-    assert_eq!(
-        get_service_tier(
-            Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
-            /*fast_mode_enabled*/ false,
-            &model_info,
-        ),
-        None
-    );
-    assert_eq!(
-        get_service_tier(
-            Some("unsupported".to_string()),
-            /*fast_mode_enabled*/ false,
-            &model_info,
-        ),
-        None
-    );
-    assert_eq!(
-        get_service_tier(
-            /*configured_service_tier*/ None,
-            /*fast_mode_enabled*/ false,
-            &model_info,
-        ),
-        None
+        (true, false, true)
     );
 }
 
@@ -6680,7 +6629,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        ForkPersistence::Copied,
+        ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         SessionSource::Exec,
         skills_service,
         plugins_manager,
@@ -7085,7 +7037,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
-        fork_persistence: ForkPersistence::Copied,
+        fork_persistence: ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     };
@@ -7271,7 +7226,10 @@ async fn make_session_with_config_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        ForkPersistence::Copied,
+        ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         SessionSource::Exec,
         skills_service,
         plugins_manager,
@@ -7412,7 +7370,10 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         tx_event,
         agent_status_tx,
         initial_history,
-        ForkPersistence::Copied,
+        ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         session_source,
         skills_service,
         plugins_manager,
@@ -9264,7 +9225,7 @@ where
     .await
 }
 
-async fn make_session_and_context_with_auth_config_home_and_rx<F>(
+pub(crate) async fn make_session_and_context_with_auth_config_home_and_rx<F>(
     auth: CodexAuth,
     dynamic_tools: Vec<DynamicToolSpec>,
     codex_home: &Path,
@@ -9555,7 +9516,10 @@ where
         services,
         session_tmp: None,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
-        fork_persistence: ForkPersistence::Copied,
+        fork_persistence: ForkPersistence::Copied {
+            inherited_usage_policy: None,
+            inherited_thread_settings: None,
+        },
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     });
@@ -13757,7 +13721,7 @@ async fn built_tools_for_mcp_history(
         )
         .await
         .expect("a fresh cancellation token cannot be cancelled");
-    let (_, router) = super::turn::built_tools(
+    let router = super::turn::built_tools(
         session.as_ref(),
         turn_context.as_ref(),
         step_context.settings.model_info.as_ref(),
