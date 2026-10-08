@@ -184,11 +184,11 @@ fast_default_opt_out = true
 
 #[tokio::test]
 async fn starfield_is_opt_in_through_legacy_or_effects_configuration() -> anyhow::Result<()> {
-    for (config_text, expected) in [
-        ("", false),
-        ("[tui]\nwhimsy = true\n", true),
-        ("[tui.effects]\nstarfield = true\n", true),
-        ("[tui.effects]\nstarfield = false\n", false),
+    for (config_text, expected_starfield, expected_whimsy) in [
+        ("", false, false),
+        ("[tui]\nwhimsy = true\n", true, true),
+        ("[tui.effects]\nstarfield = true\n", true, false),
+        ("[tui.effects]\nstarfield = false\n", false, false),
     ] {
         let home = tempfile::tempdir()?;
         std::fs::write(home.path().join("config.toml"), config_text)?;
@@ -202,7 +202,9 @@ async fn starfield_is_opt_in_through_legacy_or_effects_configuration() -> anyhow
             .loader_overrides(loader_overrides.clone())
             .build()
             .await?;
-        assert_eq!(LocalSettings::from(&config).tui.effects.starfield, expected);
+        let local_settings = LocalSettings::from(&config);
+        assert_eq!(local_settings.tui.effects.starfield, expected_starfield);
+        assert_eq!(local_settings.tui.whimsy, expected_whimsy);
 
         let bootstrap = crate::legacy_core::config::load_config_toml_with_layer_stack(
             home.path(),
@@ -215,13 +217,9 @@ async fn starfield_is_opt_in_through_legacy_or_effects_configuration() -> anyhow
             },
         )
         .await?;
-        assert_eq!(
-            LocalSettings::from_bootstrap(&bootstrap, config.codex_home.clone())?
-                .tui
-                .effects
-                .starfield,
-            expected
-        );
+        let local_settings = LocalSettings::from_bootstrap(&bootstrap, config.codex_home.clone())?;
+        assert_eq!(local_settings.tui.effects.starfield, expected_starfield);
+        assert_eq!(local_settings.tui.whimsy, expected_whimsy);
     }
     Ok(())
 }
