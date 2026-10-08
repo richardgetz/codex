@@ -2402,6 +2402,7 @@ impl ChatWidget {
             token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
+            daybreak_command_description: self.daybreak_command_description(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             provenance_commands_enabled: self.provenance_commands_enabled,
             voice_command_enabled: self.realtime_conversation_available_for_thread,
