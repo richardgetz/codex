@@ -1180,6 +1180,7 @@ async fn run_ratatui_app(
         prev_hook(info);
     }));
     let (mut tui, mut terminal_restore_guard, mut startup_draft) = startup_draft.into_parts();
+    tui.configure_realtime_voice(initial_config.realtime.enabled);
 
     #[cfg(not(debug_assertions))]
     {
@@ -1425,6 +1426,7 @@ async fn run_ratatui_app(
         &crate::local_settings::LocalSettings::from(&config),
         config.cwd.as_path(),
     );
+    tui.configure_realtime_voice(config.realtime.enabled);
     if !(cli.resume_picker || cli.fork_picker || cli.agents_overview)
         && let Err(err) = startup_draft.show(&mut tui)
     {
@@ -1780,6 +1782,7 @@ async fn run_ratatui_app(
         &crate::local_settings::LocalSettings::from(&config),
         config.cwd.as_path(),
     );
+    tui.configure_realtime_voice(config.realtime.enabled);
 
     if config.model_provider_id != startup_model_provider {
         startup_account = None;
@@ -1943,6 +1946,7 @@ async fn run_ratatui_app(
         &crate::local_settings::LocalSettings::from(&config),
         config.cwd.as_path(),
     );
+    tui.configure_realtime_voice(config.realtime.enabled);
 
     // Count launches that reach final config resolution, regardless of screen policy.
     if config.analytics_enabled != Some(false)

@@ -134,6 +134,7 @@ impl StartupDraft {
             initialized_terminal.terminal,
             initialized_terminal.enhanced_keys_supported,
             initialized_terminal.stderr_guard,
+            initialized_terminal.mac_right_option_monitor,
         );
         tui.terminal_app_over_ssh = initialized_terminal.terminal_app_over_ssh;
         tui.set_alt_screen_enabled(screen.use_alt_screen);
