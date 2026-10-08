@@ -356,6 +356,7 @@ consolidation_model = "gpt-5.2"
             min_rate_limit_remaining_percent: Some(12),
             extract_model: Some("gpt-5-mini".to_string()),
             consolidation_model: Some("gpt-5.2".to_string()),
+            ..Default::default()
         }),
         memories_cfg.memories
     );
@@ -375,6 +376,7 @@ consolidation_model = "gpt-5.2"
             disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
+            scope: Default::default(),
             dedicated_tools: true,
             max_raw_memories_for_consolidation: 512,
             max_unused_days: 21,
@@ -383,7 +385,9 @@ consolidation_model = "gpt-5.2"
             min_rollout_idle_hours: 24,
             min_rate_limit_remaining_percent: 12,
             extract_model: Some("gpt-5-mini".to_string()),
+            extract_reasoning_effort: None,
             consolidation_model: Some("gpt-5.2".to_string()),
+            consolidation_reasoning_effort: None,
         }
     );
 
@@ -443,6 +447,7 @@ enabled = false
             include_instructions: Some(false),
             max_context_tokens: std::num::NonZeroUsize::new(1_200),
             config: Vec::new(),
+            modes: HashMap::new(),
         })
     );
 
@@ -1292,6 +1297,7 @@ fn config_toml_deserializes_model_availability_nux() {
                 ]),
             },
             terminal_resize_reflow_max_rows: None,
+            ..Default::default()
         }
     );
 }
@@ -4428,6 +4434,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
+            ..Default::default()
         }
     );
 }
@@ -8170,6 +8177,8 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
@@ -10299,6 +10308,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         model_catalog_json: None,
         check_for_update_on_startup: None,
         allow_login_shell: None,
+        allow_browser: None,
         feedback: None,
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
@@ -13222,6 +13232,7 @@ voice = "cedar"
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
+            ..RealtimeToml::default()
         })
     );
 
@@ -13240,6 +13251,7 @@ voice = "cedar"
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
+            ..RealtimeConfig::default()
         }
     );
     Ok(())
@@ -13265,6 +13277,7 @@ async fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
                 microphone: Some("USB Mic".into()),
                 speaker: Some("Desk Speakers".into()),
                 microphone_channel: expected_audio.microphone_channel,
+                ..Default::default()
             }
         );
     }
