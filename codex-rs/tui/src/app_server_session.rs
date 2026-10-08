@@ -553,6 +553,7 @@ impl AppServerSession {
             DynamicToolMcpServer::start(
                 self.request_handle(),
                 thread_start_params,
+                config.features.get().clone(),
                 app_event_tx,
                 status_updates,
                 managed_requirement,
@@ -1722,6 +1723,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadGoalSet {
                 request_id,
                 params: ThreadGoalSetParams {
+                    origin: Some(codex_app_server_protocol::ThreadGoalMutationOrigin::User),
                     thread_id: thread_id.to_string(),
                     objective,
                     status,
@@ -1741,6 +1743,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadGoalClear {
                 request_id,
                 params: ThreadGoalClearParams {
+                    origin: Some(codex_app_server_protocol::ThreadGoalMutationOrigin::User),
                     thread_id: thread_id.to_string(),
                 },
             })
@@ -2235,7 +2238,7 @@ pub(crate) fn status_account_display_from_account(
     }
 }
 
-fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
+pub(crate) fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
     let upgrade = model.upgrade.map(|upgrade_id| {
         let upgrade_info = model.upgrade_info.clone();
         ModelUpgrade {

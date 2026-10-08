@@ -92,6 +92,7 @@ impl AppServerSession {
             config.workspace_roots.clone(),
             Vec::new(),
             thread.reasoning_effort,
+            config.personality,
             local_settings,
         )
         .await
@@ -251,6 +252,7 @@ impl AppServerSession {
         let mut started = started_thread_from_resume_response(
             response,
             local_settings,
+            &config,
             self.thread_params_mode(),
         )
         .await?;
