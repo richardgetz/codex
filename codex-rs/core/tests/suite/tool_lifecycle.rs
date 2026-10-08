@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -494,6 +495,105 @@ async fn mcp_result_processing_precedes_completion(
         )
     );
     assert!(!output.contains("private-mcp-metadata"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mcp_smart_wait_retries_no_update_result() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    let no_update_result: CallToolResult = serde_json::from_value(json!({
+        "content": [{"type": "text", "text": "No update yet"}],
+        "structuredContent": {"text": "No update yet"},
+        "isError": false,
+        "_meta": {
+            "codex/wait": {
+                "v": 1,
+                "state": "no_update",
+                "retry_after_ms": 1,
+            },
+        },
+    }))?;
+    let final_result: CallToolResult = serde_json::from_value(json!({
+        "content": [{"type": "text", "text": "Latest event list"}],
+        "structuredContent": {"text": "Latest event list"},
+        "isError": false,
+        "_meta": {"private-mcp-metadata": "server"},
+    }))?;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let response_results = [no_update_result, final_result.clone()];
+    let response_call_count = call_count.clone();
+    Mock::given(body_partial_json(json!({"method": "tools/call"})))
+        .respond_with(move |request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("MCP request JSON");
+            let result = match response_call_count.fetch_add(1, Ordering::SeqCst) {
+                0 => response_results[0].clone(),
+                1 => response_results[1].clone(),
+                count => panic!("unexpected MCP tools/call request {count}"),
+            };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": result,
+            }))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    let test = apps_enabled_builder(apps_server.chatgpt_base_url)
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+
+    let call_id = "mcp-smart-wait-call";
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                call_id,
+                SEARCH_CALENDAR_NAMESPACE,
+                SEARCH_CALENDAR_LIST_TOOL,
+                r#"{"query":"smart wait"}"#,
+            ),
+            responses::ev_completed("first-response"),
+        ]),
+    )
+    .await;
+    let follow_up = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("assistant-done", "done"),
+            responses::ev_completed("second-response"),
+        ]),
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "List my latest calendar events.".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    let EventMsg::McpToolCallEnd(end) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await
+    else {
+        unreachable!();
+    };
+    assert_eq!(end.result.expect("MCP server returned a result"), final_result);
+    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    let output = follow_up
+        .single_request()
+        .function_call_output(call_id)["output"]
+        .to_string();
+    assert!(output.contains("Latest event list"));
+    assert!(!output.contains("No update yet"));
     Ok(())
 }
 
