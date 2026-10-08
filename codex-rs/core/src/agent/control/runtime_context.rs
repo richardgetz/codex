@@ -11,6 +11,25 @@ use codex_protocol::error::Result as CodexResult;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
+const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
+
+fn bounded_environment_context_subagents(lines: impl IntoIterator<Item = String>) -> String {
+    let mut selected_lines = Vec::with_capacity(MAX_ENVIRONMENT_SUBAGENTS);
+    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
+    for line in lines {
+        if selected_lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
+            break;
+        }
+        let line_bytes = "    \n".len() + line.len();
+        if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
+            rendered_bytes += line_bytes;
+            selected_lines.push(line);
+        }
+    }
+    selected_lines.join("\n")
+}
+
 impl LocalAgentRuntime {
     pub(crate) fn register_session_root(
         &self,
@@ -44,18 +63,14 @@ impl LocalAgentRuntime {
         let Ok(agents) = self.open_thread_spawn_children(parent_thread_id).await else {
             return String::new();
         };
-        agents
-            .into_iter()
-            .map(|(thread_id, metadata)| {
-                let reference = metadata
-                    .agent_path
-                    .as_ref()
-                    .map(|path| path.name().to_string())
-                    .unwrap_or_else(|| thread_id.to_string());
-                format_subagent_context_line(&reference, metadata.agent_nickname.as_deref())
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        bounded_environment_context_subagents(agents.into_iter().map(|(thread_id, metadata)| {
+            let reference = metadata
+                .agent_path
+                .as_ref()
+                .map(|path| path.name().to_string())
+                .unwrap_or_else(|| thread_id.to_string());
+            format_subagent_context_line(&reference, metadata.agent_nickname.as_deref())
+        }))
     }
 
     pub(super) async fn open_thread_spawn_children(
@@ -135,3 +150,7 @@ impl LocalAgentRuntime {
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_context_tests.rs"]
+mod tests;
