@@ -25,43 +25,46 @@ impl ResumePermissions {
         let active_permission_profile_id = config
             .permissions
             .active_permission_profile()
-            .map(|profile| profile.id.clone());
+            .map(|profile| profile.id);
         let empty_container_from_source =
             |path: &[&str], is_override: &dyn Fn(&ConfigLayerSource) -> bool| {
-                let effective_is_empty = config_value_at_path(&effective_config, path)
-                    .is_some_and(|value| match value {
+                let effective_is_empty = config_value_at_path(&effective_config, path).is_some_and(
+                    |value| match value {
                         toml::Value::Array(items) => items.is_empty(),
                         toml::Value::Table(table) => table.is_empty(),
                         _ => false,
-                    });
+                    },
+                );
                 let highest_layer_is_override = config
                     .config_layer_stack
                     .layers_high_to_low()
                     .find_map(|layer| {
-                        config_value_at_path(&layer.config, path)
-                            .map(|_| is_override(&layer.name))
+                        config_value_at_path(&layer.config, path).map(|_| is_override(&layer.name))
                     })
                     .unwrap_or(false);
                 effective_is_empty && highest_layer_is_override
             };
-        let active_permission_profile_settings_override =
-            active_permission_profile_id.as_deref().is_some_and(|profile_id| {
+        let active_permission_profile_settings_override = active_permission_profile_id
+            .as_deref()
+            .is_some_and(|profile_id| {
                 // Only the active named profile's settings are forwarded; dormant definitions
                 // in the selected user profile must not replace the saved thread profile.
                 let path = ["permissions", profile_id];
-                let origins = config.config_layer_stack.origins_with_path_filter(|origin_path| {
-                    origin_path.len() > path.len()
-                        && path
-                            .iter()
-                            .zip(origin_path)
-                            .all(|(path_segment, origin_segment)| {
-                                origin_segment.as_str() == *path_segment
-                            })
-                        && matches!(
-                            origin_path[path.len()].as_str(),
-                            "extends" | "workspace_roots" | "filesystem" | "network"
-                        )
-                });
+                let origins = config
+                    .config_layer_stack
+                    .origins_with_path_filter(|origin_path| {
+                        origin_path.len() > path.len()
+                            && path
+                                .iter()
+                                .zip(origin_path)
+                                .all(|(path_segment, origin_segment)| {
+                                    origin_segment.as_str() == *path_segment
+                                })
+                            && matches!(
+                                origin_path[path.len()].as_str(),
+                                "extends" | "workspace_roots" | "filesystem" | "network"
+                            )
+                    });
                 origins.values().any(|origin| {
                     matches!(
                         &origin.name,
@@ -69,7 +72,7 @@ impl ResumePermissions {
                             | ConfigLayerSource::User {
                                 profile: Some(_),
                                 ..
-                        }
+                            }
                     )
                 }) || empty_container_from_source(
                     &["permissions", profile_id, "workspace_roots"],
@@ -88,15 +91,16 @@ impl ResumePermissions {
         // Empty arrays/tables have no leaf origin, so confirm the winning layer directly.
         let has = |path: &str| {
             let path_segments = path.split('.').collect::<Vec<_>>();
-            let origins = config.config_layer_stack.origins_with_path_filter(|origin_path| {
-                origin_path.len() >= path_segments.len()
-                    && path_segments
-                        .iter()
-                        .zip(origin_path)
-                        .all(|(path_segment, origin_segment)| {
-                            origin_segment.as_str() == *path_segment
-                        })
-            });
+            let origins = config
+                .config_layer_stack
+                .origins_with_path_filter(|origin_path| {
+                    origin_path.len() >= path_segments.len()
+                        && path_segments.iter().zip(origin_path).all(
+                            |(path_segment, origin_segment)| {
+                                origin_segment.as_str() == *path_segment
+                            },
+                        )
+                });
             let from_session_flags = origins
                 .values()
                 .any(|origin| matches!(&origin.name, ConfigLayerSource::SessionFlags))
@@ -146,8 +150,7 @@ impl ResumePermissions {
                             )
                         },
                     ))
-                || (path == "permissions"
-                    && active_permission_profile_settings_override);
+                || (path == "permissions" && active_permission_profile_settings_override);
             from_session_flags || from_user_profile
         };
         Self {

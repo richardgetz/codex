@@ -66,15 +66,14 @@ async fn materialize_to_sqlite_with_state_db(
         .map_or(initial_ordinal, |state| state.next_ordinal);
     let path = rollout_path.to_path_buf();
     let span = tracing::Span::current();
-    let file =
-        tokio::task::spawn_blocking(move || {
-            let _entered = span.enter();
-            codex_rollout::open_rollout_seekable_reader(&path)
-        })
-            .await
-            .map_err(|err| ThreadStoreError::Internal {
-                message: format!("failed to join rollout projection read: {err}"),
-            })?;
+    let file = tokio::task::spawn_blocking(move || {
+        let _entered = span.enter();
+        codex_rollout::open_rollout_seekable_reader(&path)
+    })
+    .await
+    .map_err(|err| ThreadStoreError::Internal {
+        message: format!("failed to join rollout projection read: {err}"),
+    })?;
     let file = match file {
         Ok(file) => tokio::fs::File::from_std(file),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound && start_offset == 0 => {
@@ -344,11 +343,12 @@ async fn read_projection_steps(
                         "skipping rollout line with invalid timestamp during projection"
                     );
                     record_projection_anomaly(ProjectionAnomaly::InvalidTimestamp);
-                    let end_ordinal_exclusive = ordinal.checked_add(1).ok_or_else(|| {
-                        ThreadStoreError::Internal {
-                            message: "rollout ordinal exceeds SQLite integer range".to_string(),
-                        }
-                    })?;
+                    let end_ordinal_exclusive =
+                        ordinal
+                            .checked_add(1)
+                            .ok_or_else(|| ThreadStoreError::Internal {
+                                message: "rollout ordinal exceeds SQLite integer range".to_string(),
+                            })?;
                     projections.push(RolloutProjectionStep::SkippedOrdinalRange {
                         start_ordinal: next_ordinal,
                         end_ordinal_exclusive,

@@ -21,8 +21,8 @@ use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
-use crate::context::world_state::UsageLimitsState;
 use crate::context::world_state::ToolsState;
+use crate::context::world_state::UsageLimitsState;
 use crate::context::world_state::WorldState;
 use crate::enablement::filter_connectors_for_mode;
 use crate::realtime_prompt::RealtimePreamblePolicy;
@@ -454,10 +454,12 @@ async fn format_environment_context_subagents(
             }
             lines.join("\n")
         }
-        MultiAgentVersion::Disabled | MultiAgentVersion::V1 => session
-            .services
-            .local_agent_runtime
-            .format_legacy_environment_context_subagents(session.thread_id)
-            .await,
+        MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
+            session
+                .services
+                .local_agent_runtime
+                .format_legacy_environment_context_subagents(session.thread_id)
+                .await
+        }
     }
 }

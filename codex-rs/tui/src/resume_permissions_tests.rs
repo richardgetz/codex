@@ -14,7 +14,9 @@ async fn build_user_profile_config(
     let config = ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
         .loader_overrides(codex_config::LoaderOverrides {
-            user_config_path: Some(AbsolutePathBuf::try_from(profile_config_path.to_path_buf())?),
+            user_config_path: Some(AbsolutePathBuf::try_from(
+                profile_config_path.to_path_buf(),
+            )?),
             user_config_profile: Some(profile.parse()?),
             ..codex_config::LoaderOverrides::without_managed_config_for_tests()
         })
@@ -50,10 +52,7 @@ async fn selected_profile_permissions_override_saved_permissions() -> color_eyre
         });
     let ordinary_user_config = ordinary_user_builder.clone().build().await?;
     assert_eq!(
-        ResumePermissions::from_overrides(
-            &ordinary_user_config,
-            &ConfigOverrides::default()
-        ),
+        ResumePermissions::from_overrides(&ordinary_user_config, &ConfigOverrides::default()),
         ResumePermissions::default(),
         "ordinary user defaults should not replace saved thread permissions"
     );
@@ -117,11 +116,7 @@ async fn selected_profile_permissions_override_saved_permissions() -> color_eyre
     }
 
     for (permission_id, profile_name, profile_contents) in [
-        (
-            "safe",
-            "roots",
-            "[permissions.safe.workspace_roots]\n",
-        ),
+        ("safe", "roots", "[permissions.safe.workspace_roots]\n"),
         (
             "safe.work",
             "dotted-roots",

@@ -97,10 +97,11 @@ fn test_connector(id: &str, name: &str) -> connectors::AppInfo {
 #[test]
 fn per_input_mcp_selection_uses_user_text_and_server_name_boundaries() {
     let mcp_tools = [test_mcp_tool("db")];
-    let assistant_mention = [message_with_text_chunks("assistant", &["Use db for lookup."])];
-    assert!(
-        explicitly_referenced_mcp_servers_for_input(&assistant_mention, &mcp_tools).is_empty()
-    );
+    let assistant_mention = [message_with_text_chunks(
+        "assistant",
+        &["Use db for lookup."],
+    )];
+    assert!(explicitly_referenced_mcp_servers_for_input(&assistant_mention, &mcp_tools).is_empty());
 
     let substring_only = [message_with_text_chunks("user", &["Search the database."])];
     assert!(explicitly_referenced_mcp_servers_for_input(&substring_only, &mcp_tools).is_empty());
@@ -128,17 +129,22 @@ fn per_input_connector_selection_uses_only_complete_user_message_text() {
         "assistant",
         &["Use [$calendar](app://calendar) for the next step."],
     )];
-    assert!(filter_connectors_for_input(
-        &connectors,
-        &assistant_mention,
-        &HashSet::new(),
-        &HashMap::new(),
-    )
-    .is_empty());
+    assert!(
+        filter_connectors_for_input(
+            &connectors,
+            &assistant_mention,
+            &HashSet::new(),
+            &HashMap::new(),
+        )
+        .is_empty()
+    );
 
     let user_mention_in_later_chunk = [message_with_text_chunks(
         "user",
-        &["Please use ", "[$calendar](app://calendar) for this request."],
+        &[
+            "Please use ",
+            "[$calendar](app://calendar) for this request.",
+        ],
     )];
     assert_eq!(
         filter_connectors_for_input(
@@ -246,5 +252,7 @@ fn continuous_run_block_message_points_back_to_scratchpad_policy() {
     assert!(message.contains("\"persona-api\""));
     assert!(message.contains("\"forbidden_base_branches\""));
     assert!(message.contains("Next up:\n- finish registry"));
-    assert!(message.contains("Waiting:\n- Stop keepalive (id: keepalive; details: session_id=abc)"));
+    assert!(
+        message.contains("Waiting:\n- Stop keepalive (id: keepalive; details: session_id=abc)")
+    );
 }

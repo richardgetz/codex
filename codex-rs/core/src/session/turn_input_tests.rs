@@ -881,10 +881,7 @@ async fn steer_only_requires_active_turn() {
 #[tokio::test]
 async fn realtime_handoff_is_rejected_when_turn_admission_was_retired() {
     let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
-    turn_context
-        .realtime_handoff_admissions
-        .retire_all()
-        .await;
+    turn_context.realtime_handoff_admissions.retire_all().await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     session

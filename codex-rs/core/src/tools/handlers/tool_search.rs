@@ -288,10 +288,8 @@ mod tests {
     fn cache_reuses_immutable_handlers_and_rebuilds_for_current_registry_changes() {
         let cache = ToolSearchHandlerCache::default();
         let runtime: Arc<dyn CoreToolRuntime> = Arc::new(
-            McpHandler::new(
-                tool_info("calendar", "create_event", "Create events"),
-            )
-            .expect("MCP tool should convert"),
+            McpHandler::new(tool_info("calendar", "create_event", "Create events"))
+                .expect("MCP tool should convert"),
         );
         let mut registry = ToolRegistry::default();
         registry.register_trusted_with_exposure(Arc::clone(&runtime), ToolExposure::Deferred);
@@ -305,10 +303,8 @@ mod tests {
 
         let mut replacement_registry = ToolRegistry::default();
         let replacement = Arc::new(
-            McpHandler::new(
-                tool_info("calendar", "create_event", "Create events"),
-            )
-            .expect("replacement MCP tool should convert"),
+            McpHandler::new(tool_info("calendar", "create_event", "Create events"))
+                .expect("replacement MCP tool should convert"),
         );
         replacement_registry.register_trusted_with_exposure(replacement, ToolExposure::Deferred);
         let replacement = cache.get_or_build(&replacement_registry, ToolSearchSourceListing::Omit);
@@ -325,10 +321,8 @@ mod tests {
     fn cache_rechecks_dynamic_tool_metadata_while_reusing_immutable_mcp_handlers() {
         let cache = ToolSearchHandlerCache::default();
         let mcp_runtime: Arc<dyn CoreToolRuntime> = Arc::new(
-            McpHandler::new(
-                tool_info("calendar", "create_event", "Create events"),
-            )
-            .expect("MCP tool should convert"),
+            McpHandler::new(tool_info("calendar", "create_event", "Create events"))
+                .expect("MCP tool should convert"),
         );
         let mut dynamic_tool = DynamicToolFunctionSpec {
             name: "lookup".to_string(),

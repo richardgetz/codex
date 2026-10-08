@@ -306,11 +306,8 @@ fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> Hand
     ));
     let step_context = step_context.with_tool_router_for_test(router);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime = ToolCallRuntime::new(
-        Arc::clone(&session),
-        Arc::clone(&step_context),
-        tracker,
-    );
+    let tool_runtime =
+        ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
     HandleOutputCtx {
         sess: session,
         step_context,

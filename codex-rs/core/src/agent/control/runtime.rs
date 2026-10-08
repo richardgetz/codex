@@ -19,10 +19,10 @@ use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::protocol::ThreadUsagePolicy;
-use std::collections::HashSet;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::protocol::ThreadUsagePolicy;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -344,7 +344,6 @@ impl LocalAgentRuntime {
     pub(crate) fn record_shutdown_failure(&self) {
         self.shutdown_state.record_failure();
     }
-
 }
 
 #[cfg(test)]

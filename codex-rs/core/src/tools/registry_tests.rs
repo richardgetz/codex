@@ -447,14 +447,10 @@ async fn readiness_selects_exact_tool_with_registry_owned_exposure() {
 #[tokio::test]
 async fn recovered_mcp_handler_respects_namespace_tools_setting() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
-    assert!(crate::mcp_tool_exposure::recovered_mcp_namespace_tools_enabled(
-        &turn
-    ));
+    assert!(crate::mcp_tool_exposure::recovered_mcp_namespace_tools_enabled(&turn));
 
     turn.tools_config.namespace_tools = false;
-    assert!(!crate::mcp_tool_exposure::recovered_mcp_namespace_tools_enabled(
-        &turn
-    ));
+    assert!(!crate::mcp_tool_exposure::recovered_mcp_namespace_tools_enabled(&turn));
 }
 
 #[tokio::test]
@@ -474,15 +470,17 @@ async fn registry_dispatch_recovers_configured_mcp_placeholder_after_cancelled_s
     let mut config = session.get_config().await.as_ref().clone();
     config
         .mcp_servers
-        .set(serde_json::from_value(serde_json::json!({
-            "imessage": {
-                "command": "__codex_missing_imessage_test__",
-                "startup": "eager",
-                "startup_timeout_sec": 1,
-                "enabled_tools": ["imessage_get_config"]
-            }
-        }))
-        .expect("deserialize MCP server configuration"))
+        .set(
+            serde_json::from_value(serde_json::json!({
+                "imessage": {
+                    "command": "__codex_missing_imessage_test__",
+                    "startup": "eager",
+                    "startup_timeout_sec": 1,
+                    "enabled_tools": ["imessage_get_config"]
+                }
+            }))
+            .expect("deserialize MCP server configuration"),
+        )
         .expect("set MCP server configuration");
     session
         .refresh_mcp_servers_now(turn.as_ref(), &config, /*elicitation_reviewer*/ None)

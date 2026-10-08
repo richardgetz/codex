@@ -97,8 +97,7 @@ fn has_explicit_session_config_override(config: &Config) -> bool {
                 .get("memories")
                 .and_then(toml::Value::as_table)
                 .is_some_and(|table| {
-                    table.get("use_memories").is_some()
-                        || table.get("generate_memories").is_some()
+                    table.get("use_memories").is_some() || table.get("generate_memories").is_some()
                 })
             || (local_settings.notices.fast_default_opt_out == Some(true)
                 && layer
@@ -116,7 +115,10 @@ pub(super) fn resume_model_settings_for_target(
 ) -> crate::app_server_session::ResumeModelSettings {
     let settings = resume_model_settings_for_overrides(config, harness_overrides);
     if settings != crate::app_server_session::ResumeModelSettings::RestoreFromThread
-        || !matches!(app_server_target, crate::AppServerTarget::LocalDaemon { .. })
+        || !matches!(
+            app_server_target,
+            crate::AppServerTarget::LocalDaemon { .. }
+        )
     {
         return settings;
     }
@@ -148,8 +150,7 @@ pub(super) fn resume_model_settings_for_target(
     ]
     .iter()
     .any(|key| has_profile_origin(key))
-        || (config.personality == Some(Personality::None)
-            && has_profile_origin("personality"))
+        || (config.personality == Some(Personality::None) && has_profile_origin("personality"))
         || (config.bypass_hook_trust && has_profile_origin("bypass_hook_trust"))
         || (config.realtime.enabled
             && has_profile_origin("features.realtime_conversation.enabled"))
@@ -2059,8 +2060,7 @@ mod tests {
             ),
             (
                 "sandbox_mode",
-                toml::from_str("sandbox_mode = 'workspace-write'")
-                    .expect("sandbox mode config"),
+                toml::from_str("sandbox_mode = 'workspace-write'").expect("sandbox mode config"),
                 crate::resume_permissions::ResumePermissions {
                     profile: true,
                     ..Default::default()
@@ -2068,10 +2068,8 @@ mod tests {
             ),
             (
                 "sandbox_workspace_write",
-                toml::from_str(
-                    "[sandbox_workspace_write]\nwritable_roots = ['/tmp/profile-root']",
-                )
-                .expect("workspace write config"),
+                toml::from_str("[sandbox_workspace_write]\nwritable_roots = ['/tmp/profile-root']")
+                    .expect("workspace write config"),
                 crate::resume_permissions::ResumePermissions {
                     profile: true,
                     workspace_roots: true,
@@ -2093,7 +2091,7 @@ mod tests {
                 toml::from_str(
                     "default_permissions = 'safe'\n[permissions.safe]\nextends = ':read-only'",
                 )
-                    .expect("named permissions config"),
+                .expect("named permissions config"),
                 crate::resume_permissions::ResumePermissions {
                     profile: true,
                     ..Default::default()

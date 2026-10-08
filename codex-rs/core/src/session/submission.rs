@@ -1,14 +1,14 @@
 //! Core-owned queue metadata; forwarding transfers the residency guard with the operation.
 
-use codex_extension_api::ExtensionDataInit;
 use crate::agent::control::HandoffAdmissionGuard;
 use crate::realtime_conversation::RealtimeHandoffAdmission;
+use codex_extension_api::ExtensionDataInit;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::W3cTraceContext;
 use std::sync::Arc;
-use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::sync::OwnedRwLockReadGuard;
+use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::sync::OwnedSemaphorePermit;
 
 pub(crate) const REALTIME_RESERVED_SUBMISSION_CAPACITY: usize = 1;

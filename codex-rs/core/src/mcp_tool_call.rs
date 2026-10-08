@@ -185,11 +185,7 @@ pub(crate) async fn handle_mcp_tool_call(
             sess.services.mcp_runtime.reconnect_on_next_refresh();
             sess.request_mcp_runtime_refresh();
             sess.refresh_mcp_if_dirty().await;
-            let _ = sess
-                .services
-                .mcp_runtime
-                .latest_start_server(&server)
-                .await;
+            let _ = sess.services.mcp_runtime.latest_start_server(&server).await;
         }
         if sess
             .services

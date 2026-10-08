@@ -548,7 +548,8 @@ impl AppServerSession {
                         }
                 )
             });
-        thread_start_params.daybreak_enabled = daybreak_launch_override.then_some(config.daybreak_enabled);
+        thread_start_params.daybreak_enabled =
+            daybreak_launch_override.then_some(config.daybreak_enabled);
         self.dynamic_tool_mcp = Some(Arc::new(
             DynamicToolMcpServer::start(
                 self.request_handle(),

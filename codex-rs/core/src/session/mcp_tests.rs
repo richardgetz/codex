@@ -115,7 +115,10 @@ fn parse_non_app_mcp_tool_name_rejects_apps_and_malformed_flat_names() {
         parse_non_app_mcp_tool_name(&ToolName::plain("mcp__codex_apps__search")),
         None
     );
-    assert_eq!(parse_non_app_mcp_tool_name(&ToolName::plain("mcp__server")), None);
+    assert_eq!(
+        parse_non_app_mcp_tool_name(&ToolName::plain("mcp__server")),
+        None
+    );
     assert_eq!(
         parse_non_app_mcp_tool_name(&ToolName::plain("mcp____server__bad_name")),
         None
@@ -230,11 +233,13 @@ fn configured_catalog_identity_requires_unique_namespace_or_exact_hashed_server(
         ("my-server".to_string(), disabled_alias),
         enabled_server[0].clone(),
     ];
-    assert!(unique_configured_mcp_server_for_namespace(
-        callable_namespace,
-        configured_with_disabled_alias.iter().cloned(),
-    )
-    .is_none());
+    assert!(
+        unique_configured_mcp_server_for_namespace(
+            callable_namespace,
+            configured_with_disabled_alias.iter().cloned(),
+        )
+        .is_none()
+    );
     assert!(!configured_mcp_catalog_tool_matches_identity(
         "mcp__my_server",
         "my_server",

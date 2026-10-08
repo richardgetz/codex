@@ -31,7 +31,12 @@ pub(in crate::session) async fn thread_rollback(
         .as_ref()
         .is_some_and(|active_turn| active_turn.task.is_some());
     if has_active_turn {
-        send_rollback_error(session, submission_id, "Cannot rollback while a turn is in progress.").await;
+        send_rollback_error(
+            session,
+            submission_id,
+            "Cannot rollback while a turn is in progress.",
+        )
+        .await;
         return;
     }
 
@@ -246,17 +251,26 @@ pub(in crate::session) async fn set_thread_name(
     };
 
     if let Some(state_db) = session.services.state_db.as_deref()
-        && let Err(error) = state_db.update_thread_title(session.thread_id(), &name).await
+        && let Err(error) = state_db
+            .update_thread_title(session.thread_id(), &name)
+            .await
     {
         warn!("Failed to update thread title in state db: {error}");
     }
     session.state.lock().await.session_configuration.thread_name = Some(name.clone());
 
     let codex_home = session.get_config().await.codex_home.clone();
-    if let Err(error) = crate::rollout::append_thread_name(&codex_home, session.thread_id(), &name).await {
+    if let Err(error) =
+        crate::rollout::append_thread_name(&codex_home, session.thread_id(), &name).await
+    {
         warn!("Failed to update legacy thread name index: {error}");
     }
-    session.deliver_event_raw(Event { id: submission_id, msg }).await;
+    session
+        .deliver_event_raw(Event {
+            id: submission_id,
+            msg,
+        })
+        .await;
 }
 
 async fn persist_thread_name_update(

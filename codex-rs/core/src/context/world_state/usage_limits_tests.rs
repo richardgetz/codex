@@ -140,9 +140,7 @@ fn usage_limits_removal_is_not_rediscovered_from_legacy_history() {
     let mut world_state = crate::context::world_state::WorldState::default();
     world_state.add_section(current);
     let (_, mut removals) = world_state.render_history_diff(Some(&previous), &previous_history);
-    let removal = removals
-        .pop()
-        .expect("first removal should be rendered");
+    let removal = removals.pop().expect("first removal should be rendered");
     let removal = crate::context::ContextualUserFragment::into_boxed_response_item(removal);
     assert!(
         world_state

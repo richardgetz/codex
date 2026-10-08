@@ -5327,7 +5327,8 @@ async fn conversation_close_routes_only_remaining_transcript_tail_once() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_replacement_drains_old_transcript_tail_before_starting_new_session() -> Result<()> {
+async fn conversation_replacement_drains_old_transcript_tail_before_starting_new_session()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let api_server = start_mock_server().await;
@@ -5430,7 +5431,8 @@ async fn conversation_replacement_drains_old_transcript_tail_before_starting_new
 
     timeout(
         Duration::from_secs(2),
-        test.codex.submit(Op::RealtimeConversationStart(realtime_start_params(false))),
+        test.codex
+            .submit(Op::RealtimeConversationStart(realtime_start_params(false))),
     )
     .await
     .context("timed out submitting replacement conversation start")??;
@@ -5509,7 +5511,8 @@ async fn session_shutdown_routes_transcript_tail_before_shutdown_complete() -> R
             "type": "conversation.input_transcript.delta",
             "delta": "unanswered question"
         }),
-    ]]]).await;
+    ]]])
+    .await;
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
         move |config| {

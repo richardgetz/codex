@@ -283,8 +283,6 @@ use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
-pub(crate) use frontend_reload::apply_frontend_reload_cli_args;
-pub(crate) use frontend_reload::apply_frontend_reload_context;
 pub(crate) use frontend_reload::frontend_reload_recovery_command;
 pub(crate) use frontend_reload::launcher_is_executable;
 pub(crate) use frontend_reload::reexec_frontend_with_local_daemon_socket;

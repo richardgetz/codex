@@ -1486,9 +1486,10 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
 
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let environment_id = remote_aware_environment_id();
-    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone()).with_config(
-        move |config| configure_rmcp_test_server(config, rmcp_test_server_bin, environment_id),
-    );
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
+            configure_rmcp_test_server(config, rmcp_test_server_bin, environment_id)
+        });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
@@ -1601,9 +1602,10 @@ async fn explicit_mcp_server_mentions_expose_and_dispatch_tools() -> Result<()> 
 
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let environment_id = remote_aware_environment_id();
-    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone()).with_config(
-        move |config| configure_rmcp_test_server(config, rmcp_test_server_bin, environment_id),
-    );
+    let mut builder =
+        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
+            configure_rmcp_test_server(config, rmcp_test_server_bin, environment_id)
+        });
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
@@ -1631,7 +1633,9 @@ async fn explicit_mcp_server_mentions_expose_and_dispatch_tools() -> Result<()> 
             arguments: Some(json!({ "message": "hello" })),
         }
     );
-    let result = end.result.expect("explicitly selected MCP call should succeed");
+    let result = end
+        .result
+        .expect("explicitly selected MCP call should succeed");
     let content = result
         .structured_content
         .expect("echo tool should return structured content");

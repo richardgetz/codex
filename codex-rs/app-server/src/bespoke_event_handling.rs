@@ -4700,8 +4700,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_token_count_event_empty_snapshots_fall_back_to_legacy_rate_limits(
-    ) -> Result<()> {
+    async fn test_handle_token_count_event_empty_snapshots_fall_back_to_legacy_rate_limits()
+    -> Result<()> {
         let conversation_id = ThreadId::new();
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = Arc::new(OutgoingMessageSender::new(

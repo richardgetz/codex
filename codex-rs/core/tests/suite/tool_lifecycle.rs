@@ -1,8 +1,9 @@
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -584,14 +585,17 @@ async fn mcp_smart_wait_retries_no_update_result() -> Result<()> {
     else {
         unreachable!();
     };
-    assert_eq!(end.result.expect("MCP server returned a result"), final_result);
-    wait_for_event(&test.codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        end.result.expect("MCP server returned a result"),
+        final_result
+    );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     assert_eq!(call_count.load(Ordering::SeqCst), 2);
-    let output = follow_up
-        .single_request()
-        .function_call_output(call_id)["output"]
-        .to_string();
+    let output = follow_up.single_request().function_call_output(call_id)["output"].to_string();
     assert!(output.contains("Latest event list"));
     assert!(!output.contains("No update yet"));
     Ok(())

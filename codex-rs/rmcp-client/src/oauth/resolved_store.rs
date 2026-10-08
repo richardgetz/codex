@@ -378,8 +378,11 @@ pub(crate) fn try_resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone
             }
             Err(error) => {
                 warn!("failed to read OAuth tokens from keyring: {error}");
-                load(ResolvedOAuthCredentialStore::file().with_policy(store_mode, keyring_backend_kind))
-                    .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
+                load(
+                    ResolvedOAuthCredentialStore::file()
+                        .with_policy(store_mode, keyring_backend_kind),
+                )
+                .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
             }
         },
     }

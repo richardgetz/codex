@@ -99,7 +99,12 @@ fn personality_and_provenance_commands_follow_composer_flags() {
 
     assert!(composer.slash_input().command(personality).is_none());
     assert!(composer.slash_input().command(decisions).is_none());
-    assert!(composer.slash_input().command(preference_boundaries).is_none());
+    assert!(
+        composer
+            .slash_input()
+            .command(preference_boundaries)
+            .is_none()
+    );
 
     composer.set_personality_command_enabled(/*enabled*/ true);
     assert!(composer.slash_input().command(personality).is_some());
@@ -107,7 +112,12 @@ fn personality_and_provenance_commands_follow_composer_flags() {
 
     composer.set_provenance_commands_enabled(/*enabled*/ true);
     assert!(composer.slash_input().command(decisions).is_some());
-    assert!(composer.slash_input().command(preference_boundaries).is_some());
+    assert!(
+        composer
+            .slash_input()
+            .command(preference_boundaries)
+            .is_some()
+    );
 }
 
 #[test]

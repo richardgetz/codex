@@ -19,7 +19,6 @@ use crate::tools::handlers::GetContextRemainingHandler;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
-use crate::tools::handlers::mcp::McpToolRecovery;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
@@ -37,6 +36,7 @@ use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::ask_worker_question::Handler as AskWorkerQuestionHandler;
 use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
+use crate::tools::handlers::mcp::McpToolRecovery;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -261,16 +261,19 @@ fn build_tool_router_with_recovered_mcp_tools_and_selection(
                 &mut registry,
             )
     } else {
-        session.services.mcp_handler_cache.append_mcp_tools_with_recovery(
-            mcp_tools,
-            &turn_context.config,
-            apps_enabled,
-            &mcp.config().mcp_server_catalog,
-            search_enabled,
-            recovered_mcp_tools,
-            namespace_tools_enabled,
-            &mut registry,
-        )
+        session
+            .services
+            .mcp_handler_cache
+            .append_mcp_tools_with_recovery(
+                mcp_tools,
+                &turn_context.config,
+                apps_enabled,
+                &mcp.config().mcp_server_catalog,
+                search_enabled,
+                recovered_mcp_tools,
+                namespace_tools_enabled,
+                &mut registry,
+            )
     };
     apply_mcp_tool_exposure_policy(
         turn_context,

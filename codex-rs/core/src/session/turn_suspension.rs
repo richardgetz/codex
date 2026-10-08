@@ -126,7 +126,9 @@ async fn suspend_turn_and_shutdown_with_scope(
     };
     // Flush before canceling execution so a persistence failure leaves the original turn running.
     live_thread.flush().await.map_err(|error| {
-        CodexErr::Fatal(format!("flush before {turn_label} suspension failed: {error}"))
+        CodexErr::Fatal(format!(
+            "flush before {turn_label} suspension failed: {error}"
+        ))
     })?;
 
     // The flush can yield while the active turn completes or changes. Recheck its
@@ -243,6 +245,6 @@ async fn suspend_turn_and_shutdown_with_scope(
             id: submission_id,
             msg: EventMsg::ShutdownComplete,
         })
-    .await;
+        .await;
     Ok(SuspendTurnOutcome::Suspended { turn_id })
 }

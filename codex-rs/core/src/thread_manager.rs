@@ -1913,7 +1913,8 @@ impl ThreadManager {
         let thread_id = stored_thread.thread_id;
         let (items, history_revision) = match stored_thread.history_mode {
             ThreadHistoryMode::Legacy => {
-                let history = self.state
+                let history = self
+                    .state
                     .thread_store
                     .load_history(LoadThreadHistoryParams {
                         thread_id,
@@ -1936,7 +1937,8 @@ impl ThreadManager {
                 (history.items, None)
             }
             ThreadHistoryMode::Paginated => {
-                let history = self.state
+                let history = self
+                    .state
                     .load_latest_model_context(LoadThreadHistoryParams {
                         thread_id,
                         include_archived: true,

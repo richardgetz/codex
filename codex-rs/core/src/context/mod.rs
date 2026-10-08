@@ -152,10 +152,10 @@ pub use node_repl_review_evidence::NodeReplReviewEvidence;
 pub(crate) use node_repl_review_evidence::NodeReplReviewEvidenceMode;
 pub(crate) use node_repl_review_evidence::node_repl_review_evidence_mode;
 pub(crate) use plugin_instructions::PluginInstructions;
-pub(crate) use realtime_delegation::RealtimeDelegation;
-pub(crate) use realtime_delegation::RealtimeDelegationSource;
 #[cfg(test)]
 pub(crate) use realtime_delegation::REALTIME_DELEGATION_MAX_ESTIMATED_TOKENS;
+pub(crate) use realtime_delegation::RealtimeDelegation;
+pub(crate) use realtime_delegation::RealtimeDelegationSource;
 pub(crate) use realtime_end_instructions::RealtimeEndInstructions;
 pub(crate) use realtime_start_instructions::RealtimeStartInstructions;
 pub(crate) use realtime_start_with_instructions::RealtimeStartWithInstructions;

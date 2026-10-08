@@ -10,12 +10,12 @@ use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
-use crate::enablement::filter_connectors_for_mode;
-use crate::enablement::filter_discoverable_tools_for_mode;
-use crate::enablement::filter_mcp_tools_for_mode;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
 use crate::cyber_access_program;
+use crate::enablement::filter_connectors_for_mode;
+use crate::enablement::filter_discoverable_tools_for_mode;
+use crate::enablement::filter_mcp_tools_for_mode;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
 use crate::hook_runtime::drain_async_hook_results;
@@ -25,8 +25,8 @@ use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
-use crate::mcp_tool_exposure::McpToolSelection;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+use crate::mcp_tool_exposure::McpToolSelection;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
@@ -63,8 +63,8 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
-use crate::tools::spec_plan::build_tool_router_with_recovered_mcp_tools;
 use crate::tools::spec_plan::build_tool_router_for_input;
+use crate::tools::spec_plan::build_tool_router_with_recovered_mcp_tools;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
@@ -912,10 +912,7 @@ pub(crate) async fn run_turn(
                     e.details(),
                     CodexErrorDetails::MisalignmentPolicyViolation { .. }
                 ) {
-                    turn_context
-                        .realtime_handoff_admissions
-                        .retire_all()
-                        .await;
+                    turn_context.realtime_handoff_admissions.retire_all().await;
                 }
                 let error = e.to_codex_protocol_error();
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone(), e.details())
@@ -2241,8 +2238,8 @@ pub(crate) async fn built_tools(
     let connector_snapshot = mcp.config().connector_snapshot.clone();
 
     let apps_enabled = turn_context.apps_enabled();
-    let accessible_connectors = apps_enabled
-        .then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
+    let accessible_connectors =
+        apps_enabled.then(|| connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools));
     let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);
     let PreparedToolRecommendations {
         auth,

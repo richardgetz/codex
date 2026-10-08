@@ -469,10 +469,7 @@ fn mcp_runtime(
     exposure: ToolExposure,
 ) -> RegisteredTool {
     let handler: Arc<dyn CoreToolRuntime> = Arc::new(
-        McpHandler::new(
-            mcp_tool(server, namespace, name),
-        )
-        .expect("MCP tool spec should build"),
+        McpHandler::new(mcp_tool(server, namespace, name)).expect("MCP tool spec should build"),
     );
     RegisteredTool {
         runtime: handler,
@@ -1905,10 +1902,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             let mut tool = mcp_tool(server_name, "shared", tool_name);
             tool.namespace_description = Some("Shared tools.".to_string());
             RegisteredTool {
-                runtime: Arc::new(
-                    McpHandler::new(tool)
-                        .expect("MCP tool spec should build"),
-                ),
+                runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure,
             }
         })
@@ -2203,8 +2197,7 @@ async fn strict_tool_collisions_allow_multiple_tools_in_one_namespace() {
             tool_runtimes: vec![
                 RegisteredTool {
                     runtime: Arc::new(
-                        McpHandler::new(undocumented_tool)
-                            .expect("MCP tool spec should build"),
+                        McpHandler::new(undocumented_tool).expect("MCP tool spec should build"),
                     ),
                     exposure: ToolExposure::Direct,
                 },
@@ -2244,10 +2237,7 @@ async fn relaxed_tool_collisions_preserve_first_nonempty_namespace_description()
             let mut tool = mcp_tool("shared", "shared", name);
             tool.namespace_description = description.map(str::to_string);
             RegisteredTool {
-                runtime: Arc::new(
-                    McpHandler::new(tool)
-                        .expect("MCP tool spec should build"),
-                ),
+                runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure: ToolExposure::Direct,
             }
         };

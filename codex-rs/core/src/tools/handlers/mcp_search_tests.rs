@@ -6,8 +6,7 @@ use serde_json::json;
 
 #[test]
 fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
-    let handler = McpHandler::new(tool_info())
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(tool_info()).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
@@ -49,8 +48,7 @@ fn namespace_disabled_mcp_handler_flattens_tools_with_schema_budget() {
 fn search_info_uses_connector_name_for_output_namespace_description() {
     let mut tool_info = tool_info();
     tool_info.namespace_description = None;
-    let handler = McpHandler::new(tool_info)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(tool_info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     let LoadableToolSpec::Namespace(namespace) = search_info.entry.to_loadable_spec() else {
@@ -71,8 +69,7 @@ fn mcp_namespace_descriptions_preserve_complete_metadata() {
     let full_description = format!("{}🦀keep the complete app metadata", "é".repeat(499));
     let mut info = tool_info();
     info.namespace_description = Some(full_description.clone());
-    let handler = McpHandler::new(info)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
@@ -98,8 +95,7 @@ fn mcp_namespace_descriptions_are_bounded_at_512_kib() {
     let full_description = format!("{expected_description}🦀overflow");
     let mut info = tool_info();
     info.namespace_description = Some(full_description.clone());
-    let handler = McpHandler::new(info)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(

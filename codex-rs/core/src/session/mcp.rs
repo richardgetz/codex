@@ -282,11 +282,8 @@ impl Session {
         {
             return None;
         }
-        let raw_tool_name = recoverable_raw_mcp_tool_name(
-            &server_config,
-            &callable_namespace,
-            &tool,
-        )?;
+        let raw_tool_name =
+            recoverable_raw_mcp_tool_name(&server_config, &callable_namespace, &tool)?;
 
         if !crate::enablement::mcp_tool_parts_allowed_in_mode(
             &turn_context.config,
@@ -1399,7 +1396,9 @@ fn mcp_elicitation_auto_meta() -> serde_json::Value {
 
 fn mcp_server_config_allows_tool(config: &McpServerConfig, tool: &str) -> bool {
     if let Some(enabled_tools) = &config.enabled_tools
-        && !enabled_tools.iter().any(|enabled_tool| enabled_tool == tool)
+        && !enabled_tools
+            .iter()
+            .any(|enabled_tool| enabled_tool == tool)
     {
         return false;
     }
@@ -1458,11 +1457,9 @@ fn configured_mcp_catalog_tool_matches_identity(
         });
     }
 
-    let mut matching_servers = configured_servers
-        .iter()
-        .filter(|(server_name, _)| {
-            configured_mcp_server_namespace_matches(callable_namespace, server_name)
-        });
+    let mut matching_servers = configured_servers.iter().filter(|(server_name, _)| {
+        configured_mcp_server_namespace_matches(callable_namespace, server_name)
+    });
     matching_servers.next().is_some_and(|(server_name, _)| {
         server_name == tool_server_name && matching_servers.next().is_none()
     })
@@ -1507,7 +1504,10 @@ fn recoverable_raw_mcp_tool_name(
             return None;
         }
         raw_tool_name
-    } else if callable_name.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+    } else if callable_name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric())
+    {
         callable_name.to_string()
     } else {
         return None;

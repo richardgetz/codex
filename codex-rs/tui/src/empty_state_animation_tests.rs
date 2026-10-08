@@ -8,7 +8,10 @@ use pretty_assertions::assert_eq;
 fn continue_from_preserves_the_fresh_thread_greeting() {
     let mut source = EmptyStateAnimation::default();
     source.start_fresh();
-    let greeting = *source.greeting.get().expect("fresh threads choose a greeting");
+    let greeting = *source
+        .greeting
+        .get()
+        .expect("fresh threads choose a greeting");
 
     let mut target = EmptyStateAnimation::default();
     target.continue_from(&mut source);

@@ -192,8 +192,8 @@ fn hosted_plugin_extensions_survive_installed_and_marketplace_summaries() {
             "title": "Search calendar"
         }]
     });
-    let installed: RemotePluginInstalledItem = serde_json::from_value(plugin)
-        .expect("known extension should deserialize");
+    let installed: RemotePluginInstalledItem =
+        serde_json::from_value(plugin).expect("known extension should deserialize");
     let extensions = installed.extensions.clone();
 
     let installed = remote_installed_plugin_to_cache_entry(&installed)

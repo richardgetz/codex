@@ -383,7 +383,6 @@ impl MessageProcessor {
                     thread_state_manager.clone(),
                 )),
                 Some({
-
                     (app_server_time_provider(outgoing.clone(), thread_state_manager.clone())) as _
                 }),
             );

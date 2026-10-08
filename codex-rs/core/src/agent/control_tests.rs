@@ -4539,20 +4539,22 @@ async fn completion_watcher_does_not_hide_tree_shutdown_failure() {
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
     let (child_thread_id, _child_thread) = harness.start_thread().await;
 
-    harness.control.maybe_start_completion_watcher(
-        child_thread_id,
-        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id,
-            depth: 1,
-            agent_path: None,
-            agent_nickname: None,
-            agent_role: Some("explorer".to_string()),
-        })),
-        child_thread_id.to_string(),
-        /*child_agent_path*/ None,
-        /*terminal_delivery_guard*/ None,
-    )
-    .await;
+    harness
+        .control
+        .maybe_start_completion_watcher(
+            child_thread_id,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+            child_thread_id.to_string(),
+            /*child_agent_path*/ None,
+            /*terminal_delivery_guard*/ None,
+        )
+        .await;
     harness.control.runtime.record_shutdown_failure();
     let shutdown = harness.control.runtime.request_shutdown();
 

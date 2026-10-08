@@ -248,10 +248,9 @@ fn append_mcp_tools_with_selection_and_recovery(
                 .collect::<HashSet<_>>();
             let selected_app_tools = apps_enabled
                 .then(|| {
-                    filter_codex_apps_mcp_tools(all_mcp_tools, selection.connectors, config)
-                        .filter(|tool| {
-                            !direct_only_tool_names.contains(&tool.canonical_tool_name())
-                        })
+                    filter_codex_apps_mcp_tools(all_mcp_tools, selection.connectors, config).filter(
+                        |tool| !direct_only_tool_names.contains(&tool.canonical_tool_name()),
+                    )
                 })
                 .into_iter()
                 .flatten();
@@ -297,10 +296,7 @@ fn append_mcp_tools_with_selection_and_recovery(
     let mut agent_plugin_bytes = 0usize;
     for tool in &exposed_tools {
         let tool_name = tool.canonical_tool_name();
-        let recovery = recovered_tools
-            .get(&tool_name)
-            .copied()
-            .unwrap_or_default();
+        let recovery = recovered_tools.get(&tool_name).copied().unwrap_or_default();
         let server = mcp_server_catalog.server(&tool.server_name);
         let agent_plugin = server.is_some_and(|server| server.source().is_agent_plugin());
         let tool_input_schema_max_bytes =

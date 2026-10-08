@@ -756,7 +756,9 @@ pub enum Op {
     /// Pause execution for the root thread and all loaded ThreadSpawn descendants.
     PauseActivity,
 
-    PauseActivityWithAck { reply: oneshot::Sender<()> },
+    PauseActivityWithAck {
+        reply: oneshot::Sender<()>,
+    },
 
     PauseActivityWithSnapshotAck {
         reply: oneshot::Sender<CodexResult<ThreadActivitySnapshot>>,
@@ -765,7 +767,9 @@ pub enum Op {
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
     ContinueActivity,
 
-    ContinueActivityWithAck { reply: oneshot::Sender<()> },
+    ContinueActivityWithAck {
+        reply: oneshot::Sender<()>,
+    },
 
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
@@ -933,35 +937,51 @@ pub enum Op {
 
     ConsolidateOrchestratorMemory,
 
-    OrchestratorMemoryForget { needle: String },
+    OrchestratorMemoryForget {
+        needle: String,
+    },
 
     UserPreferencesMemoryMigrate,
 
     PruneIdleAgents,
 
-    SetThreadName { name: String },
+    SetThreadName {
+        name: String,
+    },
 
-    SetScratchpadContinuousPolicy { enabled: bool },
+    SetScratchpadContinuousPolicy {
+        enabled: bool,
+    },
 
     /// Set whether the thread remains eligible for memory generation.
     ///
     /// This persists thread-level memory mode metadata without involving the
     /// model.
-    SetThreadMemoryMode { mode: ThreadMemoryMode },
+    SetThreadMemoryMode {
+        mode: ThreadMemoryMode,
+    },
 
-    SetMemoryAccessPolicy { policy: MemoryAccessPolicy },
+    SetMemoryAccessPolicy {
+        policy: MemoryAccessPolicy,
+    },
 
     SetUserPreferencesMemoryPolicy {
         policy: UserPreferencesMemoryBucketPolicy,
     },
 
-    ThreadRollback { num_turns: u32 },
+    ThreadRollback {
+        num_turns: u32,
+    },
 
     /// Request a code review from the agent.
-    Review { review_request: ReviewRequest },
+    Review {
+        review_request: ReviewRequest,
+    },
 
     /// Record that the user approved one retry of a concrete Guardian-denied action.
-    ApproveGuardianDeniedAction { event: GuardianAssessmentEvent },
+    ApproveGuardianDeniedAction {
+        event: GuardianAssessmentEvent,
+    },
 
     /// Request to shut down codex instance.
     Shutdown,
@@ -2680,7 +2700,8 @@ impl TokenUsageInfo {
         self.usage_by_service_tier.clear();
         self.usage_by_service_tier_and_context_length.clear();
         self.usage_by_model.clear();
-        self.usage_by_model_and_service_tier_and_context_length.clear();
+        self.usage_by_model_and_service_tier_and_context_length
+            .clear();
     }
 
     pub fn full_context_window(context_window: i64) -> Self {
@@ -6991,7 +7012,10 @@ mod tests {
         let actual: TokenUsageInfo = serde_json::from_value(legacy).expect("legacy token usage");
 
         assert_eq!(actual.usage_by_service_tier, BTreeMap::new());
-        assert_eq!(actual.usage_by_service_tier_and_context_length, BTreeMap::new());
+        assert_eq!(
+            actual.usage_by_service_tier_and_context_length,
+            BTreeMap::new()
+        );
         assert_eq!(actual.usage_by_model, BTreeMap::new());
         assert_eq!(
             actual.usage_by_model_and_service_tier_and_context_length,

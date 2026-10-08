@@ -5,8 +5,8 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
-use crate::session::lead_idle::lead_progress_communication;
 use crate::session::fork_ops;
+use crate::session::lead_idle::lead_progress_communication;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::turn_input::SuspendTurnOutcome;

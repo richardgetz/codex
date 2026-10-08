@@ -5,11 +5,11 @@ use crate::context::RealtimeDelegation;
 use crate::context::RealtimeDelegationSource;
 use crate::realtime_context::build_realtime_startup_context;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
-use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use crate::realtime_prompt::RealtimePreamblePolicy;
+use crate::realtime_prompt::prepare_realtime_backend_prompt;
 use crate::responses_metadata::THREAD_SOURCE_KEY;
-use crate::session::session::Session;
 use crate::session::Submission;
+use crate::session::session::Session;
 use anyhow::Context;
 use async_channel::Receiver;
 use async_channel::RecvError;
@@ -98,16 +98,16 @@ mod sideband;
 use self::bem::ChannelParser as BemChannelParser;
 use self::bem::message_phase as bem_message_phase;
 use self::handoff::PendingRealtimeHandoff;
-use self::handoff::RealtimeFanoutHandling;
-use self::handoff::RealtimeHandoffDeduper;
-use self::handoff::ReadyRealtimeEvent;
 use self::handoff::REALTIME_FANOUT_REORDER_WINDOW;
 use self::handoff::REALTIME_HANDOFF_CLASSIFIER_CONCURRENCY;
+use self::handoff::ReadyRealtimeEvent;
+use self::handoff::RealtimeFanoutHandling;
+pub(crate) use self::handoff::RealtimeHandoffAdmission;
+pub(crate) use self::handoff::RealtimeHandoffAdmissions;
+use self::handoff::RealtimeHandoffDeduper;
 use self::handoff::finish_ready_realtime_events;
 use self::handoff::handle_realtime_fanout_event;
 use self::sideband::spawn_webrtc_sideband_input_task;
-pub(crate) use self::handoff::RealtimeHandoffAdmission;
-pub(crate) use self::handoff::RealtimeHandoffAdmissions;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const TEXT_IN_QUEUE_CAPACITY: usize = 64;
@@ -1029,11 +1029,10 @@ impl RealtimeConversationManager {
         };
         if active_handoff.is_some() && handoff.defers_unphased_output(phase.as_ref()) {
             let output_text = realtime_backend_output(output_text, handoff.session_kind);
-            handoff.stream.lock().await.pending_unphased_output =
-                Some(RealtimeHandoffOutput {
-                    text: output_text,
-                    phase,
-                });
+            handoff.stream.lock().await.pending_unphased_output = Some(RealtimeHandoffOutput {
+                text: output_text,
+                phase,
+            });
             return Ok(());
         }
         let output = match active_handoff {
@@ -1162,7 +1161,11 @@ impl RealtimeConversationManager {
                 streamed_item.flush_scheduled = true;
                 Some(streamed_item.next_flush_delay())
             };
-            if stream.items.insert(item_id.clone(), streamed_item).is_none() {
+            if stream
+                .items
+                .insert(item_id.clone(), streamed_item)
+                .is_none()
+            {
                 stream.item_order.push_back(item_id.clone());
             }
             flush_delay

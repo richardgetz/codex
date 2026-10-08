@@ -1,7 +1,6 @@
 use super::AGENT_FINAL_MESSAGE_PREFIX;
 use super::ConversationState;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
-use super::handoff::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::RealtimeConversationManager;
 use super::RealtimeConversationManagerState;
 use super::RealtimeHandoffAdmission;
@@ -15,6 +14,7 @@ use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
 use super::classify_realtime_input_error;
 use super::classify_realtime_input_error_with_pending;
+use super::handoff::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::realtime_delegation_from_handoff;
 use super::realtime_delegation_with_routing_input;
 use super::realtime_request_headers;
@@ -633,7 +633,11 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
     let output_task = tokio::spawn(async move {
         let mut append_texts = Vec::new();
         for _ in 0..2 {
-            match output_rx.recv().await.expect("handoff output should be sent") {
+            match output_rx
+                .recv()
+                .await
+                .expect("handoff output should be sent")
+            {
                 RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
                 output => panic!("unexpected realtime output: {output:?}"),
             }
@@ -736,7 +740,11 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
     assert!(output_rx.try_recv().is_err());
 
     let output_task = tokio::spawn(async move {
-        match output_rx.recv().await.expect("handoff output should be sent") {
+        match output_rx
+            .recv()
+            .await
+            .expect("handoff output should be sent")
+        {
             RealtimeOutbound::HandoffAppend { text, .. } => vec![text],
             output => panic!("unexpected realtime output: {output:?}"),
         }
@@ -819,7 +827,11 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
     manager.discard_pending_unphased_handoff_output().await;
 
     let output_task = tokio::spawn(async move {
-        match output_rx.recv().await.expect("handoff output should be sent") {
+        match output_rx
+            .recv()
+            .await
+            .expect("handoff output should be sent")
+        {
             RealtimeOutbound::HandoffAppend { text, .. } => vec![text],
             output => panic!("unexpected realtime output: {output:?}"),
         }

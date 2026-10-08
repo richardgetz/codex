@@ -21,9 +21,9 @@ use super::submission::RealtimeHandoffInput;
 use super::thread_settings;
 use super::turn_context::NewTurnContextOptions;
 use super::turn_context::TurnContext;
-use crate::realtime_conversation::RealtimeHandoffAdmission;
-use crate::agent::control::HandoffAdmissionGuard;
 use crate::WithTurnExtensionData;
+use crate::agent::control::HandoffAdmissionGuard;
+use crate::realtime_conversation::RealtimeHandoffAdmission;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
@@ -171,8 +171,8 @@ impl PreparedTurnInputSettings {
                 .map(|input| Arc::clone(&input.admission)),
             ..Default::default()
         };
-        let turn_context = if let Some(effort) = realtime_handoff_input
-            .and_then(|input| input.transient_reasoning_effort.clone())
+        let turn_context = if let Some(effort) =
+            realtime_handoff_input.and_then(|input| input.transient_reasoning_effort.clone())
         {
             Some((
                 session

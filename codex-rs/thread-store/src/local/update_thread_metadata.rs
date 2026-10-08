@@ -982,11 +982,11 @@ fn rollout_path_is_archived(store: &LocalThreadStore, path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use futures::FutureExt;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::ThreadHistoryMode;
     use codex_utils_absolute_path::test_support::PathExt;
+    use futures::FutureExt;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;

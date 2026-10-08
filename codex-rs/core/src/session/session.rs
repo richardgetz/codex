@@ -31,8 +31,8 @@ use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::auth::AgentIdentityAuthPolicy;
-use codex_model_provider::SharedModelProvider;
 use codex_memories_read::memory_root;
+use codex_model_provider::SharedModelProvider;
 use codex_prompts::render_model_instructions;
 use codex_protocol::SessionId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -1236,9 +1236,9 @@ impl Session {
                             _ => None,
                         })
                     }
-                    InitialHistory::New
-                    | InitialHistory::Cleared
-                    | InitialHistory::Forked(_) => None,
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        None
+                    }
                 }
             }
         }

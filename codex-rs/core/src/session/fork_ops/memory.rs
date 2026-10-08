@@ -244,7 +244,12 @@ pub(in crate::session) async fn set_memory_access_policy(
             })
         }
     };
-    session.send_event_raw(Event { id: submission_id, msg }).await;
+    session
+        .send_event_raw(Event {
+            id: submission_id,
+            msg,
+        })
+        .await;
 }
 
 pub(in crate::session) async fn set_user_preferences_memory_policy(
@@ -269,5 +274,10 @@ pub(in crate::session) async fn set_user_preferences_memory_policy(
             })
         }
     };
-    session.send_event_raw(Event { id: submission_id, msg }).await;
+    session
+        .send_event_raw(Event {
+            id: submission_id,
+            msg,
+        })
+        .await;
 }

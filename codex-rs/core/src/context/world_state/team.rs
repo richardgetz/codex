@@ -152,7 +152,8 @@ impl WorldStateSection for TeamPolicyState {
             None if matches!(
                 previous,
                 PreviousSectionState::Known(previous) if previous.role.is_some()
-            ) || matches!(previous, PreviousSectionState::Unknown) => {
+            ) || matches!(previous, PreviousSectionState::Unknown) =>
+            {
                 Some(Box::new(TeamInstructions::disabled()) as Box<dyn ContextualUserFragment>)
             }
             None => None,

@@ -109,7 +109,9 @@ impl McpHandler {
     }
 
     pub fn new_agent_plugin(tool_info: ToolInfo) -> Result<Self, serde_json::Error> {
-        Self::new_agent_plugin_with_namespace_tools(tool_info, /*namespace_tools_enabled*/ true)
+        Self::new_agent_plugin_with_namespace_tools(
+            tool_info, /*namespace_tools_enabled*/ true,
+        )
     }
 
     pub(crate) fn new_agent_plugin_with_namespace_tools(
@@ -235,7 +237,9 @@ fn flat_mcp_tool_name(tool_name: &ToolName) -> String {
             }
             let escaped_namespace = escape_flat_mcp_tool_name_component(namespace);
             let escaped_name = escape_flat_mcp_tool_name_component(&tool_name.name);
-            format!("{ESCAPED_MCP_TOOL_NAME_PREFIX}{escaped_namespace}{MCP_TOOL_NAME_DELIMITER}{escaped_name}")
+            format!(
+                "{ESCAPED_MCP_TOOL_NAME_PREFIX}{escaped_namespace}{MCP_TOOL_NAME_DELIMITER}{escaped_name}"
+            )
         }
         None => ensure_mcp_prefix(&escape_flat_mcp_tool_name_component(&tool_name.name)),
     }
@@ -666,8 +670,12 @@ fn create_tool_spec(
         .unwrap_or_default();
 
     let namespace_name = if recovery == McpToolRecovery::ConfiguredPlaceholder
-        && tool_info.callable_namespace.starts_with(LEGACY_MCP_TOOL_NAME_PREFIX)
-        && !tool_info.callable_namespace.ends_with(MCP_TOOL_NAME_DELIMITER)
+        && tool_info
+            .callable_namespace
+            .starts_with(LEGACY_MCP_TOOL_NAME_PREFIX)
+        && !tool_info
+            .callable_namespace
+            .ends_with(MCP_TOOL_NAME_DELIMITER)
     {
         format!("{}{MCP_TOOL_NAME_DELIMITER}", tool_info.callable_namespace)
     } else {

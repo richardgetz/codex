@@ -27,9 +27,7 @@ pub(super) fn record_secure_error(
             Some(OAuthKeyringLoadError::StoreLock(lock)) => Some(lock),
             Some(OAuthKeyringLoadError::AccessPolicy(_))
             | Some(OAuthKeyringLoadError::Backend(_))
-            | None => {
-                current.downcast_ref::<OAuthStoreLockFailure>()
-            }
+            | None => current.downcast_ref::<OAuthStoreLockFailure>(),
         };
         if let Some(OAuthStoreLockFailure::Timeout {
             acquire_timeout, ..

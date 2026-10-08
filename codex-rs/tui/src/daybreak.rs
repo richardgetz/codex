@@ -24,7 +24,9 @@ pub(crate) type NoticeCache = Arc<OnceCell<Notice>>;
 
 /// Fetch account-scoped eligibility without blocking startup or turn handling.
 pub(crate) fn prefetch_notice(config: &Config, server: &AppServerSession, cache: NoticeCache) {
-    if config.model_provider_id != "openai" || server.uses_remote_workspace() || cache.get().is_some()
+    if config.model_provider_id != "openai"
+        || server.uses_remote_workspace()
+        || cache.get().is_some()
     {
         return;
     }

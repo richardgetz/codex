@@ -271,18 +271,18 @@ mod daemon_recovery;
 mod environment;
 mod extension_interruption;
 pub(crate) mod extension_metrics;
+mod fork_ops;
 mod git_intent_preflight;
 mod guardian_checkpoint;
-mod fork_ops;
 mod handlers;
 pub(crate) mod handoff_preflight;
 pub(crate) use handlers::thread_settings_applied_event;
 mod inject;
 mod submission;
 pub(crate) use submission::OrdinarySubmissionPermit;
-pub(crate) use submission::Submission;
-pub(crate) use submission::RealtimeHandoffInput;
 use submission::REALTIME_RESERVED_SUBMISSION_CAPACITY;
+pub(crate) use submission::RealtimeHandoffInput;
+pub(crate) use submission::Submission;
 mod input_queue;
 mod lead_passive_poll;
 pub(crate) use lead_passive_poll::LeadPassivePollState;
@@ -414,10 +414,14 @@ fn reconstructed_environment_context_matches_current(
     world_state: &WorldState,
 ) -> bool {
     let Some(expected_environment_context) =
-        world_state.render_full().1.into_iter().find_map(|fragment| {
-            let rendered = fragment.render();
-            EnvironmentsState::matches_text(&rendered).then_some(rendered)
-        })
+        world_state
+            .render_full()
+            .1
+            .into_iter()
+            .find_map(|fragment| {
+                let rendered = fragment.render();
+                EnvironmentsState::matches_text(&rendered).then_some(rendered)
+            })
     else {
         return false;
     };
@@ -1348,8 +1352,8 @@ impl Session {
                 rx_sub,
                 submission_lifecycle_gate_for_loop,
             )
-                .instrument(info_span!("session_loop", thread_id = %thread_id))
-                .await;
+            .instrument(info_span!("session_loop", thread_id = %thread_id))
+            .await;
             if let Some(tree_teardown) = tree_teardown {
                 tree_teardown.complete();
             }
@@ -2252,9 +2256,9 @@ impl Session {
             .await?;
         match reply_rx.await.unwrap_or(Err(CodexErr::InternalAgentDied))? {
             TurnInputSubmission::Started { .. } | TurnInputSubmission::Steered { .. } => Ok(()),
-            TurnInputSubmission::NotSubmitted { reason } => Err(CodexErr::InvalidRequest(
-                format!("realtime handoff was not admitted: {reason:?}"),
-            )),
+            TurnInputSubmission::NotSubmitted { reason } => Err(CodexErr::InvalidRequest(format!(
+                "realtime handoff was not admitted: {reason:?}"
+            ))),
         }
     }
 
@@ -5011,9 +5015,9 @@ impl Session {
             .executed_tool_calls
             .mcp_attribution_checkpoint(force_mcp_checkpoint)
             .and_then(|(attribution, revision)| {
-                let first_persisted = items.iter().position(|envelope| {
-                    should_persist_response_item(&envelope.item)
-                })?;
+                let first_persisted = items
+                    .iter()
+                    .position(|envelope| should_persist_response_item(&envelope.item))?;
                 for (index, envelope) in items.iter_mut().enumerate() {
                     // Rollout batches may be partially written. Checkpoint the first persisted
                     // item, and repeat the checkpoint at turn boundaries retained by forks.

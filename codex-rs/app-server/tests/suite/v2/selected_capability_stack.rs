@@ -17,8 +17,8 @@ use codex_app_server_protocol::EnvironmentInfoResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SelectedCapabilityRoot;
+use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
@@ -779,7 +779,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn(
             "the explicit mention must keep later samples waiting for MCP startup"
         );
         std::fs::write(&initialize_barrier, "ready")?;
-            wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
+        wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
     }
     let request_id = if matches!(mention_timing, MentionTiming::Steered) {
         None

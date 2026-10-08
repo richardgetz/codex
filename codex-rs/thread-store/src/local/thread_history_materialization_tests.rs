@@ -2263,9 +2263,12 @@ async fn blank_and_rejected_rollout_lines_do_not_poison_projection() {
     super::materialize_to_sqlite(&store, thread_id, rollout_path.as_path())
         .await
         .expect("skip rejected complete lines");
-    let expected_offset =
-        i64::try_from(fs::metadata(rollout_path.as_path()).expect("rollout metadata").len())
-            .expect("rollout length");
+    let expected_offset = i64::try_from(
+        fs::metadata(rollout_path.as_path())
+            .expect("rollout metadata")
+            .len(),
+    )
+    .expect("rollout length");
     assert_eq!(
         projection_state(&pool, thread_id).await,
         (expected_offset, before.1)

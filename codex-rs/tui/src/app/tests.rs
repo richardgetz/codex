@@ -30,6 +30,8 @@ mod browsing_pagination_tests;
 mod buffered_replay;
 #[path = "tests/connector_policy.rs"]
 mod connector_policy;
+#[path = "tests/daybreak_tests.rs"]
+mod daybreak_tests;
 #[path = "tests/disconnect_tests.rs"]
 mod disconnect;
 #[path = "tests/external_writer_fork_tests.rs"]
@@ -50,8 +52,6 @@ mod luna_reserve_recovery_tests;
 mod mcp_startup;
 #[path = "tests/misalignment_policy_tests.rs"]
 mod misalignment_policy;
-#[path = "tests/daybreak_tests.rs"]
-mod daybreak_tests;
 mod model_catalog;
 #[path = "tests/model_defaults_tests.rs"]
 mod model_defaults;

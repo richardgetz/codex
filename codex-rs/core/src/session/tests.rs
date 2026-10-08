@@ -236,9 +236,9 @@ use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration as StdDuration;
 
 pub(crate) fn mcp_config_for_test(config: &crate::config::Config) -> Arc<codex_mcp::McpConfig> {
@@ -6985,9 +6985,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             executed_tool_calls,
         ),
         orchestrator_memory_generation: std::sync::atomic::AtomicU64::new(0),
-        orchestrator_supervision: crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
-            config.codex_home.clone(),
-        ),
+        orchestrator_supervision:
+            crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                config.codex_home.clone(),
+            ),
         tool_search_handler_cache: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
@@ -8216,9 +8217,8 @@ async fn ordinary_submission_gate_preserves_lifecycle_fifo_and_realtime_reserve(
     assert!(!saturated_ordinary.is_finished());
 
     let lifecycle_io = io.clone();
-    let lifecycle = tokio::spawn(async move {
-        lifecycle_io.submit(Op::RealtimeConversationClose).await
-    });
+    let lifecycle =
+        tokio::spawn(async move { lifecycle_io.submit(Op::RealtimeConversationClose).await });
     tokio::task::yield_now().await;
     assert!(!lifecycle.is_finished());
 
@@ -8261,8 +8261,7 @@ async fn ordinary_submission_gate_preserves_lifecycle_fifo_and_realtime_reserve(
         .expect("lifecycle submission keeps its exclusive gate");
     drop(slot);
     drop(gate_read);
-    let lifecycle_gate = gate_write
-        .expect("lifecycle submission keeps its exclusive gate");
+    let lifecycle_gate = gate_write.expect("lifecycle submission keeps its exclusive gate");
 
     let (reply, _reply_rx) = tokio::sync::oneshot::channel();
     let realtime_handoff = Submission {
@@ -8294,9 +8293,7 @@ async fn ordinary_submission_gate_preserves_lifecycle_fifo_and_realtime_reserve(
         .expect("realtime handoff uses the reserved channel slot");
 
     let ordinary_after_io = io.clone();
-    let ordinary_after = tokio::spawn(async move {
-        ordinary_after_io.submit(Op::Interrupt).await
-    });
+    let ordinary_after = tokio::spawn(async move { ordinary_after_io.submit(Op::Interrupt).await });
     tokio::task::yield_now().await;
     assert!(!ordinary_after.is_finished());
 
@@ -8416,9 +8413,9 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
         parent_turn_id: None,
         root_turn_id: None,
         residency_guard: None,
-            handoff_admission: None,
-            realtime_handoff_input: None,
-            ordinary_slot_permit: None,
+        handoff_admission: None,
+        realtime_handoff_input: None,
+        ordinary_slot_permit: None,
         trace: None,
     });
 
@@ -8779,9 +8776,9 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         parent_turn_id: None,
         root_turn_id: None,
         residency_guard: None,
-            handoff_admission: None,
-            realtime_handoff_input: None,
-            ordinary_slot_permit: None,
+        handoff_admission: None,
+        realtime_handoff_input: None,
+        ordinary_slot_permit: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
@@ -9464,9 +9461,10 @@ where
             executed_tool_calls,
         ),
         orchestrator_memory_generation: std::sync::atomic::AtomicU64::new(0),
-        orchestrator_supervision: crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
-            config.codex_home.clone(),
-        ),
+        orchestrator_supervision:
+            crate::orchestrator_supervision::OrchestratorSupervisionStore::new(
+                config.codex_home.clone(),
+            ),
         tool_search_handler_cache: Default::default(),
         turn_environments: Arc::clone(&turn_environments),
     };
@@ -13775,13 +13773,20 @@ async fn built_tools_re_advertises_configured_mcp_tool_from_history() {
     )
     .await;
 
-    assert!(router.registered_tool_names_for_test().contains(
-        &codex_tools::ToolName::namespaced("mcp__imessage", "imessage_get_config")
-    ));
-    assert!(router
-        .model_visible_specs()
-        .iter()
-        .any(|tool| tool.name() == "mcp__imessage__"));
+    assert!(
+        router
+            .registered_tool_names_for_test()
+            .contains(&codex_tools::ToolName::namespaced(
+                "mcp__imessage",
+                "imessage_get_config"
+            ))
+    );
+    assert!(
+        router
+            .model_visible_specs()
+            .iter()
+            .any(|tool| tool.name() == "mcp__imessage__")
+    );
 }
 
 #[tokio::test]
@@ -13806,13 +13811,20 @@ async fn built_tools_does_not_re_advertise_disabled_mcp_server_from_history() {
     )
     .await;
 
-    assert!(!router.registered_tool_names_for_test().contains(
-        &codex_tools::ToolName::namespaced("mcp__imessage", "imessage_get_config")
-    ));
-    assert!(!router
-        .model_visible_specs()
-        .iter()
-        .any(|tool| tool.name() == "mcp__imessage__"));
+    assert!(
+        !router
+            .registered_tool_names_for_test()
+            .contains(&codex_tools::ToolName::namespaced(
+                "mcp__imessage",
+                "imessage_get_config"
+            ))
+    );
+    assert!(
+        !router
+            .model_visible_specs()
+            .iter()
+            .any(|tool| tool.name() == "mcp__imessage__")
+    );
 }
 
 #[tokio::test]
@@ -13872,14 +13884,18 @@ async fn built_tools_recovers_only_the_most_recent_unique_mcp_history_tools() {
     .await;
 
     let registered_tool_names = router.registered_tool_names_for_test();
-    assert!(!registered_tool_names.contains(&codex_tools::ToolName::namespaced(
-        "mcp__imessage",
-        "historytool000"
-    )));
-    for index in 1..=super::turn::MAX_CONFIGURED_MCP_HISTORY_PLACEHOLDERS {
-        assert!(registered_tool_names.contains(&codex_tools::ToolName::namespaced(
+    assert!(
+        !registered_tool_names.contains(&codex_tools::ToolName::namespaced(
             "mcp__imessage",
-            format!("historytool{index:03}")
-        )));
+            "historytool000"
+        ))
+    );
+    for index in 1..=super::turn::MAX_CONFIGURED_MCP_HISTORY_PLACEHOLDERS {
+        assert!(
+            registered_tool_names.contains(&codex_tools::ToolName::namespaced(
+                "mcp__imessage",
+                format!("historytool{index:03}")
+            ))
+        );
     }
 }

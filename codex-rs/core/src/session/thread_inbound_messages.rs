@@ -13,8 +13,8 @@ use codex_protocol::user_input::UserInput;
 use codex_rollout::state_db;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::sync::Semaphore;
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 const THREAD_INBOUND_MESSAGE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -478,7 +478,7 @@ mod tests {
                 &submission_lifecycle_gate(),
                 &control,
             )
-                .await
+            .await
         );
         let submission = rx_sub.recv().await.expect("receive handoff communication");
         assert_eq!(submission.id, message_id);

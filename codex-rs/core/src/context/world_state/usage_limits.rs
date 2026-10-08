@@ -151,10 +151,7 @@ impl WorldStateSection for UsageLimitsState {
         } else {
             self.body.clone()
         };
-        (
-            Some(current),
-            Some(Box::new(UsageLimitsContext::new(body))),
-        )
+        (Some(current), Some(Box::new(UsageLimitsContext::new(body))))
     }
 }
 
