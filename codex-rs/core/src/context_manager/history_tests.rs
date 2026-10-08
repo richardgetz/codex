@@ -699,7 +699,11 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
 fn reference_context_item() -> TurnContextItem {
     TurnContextItem {
         turn_id: Some("reference-turn".to_string()),
-ent directory")
+        root_turn_id: None,
+        disabled_plugin_ids: None,
+        cwd: AbsolutePathBuf::try_from(
+            std::env::current_dir()
+                .expect("current directory")
                 .join("reference-cwd"),
         )
         .expect("absolute reference cwd"),
