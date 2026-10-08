@@ -389,11 +389,31 @@ impl ChatWidget {
             }
             ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
                 if !from_replay {
+                    if self
+                        .app_event_tx
+                        .voice_only
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.on_realtime_transcript_delta(
+                            notification.role.clone(),
+                            notification.delta.clone(),
+                        );
+                    }
                     self.handle_realtime_transcript_delta(&notification.role, &notification.delta);
                 }
             }
             ServerNotification::ThreadRealtimeTranscriptDone(notification) => {
                 if !from_replay {
+                    if self
+                        .app_event_tx
+                        .voice_only
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.on_realtime_transcript_done(
+                            notification.role.clone(),
+                            notification.text.clone(),
+                        );
+                    }
                     self.handle_realtime_transcript_done(&notification.role, &notification.text);
                 }
             }

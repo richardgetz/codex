@@ -76,14 +76,20 @@ async fn web_search_overrides_preserve_explicit_legacy_choices() -> Result<()> {
             .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
             .build()
             .await?;
+        let overrides = config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+            .expect("remote config overrides");
         assert_eq!(
-            config_request_overrides_from_config(&config, ThreadParamsMode::Remote),
-            Some(std::collections::HashMap::from([(
-                "web_search".to_string(),
-                serde_json::json!(expected),
-            )])),
-            "{settings}",
+            overrides.get("web_search"),
+            Some(&serde_json::json!(expected))
         );
+        if let Some(features) = overrides
+            .get("features")
+            .and_then(serde_json::Value::as_object)
+        {
+            for key in ["web_search", "web_search_cached", "web_search_request"] {
+                assert!(!features.contains_key(key), "{settings}");
+            }
+        }
     }
     Ok(())
 }

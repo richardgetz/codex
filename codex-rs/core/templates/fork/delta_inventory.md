@@ -190,6 +190,9 @@ release or merge rules.
   A misalignment failure retires every originating gate attached to that turn;
   session close rejects ordinary handoffs while allowing at most one configured
   transcript tail through fanout drain before sealing the old gate. Before
+  voice-only UI suppression, queued transcript delta/done notifications are
+  retained in the originating session's bounded replay state so switching back
+  presents the admitted tail once. Before
   routing a handoff, the fork records bounded classifier metadata: an optional
   no-tools model classifier falls back to conservative text classification on
   timeout, malformed output, oversized input, or request failure, and explicit
@@ -1430,7 +1433,9 @@ release or merge rules.
   originating session gate, including after replacement; it cannot close a
   later voice session. Closing a session rejects ordinary parsed handoffs,
   flushes at most one configured final transcript tail, and seals the gate
-  after fanout drains. A safety failure revokes an unadmitted tail.
+  after fanout drains. A queued voice caption is retained for its source thread
+  when switching away and back, and is returned once. A safety failure revokes
+  an unadmitted tail.
 - Verify named exec-policy rulesets retain their `overlay`/`exclusive`
   semantics and app-server `execPolicy` selection.
 - Verify fork-aware help continues to load the checked-in fork differences and

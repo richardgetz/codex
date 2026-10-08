@@ -485,8 +485,7 @@ pub(crate) async fn run_turn(
             let (usage_policy, rate_limits) = sess.usage_policy_and_rate_limits().await;
             if !automatic_continuation_allowed(usage_policy, &rate_limits) {
                 if usage_policy.auto_resume
-                    && wait_for_usage_limit_floor(&sess, &turn_context, &cancellation_token)
-                        .await?
+                    && wait_for_usage_limit_floor(&sess, &turn_context, &cancellation_token).await?
                 {
                     continue;
                 }
@@ -634,8 +633,10 @@ pub(crate) async fn run_turn(
                 // Process async hooks only after sampling and its tools have finished.
                 drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ false).await;
                 let (pending_input_status, token_status) = async {
-                    let pending_input_status =
-                        sess.input_queue.pending_input_status(&sess.active_turn).await;
+                    let pending_input_status = sess
+                        .input_queue
+                        .pending_input_status(&sess.active_turn)
+                        .await;
                     let token_status = super::context_window::context_window_token_status(
                         sess.as_ref(),
                         turn_context.as_ref(),

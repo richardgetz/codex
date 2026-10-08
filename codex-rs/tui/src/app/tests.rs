@@ -32,10 +32,10 @@ mod buffered_replay;
 mod connector_policy;
 #[path = "tests/daybreak_tests.rs"]
 mod daybreak_tests;
-#[path = "tests/eta_notification_tests.rs"]
-mod eta_notification_tests;
 #[path = "tests/disconnect_tests.rs"]
 mod disconnect;
+#[path = "tests/eta_notification_tests.rs"]
+mod eta_notification_tests;
 #[path = "tests/external_writer_fork_tests.rs"]
 mod external_writer_fork_tests;
 #[path = "tests/fork_workspace_roots_tests.rs"]
@@ -102,14 +102,14 @@ mod stream_animation_tests;
 mod team_activity_hydration_tests;
 #[path = "tests/thread_usage.rs"]
 mod thread_usage;
-#[path = "tests/usage_rollup.rs"]
-mod usage_rollup;
 #[path = "tests/transcript_composer.rs"]
 mod transcript_composer;
 #[path = "tests/transcript_selection.rs"]
 mod transcript_selection;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
+#[path = "tests/usage_rollup.rs"]
+mod usage_rollup;
 #[path = "tests/user_verification_routes_tests.rs"]
 mod user_verification_routes;
 #[path = "tests/worktree_background_terminals_tests.rs"]
