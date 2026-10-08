@@ -9131,11 +9131,13 @@ async fn override_turn_context_sends_thread_settings_update() {
             Some(ActivePermissionProfile::new(
                 codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
+            /*windows_sandbox_level*/ None,
             Some("gpt-5.4".to_string()),
             Some(Some(ReasoningEffortConfig::High)),
             /*summary*/ None,
             Some(Some(service_tier.clone())),
             Some(collaboration_mode.clone()),
+            /*personality*/ None,
         );
 
         let handled = app
