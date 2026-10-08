@@ -32,11 +32,17 @@ fn namespace_disabled_mcp_handler_flattens_tools_with_schema_budget() {
     )
     .expect("MCP tool spec should build");
 
-    assert_eq!(handler.tool_name, ToolName::plain("mcp__calendar__create_event"));
+    assert_eq!(
+        handler.tool_name,
+        ToolName::plain("mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent")
+    );
     let ToolSpec::Function(tool) = handler.spec.as_ref() else {
         panic!("namespace-disabled MCP handlers should return flat function specs");
     };
-    assert_eq!(tool.name, "mcp__calendar__create_event");
+    assert_eq!(
+        tool.name,
+        "mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent"
+    );
 }
 
 #[test]
@@ -138,11 +144,17 @@ fn namespace_disabled_agent_plugin_handler_flattens_function_specs() {
     )
     .expect("agent-plugin MCP tool spec should build");
 
-    assert_eq!(handler.tool_name, ToolName::plain("mcp__calendar__create_event"));
+    assert_eq!(
+        handler.tool_name,
+        ToolName::plain("mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent")
+    );
     let ToolSpec::Function(tool) = handler.spec.as_ref() else {
         panic!("namespace-disabled MCP handlers should return flat function specs");
     };
-    assert_eq!(tool.name, "mcp__calendar__create_event");
+    assert_eq!(
+        tool.name,
+        "mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent"
+    );
 }
 
 fn tool_info() -> ToolInfo {
