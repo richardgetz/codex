@@ -51,6 +51,10 @@ release or merge rules.
   values fall back to the complete built-in retrieval instructions instead of
   injecting an unbounded or partially truncated security prompt.
 
+- Legacy subagent runtime-context summaries retain at most 8 entries and 1,024
+  rendered UTF-8 bytes, matching the bounded V2 projection so nested-agent
+  context remains predictable.
+
 - When enabled, Guardian can retrieve only the parent's read-only
   `user_message.search_messages` and `user_message.read_messages` tools through
   its isolated reviewer context. Guardian history tool responses are bounded to
@@ -1176,6 +1180,9 @@ release or merge rules.
 - Keep Guardian conversation-history prompt overrides bounded at 8 KiB. Oversized
   values must use the complete built-in retrieval instructions rather than a
   partial custom policy.
+- Preserve the subagent context ceiling in both legacy and V2 projections: no
+  more than 8 entries and 1,024 rendered UTF-8 bytes, including wrappers,
+  indentation, and line breaks.
 - Keep Guardian history access limited to the parent's two read-only
   `user_message` tools in the isolated reviewer context. Keep responses within
   the hard 8 KiB serialized-output cap; token estimates alone do not bound media
