@@ -115,31 +115,3 @@ async fn bedrock_govcloud_model_pickers() {
         );
     }
 }
-
-#[tokio::test]
-async fn bedrock_govcloud_model_pickers() {
-    for region in ["us-gov-west-1", "us-gov-east-1"] {
-        let mut provider_info =
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
-        provider_info.base_url = Some(format!("https://bedrock-mantle.{region}.api.aws/openai/v1"));
-        let presets = create_model_provider(provider_info, /*auth_manager*/ None)
-            .models_manager_without_cache(/*config_model_catalog*/ None)
-            .list_models(
-                RefreshStrategy::Offline,
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await;
-        let default_preset = presets
-            .iter()
-            .find(|preset| preset.is_default)
-            .expect("default Bedrock model");
-        let (mut chat, _events, _ops) = make_chatwidget_manual(Some(&default_preset.model)).await;
-        chat.thread_id = Some(ThreadId::new());
-        chat.model_catalog = Arc::new(ModelCatalog::new(presets));
-        chat.open_model_popup();
-        assert_chatwidget_snapshot!(
-            "bedrock_govcloud_models",
-            render_bottom_popup(&chat, /*width*/ 100)
-        );
-    }
-}
