@@ -13721,7 +13721,7 @@ async fn built_tools_for_mcp_history(
         )
         .await
         .expect("a fresh cancellation token cannot be cancelled");
-    let router = super::turn::built_tools(
+    super::turn::built_tools(
         session.as_ref(),
         turn_context.as_ref(),
         step_context.settings.model_info.as_ref(),
@@ -13731,9 +13731,7 @@ async fn built_tools_for_mcp_history(
         super::turn::prepare_tool_recommendations(session.as_ref(), turn_context.as_ref()).await,
     )
     .await
-    .expect("build tools");
-
-    router
+    .expect("build tools")
 }
 
 async fn session_with_mcp_servers(
