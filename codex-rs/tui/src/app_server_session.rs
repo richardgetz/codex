@@ -957,6 +957,7 @@ impl AppServerSession {
         local_settings: &LocalSettings,
         config: Config,
         thread_id: ThreadId,
+        selected_profile: Option<&PermissionProfileSelection>,
     ) -> Result<AppServerStartedThread> {
         self.fork_thread_at_with_presentation(
             local_settings,
@@ -966,7 +967,7 @@ impl AppServerSession {
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
             ForkPresentation::SideConversation,
-            /*selected_profile*/ None,
+            selected_profile,
             ForkPermissionMode::InheritSaved,
             ForkConfigSource::Session,
         )
@@ -1035,6 +1036,7 @@ impl AppServerSession {
         }
         if self.thread_params_mode() == ThreadParamsMode::Remote
             && permission_mode == ForkPermissionMode::InheritSaved
+            && selected_profile.is_none()
         {
             params.approval_policy = None;
             params.approvals_reviewer = None;
@@ -4377,6 +4379,7 @@ mod tests {
                 &LocalSettings::from(&ephemeral_config),
                 ephemeral_config,
                 source_thread_id,
+                /*selected_profile*/ None,
             )
             .await?;
 
@@ -4503,6 +4506,7 @@ mod tests {
                 &LocalSettings::from(&side_config),
                 side_config,
                 source_thread_id,
+                /*selected_profile*/ None,
             )
             .await?;
 
@@ -4643,7 +4647,12 @@ mod tests {
             .fork_thread(&LocalSettings::from(&config), config.clone(), thread_id)
             .await?;
         let side = app_server
-            .fork_side_thread(&LocalSettings::from(&config), config, thread_id)
+            .fork_side_thread(
+                &LocalSettings::from(&config),
+                config,
+                thread_id,
+                /*selected_profile*/ None,
+            )
             .await?;
 
         assert_eq!(regular.turns.len(), 1);
