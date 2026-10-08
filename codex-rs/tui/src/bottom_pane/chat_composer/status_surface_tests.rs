@@ -1,6 +1,7 @@
 //! Persistent status survives transient footer modes and suggestion overlays.
 
 use super::*;
+use crate::slash_command::SlashCommand;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -87,6 +88,47 @@ fn passive_activity_keeps_shortcuts_only_when_the_complete_hint_fits() {
         text.lines().last().map(str::trim),
         Some("ctrl+o t/f4 inspect activity")
     );
+}
+
+#[test]
+fn personality_and_provenance_commands_follow_composer_flags() {
+    let mut composer = composer();
+    let personality = SlashCommand::Personality.command();
+    let decisions = SlashCommand::Decisions.command();
+    let preference_boundaries = SlashCommand::PreferenceBoundaries.command();
+
+    assert!(composer.slash_input().command(personality).is_none());
+    assert!(composer.slash_input().command(decisions).is_none());
+    assert!(composer.slash_input().command(preference_boundaries).is_none());
+
+    composer.set_personality_command_enabled(/*enabled*/ true);
+    assert!(composer.slash_input().command(personality).is_some());
+    assert!(composer.slash_input().command(decisions).is_none());
+
+    composer.set_provenance_commands_enabled(/*enabled*/ true);
+    assert!(composer.slash_input().command(decisions).is_some());
+    assert!(composer.slash_input().command(preference_boundaries).is_some());
+}
+
+#[test]
+fn plan_mode_nudge_replaces_the_ambient_footer_row() {
+    let mut composer = composer();
+    let before = render(&composer, /*width*/ 80, /*footer*/ None).0;
+
+    assert!(!composer.set_plan_mode_nudge_visible(/*visible*/ false));
+    assert!(composer.set_plan_mode_nudge_visible(/*visible*/ true));
+    assert!(composer.plan_mode_nudge_visible());
+
+    let after = render(&composer, /*width*/ 80, /*footer*/ None).0;
+    assert_eq!(before.matches('\n').count(), after.matches('\n').count());
+    assert!(after.contains("MODEL · ~/project · Context 20% used"));
+    let nudge = after
+        .lines()
+        .find(|line| line.contains("Create a plan?"))
+        .expect("the Plan-mode nudge replaces the ambient footer row")
+        .trim();
+    insta::assert_snapshot!(nudge, @"Create a plan?  ⇧tab use Plan mode   esc dismiss");
+    assert!(!composer.set_plan_mode_nudge_visible(/*visible*/ true));
 }
 
 #[test]

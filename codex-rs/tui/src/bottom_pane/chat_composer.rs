@@ -631,6 +631,8 @@ pub(crate) struct ChatComposer {
     service_tier_commands: Vec<ServiceTierCommand>,
     mentions_v2_enabled: bool,
     goal_command_enabled: bool,
+    personality_command_enabled: bool,
+    provenance_commands_enabled: bool,
     voice_command_enabled: bool,
     worktrees_enabled: bool,
     windows_degraded_sandbox_active: bool,
@@ -676,6 +678,19 @@ pub(crate) struct ComposerDraftSnapshot {
     pub(crate) startup_local_history: Vec<HistoryEntry>,
     pub(crate) last_composer_activity_at: Option<Instant>,
     pub(crate) sparkle_draft: sparkle::SparkleDraft,
+}
+
+/// Builds the one-line nudge that replaces the ambient footer without adding layout height.
+fn plan_mode_nudge_line() -> Line<'static> {
+    Line::from(vec![
+        "Create a plan?".magenta(),
+        "  ".into(),
+        key_hint::shift(KeyCode::Tab).into(),
+        " use Plan mode".into(),
+        "   ".into(),
+        key_hint::plain(KeyCode::Esc).into(),
+        " dismiss".into(),
+    ])
 }
 
 impl ChatComposer {
@@ -735,6 +750,7 @@ impl ChatComposer {
                 use_shift_enter_hint,
                 mode: FooterMode::ComposerEmpty,
                 hint_override: None,
+                plan_mode_nudge_visible: false,
                 flash: None,
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -803,6 +819,8 @@ impl ChatComposer {
             service_tier_commands: Vec::new(),
             mentions_v2_enabled: false,
             goal_command_enabled: false,
+            personality_command_enabled: false,
+            provenance_commands_enabled: false,
             voice_command_enabled: false,
             worktrees_enabled: false,
             windows_degraded_sandbox_active: false,
@@ -1008,6 +1026,15 @@ impl ChatComposer {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.goal_command_enabled = enabled;
+    }
+
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.personality_command_enabled = enabled;
+    }
+
+    pub fn set_provenance_commands_enabled(&mut self, enabled: bool) {
+        self.provenance_commands_enabled = enabled;
+        self.sync_popups();
     }
 
     pub fn set_voice_command_enabled(&mut self, enabled: bool) {
@@ -1471,6 +1498,23 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer.hint_override = items;
+    }
+
+    /// Updates whether the Plan-mode nudge replaces the ambient footer row.
+    ///
+    /// Returns `true` only when the rendered footer can change so callers can avoid scheduling
+    /// redundant redraws while reevaluating nudge policy on routine composer updates.
+    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) -> bool {
+        if self.footer.plan_mode_nudge_visible == visible {
+            return false;
+        }
+        self.footer.plan_mode_nudge_visible = visible;
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
+        self.footer.plan_mode_nudge_visible
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
@@ -4363,6 +4407,7 @@ impl ChatComposer {
         self.footer.quit_shortcut_expires_at = None;
         self.footer.mode = FooterMode::ComposerEmpty;
         self.footer.hint_override = Some(Vec::new());
+        self.footer.plan_mode_nudge_visible = false;
         self.footer.flash = None;
     }
 
@@ -4702,6 +4747,17 @@ impl ChatComposer {
                     input.render(inset_footer_hint_area(hint_rect), buf);
                 } else if let Some(line) = self.history_search_footer_line() {
                     render_footer_line(hint_rect, buf, line);
+                } else if self.footer.plan_mode_nudge_visible {
+                    let available_width =
+                        hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                    render_footer_line(
+                        hint_rect,
+                        buf,
+                        truncate_line_with_ellipsis_if_overflow(
+                            plan_mode_nudge_line(),
+                            available_width,
+                        ),
+                    );
                 } else {
                     let available_width =
                         hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
