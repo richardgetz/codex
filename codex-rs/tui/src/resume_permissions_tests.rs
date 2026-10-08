@@ -74,7 +74,7 @@ async fn selected_profile_permissions_override_saved_permissions() -> color_eyre
     let permission_home = tempfile::tempdir()?;
     std::fs::write(
         permission_home.path().join("config.toml"),
-        "default_permissions = 'safe'\n",
+        "default_permissions = 'safe'\n\n[permissions.safe]\n",
     )?;
     for (profile_name, profile_contents, expected_permissions) in [
         (
