@@ -32,6 +32,8 @@ mod buffered_replay;
 mod connector_policy;
 #[path = "tests/daybreak_tests.rs"]
 mod daybreak_tests;
+#[path = "tests/eta_notification_tests.rs"]
+mod eta_notification_tests;
 #[path = "tests/disconnect_tests.rs"]
 mod disconnect;
 #[path = "tests/external_writer_fork_tests.rs"]
@@ -82,6 +84,8 @@ mod realtime_start;
 mod reasoning_resume_tests;
 #[path = "tests/recap_generation_tests.rs"]
 mod recap_generation;
+#[path = "tests/reload_provider_tests.rs"]
+mod reload_provider_tests;
 #[path = "tests/resume_shutdown_tests.rs"]
 mod resume_shutdown_tests;
 mod safety_buffering;
@@ -94,8 +98,12 @@ mod startup_frame_tests;
 mod startup_warnings_tests;
 #[path = "tests/stream_animation_tests.rs"]
 mod stream_animation_tests;
+#[path = "tests/team_activity_hydration_tests.rs"]
+mod team_activity_hydration_tests;
 #[path = "tests/thread_usage.rs"]
 mod thread_usage;
+#[path = "tests/usage_rollup.rs"]
+mod usage_rollup;
 #[path = "tests/transcript_composer.rs"]
 mod transcript_composer;
 #[path = "tests/transcript_selection.rs"]
