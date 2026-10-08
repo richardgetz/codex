@@ -89,6 +89,7 @@ async fn paginated_recovery_finds_latest_owned_settings_outside_model_context() 
     let initial_history = InitialHistory::Resumed(ResumedHistory {
         conversation_id: owned_thread_id,
         history: Arc::new(Vec::new()),
+        history_revision: None,
         rollout_path: Some(rollout_path.clone()),
     });
     let InitialHistory::Resumed(resumed) = &initial_history else {

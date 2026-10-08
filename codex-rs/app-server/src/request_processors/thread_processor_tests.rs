@@ -219,6 +219,7 @@ mod thread_processor_behavior_tests {
 
     fn test_thread_config_snapshot(cwd: AbsolutePathBuf) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
+            turn_extension_init: Default::default(),
             model: "gpt-5".to_string(),
             model_provider_id: "openai".to_string(),
             service_tier: None,

@@ -4679,7 +4679,7 @@ mod tests {
         )
         .await;
 
-        for (limit_id, used_percent) in [("codex", 25.0), ("workspace", 75.0)] {
+        for (limit_id, used_percent) in [("codex", 25), ("workspace", 75)] {
             match recv_broadcast_notification(&mut rx).await? {
                 ServerNotification::AccountRateLimitsUpdated(payload) => {
                     assert_eq!(payload.rate_limits.limit_id.as_deref(), Some(limit_id));
@@ -4750,7 +4750,7 @@ mod tests {
                         .primary
                         .as_ref()
                         .map(|window| window.used_percent),
-                    Some(33.0)
+                    Some(33)
                 );
             }
             other => bail!("unexpected notification: {other:?}"),
