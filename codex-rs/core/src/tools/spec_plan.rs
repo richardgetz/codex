@@ -332,7 +332,7 @@ fn apply_mcp_tool_exposure_policy(
         {
             McpHandler::recovered_tool_name(tool, namespace_tools_enabled)
         } else {
-            canonical_tool_name
+            canonical_tool_name.clone()
         };
         let normalized_tool_name = tool_name.clone().with_default_namespace();
         if canonical_tool_name

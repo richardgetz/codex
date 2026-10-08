@@ -623,7 +623,7 @@ async fn handle_approved_mcp_tool_call(
 
             let mut no_update_results = 0;
             loop {
-                let Some(retry_after) = retry_after.take() else {
+                let Some(retry_delay) = retry_after.take() else {
                     return Ok(result);
                 };
                 no_update_results += 1;
@@ -640,14 +640,14 @@ async fn handle_approved_mcp_tool_call(
                     server = %invocation.server,
                     tool_name = %invocation.tool,
                     no_update_results,
-                    retry_after_ms = retry_after.as_millis(),
+                    retry_after_ms = retry_delay.as_millis(),
                     "MCP tool reported no update; waiting before retry"
                 );
                 let mcp_tool = McpToolContext::from_prepared_call(
                     &prepared_call,
                     turn_context.config.mcp_servers.get().get(&server),
                 );
-                tokio::time::sleep(retry_after).await;
+                tokio::time::sleep(retry_delay).await;
 
                 let (rewritten_arguments, request_meta) = prepared_request
                     .clone()

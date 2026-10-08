@@ -524,7 +524,7 @@ pub(crate) async fn run_turn(
             let sampling_step_context = build_sampling_step_context(
                 sess.as_ref(),
                 Arc::clone(&step_context),
-                Arc::clone(&turn_context.extension_data),
+                turn_context.extension_data.as_ref(),
                 &selection_input,
                 &explicitly_enabled_connectors,
             )
