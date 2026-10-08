@@ -1,6 +1,7 @@
 //! Opportunistic attachment may fall back; automatic startup requires a shared server.
 
 use super::*;
+use crate::daemon_startup::connect_default_daemon;
 use crate::legacy_core::config::ConfigBuilder;
 use codex_app_server_daemon::ApplyOutput;
 use codex_app_server_daemon::ApplyStatus;

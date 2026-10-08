@@ -647,7 +647,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
             .keys()
             .copied()
             .collect::<HashSet<_>>(),
-        ids.into_iter().collect()
+        ids.into_iter().collect::<HashSet<_>>()
     );
     assert!(!restarted.agents_overview.discovery.has_more());
     app_server.shutdown().await?;

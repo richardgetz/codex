@@ -111,6 +111,7 @@ async fn security_setup_fetch_with_default_features_uses_authenticated_codex_end
             &server,
             AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
                 AccountUpdatedNotification {
+                    account: None,
                     auth_mode: Some(AuthMode::Chatgpt),
                     plan_type: None,
                 },

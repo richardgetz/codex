@@ -16,6 +16,8 @@ pub(crate) async fn make_test_app() -> App {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let usage_rollup = chat_widget.usage_rollup_handle();
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
 
     App {
         feature_write_lock: Arc::default(),
@@ -23,11 +25,32 @@ pub(crate) async fn make_test_app() -> App {
         session_telemetry,
         app_event_tx,
         chat_widget,
+        usage_rollup,
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,
         local_settings: crate::local_settings::LocalSettings::from(&config),
         config,
+        realtime_mic_mode,
+        realtime_voice_session: None,
+        realtime_voice_calibration_preparing: None,
+        realtime_voice_calibration_preparation_abort: None,
+        realtime_voice_calibration_preparation_cancel: None,
+        realtime_voice_requested_session_id: None,
+        realtime_voice_submission_id: None,
+        realtime_voice_legacy_notifications: false,
+        realtime_voice_ignore_legacy_notifications: false,
+        realtime_voice_calibration: None,
+        realtime_voice_profile: None,
+        realtime_voice_rotation_selected: false,
+        realtime_voice_debug: false,
+        realtime_handoff_debug_ids: VecDeque::new(),
+        realtime_output_debug_item_id: None,
+        realtime_output_debug_response_id: None,
+        realtime_output_debug_handoff_id: None,
+        realtime_output_debug_audio_chunk_count: 0,
+        realtime_output_debug_transcript_delta_count: 0,
+        realtime_output_debug_message_count: 0,
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -66,6 +89,7 @@ pub(crate) async fn make_test_app() -> App {
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
+        frontend_launcher: None,
         pending_right_click_paste: None,
         right_click_paste_environment: super::right_click_paste::PasteEnvironment {
             primary: false,
@@ -90,6 +114,8 @@ pub(crate) async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         agents_overview: Default::default(),
+        eta: Default::default(),
+        team_activity: Default::default(),
         side_threads: HashMap::new(),
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,

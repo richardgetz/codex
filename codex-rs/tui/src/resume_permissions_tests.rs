@@ -11,7 +11,7 @@ async fn build_user_profile_config(
     profile_config_path: &Path,
     profile: &str,
 ) -> color_eyre::Result<Config> {
-    ConfigBuilder::default()
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
         .loader_overrides(codex_config::LoaderOverrides {
             user_config_path: Some(AbsolutePathBuf::try_from(profile_config_path.to_path_buf())?),
@@ -19,7 +19,8 @@ async fn build_user_profile_config(
             ..codex_config::LoaderOverrides::without_managed_config_for_tests()
         })
         .build()
-        .await
+        .await?;
+    Ok(config)
 }
 
 #[tokio::test]

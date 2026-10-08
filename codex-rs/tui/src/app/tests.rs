@@ -1029,6 +1029,7 @@ async fn active_thread_drain_yields_after_frame_deadline_without_dropping_events
         crate::token_usage::TokenUsage {
             input_tokens: 4,
             cached_input_tokens: 1,
+            cache_write_tokens: 0,
             output_tokens: 5,
             reasoning_output_tokens: 0,
             total_tokens: 10,
@@ -1057,6 +1058,7 @@ async fn active_thread_drain_yields_after_frame_deadline_without_dropping_events
         crate::token_usage::TokenUsage {
             input_tokens: 4,
             cached_input_tokens: 1,
+            cache_write_tokens: 0,
             output_tokens: 10,
             reasoning_output_tokens: 0,
             total_tokens: 15,
@@ -2635,7 +2637,7 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
         assert!(backfill.completed);
         assert_eq!(
             backfill.refreshed_thread_ids,
-            [child_thread_ids[1]].into_iter().collect()
+            [child_thread_ids[1]].into_iter().collect::<HashSet<_>>()
         );
         assert_eq!(
             app.agent_navigation.get(&child_thread_ids[0]),
@@ -6076,6 +6078,8 @@ async fn make_test_app() -> Box<App> {
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let usage_rollup = chat_widget.usage_rollup_handle();
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
 
     Box::new(App {
         feature_write_lock: Arc::default(),
@@ -6083,11 +6087,32 @@ async fn make_test_app() -> Box<App> {
         session_telemetry,
         app_event_tx,
         chat_widget,
+        usage_rollup,
         workspace_command_runner: None,
         launch_cwd: config.cwd.to_path_buf(),
         runtime_working_directory_override: None,
         local_settings: crate::local_settings::LocalSettings::from(&config),
         config,
+        realtime_mic_mode,
+        realtime_voice_session: None,
+        realtime_voice_calibration_preparing: None,
+        realtime_voice_calibration_preparation_abort: None,
+        realtime_voice_calibration_preparation_cancel: None,
+        realtime_voice_requested_session_id: None,
+        realtime_voice_submission_id: None,
+        realtime_voice_legacy_notifications: false,
+        realtime_voice_ignore_legacy_notifications: false,
+        realtime_voice_calibration: None,
+        realtime_voice_profile: None,
+        realtime_voice_rotation_selected: false,
+        realtime_voice_debug: false,
+        realtime_handoff_debug_ids: VecDeque::new(),
+        realtime_output_debug_item_id: None,
+        realtime_output_debug_response_id: None,
+        realtime_output_debug_handoff_id: None,
+        realtime_output_debug_audio_chunk_count: 0,
+        realtime_output_debug_transcript_delta_count: 0,
+        realtime_output_debug_message_count: 0,
         state_db: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
@@ -6125,6 +6150,7 @@ async fn make_test_app() -> Box<App> {
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
+        frontend_launcher: None,
         reconnect: Default::default(),
         pending_right_click_paste: None,
         right_click_paste_environment: super::right_click_paste::PasteEnvironment {
@@ -6150,6 +6176,8 @@ async fn make_test_app() -> Box<App> {
         agent_navigation: AgentNavigationState::default(),
         pending_server_profiles: HashMap::new(),
         agents_overview: Default::default(),
+        eta: Default::default(),
+        team_activity: Default::default(),
         side_threads: HashMap::new(),
         abandoned_side_threads: HashSet::new(),
         active_thread_id: None,
@@ -6194,6 +6222,8 @@ pub(super) async fn make_test_app_with_channels() -> (
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
+    let usage_rollup = chat_widget.usage_rollup_handle();
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
 
     (
         Box::new(App {
@@ -6202,11 +6232,32 @@ pub(super) async fn make_test_app_with_channels() -> (
             session_telemetry,
             app_event_tx,
             chat_widget,
+            usage_rollup,
             workspace_command_runner: None,
             launch_cwd: config.cwd.to_path_buf(),
             runtime_working_directory_override: None,
             local_settings: crate::local_settings::LocalSettings::from(&config),
             config,
+            realtime_mic_mode,
+            realtime_voice_session: None,
+            realtime_voice_calibration_preparing: None,
+            realtime_voice_calibration_preparation_abort: None,
+            realtime_voice_calibration_preparation_cancel: None,
+            realtime_voice_requested_session_id: None,
+            realtime_voice_submission_id: None,
+            realtime_voice_legacy_notifications: false,
+            realtime_voice_ignore_legacy_notifications: false,
+            realtime_voice_calibration: None,
+            realtime_voice_profile: None,
+            realtime_voice_rotation_selected: false,
+            realtime_voice_debug: false,
+            realtime_handoff_debug_ids: VecDeque::new(),
+            realtime_output_debug_item_id: None,
+            realtime_output_debug_response_id: None,
+            realtime_output_debug_handoff_id: None,
+            realtime_output_debug_audio_chunk_count: 0,
+            realtime_output_debug_transcript_delta_count: 0,
+            realtime_output_debug_message_count: 0,
             state_db: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
@@ -6244,6 +6295,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             app_server_target: crate::AppServerTarget::Embedded,
+            frontend_launcher: None,
             reconnect: Default::default(),
             pending_right_click_paste: None,
             right_click_paste_environment: super::right_click_paste::PasteEnvironment {
@@ -6269,6 +6321,8 @@ pub(super) async fn make_test_app_with_channels() -> (
             agent_navigation: AgentNavigationState::default(),
             pending_server_profiles: HashMap::new(),
             agents_overview: Default::default(),
+            eta: Default::default(),
+            team_activity: Default::default(),
             side_threads: HashMap::new(),
             abandoned_side_threads: HashSet::new(),
             active_thread_id: None,
