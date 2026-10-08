@@ -207,7 +207,7 @@ pub(super) async fn run_main_inner(
                 && !cli.oss
                 && !workload_identity_selected
                 && (cli.agents_overview
-                    || can_reuse_implicit_local_daemon(
+                    || daemon_startup::can_reuse_implicit_local_daemon(
                         &daemon_cli_kv_overrides,
                         &launch_loader_overrides,
                         strict_config,
@@ -343,7 +343,7 @@ pub(super) async fn run_main_inner(
             .map_err(std::io::Error::other)?;
         Some(
             startup_draft
-                .run_until(connect_daemon_at(socket_path))
+                .run_until(daemon_startup::connect_daemon_at(socket_path))
                 .await??,
         )
     } else if !frontend_reload_embedded
@@ -352,7 +352,7 @@ pub(super) async fn run_main_inner(
         && std::env::var_os(codex_exec_server::CODEX_EXEC_SERVER_URL_ENV_VAR).is_none()
     {
         startup_draft
-            .run_until(connect_default_daemon(&codex_home))
+            .run_until(daemon_startup::connect_default_daemon(&codex_home))
             .await??
     } else {
         None

@@ -6,6 +6,7 @@
 
 use super::*;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 const SERVER_FEATURES: [Feature; 4] = [
     Feature::ApiKeyModelDiscovery,
@@ -180,12 +181,173 @@ pub(super) async fn compatibility_warning(
     .await;
     match check {
         Ok(()) => Ok(None),
-        Err(reason) if *allow_embedded_fallback => Ok(Some(format!(
-            "Running without the shared background server: {reason}."
-        ))),
-        Err(reason) => Err(CompatibilityError {
-            reason,
-            restart_features,
-        }),
+        Err(reason) => {
+            let daemon_identity = if matches!(
+                target,
+                AppServerTarget::LocalDaemon {
+                    endpoint: RemoteAppServerEndpoint::UnixSocket { .. },
+                    ..
+                }
+            ) {
+                codex_app_server_daemon::run(codex_app_server_daemon::LifecycleCommand::Version)
+                    .await
+                    .ok()
+                    .map(|output| {
+                        format!(
+                            "; daemon launcher {} is installed at version {}, while the running launcher version is {} (app-server version {})",
+                            output.managed_codex_path.display(),
+                            output.managed_codex_version.as_deref().unwrap_or("unknown"),
+                            output
+                                .running_managed_codex_version
+                                .as_deref()
+                                .unwrap_or("unknown"),
+                            output.app_server_version.as_deref().unwrap_or("unknown")
+                        )
+                    })
+            } else {
+                None
+            };
+            let reason = match daemon_identity {
+                Some(identity) => format!("{reason}{identity}"),
+                None => reason,
+            };
+            if *allow_embedded_fallback {
+                Ok(Some(format!(
+                    "Running without the shared background server: {reason}."
+                )))
+            } else {
+                Err(CompatibilityError {
+                    reason,
+                    restart_features,
+                })
+            }
+        }
+    }
+}
+
+/// Whether the implicit local daemon can reproduce this invocation's launch configuration.
+pub(super) fn can_reuse_implicit_local_daemon(
+    cli_kv_overrides: &[(String, toml::Value)],
+    loader_overrides: &LoaderOverrides,
+    strict_config: bool,
+    has_non_replayable_launch_overrides: bool,
+) -> bool {
+    cli_kv_overrides.is_empty()
+        && loader_overrides_are_default(loader_overrides)
+        && !strict_config
+        && !has_non_replayable_launch_overrides
+}
+
+/// Owns the initialized client for an implicitly selected local daemon.
+///
+/// Startup reuses the successful handshake instead of probing the socket with one connection
+/// and opening a second connection after configuration loading.
+pub(super) struct PreparedDefaultDaemon {
+    pub(super) socket_path: AbsolutePathBuf,
+    pub(super) app_server: AppServerClient,
+}
+
+pub(super) async fn connect_default_daemon(
+    codex_home: &Path,
+) -> std::io::Result<Option<PreparedDefaultDaemon>> {
+    let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home)
+        .map_err(std::io::Error::other)?;
+    match std::fs::metadata(socket_path.as_path()) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(std::io::Error::other(format!(
+                "failed to inspect the existing local app-server daemon socket at `{}`; refusing to start a competing embedded server: {err}",
+                socket_path.display()
+            )));
+        }
+    }
+    connect_daemon_at(socket_path).await.map(Some)
+}
+
+/// Connect to an already selected daemon socket without falling back to an embedded owner.
+///
+/// Frontend refresh markers use this path so a missing or broken shared daemon is reported to
+/// the caller instead of starting a second server with different ownership semantics.
+pub(super) async fn connect_daemon_at(
+    socket_path: AbsolutePathBuf,
+) -> std::io::Result<PreparedDefaultDaemon> {
+    match std::fs::metadata(socket_path.as_path()) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "the selected local app-server daemon socket `{}` is no longer available; refusing to start a competing embedded server",
+                    socket_path.display()
+                ),
+            ));
+        }
+        Err(err) => {
+            return Err(std::io::Error::other(format!(
+                "failed to inspect the existing local app-server daemon socket at `{}`; refusing to start a competing embedded server: {err}",
+                socket_path.display()
+            )));
+        }
+    }
+
+    let target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: false,
+        endpoint: RemoteAppServerEndpoint::UnixSocket {
+            socket_path: socket_path.clone(),
+        },
+    };
+    let app_server = app_server_connection::connect(&target)
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!(
+                "failed to connect to the existing local app-server daemon at `{}`; refusing to start a competing embedded server: {err}",
+                socket_path.display()
+            ))
+        })?;
+    Ok(PreparedDefaultDaemon {
+        socket_path,
+        app_server,
+    })
+}
+
+pub(super) fn launcher_update_issue(
+    output: &codex_app_server_daemon::ApplyOutput,
+) -> CompatibilityError {
+    let launcher = output
+        .managed_codex_path
+        .as_deref()
+        .unwrap_or_else(|| Path::new("unknown"));
+    let error = output
+        .error
+        .as_deref()
+        .unwrap_or("daemon update reconciliation did not complete");
+    let recovery_guidance = match output.failure_kind {
+        Some(codex_app_server_daemon::ApplyFailureKind::HandoffJournalMissing) => {
+            "The matching handoff journal is missing; Codex preserved the receipt and did not replay or discard its saved sessions."
+        }
+        Some(codex_app_server_daemon::ApplyFailureKind::HandoffStorageMismatch) => {
+            "The daemon and handoff use different Codex homes; Codex preserved the handoff and did not mutate either home."
+        }
+        Some(codex_app_server_daemon::ApplyFailureKind::HandoffWorkPending) => {
+            "Codex preserved the pending handoff and its saved session ownership."
+        }
+        Some(codex_app_server_daemon::ApplyFailureKind::RunningLauncherMismatch) | None => {
+            "The selected launcher is not verified as the running fork build."
+        }
+    };
+    CompatibilityError {
+        reason: format!(
+            "safe daemon update returned {:?}; selected launcher {} (installed version {}) is running as version {} (app-server version {}). {recovery_guidance} {error}",
+            output.status,
+            launcher.display(),
+            output.managed_codex_version.as_deref().unwrap_or("unknown"),
+            output
+                .running_managed_codex_version
+                .as_deref()
+                .unwrap_or("unknown"),
+            output.app_server_version.as_deref().unwrap_or("unknown")
+        ),
+        restart_features: None,
     }
 }
