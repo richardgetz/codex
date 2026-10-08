@@ -2372,6 +2372,8 @@ enabled = false
                 instruction_source_paths: Vec::new(),
                 reasoning_effort: None,
                 collaboration_mode: None,
+                team: None,
+                personality: None,
                 message_history: None,
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),

@@ -751,8 +751,14 @@ fn set_test_initial_prompt(app: &mut App, initial_prompt: String) {
         requires_openai_auth: true,
         local_settings: crate::local_settings::LocalSettings::from(&config),
         config,
+        environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        state_db: app.state_db.clone(),
+        provenance_commands_enabled: crate::app::provenance_commands_enabled_for_target(
+            &app.config,
+            &app.app_server_target,
+        ),
         workspace_command_runner: None,
         initial_user_message: create_initial_user_message(
             Some(initial_prompt),
@@ -767,6 +773,7 @@ fn set_test_initial_prompt(app: &mut App, initial_prompt: String) {
         is_first_run: false,
         status_account_display: None,
         initial_plan_type: None,
+        initial_collaboration_mode: Some(app.chat_widget.active_collaboration_mode_kind()),
         model: Some(model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
@@ -3399,11 +3406,13 @@ default_permissions = "locked-down"
             approvals_reviewer: None,
             permission_profile: Some(app.config.permissions.permission_profile().clone()),
             active_permission_profile: app.config.permissions.active_permission_profile(),
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            personality: None,
         }
     );
     let cell = match app_event_rx.try_recv() {
@@ -3491,11 +3500,13 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             approvals_reviewer: Some(auto_review.approvals_reviewer),
             permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            personality: None,
         })
     );
     let cell = match app_event_rx.try_recv() {
@@ -3584,11 +3595,13 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             approvals_reviewer: Some(ApprovalsReviewer::User),
             permission_profile: None,
             active_permission_profile: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            personality: None,
         })
     );
     let cell = match app_event_rx.try_recv() {
@@ -3663,11 +3676,13 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             approvals_reviewer: Some(auto_review.approvals_reviewer),
             permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            personality: None,
         })
     );
 
@@ -3721,11 +3736,13 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             approvals_reviewer: Some(ApprovalsReviewer::User),
             permission_profile: None,
             active_permission_profile: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            personality: None,
         })
     );
     assert!(
@@ -5916,6 +5933,8 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             instruction_source_paths: Vec::new(),
             reasoning_effort: Some(ReasoningEffortConfig::High),
             collaboration_mode: None,
+            team: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -6526,6 +6545,8 @@ fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState 
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -7218,6 +7239,7 @@ fn token_usage_notification(
                 reasoning_output_tokens: 0,
             },
             model_context_window,
+            ..ThreadTokenUsage::default()
         },
     })
 }
@@ -7625,6 +7647,8 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -7698,6 +7722,8 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -8826,8 +8852,14 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         requires_openai_auth: true,
         local_settings: crate::local_settings::LocalSettings::from(&app.config),
         config: app.config.clone(),
+        environment_manager: app.environment_manager.clone(),
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         app_event_tx: app.app_event_tx.clone(),
+        state_db: app.state_db.clone(),
+        provenance_commands_enabled: crate::app::provenance_commands_enabled_for_target(
+            &app.config,
+            &app.app_server_target,
+        ),
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,
@@ -8838,6 +8870,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         is_first_run: false,
         status_account_display: app.chat_widget.status_account_display().cloned(),
         initial_plan_type: app.chat_widget.current_plan_type(),
+        initial_collaboration_mode: Some(app.chat_widget.active_collaboration_mode_kind()),
         model: Some(app.chat_widget.current_model().to_string()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
@@ -8993,6 +9026,8 @@ async fn new_session_requests_shutdown_for_previous_conversation() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
@@ -9677,6 +9712,10 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             collaboration_mode: collaboration_mode.clone(),
             multi_agent_mode: Default::default(),
             personality: None,
+            memory_policy: Default::default(),
+            user_preferences_memory_policy: Default::default(),
+            usage_policy: Default::default(),
+            team: None,
         },
     };
     app.enqueue_thread_notification(
@@ -9742,6 +9781,8 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
             instruction_source_paths: Vec::new(),
             reasoning_effort: None,
             collaboration_mode: None,
+            team: None,
+            personality: None,
             message_history: None,
             network_proxy: None,
             rollout_path: Some(PathBuf::new()),
