@@ -32,6 +32,12 @@ release or merge rules.
   after canceled startup, and bounds recovered specs to the latest 64 unique
   tools found within the latest 4,096 history items.
 
+- Successful MCP results can request a bounded smart wait through
+  `_meta['codex/wait']` v1 `no_update` directives. Retries reuse the same
+  rewritten arguments and request metadata, stop after 12 no-update results,
+  and cap each delay at 10 minutes; malformed or unknown directives and MCP
+  errors retain normal behavior.
+
 - Guardian conversation-history prompt overrides are capped at 8 KiB; oversized
   values fall back to the complete built-in retrieval instructions instead of
   injecting an unbounded or partially truncated security prompt.
@@ -1692,6 +1698,11 @@ release or merge rules.
   unavailable; confirm the cached normal tool-plan path retains recovered
   placeholders and history recovery remains capped at 64 unique tools from the
   latest 4,096 history items.
+- Verify successful MCP results retry only for `_meta['codex/wait']` v1
+  `no_update` directives with positive `retry_after_ms`; retries preserve the
+  rewritten arguments and request metadata, stop after 12 no-update results,
+  and cap each wait at 10 minutes. Missing, malformed, or unknown directives
+  and MCP errors retain normal behavior.
 - Verify the fork-preserved `update_plan` default remains enabled when omitted
   or given an empty table, while explicit `enabled = false` removes the tool
   from both registered and model-visible sets.
