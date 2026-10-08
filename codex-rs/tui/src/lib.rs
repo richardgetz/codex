@@ -1156,6 +1156,7 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     mut state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    prepared_app_server: Option<AppServerClient>,
     embedded_network_policy: codex_app_server_client::EmbeddedNetworkPolicy,
     managed_worktree: Option<ManagedTuiWorktree>,
     daemon_startup_warning: Option<String>,
@@ -1207,25 +1208,29 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let startup_app_server = startup_draft
-        .run_until(
-            &mut tui,
-            start_app_server(
-                &mut app_server_target,
-                arg0_paths.clone(),
-                initial_config.clone(),
-                cli_kv_overrides.clone(),
-                loader_overrides.clone(),
-                strict_config,
-                cloud_config_bundle.clone(),
-                feedback.clone(),
-                log_db.clone(),
-                &mut state_db,
-                environment_manager.clone(),
-                embedded_network_policy.clone(),
-            ),
-        )
-        .await;
+    let startup_app_server = if let Some(app_server) = prepared_app_server {
+        Ok(Ok(app_server))
+    } else {
+        startup_draft
+            .run_until(
+                &mut tui,
+                start_app_server(
+                    &mut app_server_target,
+                    arg0_paths.clone(),
+                    initial_config.clone(),
+                    cli_kv_overrides.clone(),
+                    loader_overrides.clone(),
+                    strict_config,
+                    cloud_config_bundle.clone(),
+                    feedback.clone(),
+                    log_db.clone(),
+                    &mut state_db,
+                    environment_manager.clone(),
+                    embedded_network_policy.clone(),
+                ),
+            )
+            .await
+    };
     launch_telemetry.record(&app_server_target, matches!(&startup_app_server, Ok(Ok(_))));
     let mut app_server_session = match startup_app_server {
         Ok(Ok(app_server)) => {
@@ -1324,6 +1329,7 @@ async fn run_ratatui_app(
         );
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
+                show_welcome_screen: true,
                 show_login_screen,
                 bedrock_setup_enabled,
                 show_trust_screen: should_show_trust_screen_flag,
@@ -1334,6 +1340,7 @@ async fn run_ratatui_app(
                     .as_ref()
                     .map(AppServerSession::request_handle),
                 config: initial_config.clone(),
+                exit_on_auth_cancel: true,
             },
             if show_login_screen {
                 app_server.as_mut()
@@ -2074,6 +2081,7 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        cli.frontend_launcher.clone(),
         startup_elapsed_before_app,
         startup_bootstrap,
         startup_hooks_browser,
