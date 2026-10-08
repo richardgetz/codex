@@ -632,15 +632,9 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
     };
     let output_task = tokio::spawn(async move {
         let mut append_texts = Vec::new();
-        while let Ok(output) = output_rx.recv().await {
-            match output {
+        for _ in 0..2 {
+            match output_rx.recv().await.expect("handoff output should be sent") {
                 RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
-                RealtimeOutbound::Flush { completion } => {
-                    if let Some(completion) = completion.lock().await.take() {
-                        let _ = completion.send(());
-                    }
-                    break;
-                }
                 output => panic!("unexpected realtime output: {output:?}"),
             }
         }
@@ -742,20 +736,10 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
     assert!(output_rx.try_recv().is_err());
 
     let output_task = tokio::spawn(async move {
-        let mut append_texts = Vec::new();
-        while let Ok(output) = output_rx.recv().await {
-            match output {
-                RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
-                RealtimeOutbound::Flush { completion } => {
-                    if let Some(completion) = completion.lock().await.take() {
-                        let _ = completion.send(());
-                    }
-                    break;
-                }
-                output => panic!("unexpected realtime output: {output:?}"),
-            }
+        match output_rx.recv().await.expect("handoff output should be sent") {
+            RealtimeOutbound::HandoffAppend { text, .. } => vec![text],
+            output => panic!("unexpected realtime output: {output:?}"),
         }
-        append_texts
     });
 
     manager
@@ -835,20 +819,10 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
     manager.discard_pending_unphased_handoff_output().await;
 
     let output_task = tokio::spawn(async move {
-        let mut append_texts = Vec::new();
-        while let Ok(output) = output_rx.recv().await {
-            match output {
-                RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
-                RealtimeOutbound::Flush { completion } => {
-                    if let Some(completion) = completion.lock().await.take() {
-                        let _ = completion.send(());
-                    }
-                    break;
-                }
-                output => panic!("unexpected realtime output: {output:?}"),
-            }
+        match output_rx.recv().await.expect("handoff output should be sent") {
+            RealtimeOutbound::HandoffAppend { text, .. } => vec![text],
+            output => panic!("unexpected realtime output: {output:?}"),
         }
-        append_texts
     });
 
     manager

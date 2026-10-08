@@ -40,7 +40,13 @@ async fn browser_runtime_requires_default_sandbox_permissions() {
         .expect("primary environment");
     let mut request = ExecCommandRequest {
         command: vec!["playwright-cli".to_string(), "open".to_string()],
-        shell_type: crate::shell::ShellType::Sh,
+        shell: ShellInvocation {
+            shell: Shell {
+                shell_type: ShellType::Sh,
+                shell_path: "sh".into(),
+            },
+            use_login_shell: false,
+        },
         hook_command: "playwright-cli open".to_string(),
         process_id: 123,
         yield_time_ms: 1000,

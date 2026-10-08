@@ -117,7 +117,7 @@ async fn live_fork_keeps_instructions_when_source_is_unloaded_during_setup() {
 
     // Queue removal between the first source lookup and subsequent startup
     // lookups. Tokio's fair RwLock makes this ordering deterministic.
-    let fork = manager.fork_thread_from_history(
+    let fork = manager.fork_thread_from_history_with_start_options(
         ForkSnapshot::Interrupted,
         StartThreadOptions {
             environments: Some(Vec::new()),
@@ -406,7 +406,7 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
         .await
         .expect("spawn actual child agent");
     let fork = manager
-        .spawn_legacy_subagent(root.thread_id, StartThreadOptions::new(config))
+        .spawn_legacy_subagent(root.thread_id, StartThreadOptions::new(config), None)
         .await
         .expect("fork root thread");
 
@@ -1521,6 +1521,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
                 },
                 originator: reviewer_config.originator.clone(),
                 inherited_instructions: None,
+                inherited_usage_policy: None,
             }),
             session_source: Some(SessionSource::Internal(
                 InternalSessionSource::MemoryConsolidation,

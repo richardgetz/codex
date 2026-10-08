@@ -1577,6 +1577,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         Ok(ResponseEvent::Completed {
             response_id: "resp-123".to_string(),
             token_usage: None,
+            service_tier: None,
             usage_metadata: None,
             end_turn: Some(true),
         }),
@@ -2092,6 +2093,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
         .send(Ok(ResponseEvent::Completed {
             response_id: "response".into(),
             token_usage: None,
+            service_tier: None,
             usage_metadata: None,
             end_turn: None,
         }))

@@ -309,13 +309,11 @@ fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> Hand
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&session),
         Arc::clone(&step_context),
-        Arc::clone(&step_context.tool_router),
         tracker,
     );
     HandleOutputCtx {
         sess: session,
-        turn_context: Arc::clone(&turn_context),
-        session_telemetry: step_context.session_telemetry.clone(),
+        step_context,
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),
