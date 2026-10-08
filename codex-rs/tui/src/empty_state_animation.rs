@@ -2,12 +2,14 @@
 //! Visible time pauses while hidden. Fresh conversations start settled and can replay on a click.
 
 mod geometry;
+mod greetings;
 mod lighting;
 mod paths;
 mod policy;
 mod renderer;
 mod sequence;
 
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -22,6 +24,7 @@ use ratatui::style::Color;
 
 use crate::motion::MotionMode;
 use crate::terminal_palette;
+pub(crate) use greetings::Greeting;
 use lighting::Lighting;
 pub(crate) use policy::Presentation;
 pub(crate) use policy::is_startup_cell;
@@ -42,6 +45,9 @@ pub(crate) enum ComposerState {
 #[derive(Default)]
 pub(crate) struct EmptyStateAnimation {
     eligible: bool,
+    // Initialized once for fresh threads; never initialized for a resumed or forked thread.
+    // Headers retain the selection after the temporary blossom is dismissed.
+    pub(crate) greeting: Arc<OnceLock<Greeting>>,
     spin_elapsed: Duration,
     last_frame: Option<Instant>,
     fade_elapsed: Duration,
@@ -61,6 +67,7 @@ impl EmptyStateAnimation {
     pub(crate) fn start_fresh(&mut self) {
         self.cancel_replay();
         self.eligible = true;
+        self.greeting.get_or_init(Greeting::choose);
         self.spin_elapsed = Duration::ZERO;
         self.last_frame = None;
         self.fade_elapsed = Duration::ZERO;
@@ -68,12 +75,16 @@ impl EmptyStateAnimation {
         self.opacity = 1.0;
     }
 
-    /// Keep the provisional pose when handing off to the live thread.
+    /// Keep the provisional pose and phrase in headers already bound to the live thread.
     pub(crate) fn continue_from(&mut self, source: &mut Self) {
         let mut previous = std::mem::take(source);
         if !previous.is_eligible() {
             previous.start_fresh();
         }
+        if let Some(greeting) = previous.greeting.get() {
+            let _ = self.greeting.set(*greeting);
+        }
+        previous.greeting = Arc::clone(&self.greeting);
         *self = previous;
     }
 

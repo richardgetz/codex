@@ -23,6 +23,8 @@ fn owned_startup_keeps_the_live_bottom_geometry() {
             (area.x..area.right())
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
+                .trim_end()
+                .to_owned()
         })
         .collect::<Vec<_>>()
         .join("\n");

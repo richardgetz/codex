@@ -29,8 +29,15 @@ where
 {
     let (tx, rx) = unbounded_channel();
     let mut blossom = crate::empty_state_animation::EmptyStateAnimation::default();
+    blossom
+        .greeting
+        .set(crate::empty_state_animation::Greeting {
+            phrase: "Pull up a prompt.",
+        })
+        .expect("initial greeting");
     blossom.start_fresh();
-    let header = startup_session_header(/*cwd*/ None);
+    let mut header = startup_session_header(/*cwd*/ None);
+    crate::history_cell::set_session_greeting(header.as_mut(), &blossom.greeting);
     StartupDraftPump {
         header,
         blossom: std::cell::RefCell::new(blossom),
@@ -96,6 +103,16 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
         pump.session_action = session_action;
         if label == "configured" {
             pump.header = startup_session_header(Some(std::path::Path::new("workspace")));
+            crate::history_cell::set_session_greeting(
+                pump.header.as_mut(),
+                &pump.blossom.borrow().greeting,
+            );
+        } else if matches!(
+            session_action,
+            StartupDraftSessionAction::Resume | StartupDraftSessionAction::Fork
+        ) {
+            // Resume and fork headers do not inherit a fresh-thread greeting.
+            pump.header = startup_session_header(/*cwd*/ None);
         }
         pump.bottom_pane
             .set_composer_text(text.to_string(), Vec::new(), Vec::new());

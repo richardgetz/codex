@@ -5,6 +5,18 @@ use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn continue_from_preserves_the_fresh_thread_greeting() {
+    let mut source = EmptyStateAnimation::default();
+    source.start_fresh();
+    let greeting = *source.greeting.get().expect("fresh threads choose a greeting");
+
+    let mut target = EmptyStateAnimation::default();
+    target.continue_from(&mut source);
+
+    assert_eq!(target.greeting.get(), Some(&greeting));
+}
+
+#[test]
 fn first_screen_stage_ignores_notices_and_hides_instead_of_shrinking() {
     let mut animation = EmptyStateAnimation::default();
     animation.start_fresh();

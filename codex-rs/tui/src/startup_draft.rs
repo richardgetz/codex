@@ -205,7 +205,8 @@ impl StartupDraftPump {
         ) {
             blossom.start_fresh();
         }
-        let header = startup_session_header(/*cwd*/ None);
+        let mut header = startup_session_header(/*cwd*/ None);
+        history_cell::set_session_greeting(header.as_mut(), &blossom.greeting);
         Self {
             header,
             blossom: std::cell::RefCell::new(blossom),
@@ -263,6 +264,7 @@ impl StartupDraftPump {
             local_settings.tui.animations && local_settings.tui.effects.welcome,
         );
         self.header = startup_session_header(Some(cwd));
+        history_cell::set_session_greeting(self.header.as_mut(), &self.blossom.borrow().greeting);
         self.bottom_pane.set_status_line_enabled(
             local_settings
                 .tui
