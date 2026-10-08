@@ -13,6 +13,7 @@ use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::CurrentTimeHandler;
 use crate::tools::handlers::DynamicToolHandler;
+use crate::tools::handlers::EtaHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetContextRemainingHandler;
@@ -28,6 +29,7 @@ use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputAsyncHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::SendMessageToUserAsyncHandler;
+use crate::tools::handlers::SendUserMessageAsyncHandler;
 use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
@@ -35,6 +37,9 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WaitForEnvironmentHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::ask_worker_question::Handler as AskWorkerQuestionHandler;
+use crate::tools::handlers::builtin_session_tmp::BuiltinSessionTmpHandler;
+use crate::tools::handlers::builtin_session_tmp_spec::SESSION_TMP_TOOL_DESCRIPTIONS;
+use crate::tools::handlers::builtin_session_tmp_spec::TOOL_CREATE;
 use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::mcp::McpToolRecovery;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
@@ -514,6 +519,11 @@ pub(crate) fn finalize_tool_router(
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> CodexResult<ToolRouter> {
     hosted_specs.retain(|spec| registry.tool_policy.allows(&ToolName::plain(spec.name())));
+    crate::tools::manager_only::enable_code_mode_for_manager_coordination(
+        turn_context,
+        model_info,
+        &mut registry,
+    );
     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
     let tool_mode = effective_tool_mode(turn_context, model_info);
     let code_mode_enabled = matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly);
@@ -1314,6 +1324,21 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(PlanHandler);
     }
 
+    if !crate::guardian::is_basic_session_source(&turn_context.session_source) {
+        registry.add(EtaHandler);
+    }
+
+    if turn_context.config.session_tmp.enabled {
+        for &(tool_name, _) in SESSION_TMP_TOOL_DESCRIPTIONS {
+            let handler = BuiltinSessionTmpHandler::new(tool_name);
+            if tool_name == TOOL_CREATE {
+                registry.add(handler);
+            } else {
+                registry.add_with_exposure(handler, ToolExposure::Hidden);
+            }
+        }
+    }
+
     if features.enabled(Feature::DeferredExecutor) {
         registry.add(
             context
@@ -1333,6 +1358,15 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
             },
             ToolExposure::DirectModelOnly,
         );
+    }
+
+    let supports_legacy_async_message = context
+        .model_info
+        .experimental_supported_tools
+        .iter()
+        .any(|tool| tool == "send_user_message_async");
+    if !turn_context.session_source.is_non_root_agent() && supports_legacy_async_message {
+        registry.add_with_exposure(SendUserMessageAsyncHandler, ToolExposure::DirectModelOnly);
     }
 
     if !turn_context.session_source.is_non_root_agent()

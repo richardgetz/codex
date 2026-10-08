@@ -21,6 +21,7 @@ use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolPayload;
+use crate::tools::lead_passive_poll::observe_lead_passive_poll_dispatch;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ToolArgumentDiffConsumer;
@@ -143,6 +144,8 @@ impl ToolCallRuntime {
         let router = Arc::clone(router);
         let session = Arc::clone(&self.session);
         let turn = Arc::clone(&step_context.turn);
+        let dispatch_turn = Arc::clone(&turn);
+        let passive_poll_sample_id = step_context.passive_poll_sample_id;
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
@@ -208,6 +211,11 @@ impl ToolCallRuntime {
                 } else {
                     Either::Right(lock.write().await)
                 };
+                observe_lead_passive_poll_dispatch(
+                    dispatch_turn.as_ref(),
+                    &dispatch_call,
+                    passive_poll_sample_id,
+                );
                 // Admission through the parallel-execution gate marks the end
                 // of dispatch waiting and the start of handler execution.
                 if let Some(execution_started_at) = execution_started_at {

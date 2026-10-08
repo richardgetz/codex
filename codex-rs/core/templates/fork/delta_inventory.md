@@ -71,6 +71,12 @@ release or merge rules.
   fork's four-value protocol/config enum and permission intersections; do not
   collapse the fork value into upstream's legacy alias.
 
+- Core tool planning retains stable utility registrations across upstream API
+  refreshes: ETA stays out of basic Guardian sessions; configured
+  `[session_tmp].enabled` exposes `session_tmp.create` while helper operations
+  remain hidden; and legacy `send_user_message_async` remains root-only,
+  model-gated, and direct-model-only.
+
 - Team Leads can use the standalone `ask_worker_question` tool with either
   multi-agent backend to send a bounded, correlated question to a direct Worker.
   One pending question per Worker is tracked at runtime. The Worker’s next final
@@ -1721,6 +1727,12 @@ release or merge rules.
   or given an empty table, while explicit `enabled = false` removes the tool
   from both registered and model-visible sets.
 - Verify app-server `thread/control/set` rejects Orchestrator mode.
+- Verify ETA is excluded from basic Guardian sessions, configured
+  `[session_tmp].enabled` registers `session_tmp.create` while keeping helper
+  operations hidden, and legacy `send_user_message_async` is exposed only to
+  root sessions whose model advertises it, with direct-model-only exposure.
+  Keep the current `request_user_input_async` and
+  `send_message_to_user_async` registration gates intact.
 - Verify built-in `scratchpad` remains available in Default mode, omitted from
   Plan mode by default, and `open_scratchpad` uses the thread id when no id is
   provided.
