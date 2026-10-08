@@ -154,7 +154,6 @@ stream_max_retries = 0
             &local_settings,
             session_config,
             thread_id,
-            /*selected_profile*/ None,
         )
         .await?;
     assert_eq!(side.session.runtime_workspace_roots, expected_roots);

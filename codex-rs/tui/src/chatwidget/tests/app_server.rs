@@ -39,6 +39,10 @@ fn thread_settings_for_test(
             },
             multi_agent_mode: Default::default(),
             personality: None,
+            memory_policy: Default::default(),
+            user_preferences_memory_policy: Default::default(),
+            usage_policy: Default::default(),
+            team: None,
         },
     }
 }
@@ -63,6 +67,8 @@ fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::Threa
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: None,

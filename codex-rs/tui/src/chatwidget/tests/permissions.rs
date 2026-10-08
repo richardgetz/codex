@@ -787,6 +787,8 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -1229,6 +1231,8 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -1283,6 +1287,8 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
+        team: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -1395,11 +1401,13 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             active_permission_profile: Some(ActivePermissionProfile::new(
                 BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
+            personality: None,
         }
     );
 

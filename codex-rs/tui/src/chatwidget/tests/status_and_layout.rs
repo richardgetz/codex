@@ -257,6 +257,10 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let token_info = TokenUsageInfo {
         total_token_usage: token_usage.clone(),
         last_token_usage: token_usage,
+        usage_by_service_tier: Default::default(),
+        usage_by_service_tier_and_context_length: Default::default(),
+        usage_by_model: Default::default(),
+        usage_by_model_and_service_tier_and_context_length: Default::default(),
         model_context_window: None,
     };
 
@@ -589,8 +593,11 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         requires_openai_auth: true,
         local_settings: crate::local_settings::LocalSettings::from(&cfg),
         config: cfg.clone(),
+        environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
+        state_db: None,
         app_event_tx: tx,
+        provenance_commands_enabled: false,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
@@ -601,6 +608,7 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         is_first_run: true,
         status_account_display: None,
         initial_plan_type: None,
+        initial_collaboration_mode: None,
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
@@ -3779,6 +3787,7 @@ async fn account_update_discards_stale_workspace_headline_results() {
 
     chat.update_account_state(
         Some(StatusAccountDisplay::ChatGpt {
+            alias: None,
             email: Some("first@example.com".to_string()),
             plan: None,
         }),
@@ -3790,6 +3799,7 @@ async fn account_update_discards_stale_workspace_headline_results() {
 
     chat.update_account_state(
         Some(StatusAccountDisplay::ChatGpt {
+            alias: None,
             email: Some("second@example.com".to_string()),
             plan: None,
         }),
@@ -4386,6 +4396,8 @@ async fn session_configured_clears_goal_status_footer() {
         instruction_source_paths: Vec::new(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         collaboration_mode: None,
+        team: None,
+        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(rollout_file.path().to_path_buf()),
