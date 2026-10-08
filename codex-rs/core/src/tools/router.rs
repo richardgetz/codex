@@ -224,7 +224,7 @@ impl ToolRouter {
         &self,
         name: &ToolName,
     ) -> Option<codex_tools::ToolExposure> {
-        self.registry.tool_exposure_for_test(name)
+        self.registry.tool_exposure(name)
     }
 
     pub(crate) fn create_diff_consumer(
