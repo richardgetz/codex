@@ -411,7 +411,11 @@ async fn host_factory_follows_thread_lifecycle() -> anyhow::Result<()> {
         rollout_path: test.codex.rollout_path(),
     });
     let fork = manager
-        .fork_thread_from_history(ForkSnapshot::Interrupted, options(), history.clone())
+        .fork_thread_from_history_with_start_options(
+            ForkSnapshot::Interrupted,
+            options(),
+            history.clone(),
+        )
         .await?;
     assert_eq!(
         fork.session_configured.session_id,
