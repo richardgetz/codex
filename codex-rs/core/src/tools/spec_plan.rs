@@ -831,7 +831,7 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
         && features.enabled(Feature::Plugins)
 }
 
-fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
+pub(crate) fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
 }
 
