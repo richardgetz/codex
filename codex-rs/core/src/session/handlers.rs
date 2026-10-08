@@ -348,7 +348,7 @@ pub async fn compact(sess: &Arc<Session>, sub_id: String) {
 }
 
 pub(super) async fn persist_thread_memory_mode_update(
-    sess: &Arc<Session>,
+    sess: &Session,
     mode: ThreadMemoryMode,
 ) -> anyhow::Result<()> {
     let live_thread = sess.live_thread_for_persistence("update thread memory mode")?;
@@ -988,38 +988,19 @@ pub(super) async fn submission_loop(
                     usage_policy_update,
                     reply,
                 } => {
-                    let _settings_guard = thread_settings::acquire_persistence_lock(&sess).await;
                     let thread_settings = WithTurnExtensionData {
                         request: thread_settings,
                         turn_extension_init: sub.turn_extension_init,
                     };
-                    match thread_settings::update(&sess, thread_settings, usage_policy_update)
-                        .await
-                    {
-                        Ok(snapshot) => {
-                            // Reply first: the caller may hold a lock its event consumer needs.
-                            if let Some(reply) = reply {
-                                let _ = reply.send(Ok(()));
-                            }
-                            thread_settings::emit_applied(&sess, sub.id.clone(), snapshot).await;
-                        }
-                        Err(error) => {
-                            let message = format!("invalid thread settings override: {error}");
-                            if let Some(reply) = reply {
-                                let _ = reply.send(Err(CodexErr::InvalidRequest(message)));
-                            } else {
-                                sess.send_event_raw(Event {
-                                    id: sub.id.clone(),
-                                    msg: EventMsg::Error(ErrorEvent {
-                                        misalignment: None,
-                                        message,
-                                        codex_error_info: Some(CodexErrorInfo::BadRequest),
-                                    }),
-                                })
-                                .await;
-                            }
-                        }
-                    }
+                    thread_settings::update(
+                        &sess,
+                        sub.id.clone(),
+                        thread_settings,
+                        usage_policy_update,
+                        handoff_admission.as_ref(),
+                        reply,
+                    )
+                    .await;
                     false
                 }
                 Op::TurnSettings {

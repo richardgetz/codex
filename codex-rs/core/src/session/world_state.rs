@@ -48,13 +48,7 @@ impl Session {
         turn_context: &TurnContext,
     ) -> WorldState {
         let environment_subagents = if turn_context.config.include_environment_context {
-            self.services
-                .local_agent_control()
-                .format_environment_context_subagents(
-                    self.thread_id,
-                    turn_context.multi_agent_version,
-                )
-                .await
+            format_environment_context_subagents(self, turn_context.multi_agent_version).await
         } else {
             String::new()
         };
@@ -129,36 +123,7 @@ impl Session {
                 })
         };
         let environment_subagents = if turn_context.config.include_environment_context {
-            match turn_context.multi_agent_version {
-                MultiAgentVersion::V2 => {
-                    let agent_paths = self
-                        .services
-                        .agent_control
-                        .child_agent_paths(self.thread_id)
-                        .await;
-                    let mut lines =
-                        Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
-                    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
-                    for agent_path in agent_paths {
-                        if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
-                            break;
-                        }
-                        let line = format!(r#"<agent name="{agent_path}" />"#);
-                        let line_bytes = "    \n".len() + line.len();
-                        if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
-                            rendered_bytes += line_bytes;
-                            lines.push(line);
-                        }
-                    }
-                    lines.join("\n")
-                }
-                MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
-                    self.services
-                        .local_agent_runtime
-                        .format_legacy_environment_context_subagents(self.thread_id)
-                        .await
-                }
-            }
+            format_environment_context_subagents(self, turn_context.multi_agent_version).await
         } else {
             String::new()
         };
@@ -460,5 +425,39 @@ impl Session {
             ));
         }
         Ok(world_state)
+    }
+}
+
+async fn format_environment_context_subagents(
+    session: &Session,
+    multi_agent_version: MultiAgentVersion,
+) -> String {
+    match multi_agent_version {
+        MultiAgentVersion::V2 => {
+            let agent_paths = session
+                .services
+                .agent_control
+                .child_agent_paths(session.thread_id)
+                .await;
+            let mut lines = Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
+            let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
+            for agent_path in agent_paths {
+                if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
+                    break;
+                }
+                let line = format!(r#"<agent name="{agent_path}" />"#);
+                let line_bytes = "    \n".len() + line.len();
+                if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
+                    rendered_bytes += line_bytes;
+                    lines.push(line);
+                }
+            }
+            lines.join("\n")
+        }
+        MultiAgentVersion::Disabled | MultiAgentVersion::V1 => session
+            .services
+            .local_agent_runtime
+            .format_legacy_environment_context_subagents(session.thread_id)
+            .await,
     }
 }

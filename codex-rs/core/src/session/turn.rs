@@ -3098,6 +3098,7 @@ async fn try_run_sampling_request(
                 token_usage,
                 usage_metadata,
                 end_turn,
+                ..
             } => {
                 sess.services
                     .analytics_events_client

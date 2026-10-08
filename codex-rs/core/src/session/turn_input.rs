@@ -249,7 +249,7 @@ impl PreparedTurnInputSettings {
         let Some(thread_settings_update) = self.thread_settings_update else {
             return Ok(());
         };
-        thread_settings::apply_update(
+        thread_settings::apply_update_with_admission(
             session,
             submission_id,
             thread_settings_update,

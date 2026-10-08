@@ -2229,7 +2229,7 @@ impl Session {
             },
             |decision| decision.selected_effort,
         );
-        let request = TurnInputRequest::user_input(vec![UserInput::Text {
+        let mut request = TurnInputRequest::user_input(vec![UserInput::Text {
             text,
             text_elements: Vec::new(),
         }]);
@@ -6696,12 +6696,13 @@ impl Session {
     pub(crate) async fn record_response_item_and_emit_turn_item(
         &self,
         turn_context: &TurnContext,
+        model_info: &ModelInfo,
         response_item: ResponseItem,
     ) {
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(
             turn_context,
-            turn_context.model_info(),
+            model_info,
             std::slice::from_ref(&response_item),
         )
         .await;
