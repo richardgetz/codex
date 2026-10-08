@@ -68,7 +68,8 @@ impl LocalSettings {
             tui: Tui {
                 notification_settings: config.tui_notifications.clone(),
                 animations: animations && system_motion == crate::motion::MotionMode::Animated,
-                whimsy: config.tui_whimsy,
+                whimsy: config.tui_whimsy
+                    || configured_whimsy_enabled(&config.config_layer_stack),
                 screen_reader_detection_done: None,
                 effects: codex_config::types::TuiEffects {
                     starfield: configured_starfield_enabled(&config.config_layer_stack),
@@ -138,6 +139,8 @@ impl LocalSettings {
         );
         tui.session_picker_view = Some(tui.session_picker_view.unwrap_or_default());
         tui.screen_reader_detection_done = None;
+        tui.whimsy =
+            tui.whimsy || configured_whimsy_enabled(&bootstrap.config_layer_stack);
         tui.effects.starfield = configured_starfield_enabled(&bootstrap.config_layer_stack);
         let mut settings = Self {
             audio: Ok(Default::default()),
@@ -204,6 +207,22 @@ fn configured_starfield_enabled(layers: &ConfigLayerStack) -> bool {
         .and_then(|effects| effects.get("starfield"))
         .and_then(toml::Value::as_bool)
         .unwrap_or(false)
+}
+
+fn configured_whimsy_enabled(layers: &ConfigLayerStack) -> bool {
+    let mut enabled = false;
+    for layer in layers.layers_low_to_high() {
+        if !matches!(layer.name, codex_config::ConfigLayerSource::PackagedDefaults { .. })
+            && let Some(value) = layer
+                .config
+                .get("tui")
+                .and_then(|tui| tui.get("whimsy"))
+                .and_then(toml::Value::as_bool)
+        {
+            enabled = value;
+        }
+    }
+    enabled
 }
 
 impl LocalSettings {
