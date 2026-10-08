@@ -613,6 +613,8 @@ pub(crate) struct ChatComposer {
     blocks_direct_input: bool,
     is_task_running: bool,
     queue_submissions: bool,
+    /// Slash-command availability ignores background status work such as MCP startup.
+    slash_command_task_running: bool,
     /// Slash-command draft staged for local recall after application-level dispatch.
     ///
     /// This slot is intentionally separate from `ChatComposerHistory` so inline slash commands can
@@ -805,6 +807,7 @@ impl ChatComposer {
             blocks_direct_input: false,
             is_task_running: false,
             queue_submissions: false,
+            slash_command_task_running: false,
             pending_slash_command_history: None,
             skills: None,
             plugins: None,
@@ -3429,7 +3432,7 @@ impl ChatComposer {
     }
 
     fn reject_slash_command_if_unavailable(&self, command: &SlashCommandItem) -> bool {
-        if !self.is_task_running
+        if !self.slash_command_task_running
             || command.available_during_task()
             || matches!(command, SlashCommandItem::Builtin(cmd) if cmd.requires_dispatch_validation())
         {
@@ -4413,6 +4416,11 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.slash_command_task_running = running;
+    }
+
+    pub(crate) fn set_slash_command_task_running(&mut self, running: bool) {
+        self.slash_command_task_running = running;
     }
 
     pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
@@ -5159,6 +5167,26 @@ mod tests {
             ),
             rx,
         )
+    }
+
+    #[test]
+    fn slash_command_task_gate_is_independent_from_task_state() {
+        let (mut composer, _rx) = new_test_composer();
+        let command = SlashCommandItem::Builtin(SlashCommand::Compact);
+
+        composer.set_task_running(true);
+        assert!(composer.is_task_running);
+        assert!(composer.reject_slash_command_if_unavailable(&command));
+
+        composer.set_task_running(false);
+        composer.set_slash_command_task_running(true);
+        assert!(!composer.is_task_running);
+        assert!(composer.reject_slash_command_if_unavailable(&command));
+
+        composer.set_task_running(true);
+        composer.set_slash_command_task_running(false);
+        assert!(composer.is_task_running);
+        assert!(!composer.reject_slash_command_if_unavailable(&command));
     }
 
     #[test]
