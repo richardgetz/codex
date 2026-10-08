@@ -279,11 +279,13 @@ impl ChatWidget {
                 Some(approvals_reviewer),
                 Some(permission_profile.clone()),
                 Some(active_permission_profile.clone()),
+                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
                 /*service_tier*/ None,
                 /*collaboration_mode*/ None,
+                /*personality*/ None,
             )));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateActivePermissionProfile(
