@@ -146,6 +146,7 @@ pub(crate) async fn run_codex_thread_interactive(
         attestation_provider: parent_session.services.attestation_provider.clone(),
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
+        thread_settings_override_flags: Default::default(),
         git_enrichment_policy,
         windows_sandbox_proxy_settings_mode,
     })
@@ -269,6 +270,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         }
     }
 
+    let io = Arc::new(io);
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let io_for_shutdown = Arc::clone(&io);

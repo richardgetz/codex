@@ -1756,7 +1756,7 @@ async fn spawn_agent_creates_thread_and_sends_prompt() {
 }
 
 #[tokio::test]
-async fn environment_context_formatter_selects_v2_paths_and_legacy_for_v1_and_disabled() {
+async fn environment_context_sources_expose_v2_paths_and_legacy_subagents() {
     let (home, mut config) = test_config().await;
     config
         .features
@@ -1777,7 +1777,7 @@ async fn environment_context_formatter_selects_v2_paths_and_legacy_for_v1_and_di
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth: 1,
-                agent_path: Some(worker_path),
+                agent_path: Some(worker_path.clone()),
                 agent_nickname: None,
                 agent_role: Some("worker".to_string()),
             })),
@@ -1785,23 +1785,17 @@ async fn environment_context_formatter_selects_v2_paths_and_legacy_for_v1_and_di
         .await
         .expect("spawn named worker");
 
-    let v2_context = harness
-        .control
-        .format_environment_context_subagents(parent_thread_id, MultiAgentVersion::V2)
-        .await;
+    let v2_paths = harness.control.child_agent_paths(parent_thread_id).await;
     let v1_context = harness
         .control
-        .format_environment_context_subagents(parent_thread_id, MultiAgentVersion::V1)
-        .await;
-    let disabled_context = harness
-        .control
-        .format_environment_context_subagents(parent_thread_id, MultiAgentVersion::Disabled)
+        .runtime
+        .format_legacy_environment_context_subagents(parent_thread_id)
         .await;
 
-    assert!(v2_context.contains("<agent name=\"/root/worker\" />"));
+    assert_eq!(v2_paths, vec![worker_path]);
     assert!(!v1_context.contains("<agent name="));
     assert!(v1_context.contains("worker"));
-    assert_eq!(disabled_context, v1_context);
+}
 
 #[tokio::test]
 async fn pending_environment_failure_reaches_child_and_grandchild() {
