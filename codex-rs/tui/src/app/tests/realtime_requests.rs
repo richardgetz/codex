@@ -2171,6 +2171,8 @@ async fn audio_devices_are_persisted_and_input_changes_clear_channels() -> Resul
         microphone: Some("Interface".into()),
         speaker: Some("Headphones".into()),
         microphone_channel: None,
+        microphone_aliases: None,
+        speaker_aliases: None,
     };
     assert_eq!(app.local_settings.audio.as_ref().unwrap(), &expected);
     assert_eq!(LocalSettings::from(&app.config).audio, Ok(expected));

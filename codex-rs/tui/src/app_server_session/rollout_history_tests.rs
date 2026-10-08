@@ -163,6 +163,7 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
             &local_settings,
             client_config,
             thread_id,
+            /*selected_profile*/ None,
         )
         .await?;
     assert_eq!(
