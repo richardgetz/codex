@@ -13,6 +13,8 @@ use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::ToolInfo;
+use codex_mcp::effective_mcp_servers_from_configured;
+use codex_mcp::tool_is_model_visible;
 use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -40,7 +42,9 @@ use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::ModelInfo;
 use codex_rmcp_client::Elicitation;
 use rmcp::model::ElicitationAction;
+use rmcp::model::JsonObject;
 use rmcp::model::RequestMetaObject;
+use rmcp::model::Tool;
 use serde_json::Map;
 
 const MCP_ELICITATION_DECLINE_MESSAGE_KEY: &str = "message";
