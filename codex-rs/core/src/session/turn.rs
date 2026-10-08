@@ -10,6 +10,9 @@ use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
+use crate::enablement::filter_connectors_for_mode;
+use crate::enablement::filter_discoverable_tools_for_mode;
+use crate::enablement::filter_mcp_tools_for_mode;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
 use crate::cyber_access_program;
@@ -22,6 +25,7 @@ use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_turn_stop_hooks;
+use crate::mcp_tool_exposure::McpToolSelection;
 use crate::mcp_skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::collect_explicit_app_ids;
@@ -60,6 +64,7 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::build_tool_router_with_recovered_mcp_tools;
+use crate::tools::spec_plan::build_tool_router_for_input;
 use crate::tools::spec_plan::tool_suggest_enabled;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::record_turn_ttft_metric;
@@ -508,26 +513,43 @@ pub(crate) async fn run_turn(
             )
             .await?;
 
-            world_state = sess
-                .record_step_world_state_if_changed(step_context.as_ref())
-                .await?;
-
-            // Keep the override after accepted input so history truncation removes them together.
-            sess.record_reasoning_effort_override(step_context.as_ref())
-                .await;
-
-            // Construct the input that we will send to the model.
-            let sampling_request_input: Vec<ResponseItem> = async {
+            // Select MCP exposure from the exact history that this sampling request will use.
+            let selection_input: Vec<ResponseItem> = async {
                 sess.clone_history()
                     .await
                     .for_prompt(&step_context.settings.model_info.input_modalities)
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
+            let sampling_step_context = build_sampling_step_context(
+                sess.as_ref(),
+                Arc::clone(&step_context),
+                Arc::clone(&turn_context.extension_data),
+                &selection_input,
+                &explicitly_enabled_connectors,
+            )
+            .await?;
+
+            world_state = sess
+                .record_step_world_state_if_changed(sampling_step_context.as_ref())
+                .await?;
+
+            // Keep the override after accepted input so history truncation removes them together.
+            sess.record_reasoning_effort_override(sampling_step_context.as_ref())
+                .await;
+
+            // Include any incremental WorldState update from the selected tool router.
+            let sampling_request_input: Vec<ResponseItem> = async {
+                sess.clone_history()
+                    .await
+                    .for_prompt(&sampling_step_context.settings.model_info.input_modalities)
+            }
+            .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
+            .await;
 
             run_sampling_request(
                 Arc::clone(&sess),
-                Arc::clone(&step_context),
+                sampling_step_context,
                 Arc::clone(&turn_context.extension_data),
                 Arc::clone(&turn_diff_tracker),
                 &mut client_session,
@@ -1661,6 +1683,105 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
     connector_ids
 }
 
+pub(super) fn explicitly_referenced_mcp_servers_for_input(
+    input: &[ResponseItem],
+    mcp_tools: &[codex_mcp::ToolInfo],
+) -> HashSet<String> {
+    let user_messages = input
+        .iter()
+        .filter_map(|item| {
+            let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item)
+            else {
+                return None;
+            };
+            let message = user.message();
+            (!crate::compact::is_summary_message(&message)).then_some(message)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    if user_messages.is_empty() {
+        return HashSet::new();
+    }
+    let user_message_tokens = user_messages
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    mcp_tools
+        .iter()
+        .map(|tool| tool.server_name.as_str())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter(|server_name| {
+            let lower = server_name.to_ascii_lowercase();
+            let server_name_tokens = lower
+                .split(|character: char| !character.is_ascii_alphanumeric())
+                .filter(|token| !token.is_empty())
+                .collect::<Vec<_>>();
+            !server_name_tokens.is_empty()
+                && user_message_tokens
+                    .windows(server_name_tokens.len())
+                    .any(|tokens| tokens == server_name_tokens.as_slice())
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
+pub(super) fn filter_connectors_for_input(
+    connectors: &[connectors::AppInfo],
+    input: &[ResponseItem],
+    explicitly_enabled_connectors: &HashSet<String>,
+    skill_name_counts_lower: &HashMap<String, usize>,
+) -> Vec<connectors::AppInfo> {
+    if connectors.is_empty() {
+        return Vec::new();
+    }
+
+    let messages = input
+        .iter()
+        .filter_map(|item| {
+            let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item)
+            else {
+                return None;
+            };
+            let message = user.message();
+            (!crate::compact::is_summary_message(&message)).then_some(message)
+        })
+        .collect::<Vec<_>>();
+    let mentions = collect_tool_mentions_from_messages(&messages);
+    let mention_names_lower = mentions
+        .plain_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mentioned_app_ids = mentions
+        .paths
+        .iter()
+        .filter(|path| tool_kind_for_path(path) == ToolMentionKind::App)
+        .filter_map(|path| app_id_from_path(path).map(str::to_string))
+        .collect::<HashSet<_>>();
+    let connector_slug_counts = build_connector_slug_counts(connectors);
+
+    connectors
+        .iter()
+        .filter(|connector| connector.is_enabled)
+        .filter(|connector| {
+            if explicitly_enabled_connectors.contains(&connector.id)
+                || mentioned_app_ids.contains(&connector.id)
+            {
+                return true;
+            }
+
+            let slug = codex_connectors::metadata::connector_mention_slug(connector);
+            connector_slug_counts.get(&slug).copied().unwrap_or(0) == 1
+                && !skill_name_counts_lower.contains_key(&slug)
+                && mention_names_lower.contains(&slug)
+        })
+        .cloned()
+        .collect()
+}
+
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
@@ -1679,6 +1800,42 @@ pub(crate) fn build_prompt(
         ),
         cyber_access_program: turn_context.cyber_access_program,
     }
+}
+
+async fn build_sampling_step_context(
+    sess: &Session,
+    step_context: Arc<StepContext>,
+    turn_store: &ExtensionData,
+    input: &[ResponseItem],
+    explicitly_enabled_connectors: &HashSet<String>,
+) -> CodexResult<Arc<StepContext>> {
+    turn_store.insert(step_context.selected_capability_roots.clone());
+    let (_, tool_router) = built_tools_for_input(
+        sess,
+        step_context.turn.as_ref(),
+        step_context.as_ref(),
+        turn_store,
+        input,
+        explicitly_enabled_connectors,
+    )
+    .await?;
+
+    Ok(Arc::new(StepContext {
+        turn: Arc::clone(&step_context.turn),
+        passive_poll_sample_id: step_context.passive_poll_sample_id,
+        preempt: step_context.preempt.clone(),
+        realtime: step_context.realtime.clone(),
+        settings: Arc::clone(&step_context.settings),
+        team_lead_work_policy: Arc::clone(&step_context.team_lead_work_policy),
+        token_budget: step_context.token_budget.clone(),
+        session_telemetry: step_context.session_telemetry.clone(),
+        environments: step_context.environments.clone(),
+        selected_capability_roots: step_context.selected_capability_roots.clone(),
+        executor_capability_discovery: step_context.executor_capability_discovery.clone(),
+        mcp: Arc::clone(&step_context.mcp),
+        tool_router,
+        loaded_agents_md: step_context.loaded_agents_md.clone(),
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1862,6 +2019,179 @@ pub(crate) async fn prepare_tool_recommendations(
         auth,
         endpoint_candidates,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn built_tools_for_input(
+    sess: &Session,
+    turn_context: &TurnContext,
+    step_context: &StepContext,
+    step_store: &ExtensionData,
+    input: &[ResponseItem],
+    explicitly_enabled_connectors: &HashSet<String>,
+) -> CodexResult<(Vec<codex_mcp::ToolInfo>, Arc<ToolRouter>)> {
+    let mut all_mcp_tools = step_context.mcp.tools().to_vec();
+    let history = sess.clone_history().await;
+    let mut recovered_mcp_tools = HashMap::new();
+    let mut existing_mcp_tool_names = all_mcp_tools
+        .iter()
+        .map(codex_mcp::ToolInfo::canonical_tool_name)
+        .collect::<HashSet<_>>();
+    for resolved in configured_mcp_placeholders_from_history(
+        sess,
+        turn_context,
+        step_context.mcp.tools(),
+        history.raw_items(),
+    )
+    .await
+    {
+        let canonical_tool_name = resolved.tool_info.canonical_tool_name();
+        let recovery = if resolved.recovery == McpToolRecovery::ConfiguredPlaceholder {
+            McpToolRecovery::ConfiguredPlaceholder
+        } else {
+            McpToolRecovery::History
+        };
+        recovered_mcp_tools.insert(canonical_tool_name.clone(), recovery);
+        if existing_mcp_tool_names.insert(canonical_tool_name) {
+            all_mcp_tools.push(resolved.tool_info);
+        }
+    }
+
+    let mcp = &step_context.mcp;
+    let connector_snapshot = mcp.config().connector_snapshot.clone();
+    let apps_enabled = turn_context.apps_enabled();
+    let accessible_connectors = apps_enabled.then(|| {
+        filter_connectors_for_mode(
+            &turn_context.config,
+            turn_context.mode,
+            &connectors::accessible_connectors_from_mcp_tools(&all_mcp_tools),
+        )
+    });
+    let accessible_connectors_with_enabled_state =
+        accessible_connectors.as_ref().map(|connectors| {
+            let connectors = AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
+                .apply_app_enabled_state(connectors.clone());
+            filter_connectors_for_mode(&turn_context.config, turn_context.mode, &connectors)
+        });
+    let connectors = if apps_enabled {
+        let connectors = codex_connectors::merge::merge_plugin_connectors_with_accessible(
+            connector_snapshot
+                .connector_ids()
+                .iter()
+                .map(|connector_id| connector_id.0.clone()),
+            accessible_connectors.clone().unwrap_or_default(),
+        );
+        let connectors = AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
+            .apply_app_enabled_state(connectors);
+        Some(filter_connectors_for_mode(
+            &turn_context.config,
+            turn_context.mode,
+            &connectors,
+        ))
+    } else {
+        None
+    };
+
+    let PreparedToolRecommendations {
+        auth,
+        endpoint_candidates,
+    } = prepare_tool_recommendations(sess, turn_context).await;
+    let tool_suggest_candidates = if let Some(candidates) = endpoint_candidates {
+        Some(ToolSuggestCandidates {
+            tools: candidates,
+            presentation: ToolSuggestPresentation::RecommendationContext,
+        })
+    } else {
+        let loaded_plugin_app_connector_ids = connector_snapshot
+            .connector_ids()
+            .iter()
+            .map(|connector_id| connector_id.0.clone())
+            .collect::<Vec<_>>();
+        async {
+            if apps_enabled && tool_suggest_enabled(turn_context) {
+                if let Some(accessible_connectors) =
+                    accessible_connectors_with_enabled_state.as_ref()
+                {
+                    match connectors::list_tool_suggest_discoverable_tools_with_auth(
+                        &turn_context.config,
+                        sess.services.plugins_manager.as_ref(),
+                        auth.as_ref(),
+                        accessible_connectors.as_slice(),
+                        &loaded_plugin_app_connector_ids,
+                    )
+                    .await
+                    .map(|discoverable_tools| {
+                        let discoverable_tools =
+                            filter_request_plugin_install_discoverable_tools_for_client(
+                                discoverable_tools,
+                                turn_context.app_server_client_name.as_deref(),
+                            );
+                        filter_discoverable_tools_for_mode(
+                            &turn_context.config,
+                            turn_context.mode,
+                            discoverable_tools,
+                        )
+                    }) {
+                        Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
+                        Ok(discoverable_tools) => Some(ToolSuggestCandidates {
+                            tools: discoverable_tools,
+                            presentation: ToolSuggestPresentation::ListTool,
+                        }),
+                        Err(err) => {
+                            warn!("failed to load discoverable tool suggestions: {err:#}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        .instrument(trace_span!("built_tools.load_discoverable_tools"))
+        .await
+    };
+
+    let filtered_all_mcp_tools =
+        filter_mcp_tools_for_mode(&turn_context.config, turn_context.mode, &all_mcp_tools);
+    let mut explicitly_selected_connector_ids = explicitly_enabled_connectors.clone();
+    explicitly_selected_connector_ids.extend(sess.get_connector_selection().await);
+    let skills_snapshot = turn_context.skills_snapshot();
+    let skills_outcome = skills_snapshot.outcome();
+    let skill_name_counts_lower =
+        build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
+    let explicitly_enabled_connectors = connectors
+        .as_deref()
+        .map(|connectors| {
+            filter_connectors_for_input(
+                connectors,
+                input,
+                &explicitly_selected_connector_ids,
+                &skill_name_counts_lower,
+            )
+        })
+        .unwrap_or_default();
+    let explicitly_referenced_mcp_servers =
+        explicitly_referenced_mcp_servers_for_input(input, &filtered_all_mcp_tools);
+    let router = build_tool_router_for_input(
+        sess,
+        turn_context,
+        &step_context.settings.model_info,
+        &step_context.environments,
+        mcp,
+        &filtered_all_mcp_tools,
+        &recovered_mcp_tools,
+        apps_enabled,
+        step_store,
+        tool_suggest_candidates.as_ref(),
+        McpToolSelection {
+            connectors: connectors.as_deref(),
+            explicitly_enabled_connectors: &explicitly_enabled_connectors,
+            explicitly_referenced_mcp_servers: &explicitly_referenced_mcp_servers,
+        },
+    )?;
+    Ok((all_mcp_tools, Arc::new(router)))
 }
 
 #[allow(clippy::too_many_arguments)]

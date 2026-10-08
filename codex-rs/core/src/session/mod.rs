@@ -5390,7 +5390,9 @@ impl Session {
                 .then(CancellationToken::new),
             realtime: self.conversation.snapshot().await,
             settings,
-            team_lead_work_policy: arc_swap::ArcSwap::from_pointee(initial_team_lead_work_policy),
+            team_lead_work_policy: Arc::new(arc_swap::ArcSwap::from_pointee(
+                initial_team_lead_work_policy,
+            )),
             passive_poll_sample_id,
             token_budget,
             session_telemetry,

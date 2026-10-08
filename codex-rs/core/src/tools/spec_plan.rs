@@ -2,6 +2,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::image_preparation::unified_image_budget_enabled;
+use crate::mcp_tool_exposure::McpToolSelection;
 use crate::mcp_tool_exposure::recovered_mcp_namespace_tools_enabled;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -164,6 +165,64 @@ pub(crate) fn build_tool_router_with_recovered_mcp_tools(
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
 ) -> CodexResult<ToolRouter> {
+    build_tool_router_with_recovered_mcp_tools_and_selection(
+        session,
+        turn_context,
+        model_info,
+        environments,
+        mcp,
+        mcp_tools,
+        recovered_mcp_tools,
+        apps_enabled,
+        step_store,
+        tool_suggest_candidates,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_tool_router_for_input(
+    session: &Session,
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    environments: &TurnEnvironmentSnapshot,
+    mcp: &Arc<codex_mcp::McpBinding>,
+    mcp_tools: &[codex_mcp::ToolInfo],
+    recovered_mcp_tools: &HashMap<ToolName, McpToolRecovery>,
+    apps_enabled: bool,
+    step_store: &ExtensionData,
+    tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
+    selection: McpToolSelection<'_>,
+) -> CodexResult<ToolRouter> {
+    build_tool_router_with_recovered_mcp_tools_and_selection(
+        session,
+        turn_context,
+        model_info,
+        environments,
+        mcp,
+        mcp_tools,
+        recovered_mcp_tools,
+        apps_enabled,
+        step_store,
+        tool_suggest_candidates,
+        Some(selection),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_tool_router_with_recovered_mcp_tools_and_selection(
+    session: &Session,
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+    environments: &TurnEnvironmentSnapshot,
+    mcp: &Arc<codex_mcp::McpBinding>,
+    mcp_tools: &[codex_mcp::ToolInfo],
+    recovered_mcp_tools: &HashMap<ToolName, McpToolRecovery>,
+    apps_enabled: bool,
+    step_store: &ExtensionData,
+    tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
+    mcp_selection: Option<McpToolSelection<'_>>,
+) -> CodexResult<ToolRouter> {
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let wait_for_environment_tool_config = session
@@ -185,16 +244,34 @@ pub(crate) fn build_tool_router_with_recovered_mcp_tools(
     add_core_tool_sources(&context, &mut registry);
 
     let namespace_tools_enabled = recovered_mcp_namespace_tools_enabled(turn_context);
-    let registered_mcp_tools = session.services.mcp_handler_cache.append_mcp_tools_with_recovery(
-        mcp_tools,
-        &turn_context.config,
-        apps_enabled,
-        &mcp.config().mcp_server_catalog,
-        search_tool_enabled(turn_context, model_info),
-        recovered_mcp_tools,
-        namespace_tools_enabled,
-        &mut registry,
-    );
+    let search_enabled = search_tool_enabled(turn_context, model_info);
+    let registered_mcp_tools = if let Some(selection) = mcp_selection {
+        session
+            .services
+            .mcp_handler_cache
+            .append_mcp_tools_for_input_with_recovery(
+                mcp_tools,
+                &turn_context.config,
+                apps_enabled,
+                &mcp.config().mcp_server_catalog,
+                search_enabled,
+                recovered_mcp_tools,
+                namespace_tools_enabled,
+                selection,
+                &mut registry,
+            )
+    } else {
+        session.services.mcp_handler_cache.append_mcp_tools_with_recovery(
+            mcp_tools,
+            &turn_context.config,
+            apps_enabled,
+            &mcp.config().mcp_server_catalog,
+            search_enabled,
+            recovered_mcp_tools,
+            namespace_tools_enabled,
+            &mut registry,
+        )
+    };
     apply_mcp_tool_exposure_policy(
         turn_context,
         model_info,
@@ -203,6 +280,7 @@ pub(crate) fn build_tool_router_with_recovered_mcp_tools(
         recovered_mcp_tools,
         namespace_tools_enabled,
         &registered_mcp_tools,
+        mcp_selection.as_ref(),
         &mut registry,
     );
     let standalone_web_search_tool = append_extension_tool_executors(
@@ -235,23 +313,56 @@ fn apply_mcp_tool_exposure_policy(
     recovered_mcp_tools: &HashMap<ToolName, McpToolRecovery>,
     namespace_tools_enabled: bool,
     registered_mcp_tools: &HashSet<ToolName>,
+    selection: Option<&McpToolSelection<'_>>,
     registry: &mut ToolRegistry,
 ) {
     let mut omitted_exposures_by_tool = HashMap::new();
+    let mut explicitly_direct_tool_names = HashSet::new();
+    let mut direct_only_tool_names = HashSet::new();
     let apps_config = apps_config_from_layer_stack(&turn_context.config.config_layer_stack);
     for tool in mcp_tools {
         let canonical_tool_name = tool.canonical_tool_name();
         if !registered_mcp_tools.contains(&canonical_tool_name) {
             continue;
         }
-        let tool_name = if recovered_mcp_tools
-            .get(&canonical_tool_name)
-            .is_some_and(|recovery| *recovery != McpToolRecovery::None)
+        let tool_name = if !namespace_tools_enabled
+            || recovered_mcp_tools
+                .get(&canonical_tool_name)
+                .is_some_and(|recovery| *recovery != McpToolRecovery::None)
         {
             McpHandler::recovered_tool_name(tool, namespace_tools_enabled)
         } else {
             canonical_tool_name
         };
+        let normalized_tool_name = tool_name.clone().with_default_namespace();
+        if canonical_tool_name
+            .namespace
+            .as_ref()
+            .is_some_and(|namespace| {
+                turn_context
+                    .config
+                    .code_mode
+                    .direct_only_tool_namespaces
+                    .contains(namespace)
+            })
+        {
+            direct_only_tool_names.insert(normalized_tool_name.clone());
+        }
+        if selection.is_some_and(|selection| {
+            tool.server_name == CODEX_APPS_MCP_SERVER_NAME
+                && tool.connector_id.as_ref().is_some_and(|connector_id| {
+                    selection
+                        .explicitly_enabled_connectors
+                        .iter()
+                        .any(|connector| connector.id == *connector_id)
+                })
+                || (tool.server_name != CODEX_APPS_MCP_SERVER_NAME
+                    && selection
+                        .explicitly_referenced_mcp_servers
+                        .contains(&tool.server_name))
+        }) {
+            explicitly_direct_tool_names.insert(normalized_tool_name);
+        }
         let Some(server) = mcp.config().mcp_server_catalog.server(&tool.server_name) else {
             continue;
         };
@@ -284,18 +395,13 @@ fn apply_mcp_tool_exposure_policy(
         let tool_name = tool_name.with_default_namespace();
 
         let mut exposures = ToolExposures::ALL.difference(*omitted_exposures);
-        if tool_name.namespace.as_ref().is_some_and(|namespace| {
-            turn_context
-                .config
-                .code_mode
-                .direct_only_tool_namespaces
-                .contains(namespace)
-        }) {
+        if direct_only_tool_names.contains(&tool_name) {
             exposures = exposures.difference(ToolExposures::DEFERRED | ToolExposures::CODE_MODE);
         }
 
         exposures = if search_tool_enabled(turn_context, model_info)
             && exposures.contains(ToolExposures::DEFERRED)
+            && !explicitly_direct_tool_names.contains(&tool_name)
             && (effective_tool_mode(turn_context, model_info) != ToolMode::CodeModeOnly
                 || exposures.contains(ToolExposures::CODE_MODE))
         {

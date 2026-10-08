@@ -520,7 +520,7 @@ fn mcp_tool_info(
 
 fn mcp_runtime(tool_info: codex_mcp::ToolInfo) -> RegisteredTool {
     let runtime = Arc::new(
-        McpHandler::new(tool_info, /*namespace_tools_enabled*/ true)
+        McpHandler::new(tool_info)
             .expect("MCP tool spec should build"),
     ) as Arc<dyn CoreToolRuntime>;
     RegisteredTool {

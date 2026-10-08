@@ -284,9 +284,9 @@ impl StepContext {
                 settings.model_info.as_ref(),
             ),
             settings: Arc::new(settings),
-            team_lead_work_policy: arc_swap::ArcSwap::from_pointee(
+            team_lead_work_policy: Arc::new(arc_swap::ArcSwap::from_pointee(
                 turn.config.effective_team_lead_work_policy(),
-            ),
+            )),
             session_telemetry: turn.session_telemetry.clone(),
             realtime: RealtimeConversationSnapshot {
                 active: turn.realtime_active,

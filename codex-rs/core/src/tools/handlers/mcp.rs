@@ -67,9 +67,16 @@ pub struct McpHandler {
 
 impl McpHandler {
     pub fn new(tool_info: ToolInfo) -> Result<Self, serde_json::Error> {
+        Self::new_with_namespace_tools(tool_info, /*namespace_tools_enabled*/ true)
+    }
+
+    pub(crate) fn new_with_namespace_tools(
+        tool_info: ToolInfo,
+        namespace_tools_enabled: bool,
+    ) -> Result<Self, serde_json::Error> {
         Self::with_agent_plugin(
             tool_info,
-            /*namespace_tools_enabled*/ true,
+            namespace_tools_enabled,
             /*agent_plugin*/ false,
             /*schema_max_bytes*/ None,
             McpToolRecovery::None,
@@ -80,9 +87,21 @@ impl McpHandler {
         tool_info: ToolInfo,
         schema_max_bytes: usize,
     ) -> Result<Self, serde_json::Error> {
+        Self::new_with_schema_max_bytes_and_namespace_tools(
+            tool_info,
+            schema_max_bytes,
+            /*namespace_tools_enabled*/ true,
+        )
+    }
+
+    pub(crate) fn new_with_schema_max_bytes_and_namespace_tools(
+        tool_info: ToolInfo,
+        schema_max_bytes: usize,
+        namespace_tools_enabled: bool,
+    ) -> Result<Self, serde_json::Error> {
         Self::with_agent_plugin(
             tool_info,
-            /*namespace_tools_enabled*/ true,
+            namespace_tools_enabled,
             /*agent_plugin*/ false,
             Some(schema_max_bytes),
             McpToolRecovery::None,
@@ -90,9 +109,16 @@ impl McpHandler {
     }
 
     pub fn new_agent_plugin(tool_info: ToolInfo) -> Result<Self, serde_json::Error> {
+        Self::new_agent_plugin_with_namespace_tools(tool_info, /*namespace_tools_enabled*/ true)
+    }
+
+    pub(crate) fn new_agent_plugin_with_namespace_tools(
+        tool_info: ToolInfo,
+        namespace_tools_enabled: bool,
+    ) -> Result<Self, serde_json::Error> {
         Self::with_agent_plugin(
             tool_info,
-            /*namespace_tools_enabled*/ true,
+            namespace_tools_enabled,
             /*agent_plugin*/ true,
             /*schema_max_bytes*/ None,
             McpToolRecovery::None,
@@ -147,7 +173,7 @@ impl McpHandler {
                         .to_string()
                     });
         }
-        let tool_name = if recovery == McpToolRecovery::None {
+        let tool_name = if recovery == McpToolRecovery::None && namespace_tools_enabled {
             tool_info.canonical_tool_name()
         } else {
             Self::recovered_tool_name(&tool_info, namespace_tools_enabled)

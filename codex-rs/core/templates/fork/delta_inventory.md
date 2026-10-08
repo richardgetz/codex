@@ -38,6 +38,11 @@ release or merge rules.
   and cap each delay at 10 minutes; malformed or unknown directives and MCP
   errors retain normal behavior.
 
+- Direct MCP tools retain flat `mcp__server__tool` Function specs when namespace
+  tools are disabled. Each sampling request selects Apps connectors and
+  explicitly named MCP servers from current user input while keeping all
+  other eligible tools deferred for search.
+
 - Guardian conversation-history prompt overrides are capped at 8 KiB; oversized
   values fall back to the complete built-in retrieval instructions instead of
   injecting an unbounded or partially truncated security prompt.
@@ -1001,6 +1006,11 @@ release or merge rules.
   - Cached normal tool-plan construction registers the complete per-step MCP
     inventory, including recovered placeholders, while retaining handler reuse
     keyed to the immutable MCP binding.
+  - Namespace-disabled normal MCP tools retain flat Function specs, and
+    recovered placeholders preserve direct-only namespace exposure after name
+    flattening. Per-sampling router selection uses current user messages only,
+    applies server-name token boundaries, and keeps serialized exposure aligned
+    with the router used for dispatch.
 - Built-in scratchpad:
   - Namespace: `scratchpad`
   - Default mode exposes it by default; Plan mode does not.

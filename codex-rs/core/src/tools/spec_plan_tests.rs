@@ -471,7 +471,6 @@ fn mcp_runtime(
     let handler: Arc<dyn CoreToolRuntime> = Arc::new(
         McpHandler::new(
             mcp_tool(server, namespace, name),
-            /*namespace_tools_enabled*/ true,
         )
         .expect("MCP tool spec should build"),
     );
@@ -643,7 +642,6 @@ async fn reviewer_tool_policy_exclude_optional_core_tools() {
         &session,
         step_context.turn.as_ref(),
         &step_context.settings.model_info,
-        /*model_messages*/ None,
         &step_context.environments,
         &step_context.mcp,
         /*apps_enabled*/ false,
@@ -696,7 +694,6 @@ async fn reviewer_tool_policy_respect_managed_shell_restrictions() {
             &session,
             step_context.turn.as_ref(),
             &step_context.settings.model_info,
-            /*model_messages*/ None,
             &step_context.environments,
             &step_context.mcp,
             /*apps_enabled*/ false,
@@ -733,7 +730,6 @@ async fn reviewer_tool_policy_preserve_code_mode() {
         &session,
         step_context.turn.as_ref(),
         &step_context.settings.model_info,
-        /*model_messages*/ None,
         &step_context.environments,
         &step_context.mcp,
         /*apps_enabled*/ false,
@@ -804,7 +800,6 @@ async fn reviewer_tool_policy_require_managed_secondary_environments() {
             &session,
             step_context.turn.as_ref(),
             &step_context.settings.model_info,
-            /*model_messages*/ None,
             &step_context.environments,
             &step_context.mcp,
             /*apps_enabled*/ false,
@@ -1663,7 +1658,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         ToolPlanInputs {
             tool_runtimes: vec![RegisteredTool {
                 runtime: Arc::new(
-                    McpHandler::new(
+                    McpHandler::new_with_namespace_tools(
                         mcp_tool("direct", "mcp__direct", "lookup"),
                         /*namespace_tools_enabled*/ false,
                     )
@@ -1911,7 +1906,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             tool.namespace_description = Some("Shared tools.".to_string());
             RegisteredTool {
                 runtime: Arc::new(
-                    McpHandler::new(tool, /*namespace_tools_enabled*/ true)
+                    McpHandler::new(tool)
                         .expect("MCP tool spec should build"),
                 ),
                 exposure,
@@ -2208,7 +2203,7 @@ async fn strict_tool_collisions_allow_multiple_tools_in_one_namespace() {
             tool_runtimes: vec![
                 RegisteredTool {
                     runtime: Arc::new(
-                        McpHandler::new(undocumented_tool, /*namespace_tools_enabled*/ true)
+                        McpHandler::new(undocumented_tool)
                             .expect("MCP tool spec should build"),
                     ),
                     exposure: ToolExposure::Direct,
@@ -2250,7 +2245,7 @@ async fn relaxed_tool_collisions_preserve_first_nonempty_namespace_description()
             tool.namespace_description = description.map(str::to_string);
             RegisteredTool {
                 runtime: Arc::new(
-                    McpHandler::new(tool, /*namespace_tools_enabled*/ true)
+                    McpHandler::new(tool)
                         .expect("MCP tool spec should build"),
                 ),
                 exposure: ToolExposure::Direct,

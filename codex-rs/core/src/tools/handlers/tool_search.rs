@@ -290,7 +290,6 @@ mod tests {
         let runtime: Arc<dyn CoreToolRuntime> = Arc::new(
             McpHandler::new(
                 tool_info("calendar", "create_event", "Create events"),
-                /*namespace_tools_enabled*/ true,
             )
             .expect("MCP tool should convert"),
         );
@@ -308,7 +307,6 @@ mod tests {
         let replacement = Arc::new(
             McpHandler::new(
                 tool_info("calendar", "create_event", "Create events"),
-                /*namespace_tools_enabled*/ true,
             )
             .expect("replacement MCP tool should convert"),
         );
@@ -329,7 +327,6 @@ mod tests {
         let mcp_runtime: Arc<dyn CoreToolRuntime> = Arc::new(
             McpHandler::new(
                 tool_info("calendar", "create_event", "Create events"),
-                /*namespace_tools_enabled*/ true,
             )
             .expect("MCP tool should convert"),
         );
@@ -403,7 +400,7 @@ mod tests {
         let mut search_infos = mcp_tools
             .iter()
             .map(|tool| {
-                McpHandler::new(tool.clone(), /*namespace_tools_enabled*/ true)
+                McpHandler::new(tool.clone())
                     .expect("MCP tool should convert")
                     .search_info()
                     .expect("MCP handler should return search info")

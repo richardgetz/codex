@@ -143,6 +143,46 @@ fn tool_search_output_has_namespace_child(
     namespace_child_tool(&output, namespace, tool_name).is_some()
 }
 
+fn configure_rmcp_test_server(config: &mut Config, command: String, environment_id: String) {
+    let mut servers = config.mcp_servers.get().clone();
+    servers.insert(
+        "rmcp".to_string(),
+        McpServerConfig {
+            auth: Default::default(),
+            transport: McpServerTransportConfig::Stdio {
+                command,
+                args: Vec::new(),
+                env: None,
+                env_vars: Vec::new(),
+                cwd: Some(LegacyAppPathString::from_path(config.cwd.as_path())),
+            },
+            environment_id,
+            enabled: true,
+            required: false,
+            startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
+            disabled_reason: None,
+            startup_timeout_sec: Some(Duration::from_secs(10)),
+            tool_timeout_sec: None,
+            default_tools_approval_mode: None,
+            enabled_tools: Some(vec!["echo".to_string()]),
+            disabled_tools: None,
+            scopes: None,
+            oauth: None,
+            oauth_resource: None,
+            supports_parallel_tool_calls: false,
+            tool_input_schema_max_bytes: None,
+            omit_tools_from: None,
+            tools: HashMap::new(),
+        },
+    );
+    config
+        .mcp_servers
+        .set(servers)
+        .expect("test MCP server configuration should be accepted");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn search_tool_enabled_by_default_adds_tool_search() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -502,7 +542,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
+async fn explicit_app_mentions_directly_expose_app_tools() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -531,7 +571,7 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
     let tools = tool_names(&body);
     assert!(
         tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "explicit app mentions should leave app tools deferred: {tools:?}"
+        "tool_search should stay available for deferred app tools: {tools:?}"
     );
     assert!(
         namespace_child_tool(
@@ -539,12 +579,12 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
             SEARCH_CALENDAR_NAMESPACE,
             SEARCH_CALENDAR_CREATE_TOOL
         )
-        .is_none(),
-        "explicit app mentions should not directly expose create tool, got tools: {tools:?}"
+        .is_some(),
+        "explicit app mention should directly expose create tool, got tools: {tools:?}"
     );
     assert!(
-        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_none(),
-        "explicit app mentions should not directly expose list tool, got tools: {tools:?}"
+        namespace_child_tool(&body, SEARCH_CALENDAR_NAMESPACE, SEARCH_CALENDAR_LIST_TOOL).is_some(),
+        "explicit app mention should directly expose list tool, got tools: {tools:?}"
     );
 
     Ok(())
@@ -601,7 +641,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let test = builder.build_with_auto_env(&server).await?;
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Find the calendar create tool".to_string(),
+            text: "Find a tool to create an event".to_string(),
             text_elements: Vec::new(),
         }]))
         .await?;
@@ -1446,52 +1486,15 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
 
     let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
     let environment_id = remote_aware_environment_id();
-    let mut builder =
-        configured_builder(apps_server.chatgpt_base_url.clone()).with_config(move |config| {
-            let mut servers = config.mcp_servers.get().clone();
-            servers.insert(
-                "rmcp".to_string(),
-                McpServerConfig {
-                    auth: Default::default(),
-                    transport: McpServerTransportConfig::Stdio {
-                        command: rmcp_test_server_bin,
-                        args: Vec::new(),
-                        env: None,
-                        env_vars: Vec::new(),
-                        cwd: Some(LegacyAppPathString::from_path(config.cwd.as_path())),
-                    },
-                    environment_id,
-                    enabled: true,
-                    required: false,
-                    startup_readiness: Default::default(),
-                    startup: Default::default(),
-                    sharing: Default::default(),
-                    disabled_reason: None,
-                    startup_timeout_sec: Some(Duration::from_secs(10)),
-                    tool_timeout_sec: None,
-                    default_tools_approval_mode: None,
-                    enabled_tools: Some(vec!["echo".to_string()]),
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth: None,
-                    oauth_resource: None,
-                    supports_parallel_tool_calls: false,
-                    tool_input_schema_max_bytes: None,
-                    omit_tools_from: None,
-                    tools: HashMap::new(),
-                },
-            );
-            config
-                .mcp_servers
-                .set(servers)
-                .expect("test mcp servers should accept any configuration");
-        });
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone()).with_config(
+        move |config| configure_rmcp_test_server(config, rmcp_test_server_bin, environment_id),
+    );
     let test = builder.build_with_auto_env(&server).await?;
     wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Find the rmcp echo tool and call it.".to_string(),
+            text: "Find the echo tool and call it.".to_string(),
             text_elements: Vec::new(),
         }]))
         .await?;
@@ -1560,6 +1563,97 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
         "search-surfaced MCP calls should not fall through to unsupported call: {output_text}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_mcp_server_mentions_expose_and_dispatch_tools() -> Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let call_id = "rmcp-echo-direct";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    "mcp__rmcp",
+                    "echo",
+                    &json!({ "message": "hello" }).to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+    let environment_id = remote_aware_environment_id();
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone()).with_config(
+        move |config| configure_rmcp_test_server(config, rmcp_test_server_bin, environment_id),
+    );
+    let test = builder.build_with_auto_env(&server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Use rmcp to echo hello.".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+
+    let EventMsg::McpToolCallEnd(end) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::McpToolCallEnd(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees McpToolCallEnd");
+    };
+    assert_eq!(end.call_id, call_id);
+    assert!(end.is_success());
+    assert_eq!(
+        end.invocation,
+        McpInvocation {
+            server: "rmcp".to_string(),
+            tool: "echo".to_string(),
+            arguments: Some(json!({ "message": "hello" })),
+        }
+    );
+    let result = end.result.expect("explicitly selected MCP call should succeed");
+    let content = result
+        .structured_content
+        .expect("echo tool should return structured content");
+    assert!(
+        content["echo"]
+            .as_str()
+            .is_some_and(|value| value.contains("ECHOING: hello")),
+        "MCP echo result should be routed from rmcp: {content}"
+    );
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        namespace_child_tool(&requests[0].body_json(), "mcp__rmcp", "echo").is_some(),
+        "a named MCP server should expose its tool in the current request"
+    );
+    assert!(requests[1].function_call_output_text(call_id).is_some());
     Ok(())
 }
 

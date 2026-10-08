@@ -34,7 +34,7 @@ pub(crate) struct StepContext {
     /// One immutable settings version captured before request preparation.
     pub(crate) settings: Arc<ResolvedStepSettings>,
     /// Lead work policy advertised by this sampling request's latest WorldState.
-    pub(crate) team_lead_work_policy: ArcSwap<TeamLeadWorkPolicy>,
+    pub(crate) team_lead_work_policy: Arc<ArcSwap<TeamLeadWorkPolicy>>,
     /// Frozen turn preferences resolved against this step's captured model.
     pub(crate) token_budget: Option<TokenBudgetConfig>,
     /// Telemetry context tagged with this sampling request's model.
