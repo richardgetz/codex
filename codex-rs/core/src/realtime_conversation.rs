@@ -16,6 +16,7 @@ use async_channel::RecvError;
 use async_channel::Sender;
 use async_channel::TrySendError;
 use async_channel::WeakSender;
+use async_channel::bounded;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::ApiError;
@@ -2021,7 +2022,7 @@ async fn handle_start_inner(
             bounded::<PendingRealtimeHandoff>(HANDOFF_OUT_QUEUE_CAPACITY);
         let mut ready_events = BTreeMap::new();
         let mut pending_count = 0;
-        let mut next_sequence = 0;
+        let mut next_sequence: u64 = 0;
         let mut next_sequence_to_finish = 0;
         let mut events_closed = false;
         // Drain already-parsed events so a queued handoff is routed before the final tail.
