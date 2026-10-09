@@ -348,11 +348,14 @@ fn usage_limits_fragment_emits_when_reset_timestamp_availability_changes() {
         plan_type: None,
         rate_limit_reached_type: None,
     };
-    let without_reset = UsageLimitsState::new(
-        ThreadUsagePolicy::default(),
-        std::slice::from_ref(&rate_limits(None)),
-    )
-    .snapshot();
+    let without_reset: super::UsageLimitsSnapshot = serde_json::from_value(serde_json::json!({
+        "policy": {},
+        "limits": [{
+            "limit_id": "codex",
+            "primary": { "remaining_percent": 32.0, "window_minutes": 300 }
+        }]
+    }))
+    .expect("missing reset metadata should deserialize");
     let with_reset = UsageLimitsState::new(
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(Some(1_700_000_000))),
