@@ -1,7 +1,9 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config_lock::config_without_lock_controls;
+use crate::config_lock::lock_layer_from_config;
+use crate::config_lock::read_config_lock_from_path;
 use crate::context::world_state::validate_managed_developer_instructions;
-use crate::orchestrator_supervision::root as orchestrator_supervision_root;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::tools::handlers::builtin_scratchpad::run_lifecycle_cleanup as run_scratchpad_lifecycle_cleanup;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
@@ -31,9 +33,9 @@ use codex_config::TeamConfig;
 use codex_config::TeamModelProfiles;
 use codex_config::ThreadConfigLoader;
 use codex_config::account_registry::account_storage_home;
-use codex_config::config_toml::ConfigLockfileToml;
-
+use codex_config::account_registry::self_heal_account_registry;
 use codex_config::config_toml::CircuitBreakAction;
+use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
@@ -86,9 +88,7 @@ use codex_config::types::UserPreferencesMemoryConfig;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginsConfigInput;
-use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::ReadFileOptions;
 use codex_features::CodeModeConfigToml;
@@ -117,7 +117,6 @@ use codex_mcp::McpPluginAttribution;
 use codex_mcp::McpProtocolMode;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::ResolvedMcpCatalog;
-use codex_memories_read::memory_root;
 use codex_model_provider::ProviderCapabilities;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
@@ -131,6 +130,7 @@ use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
@@ -147,10 +147,12 @@ use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::DenyReadValidator;
+use codex_protocol::permissions::DenyReadViolation;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
@@ -187,9 +189,6 @@ use crate::config::permissions::default_builtin_permission_profile_name;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_for_profile_selection;
 use crate::config::permissions::validate_user_permission_profile_names;
-use crate::config_lock::config_without_lock_controls;
-use crate::config_lock::lock_layer_from_config;
-use crate::config_lock::read_config_lock_from_path;
 use crate::responses_metadata::validate_extra_metadata;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
@@ -199,7 +198,6 @@ mod auth_keyring;
 pub mod edit;
 mod managed_features;
 mod metrics;
-pub(crate) use metrics::emit_session_start_metrics;
 mod network_config;
 mod network_proxy_spec;
 mod otel;
@@ -209,9 +207,11 @@ mod permission_profile_selection;
 mod permissions;
 mod requirements;
 mod resolved_permission_profile;
+mod runtime_refresh;
+mod team;
+pub(crate) use runtime_refresh::RuntimeConfigRefresh;
 #[cfg(test)]
 mod schema;
-mod team;
 mod token_budget_startup;
 mod windows_sandbox_config;
 pub use auth_keyring::bootstrap_auth_config;
@@ -226,6 +226,7 @@ pub use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
+pub(crate) use metrics::emit_session_start_metrics;
 pub use network_config::EnvironmentNetworkConfigError;
 pub use network_config::NetworkConfigInputs;
 pub use network_config::PreparedNetworkConfig;
@@ -242,7 +243,6 @@ pub use permission_profile_selection::ResolvedPermissionProfileSelection;
 pub use permission_profile_selection::resolve_permission_profile_selection;
 pub use permissions::CompiledPermissionProfile;
 pub use permissions::WorkspaceWriteSettings;
-pub(crate) use permissions::builtin_permission_profile;
 pub use permissions::compile_permission_profile;
 pub(crate) use permissions::is_builtin_permission_profile_name;
 pub use permissions::network_proxy_config_from_profile_network;
@@ -250,45 +250,12 @@ pub use permissions::resolve_permission_profile;
 pub(crate) use resolved_permission_profile::PermissionProfileState;
 pub use token_budget_startup::TokenBudgetStartupConfig;
 pub use windows_sandbox_config::PreparedWindowsSandboxConfig;
-use windows_sandbox_config::network_config_allows_mxc;
+use windows_sandbox_config::config_allows_mxc;
 pub use windows_sandbox_config::prepare_windows_sandbox_config;
 use windows_sandbox_config::resolve_windows_sandbox_type;
 
 const DEFAULT_IGNORE_LARGE_UNTRACKED_DIRS: i64 = 200;
 const DEFAULT_IGNORE_LARGE_UNTRACKED_FILES: i64 = 10 * 1024 * 1024;
-
-fn build_network_proxy_spec(
-    configured_network_proxy_config: NetworkProxyConfig,
-    network_requirements: Option<Sourced<codex_config::NetworkConstraints>>,
-    permission_profile: &PermissionProfile,
-) -> std::io::Result<Option<NetworkProxySpec>> {
-    let (network_requirements, network_requirements_source) = match network_requirements {
-        Some(Sourced { value, source }) => (Some(value), Some(source)),
-        None => (None, None),
-    };
-    let has_network_requirements = network_requirements.is_some();
-    let network = NetworkProxySpec::from_config_and_constraints(
-        configured_network_proxy_config,
-        network_requirements,
-        permission_profile,
-    )
-    .map_err(|err| {
-        if let Some(source) = network_requirements_source.as_ref() {
-            std::io::Error::new(
-                err.kind(),
-                format!("failed to build managed network proxy from {source}: {err}"),
-            )
-        } else {
-            err
-        }
-    })?;
-
-    Ok(if has_network_requirements {
-        Some(network)
-    } else {
-        network.enabled().then_some(network)
-    })
-}
 
 /// Signals that a public config selected the retired `untrusted` approval policy.
 #[derive(Debug, thiserror::Error)]
@@ -329,232 +296,12 @@ pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
     DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
+pub const DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES: u64 = 15;
+pub const DEFAULT_ETA_HISTORY_RETENTION_DAYS: u64 = 30;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
-
-async fn git_intent_note_writable_roots(
-    fs: &dyn ExecutorFileSystem,
-    cwd: &AbsolutePathBuf,
-) -> Vec<AbsolutePathBuf> {
-    let mut git_entry = None;
-    for dir in cwd.ancestors() {
-        let candidate = dir.join(".git");
-        if fs
-            .get_metadata(
-                &PathUri::from_abs_path(&candidate),
-                GetMetadataOptions::default(),
-                /*sandbox*/ None,
-            )
-            .await
-            .is_ok()
-        {
-            git_entry = Some((candidate, dir));
-            break;
-        }
-    }
-    let Some((dot_git, git_boundary)) = git_entry else {
-        return Vec::new();
-    };
-    let dot_git_uri = PathUri::from_abs_path(&dot_git);
-    let git_dir = match fs
-        .get_metadata(
-            &dot_git_uri,
-            GetMetadataOptions::default(),
-            /*sandbox*/ None,
-        )
-        .await
-    {
-        Ok(metadata) if metadata.is_symlink => return Vec::new(),
-        Ok(metadata) if metadata.is_directory => dot_git,
-        Ok(metadata) if metadata.is_file => {
-            let Ok(contents) = fs
-                .read_file_text(
-                    &dot_git_uri,
-                    ReadFileOptions::default(),
-                    /*sandbox*/ None,
-                )
-                .await
-            else {
-                return Vec::new();
-            };
-            let Some(git_dir) = contents.trim().strip_prefix("gitdir:").map(str::trim) else {
-                return Vec::new();
-            };
-            if git_dir.is_empty() {
-                return Vec::new();
-            }
-            let Some(repo_root) = dot_git.parent() else {
-                return Vec::new();
-            };
-            AbsolutePathBuf::resolve_path_against_base(git_dir, repo_root.as_path())
-        }
-        Ok(_) => return Vec::new(),
-        Err(_) => return Vec::new(),
-    };
-    if !git_dir.as_path().starts_with(git_boundary.as_path()) {
-        return Vec::new();
-    }
-    let common_dir_file = git_dir.join("commondir");
-    let git_common_dir = fs
-        .read_file_text(
-            &PathUri::from_abs_path(&common_dir_file),
-            ReadFileOptions::default(),
-            /*sandbox*/ None,
-        )
-        .await
-        .ok()
-        .map(|contents| {
-            AbsolutePathBuf::resolve_path_against_base(contents.trim(), git_dir.as_path())
-        })
-        .unwrap_or(git_dir);
-    if !git_common_dir.as_path().starts_with(git_boundary.as_path()) {
-        return Vec::new();
-    }
-    if !existing_git_path_components_are_safe(
-        fs,
-        &git_boundary,
-        &git_common_dir,
-        MissingPathComponents::Reject,
-    )
-    .await
-        || !fs
-            .get_metadata(
-                &PathUri::from_abs_path(&git_common_dir),
-                GetMetadataOptions::default(),
-                /*sandbox*/ None,
-            )
-            .await
-            .is_ok_and(|metadata| metadata.is_directory && !metadata.is_symlink)
-    {
-        return Vec::new();
-    }
-
-    let objects = git_common_dir.join("objects");
-    let notes_refs = git_common_dir.join("refs").join("notes");
-    let notes_logs = git_common_dir.join("logs").join("refs").join("notes");
-    for root in [&objects, &notes_refs, &notes_logs] {
-        if !existing_git_path_components_are_safe(
-            fs,
-            &git_common_dir,
-            root,
-            MissingPathComponents::Allow,
-        )
-        .await
-        {
-            return Vec::new();
-        }
-    }
-    if !fs
-        .get_metadata(
-            &PathUri::from_abs_path(&objects),
-            GetMetadataOptions::default(),
-            /*sandbox*/ None,
-        )
-        .await
-        .is_ok_and(|metadata| metadata.is_directory && !metadata.is_symlink)
-    {
-        return Vec::new();
-    }
-    vec![objects, notes_refs, notes_logs]
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MissingPathComponents {
-    Allow,
-    Reject,
-}
-
-async fn existing_git_path_components_are_safe(
-    fs: &dyn ExecutorFileSystem,
-    boundary: &AbsolutePathBuf,
-    path: &AbsolutePathBuf,
-    missing: MissingPathComponents,
-) -> bool {
-    let Ok(relative_path) = path.as_path().strip_prefix(boundary.as_path()) else {
-        return false;
-    };
-    let mut current = boundary.clone();
-    for component in relative_path.components() {
-        current = current.join(component.as_os_str());
-        match fs
-            .get_metadata(
-                &PathUri::from_abs_path(&current),
-                GetMetadataOptions::default(),
-                /*sandbox*/ None,
-            )
-            .await
-        {
-            Ok(metadata) if metadata.is_symlink || !metadata.is_directory => return false,
-            Ok(_) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return missing == MissingPathComponents::Allow;
-            }
-            Err(_) => return false,
-        }
-    }
-    true
-}
-
-async fn ensure_git_intent_note_writable_roots(
-    fs: &dyn ExecutorFileSystem,
-    roots: &[AbsolutePathBuf],
-) -> Vec<AbsolutePathBuf> {
-    let Some((objects_root, note_roots)) = roots.split_first() else {
-        return Vec::new();
-    };
-    let Some(git_common_dir) = objects_root.parent() else {
-        return Vec::new();
-    };
-    for root in note_roots {
-        if root == objects_root {
-            continue;
-        }
-        let _ = fs
-            .create_directory(
-                &PathUri::from_abs_path(root),
-                CreateDirectoryOptions {
-                    recursive: true,
-                    follow_symlinks: true,
-                },
-                /*sandbox*/ None,
-            )
-            .await;
-    }
-    let mut verified = Vec::new();
-    for root in roots {
-        if existing_git_path_components_are_safe(
-            fs,
-            &git_common_dir,
-            root,
-            MissingPathComponents::Reject,
-        )
-        .await
-        {
-            verified.push(root.clone());
-        }
-    }
-    if verified.len() == roots.len() {
-        verified
-    } else {
-        Vec::new()
-    }
-}
-
-async fn additional_writable_roots_with_git_intent_notes(
-    fs: &dyn ExecutorFileSystem,
-    additional_writable_roots: &[AbsolutePathBuf],
-    git_intent_note_roots: &[AbsolutePathBuf],
-) -> Vec<AbsolutePathBuf> {
-    let mut roots = additional_writable_roots.to_vec();
-    for root in ensure_git_intent_note_writable_roots(fs, git_intent_note_roots).await {
-        if !roots.iter().any(|existing| existing == &root) {
-            roots.push(root);
-        }
-    }
-    roots
-}
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<AbsolutePathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
@@ -878,6 +625,19 @@ fn profile_allows_configured_network_proxy(permission_profile: &PermissionProfil
     }
 }
 
+fn build_network_proxy_spec(
+    mut configured_network_proxy_config: NetworkProxyConfig,
+    network_requirements: Option<Sourced<codex_config::NetworkConstraints>>,
+    permission_profile: &PermissionProfile,
+    environment_overrides: &HashMap<String, String>,
+) -> std::io::Result<Option<NetworkProxySpec>> {
+    configured_network_proxy_config.configure_credential_broker_environment(environment_overrides);
+    PreparedNetworkConfig {
+        configured_proxy: configured_network_proxy_config,
+    }
+    .build(network_requirements, permission_profile)
+}
+
 /// Configured thread persistence backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ThreadStoreConfig {
@@ -905,7 +665,11 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
+    /// Default Daybreak preference for new threads and non-interactive turns.
+    pub daybreak_enabled: bool,
+
     /// Effective service tier request id preference for new turns.
+    /// `default` means the user explicitly selected standard routing.
     pub service_tier: Option<String>,
 
     /// Model used specifically for review sessions.
@@ -917,7 +681,8 @@ pub struct Config {
     /// Token usage threshold triggering auto-compaction of conversation history.
     pub model_auto_compact_token_limit: Option<i64>,
 
-    /// Controls whether auto-compaction uses total context or post-prefix body growth.
+    /// Controls whether `model_auto_compact_token_limit` applies to the full
+    /// active context or only tokens after the carried compaction-window prefix.
     pub model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
 
     /// Percentage of the usable context window that triggers turn-end compaction.
@@ -1078,6 +843,7 @@ pub struct Config {
 
     /// Enable decorative TUI effects such as Astra composer stars. Defaults to false.
     pub tui_whimsy: bool,
+
     /// Individual TUI effects, subordinate to the animation master switch.
     pub tui_effects: codex_config::types::TuiEffects,
 
@@ -1495,6 +1261,9 @@ pub struct Config {
     /// Local rollout preference after checking network restrictions and native availability.
     pub prefer_mxc: bool,
 
+    /// Host feature defaults retained beneath explicit configuration overrides.
+    pub runtime_feature_defaults: BTreeMap<Feature, bool>,
+
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
 
@@ -1711,9 +1480,6 @@ pub struct EtaConfig {
     pub history_retention_days: u64,
 }
 
-pub const DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES: u64 = 15;
-pub const DEFAULT_ETA_HISTORY_RETENTION_DAYS: u64 = 30;
-
 impl Default for EtaConfig {
     fn default() -> Self {
         Self {
@@ -1753,6 +1519,7 @@ pub struct MultiAgentV2Config {
     pub wait_agent_enabled: bool,
     pub disable_direct_message: bool,
     pub message_board_in_memory: bool,
+    pub message_board_remote: Option<codex_features::RemoteMessageBoardConfigToml>,
     pub non_code_mode_only: bool,
 }
 
@@ -1774,6 +1541,7 @@ impl MultiAgentV2Config {
             wait_agent_enabled: true,
             disable_direct_message: false,
             message_board_in_memory: false,
+            message_board_remote: None,
             non_code_mode_only: true,
         }
     }
@@ -1941,30 +1709,7 @@ impl ConfigBuilder {
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
         )
         .await?;
-        let merged_toml = config_layer_stack.effective_config();
-
-        // Note that each layer in ConfigLayerStack should have resolved
-        // relative paths to absolute paths based on the parent folder of the
-        // respective config file, so we should be safe to deserialize without
-        // AbsolutePathBufGuard here.
-        let config_toml: ConfigToml = match merged_toml.try_into() {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
-                    &config_layer_stack,
-                    codex_config::CONFIG_TOML_FILE,
-                )
-                .await
-                {
-                    return Err(codex_config::io_error_from_config_error(
-                        std::io::ErrorKind::InvalidData,
-                        config_error,
-                        Some(err),
-                    ));
-                }
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
-            }
-        };
+        let config_toml = config_toml_from_layers(&config_layer_stack).await?;
         let config_lock_settings = config_toml
             .debug
             .as_ref()
@@ -2014,6 +1759,28 @@ impl ConfigBuilder {
     #[cfg(test)]
     pub(crate) fn without_managed_config_for_tests() -> Self {
         Self::default().loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+    }
+}
+
+async fn config_toml_from_layers(layers: &ConfigLayerStack) -> std::io::Result<ConfigToml> {
+    // The loader resolves paths relative to each layer's file before deserialization.
+    match layers.effective_config().try_into() {
+        Ok(config_toml) => Ok(config_toml),
+        Err(err) => {
+            if let Some(config_error) = codex_config::first_layer_config_error::<ConfigToml>(
+                layers,
+                codex_config::CONFIG_TOML_FILE,
+            )
+            .await
+            {
+                return Err(codex_config::io_error_from_config_error(
+                    std::io::ErrorKind::InvalidData,
+                    config_error,
+                    Some(err),
+                ));
+            }
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+        }
     }
 }
 
@@ -2352,6 +2119,7 @@ impl Config {
             config_layer_stack: self.config_layer_stack.clone(),
             approvals_reviewer: self.approvals_reviewer,
             environment_cwds: HashMap::new(),
+            environment_use_mxc: HashMap::new(),
             server_permission_profiles: HashMap::new(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
@@ -2368,7 +2136,11 @@ impl Config {
                 Vec::new()
             },
             protocol_mode: self.mcp_protocol_mode(),
-            host_owned_apps_protocol_mode: self.mcp_protocol_mode(),
+            host_owned_apps_protocol_mode: if self.features.enabled(Feature::CodexAppsMcp20260728) {
+                McpProtocolMode::V20260728
+            } else {
+                McpProtocolMode::Legacy
+            },
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability::new()
                     .with_form(FormElicitationCapability::new())
@@ -2416,10 +2188,7 @@ impl Config {
     ) -> std::io::Result<Self> {
         let config_layer_stack =
             Self::layer_stack_preserving_session(session_layers, refreshed_layers)?;
-        let cfg: ConfigToml = config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+        let cfg = config_toml_from_layers(&config_layer_stack).await?;
         Self::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             cfg,
@@ -2456,6 +2225,7 @@ impl Config {
             refreshed_layers.requirements().clone(),
             refreshed_layers.requirements_toml().clone(),
         )?
+        .with_cloud_config_binding(refreshed_layers.cloud_config_binding().cloned())
         .with_user_and_project_exec_policy_rules_ignored(
             refreshed_layers.ignore_user_and_project_exec_policy_rules(),
         ))
@@ -3174,15 +2944,15 @@ pub struct ConfigOverrides {
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
 }
 
-fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
-    let mut seen = HashSet::new();
-    paths.retain(|path| seen.insert(path.clone()));
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExecPolicyConfig {
     pub rulesets: BTreeMap<String, ExecPolicyRulesetToml>,
     pub active_rulesets: Vec<String>,
+}
+
+fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
 }
 
 /// Resolves the OSS provider from CLI override or global config.
@@ -3235,7 +3005,7 @@ fn resolve_update_plan_enabled(config_toml: &ConfigToml) -> bool {
         .tools
         .as_ref()
         .and_then(|tools| tools.update_plan.as_ref())
-        .is_none_or(|config| config.enabled)
+        .is_some_and(|config| config.enabled)
 }
 
 fn resolve_feature_enabled(feature: Option<&codex_config::config_toml::FeatureToggleToml>) -> bool {
@@ -3356,6 +3126,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         wait_agent_enabled,
         disable_direct_message,
         message_board_in_memory,
+        message_board_remote: base.and_then(|config| config.message_board_remote.clone()),
         non_code_mode_only,
     }
 }
@@ -3516,13 +3287,15 @@ fn resolve_eta_config(config_toml: &ConfigToml) -> std::io::Result<EtaConfig> {
         .and_then(|config| config.use_local_timezone)
         .unwrap_or(false);
     let timezone = eta.and_then(|config| config.timezone.clone());
+    if let Some(timezone) = timezone.as_deref()
+        && timezone.trim().is_empty()
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "eta.timezone must be a non-empty IANA time zone name",
+        ));
+    }
     if let Some(timezone) = timezone.as_deref() {
-        if timezone.trim().is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "eta.timezone must be a non-empty IANA time zone name",
-            ));
-        }
         jiff::tz::TimeZone::get(timezone).map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -3796,17 +3569,6 @@ impl Config {
     ) -> std::io::Result<Self> {
         // Keep the large config-construction future off small test thread stacks.
         Box::pin(async move {
-        if let Some(alias) = cfg
-            .accounts
-            .as_ref()
-            .and_then(|accounts| accounts.active.as_deref())
-            && !alias.trim().is_empty()
-            && codex_config::account_registry::normalize_account_alias(alias).is_none()
-        {
-            return Err(
-                codex_config::account_registry::invalid_configured_account_alias_error(alias),
-            );
-        }
         if cfg.experimental_thread_store_endpoint.is_some() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -3866,6 +3628,7 @@ impl Config {
             model_providers: _,
             check_for_update_on_startup: _,
             allow_login_shell: _,
+            allow_browser: _,
             feedback: _,
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
@@ -3890,7 +3653,6 @@ impl Config {
             additional_developer_instructions: _,
             guardian_policy_config_source: _,
             guardian_extra_policy_source: _,
-            allow_browser: _,
         } = config_layer_stack.requirements().clone();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -4089,66 +3851,19 @@ impl Config {
             permission_config_syntax,
         );
         let memory_policy = memory_policy.map(MemoryAccessPolicy::normalized);
-        let mut memories: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
+        let mut memories_config: MemoriesConfig = cfg.memories.clone().unwrap_or_default().into();
         if let Some(policy) = memory_policy {
-            memories.use_memories = policy.read;
-            memories.generate_memories = policy.write;
+            memories_config.use_memories = policy.read;
+            memories_config.generate_memories = policy.write;
         }
-        memories.use_memories |= memories.generate_memories;
-        let mut additional_readable_roots: Vec<AbsolutePathBuf> = Vec::new();
-        let mut codex_managed_writable_roots: Vec<AbsolutePathBuf> = Vec::new();
-        let memories_root = memory_root(&codex_home);
-        let profile_selection_adds_memory_write_roots =
-            profiles_are_active && permission_profile.is_none();
-        let memory_write_roots_enabled = memories.generate_memories
-            && (profile_selection_adds_memory_write_roots
+        memories_config.use_memories |= memories_config.generate_memories;
+        let memories_root = codex_home.join(memories_config.version.directory_name());
+        let memory_write_roots_enabled = memories_config.generate_memories
+            && (profiles_are_active && permission_profile.is_none()
                 || memory_policy.is_some_and(|policy| policy.write));
-        if memory_write_roots_enabled {
-            std::fs::create_dir_all(&memories_root)?;
-            if !codex_managed_writable_roots
-                .iter()
-                .any(|existing| existing == &memories_root)
-            {
-                codex_managed_writable_roots.push(memories_root.clone());
-            }
-        } else if memories.use_memories || features.enabled(Feature::MemoryTool) {
-            additional_readable_roots.push(memories_root.clone());
-            additional_readable_roots.push(crate::orchestrator_memory::legacy_user_preferences_root(
-                &codex_home,
-            ));
-        }
-        let orchestrator_supervision_root = orchestrator_supervision_root(&codex_home);
-        std::fs::create_dir_all(&orchestrator_supervision_root)?;
-        if !codex_managed_writable_roots
-            .iter()
-            .any(|existing| existing == &orchestrator_supervision_root)
-        {
-            codex_managed_writable_roots.push(orchestrator_supervision_root);
-        }
-        let scratchpad_root = codex_home.join("scratchpad");
-        std::fs::create_dir_all(&scratchpad_root)?;
-        if !codex_managed_writable_roots
-            .iter()
-            .any(|existing| existing == &scratchpad_root)
-        {
-            codex_managed_writable_roots.push(scratchpad_root);
-        }
-        let schedule_root = codex_home.join("schedule");
-        std::fs::create_dir_all(&schedule_root)?;
-        if !codex_managed_writable_roots
-            .iter()
-            .any(|existing| existing == &schedule_root)
-        {
-            codex_managed_writable_roots.push(schedule_root);
-        }
-        let git_intent_note_roots =
-            if git_intent_notes.enabled && git_intent_notes.allow_git_metadata_writes {
-                git_intent_note_writable_roots(fs, &resolved_cwd).await
-            } else {
-                Vec::new()
-            };
         let prefer_mxc = features.enabled(Feature::PreferMxc)
-            && network_config_allows_mxc(
+            && config_allows_mxc(
+                &constrained_windows_sandbox_mode,
                 &effective_permission_selection,
                 profiles_are_active,
                 permission_profile.as_ref(),
@@ -4219,8 +3934,8 @@ impl Config {
             file_system_sandbox_policy,
             mut active_permission_profile,
             mut profile_workspace_roots,
-        ) = if let Some(mut permission_profile) = permission_profile {
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+        ) = if let Some(permission_profile) = permission_profile {
+            let (file_system_sandbox_policy, _network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
             let configured_network_proxy_config =
                 if profile_allows_configured_network_proxy(&permission_profile)
@@ -4244,34 +3959,6 @@ impl Config {
                 } else {
                     NetworkProxyConfig::default()
                 };
-            let materialized_file_system_sandbox_policy = file_system_sandbox_policy
-                .clone()
-                .materialize_project_roots_with_workspace_roots(&workspace_roots);
-            let materialized_permission_profile =
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &materialized_file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &materialized_permission_profile,
-                resolved_cwd.as_path(),
-            );
-            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                let internal_writable_roots = additional_writable_roots_with_git_intent_notes(
-                    fs,
-                    &codex_managed_writable_roots,
-                    &git_intent_note_roots,
-                )
-                .await;
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            }
             (
                 configured_network_proxy_config,
                 permission_profile,
@@ -4304,7 +3991,7 @@ impl Config {
             )?;
             let CompiledPermissionProfile {
                 permission_profile,
-                workspace_roots: mut configured_workspace_roots,
+                workspace_roots: configured_workspace_roots,
             } = compile_permission_profile(
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
@@ -4312,73 +3999,7 @@ impl Config {
                 builtin_workspace_write_settings.as_ref(),
                 &mut startup_warnings,
             )?;
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                permission_profile.to_runtime_permissions();
-            if using_implicit_builtin_profile
-                && default_permissions == BUILT_IN_WORKSPACE_PROFILE
-                && let Some(sandbox_workspace_write) = cfg.sandbox_workspace_write.as_ref()
-            {
-                for root in &sandbox_workspace_write.writable_roots {
-                    let root = PathUri::from_abs_path(root);
-                    if !configured_workspace_roots.contains(&root) {
-                        configured_workspace_roots.push(root);
-                    }
-                }
-            }
-            let mut seen = HashSet::new();
-            configured_workspace_roots.retain(|root| seen.insert(root.clone()));
-            file_system_sandbox_policy = file_system_sandbox_policy
-                .with_materialized_project_roots_for_path_uris(&configured_workspace_roots);
-            let mut permission_profile = if let Some(permission_profile) =
-                builtin_permission_profile(
-                    default_permissions,
-                    builtin_workspace_write_settings.as_ref(),
-                )
-            {
-                permission_profile
-            } else {
-                PermissionProfile::from_runtime_permissions(
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                )
-            };
-            let materialized_file_system_sandbox_policy = file_system_sandbox_policy
-                .clone()
-                .materialize_project_roots_with_workspace_roots(&workspace_roots);
-            let materialized_permission_profile =
-                PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &materialized_file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            let sandbox_policy = compatibility_sandbox_policy_for_permission_profile(
-                &materialized_permission_profile,
-                resolved_cwd.as_path(),
-            );
-            if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                let internal_writable_roots = additional_writable_roots_with_git_intent_notes(
-                    fs,
-                    &codex_managed_writable_roots,
-                    &git_intent_note_roots,
-                )
-                .await;
-                file_system_sandbox_policy = if using_implicit_builtin_profile {
-                    file_system_sandbox_policy
-                        .with_additional_legacy_workspace_writable_roots(
-                            &internal_writable_roots,
-                        )
-                } else {
-                    file_system_sandbox_policy.with_additional_writable_roots(
-                        resolved_cwd.as_path(),
-                        &internal_writable_roots,
-                    )
-                };
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            }
+            let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
                 && cfg.sandbox_workspace_write.is_some()
@@ -4390,14 +4011,14 @@ impl Config {
                 // when doing so would lose roots, network, or tmp settings.
                 None
             } else {
-                let extends = effective_permission_selection
-                    .profiles
+                let selected_profile_extends = cfg
+                    .permissions
                     .as_ref()
-                    .and_then(|profiles| profiles.entries.get(default_permissions))
+                    .and_then(|permissions| permissions.entries.get(default_permissions))
                     .and_then(|profile| profile.extends.clone());
                 Some(ActivePermissionProfile {
                     id: default_permissions.to_string(),
-                    extends,
+                    extends: selected_profile_extends,
                 })
             };
             (
@@ -4435,38 +4056,8 @@ impl Config {
                 );
                 permission_profile = PermissionProfile::read_only();
             }
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
+            let (file_system_sandbox_policy, _network_sandbox_policy) =
                 permission_profile.to_runtime_permissions();
-            let materialized_file_system_sandbox_policy = permission_profile
-                .clone()
-                .materialize_project_roots_with_workspace_roots(&workspace_roots)
-                .file_system_sandbox_policy();
-            if matches!(permission_profile.enforcement(), SandboxEnforcement::Managed)
-                && materialized_file_system_sandbox_policy.can_write_path_with_cwd(
-                    resolved_cwd.as_path(),
-                    resolved_cwd.as_path(),
-                )
-                && !materialized_file_system_sandbox_policy.has_full_disk_write_access()
-            {
-                let internal_writable_roots = additional_writable_roots_with_git_intent_notes(
-                    fs,
-                    &codex_managed_writable_roots,
-                    &git_intent_note_roots,
-                )
-                .await;
-                // Keep legacy behavior for extra writable roots while storing
-                // the result as the canonical permission profile. Explicit
-                // extra roots are concrete paths, so their metadata carveouts
-                // are also concrete rather than symbolic `:project_roots`
-                // entries.
-                file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_legacy_workspace_writable_roots(&internal_writable_roots);
-                permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-                    permission_profile.enforcement(),
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                );
-            }
             (
                 configured_network_proxy_config,
                 permission_profile,
@@ -4564,14 +4155,6 @@ impl Config {
         let agent_roles =
             load_agent_roles(fs, &cfg, &config_layer_stack, &mut startup_warnings).await?;
 
-        let team = cfg
-            .team
-            .clone()
-            .map(TeamConfig::try_from)
-            .transpose()
-            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?
-            .unwrap_or_default();
-
         let openai_base_url = cfg
             .openai_base_url
             .clone()
@@ -4597,7 +4180,7 @@ impl Config {
             })?
             .clone();
 
-        let shell_environment_policy = cfg.shell_environment_policy.into();
+        let shell_environment_policy = ShellEnvironmentPolicy::from(cfg.shell_environment_policy);
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
         let allow_browser = cfg.allow_browser.unwrap_or(false);
         let playwright_cli_path = cfg.playwright_cli_path;
@@ -4666,6 +4249,13 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_depth)
             .is_some();
+        let team = cfg
+            .team
+            .clone()
+            .map(TeamConfig::try_from)
+            .transpose()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?
+            .unwrap_or_default();
         let agent_default_subagent_model = cfg
             .agents
             .as_ref()
@@ -4736,15 +4326,10 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(cfg.model);
-        let mut notices = cfg.notice.unwrap_or_default();
+        let notices = cfg.notice.unwrap_or_default();
         let service_tier = match service_tier_override {
             Some(Some(service_tier)) => Some(service_tier),
-            Some(None) => {
-                // Preserve explicit standard/clear intent after the nested override
-                // collapses into `Config.service_tier = None`.
-                notices.fast_default_opt_out = Some(true);
-                None
-            }
+            Some(None) => Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             None => cfg.service_tier,
         };
         let service_tier = service_tier.and_then(|service_tier| {
@@ -4783,7 +4368,6 @@ impl Config {
             .as_ref()
             .map(|_| BaseInstructionsProvenance::Custom);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
-        let commit_attribution = cfg.commit_attribution.clone();
         let include_permissions_instructions = cfg.include_permissions_instructions.unwrap_or(true);
         let include_apps_instructions = cfg.include_apps_instructions.unwrap_or(true);
         let include_collaboration_mode_instructions =
@@ -4834,8 +4418,7 @@ impl Config {
         let guardian_conversation_history_max_output_tokens = cfg
             .auto_review
             .as_ref()
-            .and_then(|auto_review| auto_review.conversation_history_max_output_tokens)
-            .map(|limit| limit.min(NonZeroUsize::new(8_000).expect("8,000 is nonzero")));
+            .and_then(|auto_review| auto_review.conversation_history_max_output_tokens);
         let personality = personality.or(cfg.personality);
 
         let experimental_compact_prompt_path = cfg.experimental_compact_prompt_file.as_ref();
@@ -4918,16 +4501,10 @@ impl Config {
             &mut startup_warnings,
         )?;
         if permission_profile_was_constrained
-            && approval_policy_was_explicit
-            && approval_policy == AskForApproval::Never
-            && matches!(
-                sandbox_mode_requirement_for_permission_profile(&original_permission_profile),
-                SandboxModeRequirement::DangerFullAccess | SandboxModeRequirement::ExternalSandbox
-            )
-            && !matches!(
-                sandbox_mode_requirement_for_permission_profile(constrained_permission_profile.get()),
-                SandboxModeRequirement::DangerFullAccess | SandboxModeRequirement::ExternalSandbox
-            )
+            && sandbox_mode_requirement_for_permission_profile(&original_permission_profile)
+                == SandboxModeRequirement::DangerFullAccess
+            && constrained_permission_profile.get() == &PermissionProfile::read_only()
+            && constrained_approval_policy.value() == AskForApproval::Never
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -4950,37 +4527,21 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let network_requirements_source = network_requirements
-            .as_ref()
-            .map(|Sourced { source, .. }| source.clone());
-        let has_network_requirements = network_requirements.is_some();
         let network_permission_profile = constrained_permission_profile.get().clone();
         let network = build_network_proxy_spec(
             prepared_network.configured_proxy,
             network_requirements,
             &network_permission_profile,
-        )
-        .map_err(|err| {
-            if let Some(source) = network_requirements_source.as_ref() {
-                std::io::Error::new(
-                    err.kind(),
-                    format!("failed to build managed network proxy from {source}: {err}"),
-                )
-            } else {
-                err
-            }
-        })?;
-        let network = if has_network_requirements {
-            network
-        } else {
-            network.filter(NetworkProxySpec::enabled)
-        };
+            &shell_environment_policy.r#set,
+        )?;
         let mut helper_readable_roots = get_readable_roots_required_for_codex_runtime(
             &codex_home,
             zsh_path.as_ref(),
             main_execve_wrapper_exe.as_ref(),
         );
-        helper_readable_roots.extend(additional_readable_roots);
+        if features.enabled(Feature::MemoryTool) && memories_config.use_memories {
+            helper_readable_roots.push(memories_root);
+        }
         let effective_permission_profile = constrained_permission_profile.value.get().clone();
         let (mut effective_file_system_sandbox_policy, effective_network_sandbox_policy) =
             effective_permission_profile.to_runtime_permissions();
@@ -5003,6 +4564,86 @@ impl Config {
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
+        let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
+            effective_permission_profile.enforcement(),
+            &effective_file_system_sandbox_policy,
+            effective_network_sandbox_policy,
+        );
+        constrained_permission_profile
+            .value
+            .set(effective_permission_profile)
+            .map_err(std::io::Error::from)?;
+        if let Some(Sourced {
+            source: requirement_source,
+            ..
+        }) = filesystem_requirements.as_ref()
+            && let Some(managed_file_system_policy) = managed_deny_read_policy.as_ref()
+        {
+            let cwd = PathUri::from_abs_path(&resolved_cwd);
+            let user_home_dir = PathUri::from_host_native_path("~").ok();
+            let temporary_directories = std::env::var_os("TMPDIR")
+                .filter(|path| !path.is_empty())
+                .and_then(|path| AbsolutePathBuf::from_absolute_path(PathBuf::from(path)).ok())
+                .map(PathUri::from)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let context = FileSystemSandboxPolicyContext {
+                cwd: &cwd,
+                workspace_roots: std::slice::from_ref(&cwd),
+                user_home_dir: user_home_dir.as_ref(),
+                temporary_directories: Some(&temporary_directories),
+            };
+            let validator = DenyReadValidator::new(managed_file_system_policy, &context)
+                .map_err(std::io::Error::other)?;
+            let requirement_source = requirement_source.clone();
+            constrained_permission_profile
+                .value
+                .add_validator(move |permission_profile| {
+                    let mut file_system_policy = permission_profile.file_system_sandbox_policy();
+                    // Preserve the native conversion boundary before the shared URI checks.
+                    // Mandatory entries are Deny entries, so their identity stays unchanged.
+                    file_system_policy.entries.retain_mut(|entry| {
+                        if entry.access.can_read()
+                            && let FileSystemPath::Path { path } = &mut entry.path
+                        {
+                            let Ok(native_path) = path.to_abs_path() else {
+                                return false;
+                            };
+                            *path = PathUri::from(native_path);
+                        }
+                        true
+                    });
+                    let context = FileSystemSandboxPolicyContext {
+                        cwd: &cwd,
+                        workspace_roots: std::slice::from_ref(&cwd),
+                        user_home_dir: user_home_dir.as_ref(),
+                        temporary_directories: Some(&temporary_directories),
+                    };
+                    validator.validate(&file_system_policy, &context).map_err(|violation| {
+                        let candidate = match violation {
+                            DenyReadViolation::MissingRequiredDeny => "missing managed deny".to_string(),
+                            DenyReadViolation::ReadablePath(path) => path.to_abs_path().map_or_else(
+                                |_| path.to_string(),
+                                |path| path.to_string_lossy().into_owned(),
+                            ),
+                        };
+                        ConstraintError::InvalidValue {
+                            field_name: "permissions.filesystem",
+                            candidate,
+                            allowed: "all managed deny_read restrictions".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        }
+                    })
+                })
+                .map_err(std::io::Error::from)?;
+        }
+
+        let permission_profile_state = PermissionProfileState::from_constrained_active_profile(
+            constrained_permission_profile.value,
+            active_permission_profile,
+            profile_workspace_roots,
+        )
+        .map_err(std::io::Error::from)?;
         let mut user_preferences_memory: UserPreferencesMemoryConfig = cfg
             .user_preferences_memory
             .unwrap_or_default()
@@ -5065,83 +4706,21 @@ impl Config {
         ) {
             tracing::warn!(error = %err, "failed to run built-in scratchpad lifecycle cleanup");
         }
-        let cli_auth_credentials_store_mode = resolve_cli_auth_credentials_store_mode(
-            cfg.cli_auth_credentials_store.unwrap_or_default(),
-            env!("CARGO_PKG_VERSION"),
-        );
+        let cli_auth_credentials_store_mode = match cli_auth_credentials_store {
+            Some(required) => required.value,
+            None => resolve_cli_auth_credentials_store_mode(
+                cfg.cli_auth_credentials_store.unwrap_or_default(),
+                env!("CARGO_PKG_VERSION"),
+            ),
+        };
         let accounts: AccountsConfig = cfg.accounts.unwrap_or_default().into();
-        if let Err(err) = codex_config::account_registry::self_heal_account_registry(
+        if let Err(err) = self_heal_account_registry(
             codex_home.as_path(),
             &accounts,
             cli_auth_credentials_store_mode,
         ) {
             tracing::warn!(error = %err, "failed to self-heal account alias registry");
         }
-        let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            effective_permission_profile.enforcement(),
-            &effective_file_system_sandbox_policy,
-            effective_network_sandbox_policy,
-        );
-        constrained_permission_profile
-            .value
-            .set(effective_permission_profile)
-            .map_err(std::io::Error::from)?;
-        if let Some(Sourced {
-            source: requirement_source,
-            ..
-        }) = filesystem_requirements.as_ref()
-            && let Some(managed_file_system_policy) = managed_deny_read_policy.as_ref()
-        {
-            let managed_deny_matcher =
-                ReadDenyMatcher::try_new_for_local_paths(managed_file_system_policy, resolved_cwd.as_path())
-                    .map_err(std::io::Error::other)?;
-            let managed_file_system_policy = Arc::clone(managed_file_system_policy);
-            let requirement_source = requirement_source.clone();
-            constrained_permission_profile
-                .value
-                .add_validator(move |permission_profile| {
-                    let file_system_policy = permission_profile.file_system_sandbox_policy();
-                    let missing_required_deny = managed_file_system_policy
-                        .entries
-                        .iter()
-                        .any(|entry| !file_system_policy.entries.contains(entry));
-                    let violating_root = file_system_policy
-                        .entries
-                        .iter()
-                        .filter(|entry| entry.access.can_read())
-                        .find_map(|entry| {
-                            let FileSystemPath::Path { path } = &entry.path else {
-                                return None;
-                            };
-                            let path = path.to_abs_path().ok()?;
-                            managed_deny_matcher
-                                .as_ref()
-                                .is_some_and(|matcher| matcher.is_local_path_read_denied(path.as_path()))
-                                .then_some(path)
-                        });
-                    if missing_required_deny || violating_root.is_some() {
-                        return Err(ConstraintError::InvalidValue {
-                            field_name: "permissions.filesystem",
-                            candidate: violating_root
-                                .map_or_else(|| "missing managed deny".to_string(), |path| {
-                                    path.to_string_lossy().into_owned()
-                                }),
-                            allowed: "all managed deny_read restrictions".to_string(),
-                            requirement_source: requirement_source.clone(),
-                        });
-                    }
-
-                    Ok(())
-                })
-                .map_err(std::io::Error::from)?;
-        }
-        let permission_profile_state = PermissionProfileState::from_constrained_active_profile(
-            constrained_permission_profile.value,
-            active_permission_profile,
-            profile_workspace_roots,
-        )
-        .map_err(std::io::Error::from)?;
-        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let tui_usage_auto_resume = cfg
             .tui
             .as_ref()
@@ -5150,9 +4729,11 @@ impl Config {
         tui_usage_auto_resume
             .validate()
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             prefer_mxc,
             model,
+            daybreak_enabled: cfg.daybreak.unwrap_or(false),
             service_tier,
             review_model,
             model_context_window: cfg.model_context_window,
@@ -5192,7 +4773,7 @@ impl Config {
             personality,
             developer_instructions,
             compact_prompt,
-            commit_attribution,
+            commit_attribution: cfg.commit_attribution.clone(),
             conventional_commits,
             git_intent_notes,
             exec_policy,
@@ -5208,13 +4789,7 @@ impl Config {
             include_environment_context,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
-            cli_auth_credentials_store_mode: match cli_auth_credentials_store {
-                Some(required) => required.value,
-                None => resolve_cli_auth_credentials_store_mode(
-                    cfg.cli_auth_credentials_store.unwrap_or_default(),
-                    env!("CARGO_PKG_VERSION"),
-                ),
-            },
+            cli_auth_credentials_store_mode,
             mcp_servers,
             non_prefixed_mcp_tool_servers,
             mcp_enterprise_managed_auth,
@@ -5277,7 +4852,7 @@ impl Config {
                     })
                 })
                 .transpose()?,
-            memories,
+            memories: memories_config,
             decision_provenance: cfg.decision_provenance.unwrap_or_default().into(),
             orchestrator_memory,
             user_preferences_memory,
@@ -5356,6 +4931,7 @@ impl Config {
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
                     microphone: audio.microphone,
+                    microphone_channel: audio.microphone_channel,
                     speaker: audio.speaker,
                     microphone_aliases: audio.microphone_aliases.unwrap_or_default(),
                     speaker_aliases: audio.speaker_aliases.unwrap_or_default(),
@@ -5415,6 +4991,7 @@ impl Config {
             eta,
             sleep_tool_mode,
             features,
+            runtime_feature_defaults: BTreeMap::new(),
             suppress_unstable_features_warning: cfg
                 .suppress_unstable_features_warning
                 .unwrap_or(false),
@@ -5671,6 +5248,7 @@ impl Config {
             configured_network_proxy_config,
             self.config_layer_stack.requirements().network.clone(),
             permission_profile,
+            &self.permissions.shell_environment_policy.r#set,
         )
     }
 

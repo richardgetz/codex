@@ -33,7 +33,9 @@ or behaves differently from upstream.
   The `rust-v0.159.1` refresh retains the shipped sequence through `0066` and
   appends the upstream archive-sort index migration as `0067`. The
   `rust-v0.160.0` refresh preserves `0067` and omits upstream `0058`, whose SQL
-  is byte-identical to that already-shipped migration.
+  is byte-identical to that already-shipped migration. The `rust-v0.161.0` refresh
+  also omits that duplicate `0058` migration; the shipped Daybreak migration keeps
+  version `0058`, and the archive-sort SQL remains at shipped version `0067`.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 

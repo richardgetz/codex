@@ -3,46 +3,12 @@
 use super::*;
 use codex_guardian_context::ContextPresentation;
 use codex_guardian_context::ContextProfile;
-use codex_guardian_context::ContextSection;
-use codex_guardian_context::ConversationTranscriptEntry;
-use codex_guardian_context::ConversationTranscriptEntryKind;
 use codex_guardian_context::PlannedAction;
 use codex_guardian_context::PlannedActionKind;
-use codex_guardian_context::SectionContributor;
-use codex_guardian_context::SectionError;
-use codex_guardian_context::SectionInput;
-use codex_guardian_context::SectionRegistry;
-use codex_guardian_context::SectionScope;
-use codex_guardian_context::TranscriptContent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnAbortReason;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
-
-struct NativeMessageContributor(ResponseItem);
-
-impl SectionContributor for NativeMessageContributor {
-    fn scope(&self) -> SectionScope {
-        SectionScope::Shared
-    }
-
-    fn contribute(
-        &self,
-        _input: &SectionInput<'_>,
-    ) -> Result<Option<ContextSection>, SectionError> {
-        let original_bytes = serde_json::to_vec(&self.0)
-            .expect("serialize native test message")
-            .len();
-        Ok(Some(ContextSection::ConversationTranscript {
-            items: vec![ConversationTranscriptEntry {
-                kind: ConversationTranscriptEntryKind::User,
-                content: TranscriptContent::AgentMessage(Box::new(self.0.clone())),
-                original_bytes,
-                retained_source: None,
-            }],
-        }))
-    }
-}
 
 fn required_context(text: String) -> ComposedContext {
     let action = PlannedAction {
@@ -175,110 +141,6 @@ async fn finalization_overflow_marks_the_reviewer_exhausted() {
             .get::<super::super::request_budget::ExhaustedReviewBudget>()
             .is_some()
     );
-}
-
-#[tokio::test]
-async fn finalization_preserves_native_encrypted_user_message_in_request() {
-    let (session, turn) = crate::session::tests::make_session_and_context().await;
-    let session = Arc::new(session);
-    let step = session
-        .capture_step_context(Arc::new(turn), &tokio_util::sync::CancellationToken::new())
-        .await
-        .unwrap();
-    let encrypted_message = ResponseItem::Message {
-        id: None,
-        role: "user".to_owned(),
-        content: vec![ContentItem::EncryptedContent {
-            encrypted_content: "opaque-guardian-context".to_owned(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    };
-    // Inject a native user envelope to exercise the defensive branch; the normal
-    // transcript collector omits encrypted user content before composition.
-    let profile = ContextProfile::synchronous();
-    let history = Vec::<ResponseItem>::new();
-    let mut registry = SectionRegistry::default();
-    registry.register(NativeMessageContributor(encrypted_message.clone()));
-    let sections = registry
-        .prepare(&SectionInput {
-            target: profile.target,
-            history: &history,
-            transcript: &profile.transcript,
-            root_conversation: &[],
-            trusted_user_answers: &[],
-            planned_action: None,
-            permissions: None,
-            previous_reviews: None,
-            trusted_tool: None,
-            trusted_skill_paths: &[],
-            images: None,
-            node_repl: None,
-        })
-        .unwrap();
-    let transcript = profile.render_transcript(
-        sections.transcript_entries(),
-        /*entry_number_offset*/ 0,
-    );
-    let context = sections
-        .compose(
-            ContextPresentation::SyncFull {
-                session_id: "test-parent",
-            },
-            transcript,
-        )
-        .unwrap();
-    session
-        .services
-        .thread_extension_data
-        .insert(PendingReviewContext(context));
-    let mut input = vec![TurnInput::UserInput {
-        metadata: Default::default(),
-        content: Vec::new(),
-        client_id: None,
-    }];
-
-    finalize(&session, &step, &mut input, HistoryTruncation::Preserve)
-        .await
-        .unwrap();
-    let prompt_input = input
-        .into_iter()
-        .filter_map(|item| match item {
-            TurnInput::ResponseItem(envelope) => Some(envelope.item),
-            TurnInput::UserInput { .. }
-            | TurnInput::FunctionCallOutput(_)
-            | TurnInput::InterAgentCommunication(_) => None,
-        })
-        .collect::<Vec<_>>();
-    let prompt = build_prompt(
-        prompt_input,
-        &step,
-        session.get_prompt_base_instructions().await,
-    );
-    let metadata = session
-        .responses_metadata(&step, CodexResponsesRequestKind::Turn)
-        .await;
-    let request = session
-        .services
-        .model_client
-        .build_responses_request(
-            &prompt,
-            &step.settings.model_info,
-            /*effort*/ None,
-            ReasoningSummary::None,
-            /*service_tier*/ None,
-            &metadata,
-            /*include_internal*/ true,
-        )
-        .unwrap();
-
-    let delivered = request
-        .input
-        .iter()
-        .filter(|item| *item == &encrypted_message)
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(delivered, vec![encrypted_message]);
 }
 
 #[tokio::test]

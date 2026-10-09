@@ -469,11 +469,7 @@ fn mcp_runtime(
     exposure: ToolExposure,
 ) -> RegisteredTool {
     let handler: Arc<dyn CoreToolRuntime> = Arc::new(
-        McpHandler::new(
-            mcp_tool(server, namespace, name),
-            /*namespace_tools_enabled*/ true,
-        )
-        .expect("MCP tool spec should build"),
+        McpHandler::new(mcp_tool(server, namespace, name)).expect("MCP tool spec should build"),
     );
     RegisteredTool {
         runtime: handler,
@@ -643,7 +639,6 @@ async fn reviewer_tool_policy_exclude_optional_core_tools() {
         &session,
         step_context.turn.as_ref(),
         &step_context.settings.model_info,
-        /*model_messages*/ None,
         &step_context.environments,
         &step_context.mcp,
         /*apps_enabled*/ false,
@@ -696,7 +691,6 @@ async fn reviewer_tool_policy_respect_managed_shell_restrictions() {
             &session,
             step_context.turn.as_ref(),
             &step_context.settings.model_info,
-            /*model_messages*/ None,
             &step_context.environments,
             &step_context.mcp,
             /*apps_enabled*/ false,
@@ -733,7 +727,6 @@ async fn reviewer_tool_policy_preserve_code_mode() {
         &session,
         step_context.turn.as_ref(),
         &step_context.settings.model_info,
-        /*model_messages*/ None,
         &step_context.environments,
         &step_context.mcp,
         /*apps_enabled*/ false,
@@ -804,7 +797,6 @@ async fn reviewer_tool_policy_require_managed_secondary_environments() {
             &session,
             step_context.turn.as_ref(),
             &step_context.settings.model_info,
-            /*model_messages*/ None,
             &step_context.environments,
             &step_context.mcp,
             /*apps_enabled*/ false,
@@ -1663,7 +1655,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         ToolPlanInputs {
             tool_runtimes: vec![RegisteredTool {
                 runtime: Arc::new(
-                    McpHandler::new(
+                    McpHandler::new_with_namespace_tools(
                         mcp_tool("direct", "mcp__direct", "lookup"),
                         /*namespace_tools_enabled*/ false,
                     )
@@ -1910,10 +1902,7 @@ async fn strict_namespace_ownership_requires_tool_namespace_inventory_opt_in() {
             let mut tool = mcp_tool(server_name, "shared", tool_name);
             tool.namespace_description = Some("Shared tools.".to_string());
             RegisteredTool {
-                runtime: Arc::new(
-                    McpHandler::new(tool, /*namespace_tools_enabled*/ true)
-                        .expect("MCP tool spec should build"),
-                ),
+                runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure,
             }
         })
@@ -2208,8 +2197,7 @@ async fn strict_tool_collisions_allow_multiple_tools_in_one_namespace() {
             tool_runtimes: vec![
                 RegisteredTool {
                     runtime: Arc::new(
-                        McpHandler::new(undocumented_tool, /*namespace_tools_enabled*/ true)
-                            .expect("MCP tool spec should build"),
+                        McpHandler::new(undocumented_tool).expect("MCP tool spec should build"),
                     ),
                     exposure: ToolExposure::Direct,
                 },
@@ -2249,10 +2237,7 @@ async fn relaxed_tool_collisions_preserve_first_nonempty_namespace_description()
             let mut tool = mcp_tool("shared", "shared", name);
             tool.namespace_description = description.map(str::to_string);
             RegisteredTool {
-                runtime: Arc::new(
-                    McpHandler::new(tool, /*namespace_tools_enabled*/ true)
-                        .expect("MCP tool spec should build"),
-                ),
+                runtime: Arc::new(McpHandler::new(tool).expect("MCP tool spec should build")),
                 exposure: ToolExposure::Direct,
             }
         };
@@ -3481,6 +3466,10 @@ async fn manager_only_keeps_normal_tools_and_exposes_worker_capacity_in_code_mod
     let manager_only = probe_with(
         |turn| {
             configure_team_code_mode_plan(turn, TeamLeadWorkPolicy::ManagerOnly, None);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).apply_patch_tool_type =
+                    Some(ApplyPatchToolType::Freeform);
+            });
             use_chatgpt_auth(turn);
             set_web_search_mode(turn, WebSearchMode::Live);
         },

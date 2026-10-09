@@ -551,6 +551,7 @@ export type { ThreadGoalClearResponse } from "./ThreadGoalClearResponse";
 export type { ThreadGoalClearedNotification } from "./ThreadGoalClearedNotification";
 export type { ThreadGoalGetParams } from "./ThreadGoalGetParams";
 export type { ThreadGoalGetResponse } from "./ThreadGoalGetResponse";
+export type { ThreadGoalMutationOrigin } from "./ThreadGoalMutationOrigin";
 export type { ThreadGoalSetParams } from "./ThreadGoalSetParams";
 export type { ThreadGoalSetResponse } from "./ThreadGoalSetResponse";
 export type { ThreadGoalStatus } from "./ThreadGoalStatus";
@@ -585,6 +586,8 @@ export type { ThreadOrchestratorMemoryConsolidateResponse } from "./ThreadOrches
 export type { ThreadOrchestratorMemoryForgetParams } from "./ThreadOrchestratorMemoryForgetParams";
 export type { ThreadOrchestratorMemoryForgetResponse } from "./ThreadOrchestratorMemoryForgetResponse";
 export type { ThreadPauseState } from "./ThreadPauseState";
+export type { ThreadPredictionResult } from "./ThreadPredictionResult";
+export type { ThreadPredictionUpdatedNotification } from "./ThreadPredictionUpdatedNotification";
 export type { ThreadProjectUpdatedNotification } from "./ThreadProjectUpdatedNotification";
 export type { ThreadQueueChangedNotification } from "./ThreadQueueChangedNotification";
 export type { ThreadReadParams } from "./ThreadReadParams";

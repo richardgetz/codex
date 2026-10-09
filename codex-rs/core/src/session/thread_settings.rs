@@ -1,9 +1,10 @@
 //! Handles persistent thread-settings updates and serializes their persistence
-//! with compaction checkpoints.
+//! with checkpoints written directly to storage.
 
 use super::session::Session;
 use super::session::SessionSettingsUpdate;
 use super::step_settings::StepSettingsUpdate;
+use crate::WithTurnExtensionData;
 use crate::agent::control::HandoffAdmissionGuard;
 use crate::config::ConstraintResult;
 use codex_config::TeamLeadWorkPolicy;
@@ -25,10 +26,7 @@ use tokio::sync::SemaphorePermit;
 use tokio::sync::oneshot;
 
 impl Session {
-    /// Persists the current settings snapshot without emitting a live settings event.
-    ///
-    /// Resume/revert paths use this checkpoint so effective runtime roots survive
-    /// a cold restart even when no subsequent turn is submitted.
+    /// Captures and flushes current settings under the shared persistence permit.
     pub(crate) async fn checkpoint_thread_settings(&self) -> ThreadStoreResult<()> {
         let _settings_guard = acquire_persistence_lock(self).await;
         if let Some(live_thread) = self.live_thread() {
@@ -41,11 +39,11 @@ impl Session {
     }
 }
 
-/// Applies standalone thread settings. The caller holds the persistence permit through notification.
+/// Applies standalone thread settings and holds the persistence permit through event delivery.
 pub(super) async fn update(
     session: &Arc<Session>,
     submission_id: String,
-    overrides: ThreadSettingsOverrides,
+    overrides: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
     usage_policy_update: Option<ThreadUsagePolicyUpdate>,
     handoff_admission: Option<&HandoffAdmissionGuard>,
     reply: Option<oneshot::Sender<CodexResult<()>>>,
@@ -75,14 +73,14 @@ pub(super) async fn update(
     }
 }
 
-#[derive(Clone, Copy)]
-enum PendingContinuationUpdate {
-    Preserve,
-    Supersede,
-}
-
 /// Converts protocol overrides into the internal settings update shape.
-pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSettingsUpdate {
+pub(super) fn prepare_update(
+    overrides: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
+) -> SessionSettingsUpdate {
+    let WithTurnExtensionData {
+        request: overrides,
+        turn_extension_init,
+    } = overrides.into();
     let ThreadSettingsOverrides {
         environments,
         runtime_workspace_roots,
@@ -104,6 +102,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         team,
     } = overrides;
     SessionSettingsUpdate {
+        turn_extension_init,
         step_settings: StepSettingsUpdate {
             model,
             effort,
@@ -142,6 +141,23 @@ pub(super) async fn apply_update(
     session: &Arc<Session>,
     submission_id: String,
     updates: SessionSettingsUpdate,
+) -> ConstraintResult<()> {
+    apply_update_with_policy(
+        session,
+        submission_id,
+        updates,
+        None,
+        PendingContinuationUpdate::Preserve,
+        None,
+    )
+    .await
+}
+
+/// Applies settings while keeping an admitted operation live through any completion flush.
+pub(super) async fn apply_update_with_admission(
+    session: &Arc<Session>,
+    submission_id: String,
+    updates: SessionSettingsUpdate,
     handoff_admission: Option<&HandoffAdmissionGuard>,
 ) -> ConstraintResult<()> {
     apply_update_with_policy(
@@ -153,6 +169,12 @@ pub(super) async fn apply_update(
         None,
     )
     .await
+}
+
+#[derive(Clone, Copy)]
+enum PendingContinuationUpdate {
+    Preserve,
+    Supersede,
 }
 
 async fn apply_update_with_policy(
@@ -185,15 +207,11 @@ async fn apply_update_with_policy(
         pending_continuation_update,
         PendingContinuationUpdate::Supersede
     ) {
-        // Invalidate the continuation before its accepted settings snapshot can be delivered.
         session.state.lock().await.last_started_turn_id = None;
     }
     if let Some(reply) = reply {
         let _ = reply.send(Ok(()));
     }
-    // `update_settings` returns after the shared Team admission boundary is released. The
-    // Applied event therefore acknowledges that later tool calls will observe the committed
-    // policy; operations admitted before the commit remain in flight.
     emit_applied(
         session,
         submission_id,
@@ -222,6 +240,9 @@ pub(super) async fn emit_applied(
     snapshot: ThreadSettingsSnapshot,
     usage_policy_changed: bool,
 ) {
+    let should_materialize = usage_policy_changed
+        || snapshot.usage_policy != ThreadUsagePolicy::default()
+        || snapshot.team.is_some();
     let msg = EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
         thread_id: Some(session.thread_id()),
         thread_settings: snapshot,
@@ -230,15 +251,7 @@ pub(super) async fn emit_applied(
         id: submission_id,
         msg,
     };
-    let EventMsg::ThreadSettingsApplied(applied) = &event.msg else {
-        unreachable!("usage policy persistence only receives thread settings events");
-    };
-    if usage_policy_changed
-        || applied.thread_settings.usage_policy != ThreadUsagePolicy::default()
-        || applied.thread_settings.team.is_some()
-    {
-        // Usage policy and team state are thread-owned durable state. Materialize a lazy thread
-        // when either is first enabled so a later cold resume or fork can recover it.
+    if should_materialize {
         session.send_event_raw(event).await;
     } else {
         session
@@ -247,7 +260,7 @@ pub(super) async fn emit_applied(
     }
 }
 
-/// Builds a current thread-owned snapshot for fork and compaction persistence.
+/// Builds a current thread-owned snapshot for storage checkpoints.
 pub(super) async fn applied_event(session: &Session) -> EventMsg {
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
         thread_id: Some(session.thread_id()),

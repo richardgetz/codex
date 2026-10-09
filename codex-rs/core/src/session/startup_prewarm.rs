@@ -417,9 +417,10 @@ async fn schedule_startup_prewarm_inner(
                 .clone_history()
                 .await
                 .for_prompt(&step_context.settings.model_info.input_modalities);
-            if let Some(executed_tool_calls) = &session.services.executed_tool_calls {
-                executed_tool_calls.attach_to_prompt(&mut history, &mut HashMap::new());
-            }
+            session
+                .services
+                .executed_tool_calls
+                .attach_to_prompt(&mut history, &mut HashMap::new());
             history
         }
     };

@@ -25,8 +25,6 @@ pub(crate) use card::new_status_output;
 pub(crate) use card::new_status_output_with_rate_limits;
 #[cfg(test)]
 pub(crate) use card::new_status_output_with_rate_limits_handle;
-#[cfg(test)]
-pub(crate) use card::new_status_output_with_rate_limits_handle_with_sources;
 pub(crate) use card::new_status_output_with_status_model;
 pub(crate) use helpers::compose_agents_summary;
 pub(crate) use helpers::format_directory_display;

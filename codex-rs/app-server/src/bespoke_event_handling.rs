@@ -1944,7 +1944,9 @@ async fn handle_token_count_event(
     outgoing: &ThreadScopedOutgoingMessageSender,
 ) {
     let TokenCountEvent {
-        info, rate_limits, ..
+        info,
+        rate_limits,
+        rate_limit_snapshots,
     } = token_count_event;
     if let Some(token_usage) = info.map(ThreadTokenUsage::from) {
         let notification = ThreadTokenUsageUpdatedNotification {
@@ -1956,7 +1958,11 @@ async fn handle_token_count_event(
             .send_server_notification(ServerNotification::ThreadTokenUsageUpdated(notification))
             .await;
     }
-    if let Some(rate_limits) = rate_limits {
+    let rate_limit_snapshots = match rate_limit_snapshots {
+        Some(snapshots) if !snapshots.is_empty() => snapshots,
+        _ => rate_limits.into_iter().collect(),
+    };
+    for rate_limits in rate_limit_snapshots {
         outgoing
             .send_server_notification(ServerNotification::AccountRateLimitsUpdated(
                 AccountRateLimitsUpdatedNotification {
@@ -4617,6 +4623,139 @@ mod tests {
             }
             other => bail!("unexpected notification: {other:?}"),
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_count_event_emits_all_rate_limit_snapshots_in_order() -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+        let first = RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: Some("Codex".to_string()),
+            normal_model_slug: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 25.0,
+                window_minutes: Some(15),
+                resets_at: Some(1_700_000_000),
+            }),
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            spend_control_reached: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        };
+        let second = RateLimitSnapshot {
+            limit_id: Some("workspace".to_string()),
+            primary: Some(RateLimitWindow {
+                used_percent: 75.0,
+                window_minutes: Some(60),
+                resets_at: Some(1_700_003_600),
+            }),
+            ..first.clone()
+        };
+
+        handle_token_count_event(
+            conversation_id,
+            "turn-789".to_string(),
+            TokenCountEvent {
+                info: None,
+                // The full bucket list is authoritative when present; retain `rate_limits` as
+                // the compatibility fallback for older events without that list.
+                rate_limits: Some(first.clone()),
+                rate_limit_snapshots: Some(vec![first, second]),
+            },
+            &outgoing,
+        )
+        .await;
+
+        for (limit_id, used_percent) in [("codex", 25), ("workspace", 75)] {
+            match recv_broadcast_notification(&mut rx).await? {
+                ServerNotification::AccountRateLimitsUpdated(payload) => {
+                    assert_eq!(payload.rate_limits.limit_id.as_deref(), Some(limit_id));
+                    assert_eq!(
+                        payload
+                            .rate_limits
+                            .primary
+                            .as_ref()
+                            .map(|window| window.used_percent),
+                        Some(used_percent)
+                    );
+                }
+                other => bail!("unexpected notification: {other:?}"),
+            }
+        }
+        assert!(rx.try_recv().is_err(), "no extra notifications expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_token_count_event_empty_snapshots_fall_back_to_legacy_rate_limits()
+    -> Result<()> {
+        let conversation_id = ThreadId::new();
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            tx,
+            codex_analytics::AnalyticsEventsClient::disabled(),
+        ));
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            ThreadId::new(),
+        );
+
+        handle_token_count_event(
+            conversation_id,
+            "turn-empty-snapshots".to_string(),
+            TokenCountEvent {
+                info: None,
+                rate_limits: Some(RateLimitSnapshot {
+                    limit_id: Some("legacy".to_string()),
+                    limit_name: None,
+                    normal_model_slug: None,
+                    primary: Some(RateLimitWindow {
+                        used_percent: 33.0,
+                        window_minutes: Some(15),
+                        resets_at: Some(1_700_000_000),
+                    }),
+                    secondary: None,
+                    credits: None,
+                    individual_limit: None,
+                    spend_control_reached: None,
+                    plan_type: None,
+                    rate_limit_reached_type: None,
+                }),
+                rate_limit_snapshots: Some(Vec::new()),
+            },
+            &outgoing,
+        )
+        .await;
+
+        match recv_broadcast_notification(&mut rx).await? {
+            ServerNotification::AccountRateLimitsUpdated(payload) => {
+                assert_eq!(payload.rate_limits.limit_id.as_deref(), Some("legacy"));
+                assert_eq!(
+                    payload
+                        .rate_limits
+                        .primary
+                        .as_ref()
+                        .map(|window| window.used_percent),
+                    Some(33)
+                );
+            }
+            other => bail!("unexpected notification: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra notifications expected");
         Ok(())
     }
 

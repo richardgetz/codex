@@ -567,6 +567,7 @@ pub(crate) struct ChatWidget {
     pub(crate) empty_state_animation:
         std::cell::RefCell<crate::empty_state_animation::EmptyStateAnimation>,
     pub(crate) cyber_policy_notice: crate::daybreak::NoticeCache,
+    pub(crate) daybreak_enabled: bool,
     app_event_tx: AppEventSender,
     state_db: Option<StateDbHandle>,
     provenance_commands_enabled: bool,

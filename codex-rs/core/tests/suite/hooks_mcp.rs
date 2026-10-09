@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_config::McpServerSharingMode;
-use codex_config::McpServerStartupMode;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::McpServerConfig;
@@ -294,9 +292,9 @@ fn insert_rmcp_test_server(
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: McpServerStartupMode::Auto,
-            sharing: McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,

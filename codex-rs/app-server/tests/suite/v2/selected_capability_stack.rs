@@ -143,11 +143,18 @@ async fn selected_plugin_mcp_startup_respects_explicit_mentions(
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
             input: vec![input],
-            environments: Some(vec![TurnEnvironmentParams {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: fixture.environment_cwd.into(),
-                runtime_workspace_roots: None,
-            }]),
+            environments: Some(vec![
+                TurnEnvironmentParams {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: fixture.environment_cwd.clone().into(),
+                    runtime_workspace_roots: None,
+                },
+                TurnEnvironmentParams {
+                    environment_id: EXECUTOR_ID.to_string(),
+                    cwd: fixture.environment_cwd.into(),
+                    runtime_workspace_roots: None,
+                },
+            ]),
             ..Default::default()
         })
         .await?;
@@ -270,6 +277,7 @@ async fn managed_plugins_requirement_disables_selected_executor_plugin_capabilit
         &thread_id,
         "Inspect the disabled selected plugin capabilities",
         fixture.environment_cwd,
+        &[LOCAL_ENVIRONMENT_ID, EXECUTOR_ID],
     )
     .await?;
 
@@ -286,7 +294,7 @@ async fn managed_plugins_requirement_disables_selected_executor_plugin_capabilit
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn selected_capability_stack_tracks_environment_availability_and_resume() -> Result<()> {
+async fn selected_capability_stack_tracks_environment_selection_and_resume() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_url, apps_server_handle) = start_apps_server_with_delays(
         vec![AppInfo {
@@ -381,6 +389,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &thread_id,
         "Inspect the current capabilities",
         fixture.environment_cwd.clone(),
+        &[LOCAL_ENVIRONMENT_ID],
     )
     .await?;
     let initial_requests = response_mock.requests();
@@ -389,14 +398,14 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     let mut exec_server =
         spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
-    wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
-    // A skill mention alone does not wait for MCP startup.
+    // The next turn selects the executor; its server mention waits for MCP startup.
     run_turn(
         &mut app_server,
         &thread_id,
         &format!("Use ${SKILL_NAME} and call [${MCP_SERVER_NAME}](mcp://{MCP_SERVER_NAME})"),
         fixture.environment_cwd.clone(),
+        &[LOCAL_ENVIRONMENT_ID, EXECUTOR_ID],
     )
     .await?;
     let first_mcp_pid = wait_for_pid_file(&fixture.pid_file).await?;
@@ -406,6 +415,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &thread_id,
         "Continue with the same selected capabilities",
         fixture.environment_cwd.clone(),
+        &[LOCAL_ENVIRONMENT_ID, EXECUTOR_ID],
     )
     .await?;
     assert_eq!(first_mcp_pid, wait_for_pid_file(&fixture.pid_file).await?);
@@ -440,6 +450,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
         &thread_id,
         "Inspect capabilities while the selected executor is unavailable",
         fixture.environment_cwd.clone(),
+        &[LOCAL_ENVIRONMENT_ID],
     )
     .await?;
     let requests = response_mock.requests();
@@ -452,7 +463,6 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
 
     exec_server = spawn_exec_server(fixture.codex_home.path(), &fixture.exec_server_url).await?;
     add_environment(&mut app_server, &fixture.exec_server_url).await?;
-    wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
 
     run_turn(
         &mut app_server,
@@ -461,6 +471,7 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
             "Use ${SKILL_NAME} with [${MCP_SERVER_NAME}](mcp://{MCP_SERVER_NAME}) after reattaching the selected executor"
         ),
         fixture.environment_cwd,
+        &[LOCAL_ENVIRONMENT_ID, EXECUTOR_ID],
     )
     .await?;
     let resumed_mcp_pid = wait_for_pid_file(&fixture.pid_file).await?;
@@ -706,7 +717,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn(
     if !matches!(mention_timing, MentionTiming::Unmentioned) {
         let steer_request_id = app_server
             .send_turn_steer_request(TurnSteerParams {
-                thread_id,
+                thread_id: thread_id.clone(),
                 input: vec![UserInput::Text {
                     text: if matches!(mention_timing, MentionTiming::Steered) {
                         format!("Use {mention_link} now.")
@@ -768,6 +779,7 @@ async fn selected_capabilities_become_available_between_samples_in_one_turn(
             "the explicit mention must keep later samples waiting for MCP startup"
         );
         std::fs::write(&initialize_barrier, "ready")?;
+        wait_for_selected_mcp_server(&mut app_server, &thread_id).await?;
     }
     let request_id = if matches!(mention_timing, MentionTiming::Steered) {
         None
@@ -875,10 +887,11 @@ fn selected_capability_fixture(
         "mcp_oauth_credentials_store = \"file\"\nmodel_provider = \"mock_provider\"",
         1,
     );
+    // These scenarios attach executors between turns, so each turn waits for attachment resolution.
     std::fs::write(
         config_path,
         format!(
-            "{config}\n[features]\napps = true\ndeferred_executor = true\nexecutor_capability_discovery = true\n\n[skills]\ninclude_instructions = true\n"
+            "{config}\n[features]\napps = true\nexecutor_capability_discovery = true\n\n[skills]\ninclude_instructions = true\n"
         ),
     )?;
     write_chatgpt_auth(
@@ -1090,6 +1103,7 @@ async fn run_turn(
     thread_id: &str,
     text: &str,
     environment_cwd: AbsolutePathBuf,
+    environment_ids: &[&str],
 ) -> Result<()> {
     let request_id = app_server
         .send_turn_start_request(TurnStartParams {
@@ -1098,11 +1112,16 @@ async fn run_turn(
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: Some(vec![TurnEnvironmentParams {
-                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                cwd: environment_cwd.into(),
-                runtime_workspace_roots: None,
-            }]),
+            environments: Some(
+                environment_ids
+                    .iter()
+                    .map(|environment_id| TurnEnvironmentParams {
+                        environment_id: (*environment_id).to_string(),
+                        cwd: environment_cwd.clone().into(),
+                        runtime_workspace_roots: None,
+                    })
+                    .collect(),
+            ),
             ..Default::default()
         })
         .await?;

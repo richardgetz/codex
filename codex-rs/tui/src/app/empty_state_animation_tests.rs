@@ -178,9 +178,6 @@ async fn non_startup_history_dismisses_logo_until_a_new_thread() -> Result<()> {
 async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     app.local_settings.tui.animations = true;
-    let size = Size::new(/*width*/ 120, /*height*/ 44);
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    tui.set_owned_screen(/*owned*/ true)?;
     app.chat_widget
         .empty_state_animation
         .borrow()
@@ -189,6 +186,9 @@ async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()
             phrase: "Pull up a prompt.",
         })
         .expect("initial greeting");
+    let size = Size::new(/*width*/ 120, /*height*/ 44);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
     app.queue_clear_ui_header(&mut tui);
     app.transcript_cells
         .push(Arc::new(history_cell::StartupWarningsCell::mcp(
@@ -201,6 +201,7 @@ async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()
     let before = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
     let cursor = tui.terminal.last_known_cursor_pos;
     assert!(!has_blossom(&tui));
+    assert!(text(&before).contains("Pull up a prompt."));
     app.chat_widget
         .empty_state_animation
         .borrow_mut()
@@ -209,7 +210,6 @@ async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()
     let after = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
     assert!(has_blossom(&tui));
     assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
-    assert!(text(&before).contains("Pull up a prompt."));
     assert_eq!(
         &after.content[after.index_of(/*x*/ 0, before_bottom.y)..],
         &before.content[before.index_of(/*x*/ 0, before_bottom.y)..]
@@ -229,7 +229,6 @@ async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()
         .position(|cell| cell.symbol() == "P")
         .expect("the phrase is visible above the composer");
     assert_eq!(after.content[phrase_pos].fg, crate::style::accent_color());
-
     let short = Size::new(/*width*/ 120, /*height*/ 12);
     draw(&mut app, &mut tui, short)?;
     assert!(!has_blossom(&tui));

@@ -1,7 +1,6 @@
 //! Local registry lookups for startup, legacy context and loaded descendant checks.
 //! These use the same local registry and thread manager as lifecycle operations.
 
-use super::LocalAgentControl;
 use super::LocalAgentRuntime;
 use crate::agent::types::AgentMetadata;
 use crate::session_prefix::format_subagent_context_line;
@@ -9,7 +8,6 @@ use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::protocol::MultiAgentVersion;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -30,29 +28,6 @@ fn bounded_environment_context_subagents(lines: impl IntoIterator<Item = String>
         }
     }
     selected_lines.join("\n")
-}
-
-impl LocalAgentControl {
-    pub(crate) async fn format_environment_context_subagents(
-        &self,
-        parent_thread_id: ThreadId,
-        multi_agent_version: MultiAgentVersion,
-    ) -> String {
-        if multi_agent_version != MultiAgentVersion::V2 {
-            return self
-                .runtime
-                .format_legacy_environment_context_subagents(parent_thread_id)
-                .await;
-        }
-
-        let agent_paths =
-            crate::agent::api::AgentControl::child_agent_paths(self, parent_thread_id).await;
-        bounded_environment_context_subagents(
-            agent_paths
-                .into_iter()
-                .map(|agent_path| format!(r#"<agent name="{agent_path}" />"#)),
-        )
-    }
 }
 
 impl LocalAgentRuntime {

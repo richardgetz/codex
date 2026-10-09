@@ -6,6 +6,7 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
+use codex_features::Feature;
 use codex_protocol::config_types::Personality;
 
 async fn build_config_on_runtime_worker(
@@ -56,12 +57,54 @@ pub(super) fn resume_model_settings_for_overrides(
 }
 
 fn has_explicit_session_config_override(config: &Config) -> bool {
+    let terminal_visualization_enabled = config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions);
+    let local_settings = crate::local_settings::LocalSettings::from(config);
     config.config_layer_stack.layers_high_to_low().any(|layer| {
-        matches!(&layer.name, ConfigLayerSource::SessionFlags)
-            && layer
+        if !matches!(&layer.name, ConfigLayerSource::SessionFlags) {
+            return false;
+        }
+
+        [
+            "allow_login_shell",
+            "default_permissions",
+            "features",
+            "model_reasoning_summary",
+            "model_verbosity",
+            "network",
+            "permissions",
+            "sandbox_workspace_write",
+            "service_tier",
+            "shell_environment_policy",
+            "suppress_unstable_features_warning",
+            "web_search",
+        ]
+        .iter()
+        .any(|key| layer.config.get(*key).is_some())
+            || (config.personality == Some(Personality::None)
+                && layer.config.get("personality").is_some())
+            || (config.bypass_hook_trust && layer.config.get("bypass_hook_trust").is_some())
+            || (terminal_visualization_enabled
+                && layer.config.get("developer_instructions").is_some())
+            || layer
                 .config
-                .as_table()
-                .is_some_and(|table| !table.is_empty())
+                .get("user_preferences_memory")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.get("bucket_policy").is_some())
+            || layer
+                .config
+                .get("memories")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| {
+                    table.get("use_memories").is_some() || table.get("generate_memories").is_some()
+                })
+            || (local_settings.notices.fast_default_opt_out == Some(true)
+                && layer
+                    .config
+                    .get("notices")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|table| table.get("fast_default_opt_out").is_some()))
     })
 }
 
@@ -80,12 +123,50 @@ pub(super) fn resume_model_settings_for_target(
         return settings;
     }
 
+    let origins = config.config_layer_stack.origins();
+    let has_profile_origin = |key: &str| {
+        origins.get(key).is_some_and(|origin| {
+            matches!(
+                &origin.name,
+                ConfigLayerSource::User {
+                    profile: Some(_),
+                    ..
+                }
+            )
+        })
+    };
+    let local_settings = crate::local_settings::LocalSettings::from(config);
+    let terminal_visualization_enabled = config
+        .features
+        .enabled(Feature::TerminalVisualizationInstructions);
+    let has_explicit_profile_override = [
+        "service_tier",
+        "web_search",
+        "model_reasoning_summary",
+        "model_verbosity",
+        "user_preferences_memory.bucket_policy",
+        "memories.use_memories",
+        "memories.generate_memories",
+    ]
+    .iter()
+    .any(|key| has_profile_origin(key))
+        || (config.personality == Some(Personality::None) && has_profile_origin("personality"))
+        || (config.bypass_hook_trust && has_profile_origin("bypass_hook_trust"))
+        || (config.realtime.enabled
+            && has_profile_origin("features.realtime_conversation.enabled"))
+        || (terminal_visualization_enabled
+            && (has_profile_origin("features.terminal_visualization_instructions.enabled")
+                || has_profile_origin("developer_instructions")))
+        || (local_settings.notices.fast_default_opt_out == Some(true)
+            && has_profile_origin("notices.fast_default_opt_out"));
+
     // A local daemon owns the live thread settings. Rejoining with an empty set of
     // client overrides avoids making the server tear down an idle thread and reopen
     // its session storage under this process. Keep explicit launch settings on the
     // existing restore path so they retain their documented override semantics.
     if has_explicit_resume_permission_override(config, harness_overrides)
         || has_explicit_session_config_override(config)
+        || has_explicit_profile_override
         || harness_overrides.bypass_hook_trust.is_some()
         || harness_overrides.cwd.is_some()
         || harness_overrides.personality.is_some()
@@ -157,6 +238,7 @@ impl App {
         .await
     }
 
+    #[cfg(test)]
     pub(super) async fn rebuild_config_for_permission_profile(
         &self,
         profile_id: &str,
@@ -180,6 +262,8 @@ impl App {
         .await
     }
 
+    // Local setup for startup fixtures; connected selections always use the server below.
+    #[cfg(test)]
     pub(super) async fn apply_permission_profile_selection(
         &mut self,
         selection: PermissionProfileSelection,
@@ -311,23 +395,9 @@ impl App {
     pub(super) async fn select_permission_profile(
         &mut self,
         app_server: &mut AppServerSession,
-        selection: PermissionProfileSelection,
+        mut selection: PermissionProfileSelection,
     ) {
         if self.reject_pending_permission_change() {
-            return;
-        }
-        if (self.chat_widget.thread_id().is_none() && selection.profile_id.starts_with(':'))
-            || (app_server.thread_params_mode()
-                == crate::app_server_session::ThreadParamsMode::Embedded
-                && self
-                    .config
-                    .custom_permission_profiles
-                    .iter()
-                    .any(|profile| profile.id == selection.profile_id))
-        {
-            if self.apply_permission_profile_selection(selection).await {
-                self.chat_widget.submit_initial_user_message_if_pending();
-            }
             return;
         }
         let Some(thread_id) = self.chat_widget.thread_id() else {
@@ -338,21 +408,16 @@ impl App {
             );
             return;
         };
-        if !selection.profile_id.starts_with(':')
-            && self.chat_widget.is_user_turn_pending_or_running()
-        {
-            self.chat_widget
-                .retain_input_after_failed_permission_selection();
-            self.chat_widget.add_error_message(
-                "Wait for the current turn to finish before changing permissions.".into(),
-            );
-            return;
-        }
         let config = self.chat_widget.config_ref();
-        if config
-            .permissions
-            .active_permission_profile()
-            .is_some_and(|profile| profile.id == selection.profile_id)
+        if !self
+            .agents_overview
+            .requested_permission_profiles
+            .contains_key(&thread_id)
+            && selection.profile_id.starts_with(':')
+            && config
+                .permissions
+                .active_permission_profile()
+                .is_some_and(|profile| profile.id == selection.profile_id)
             && selection
                 .approval_policy
                 .is_none_or(|policy| config.permissions.approval_policy.value() == policy.to_core())
@@ -375,10 +440,25 @@ impl App {
         };
         match app_server.thread_settings_update(params).await {
             Ok(true) => {
+                // Omission preserves the active value on update, but uses defaults on start.
+                // Retain effective intent across consecutive requests before confirmation.
+                let previous = self
+                    .agents_overview
+                    .requested_permission_profiles
+                    .get(&thread_id);
+                selection.approval_policy = selection
+                    .approval_policy
+                    .or_else(|| previous.and_then(|profile| profile.approval_policy))
+                    .or(Some(config.permissions.approval_policy.value().into()));
+                selection.approvals_reviewer = selection
+                    .approvals_reviewer
+                    .or_else(|| previous.and_then(|profile| profile.approvals_reviewer))
+                    .or(Some(config.approvals_reviewer));
                 self.agents_overview
                     .selected_permission_profiles
                     .insert(thread_id, selection.profile_id.clone());
-                self.pending_server_profiles
+                self.agents_overview
+                    .requested_permission_profiles
                     .insert(thread_id, selection.clone());
                 self.chat_widget.add_info_message(
                     format!(
@@ -459,8 +539,90 @@ impl App {
         })
     }
 
+    pub(super) fn selected_server_profile(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<PermissionProfileSelection> {
+        if self.chat_widget.thread_id() != Some(thread_id) {
+            return None;
+        }
+        if let Some(selection) = self
+            .agents_overview
+            .requested_permission_profiles
+            .get(&thread_id)
+        {
+            return Some(selection.clone());
+        }
+        if self.app_server_target.thread_params_mode()
+            == crate::app_server_session::ThreadParamsMode::Remote
+        {
+            return None;
+        }
+        let config = self.chat_widget.config_ref();
+        let active = config.permissions.active_permission_profile()?;
+        if active.id.starts_with(':')
+            || (self
+                .agents_overview
+                .selected_permission_profiles
+                .get(&thread_id)
+                != Some(&active.id)
+                && self.app_server_target.thread_params_mode()
+                    == crate::app_server_session::ThreadParamsMode::Embedded
+                && self
+                    .config
+                    .custom_permission_profiles
+                    .iter()
+                    .any(|profile| profile.id == active.id))
+        {
+            return None;
+        }
+        Some(PermissionProfileSelection {
+            profile_id: active.id.clone(),
+            approval_policy: Some(config.permissions.approval_policy.value().into()),
+            approvals_reviewer: Some(config.approvals_reviewer),
+            display_label: active.id,
+        })
+    }
+
+    /// Adopt authoritative widget settings before deriving overrides for subsequent turns.
+    pub(super) fn adopt_server_permissions(&mut self) {
+        self.chat_widget.set_permission_network(/*network*/ None);
+        self.config.permissions = self.chat_widget.config_ref().permissions.clone();
+        self.config.approvals_reviewer = self.chat_widget.config_ref().approvals_reviewer;
+        self.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Explicit(
+            self.config.permissions.approval_policy.value().into(),
+        ));
+        self.runtime_approvals_reviewer_override = if self
+            .config
+            .permissions
+            .active_permission_profile()
+            .is_some_and(|profile| profile.id.starts_with(':'))
+        {
+            Some(self.config.approvals_reviewer)
+        } else {
+            self.runtime_approvals_reviewer_override
+                .filter(|reviewer| *reviewer == self.config.approvals_reviewer)
+        };
+        self.runtime_permission_profile_override =
+            Some(RuntimePermissionProfileOverride::from_config(&self.config));
+    }
+
+    pub(super) fn adopt_inherited_server_selection(&mut self) {
+        if let Some(thread_id) = self.chat_widget.thread_id()
+            && let Some(active) = self
+                .chat_widget
+                .config_ref()
+                .permissions
+                .active_permission_profile()
+        {
+            self.agents_overview
+                .selected_permission_profiles
+                .insert(thread_id, active.id);
+        }
+        self.adopt_server_permissions();
+    }
+
     pub(super) async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
-        let _active_account_alias = self.config.accounts.active.clone();
         let mut config = self
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
@@ -973,7 +1135,6 @@ impl App {
         use_memories: bool,
         generate_memories: bool,
     ) {
-        let previous_use_memories = self.config.memories.use_memories;
         let previous_generate_memories = self.config.memories.generate_memories;
         if !self
             .update_memory_settings(app_server, use_memories, generate_memories)
@@ -990,24 +1151,6 @@ impl App {
         let Some(thread_id) = self.current_displayed_thread_id() else {
             return;
         };
-
-        if previous_use_memories != use_memories || previous_generate_memories != generate_memories
-        {
-            let policy = codex_protocol::config_types::MemoryAccessPolicy::new(
-                use_memories,
-                generate_memories,
-            );
-            if let Err(err) = app_server.thread_memory_policy_set(thread_id, policy).await {
-                tracing::error!(error = ?err, "failed to update current thread memory policy");
-                self.chat_widget.add_error_message(format!(
-                    "Failed to update current thread memory policy: {err}"
-                ));
-            }
-        }
-
-        if previous_generate_memories == generate_memories {
-            return;
-        }
 
         let mode = if generate_memories {
             ThreadMemoryMode::Enabled
@@ -1738,6 +1881,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_daemon_resume_preserves_owner_settings_for_local_only_session_overrides() {
+        let mut app = make_test_app().await;
+        app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::from_str("[tui]\ntheme = 'dark'").expect("TUI session config"),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("session flags layer stack");
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::PreserveExistingThread
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_keeps_explicit_harness_overrides() {
+        let app = make_test_app().await;
+        let target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        let overrides = [
+            (
+                "cwd",
+                ConfigOverrides {
+                    cwd: Some(std::path::PathBuf::from("/tmp/work")),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "personality",
+                ConfigOverrides {
+                    personality: Some(Personality::None),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "service_tier",
+                ConfigOverrides {
+                    service_tier: Some(Some("fast".to_string())),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "tools_web_search_request",
+                ConfigOverrides {
+                    tools_web_search_request: Some(true),
+                    ..ConfigOverrides::default()
+                },
+            ),
+            (
+                "bypass_hook_trust",
+                ConfigOverrides {
+                    bypass_hook_trust: Some(true),
+                    ..ConfigOverrides::default()
+                },
+            ),
+        ];
+
+        for (name, overrides) in overrides {
+            assert_eq!(
+                resume_model_settings_for_target(&app.config, &overrides, &target),
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+                "explicit {name} override should restore thread settings"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn local_daemon_resume_keeps_explicit_session_overrides() {
         let mut app = make_test_app().await;
         app.app_server_target = crate::AppServerTarget::LocalDaemon {
@@ -1762,6 +1986,173 @@ mod tests {
         assert_eq!(
             app.resume_model_settings(),
             crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_keeps_profile_service_tier_override() {
+        let mut app = make_test_app().await;
+        app.app_server_target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        app.config.service_tier = Some("fast".to_string());
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: test_path_buf("/tmp/codex-profile.config.toml").abs(),
+                    profile: Some("work".to_string()),
+                },
+                TomlValue::Table(toml::map::Map::from_iter([(
+                    "service_tier".to_string(),
+                    TomlValue::String("fast".to_string()),
+                )])),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("profile layer stack");
+
+        assert_eq!(
+            app.resume_model_settings(),
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread
+        );
+    }
+
+    #[tokio::test]
+    async fn local_daemon_resume_keeps_selected_profile_permission_overrides() {
+        let mut app = make_test_app().await;
+        let target = crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: false,
+            endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
+                socket_path: test_path_buf("/tmp/codex-local-daemon.sock").abs(),
+            },
+        };
+        let profile_path = test_path_buf("/tmp/codex-profile.config.toml").abs();
+        let cases = [
+            (
+                "approval_policy",
+                toml::from_str("approval_policy = 'never'").expect("approval policy config"),
+                crate::resume_permissions::ResumePermissions {
+                    approval_policy: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "approvals_reviewer",
+                toml::from_str("approvals_reviewer = 'auto_review'")
+                    .expect("approvals reviewer config"),
+                crate::resume_permissions::ResumePermissions {
+                    approvals_reviewer: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "default_permissions",
+                toml::from_str("default_permissions = ':read-only'")
+                    .expect("default permissions config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "sandbox_mode",
+                toml::from_str("sandbox_mode = 'workspace-write'").expect("sandbox mode config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "sandbox_workspace_write",
+                toml::from_str("[sandbox_workspace_write]\nwritable_roots = ['/tmp/profile-root']")
+                    .expect("workspace write config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    workspace_roots: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "empty_sandbox_workspace_write_roots",
+                toml::from_str("[sandbox_workspace_write]\nwritable_roots = []")
+                    .expect("empty workspace roots config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    workspace_roots: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "permissions",
+                toml::from_str(
+                    "default_permissions = 'safe'\n[permissions.safe]\nextends = ':read-only'",
+                )
+                .expect("named permissions config"),
+                crate::resume_permissions::ResumePermissions {
+                    profile: true,
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, profile_config, expected_permissions) in cases {
+            app.config.config_layer_stack = ConfigLayerStack::new(
+                vec![ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: profile_path.clone(),
+                        profile: Some("work".to_string()),
+                    },
+                    profile_config,
+                )],
+                Default::default(),
+                Default::default(),
+            )
+            .expect("selected profile layer stack");
+
+            assert_eq!(
+                crate::resume_permissions::ResumePermissions::from_overrides(
+                    &app.config,
+                    &ConfigOverrides::default()
+                ),
+                expected_permissions,
+                "selected profile {name} should be recognized as a permission override"
+            );
+            assert_eq!(
+                resume_model_settings_for_target(&app.config, &ConfigOverrides::default(), &target),
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+                "selected profile {name} should restore explicit thread settings"
+            );
+        }
+
+        app.config.config_layer_stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: profile_path,
+                    profile: None,
+                },
+                toml::from_str("sandbox_mode = 'workspace-write'")
+                    .expect("ordinary user sandbox config"),
+            )],
+            Default::default(),
+            Default::default(),
+        )
+        .expect("ordinary user layer stack");
+
+        assert_eq!(
+            crate::resume_permissions::ResumePermissions::from_overrides(
+                &app.config,
+                &ConfigOverrides::default()
+            ),
+            crate::resume_permissions::ResumePermissions::default(),
+            "ordinary user defaults should not override saved permissions"
+        );
+        assert_eq!(
+            resume_model_settings_for_target(&app.config, &ConfigOverrides::default(), &target),
+            crate::app_server_session::ResumeModelSettings::PreserveExistingThread
         );
     }
 
@@ -1865,25 +2256,6 @@ enabled = false
     }
 
     #[tokio::test]
-    async fn refresh_in_memory_config_from_disk_preserves_session_account_alias() -> Result<()> {
-        let mut app = make_test_app().await;
-        let codex_home = tempdir()?;
-        app.config.codex_home = codex_home.path().to_path_buf().abs();
-        app.config.accounts.active = Some("personal".to_string());
-        app.chat_widget
-            .set_active_account_alias(Some("personal".to_string()));
-
-        app.refresh_in_memory_config_from_disk().await?;
-
-        assert_eq!(app.config.accounts.active.as_deref(), Some("personal"));
-        assert_eq!(
-            app.chat_widget.config_ref().active_account_alias(),
-            Some("personal")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn new_session_and_config_rebuilds_keep_the_live_application_network_policy() -> Result<()>
     {
         use codex_http_client::ClientRouteClass;
@@ -1980,6 +2352,7 @@ enabled = false
 
         app.chat_widget
             .handle_thread_session(crate::session_state::ThreadSessionState {
+                daybreak_enabled: false,
                 windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
                 thread_id: ThreadId::new(),
                 forked_from_id: None,

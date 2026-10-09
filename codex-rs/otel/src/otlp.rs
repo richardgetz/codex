@@ -113,7 +113,9 @@ fn build_http_client_inner(
                 location.display()
             ))
         })?;
-        builder = builder.tls_certs_only([certificate]);
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .add_root_certificate(certificate);
     }
 
     match (&tls.client_certificate, &tls.client_private_key) {

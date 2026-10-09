@@ -137,6 +137,8 @@ impl PreparedGuardianContext {
         let session = Arc::clone(&thread.session);
         let io = SessionIo {
             tx_sub: thread.io.tx_sub.clone(),
+            ordinary_submission_slots: Arc::clone(&thread.io.ordinary_submission_slots),
+            submission_lifecycle_gate: Arc::clone(&thread.io.submission_lifecycle_gate),
             rx_event: thread.io.rx_event.clone(),
             agent_status: thread.io.agent_status.clone(),
             session_loop_termination: thread.io.session_loop_termination.clone(),
@@ -208,13 +210,22 @@ pub(crate) async fn run_guardian_review_session(
     pool: Arc<ReviewerPool<GuardianReviewSession>>,
     params: GuardianReviewSessionParams,
 ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-    match prepare_review(params).await {
+    let context_mode = GuardianContextMode::from_history(
+        params
+            .parent_history
+            .conversation_history_snapshot()
+            .as_ref(),
+    );
+    let (outcome, mut analytics) = match prepare_review(params).await {
         Ok(prepared) => pool.review(prepared).await,
         Err(error) => (
             GuardianReviewSessionOutcome::PromptBuildFailed(error),
             GuardianReviewAnalyticsResult::without_session(),
         ),
-    }
+    };
+    // Keep the captured mode even when preparation or reviewer startup fails.
+    analytics.guardian_context_mode = Some(context_mode.as_str());
+    (outcome, analytics)
 }
 
 pub(super) async fn prepare_review(

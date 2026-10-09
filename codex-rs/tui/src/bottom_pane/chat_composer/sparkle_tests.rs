@@ -121,6 +121,10 @@ fn sparkle_matches_the_original_starfield_and_protects_the_placeholder_and_curso
         let mut default_pane = pane();
         let default_settings = Tui {
             animations: true,
+            effects: codex_config::types::TuiEffects {
+                starfield: false,
+                ..Default::default()
+            },
             ..Tui::default()
         };
         default_pane.mark_fresh_task_for_sparkle("gpt-6-astra", &default_settings);

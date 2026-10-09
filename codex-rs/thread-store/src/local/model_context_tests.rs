@@ -153,7 +153,7 @@ async fn fork_context_excludes_items_after_frozen_cutoff() {
     append_items(path.as_path(), [user_message("later message")]);
     let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
     let lineage = store
-        .resolve_rollout_lineage(thread_id)
+        .resolve_rollout_lineage(thread_id, /*initial_path*/ None)
         .await
         .expect("resolve source lineage");
     let session_meta = codex_rollout::read_session_meta_line(path.as_path())
@@ -274,7 +274,7 @@ async fn fork_version_stops_before_older_segments_once_resolved() {
         );
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
         let lineage = store
-            .resolve_rollout_lineage(child_id)
+            .resolve_rollout_lineage(child_id, /*initial_path*/ None)
             .await
             .expect("resolve source lineage");
         // The usable compaction should stop the scan before it reaches this missing segment.
@@ -740,7 +740,6 @@ fn completed_user_message(turn_id: &str, message: &str) -> RolloutItem {
 fn turn_context(root: &Path, turn_id: &str) -> RolloutItem {
     RolloutItem::TurnContext(TurnContextItem {
         turn_id: Some(turn_id.to_string()),
-        trace_id: None,
         root_turn_id: None,
         disabled_plugin_ids: None,
         cwd: serde_json::from_value(serde_json::json!(root)).expect("absolute cwd"),
@@ -764,10 +763,6 @@ fn turn_context(root: &Path, turn_id: &str) -> RolloutItem {
         cyber_access_program: None,
         effort: None,
         summary: ReasoningSummary::Auto,
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: None,
     })
 }
 

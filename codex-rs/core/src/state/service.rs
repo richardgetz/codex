@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU64;
 
 use crate::agent::api::AgentControl;
@@ -18,7 +20,7 @@ use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
 use crate::mcp_tool_exposure::McpHandlerCache;
 use crate::orchestrator_supervision::OrchestratorSupervisionStore;
-use crate::tools::ExecutedToolCallRecorder;
+use crate::tools::ExecutedToolCalls;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -40,8 +42,10 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::AdditionalPermissionProfile;
 use codex_rollout::state_db::StateDbHandle;
 use codex_rollout_trace::ThreadTraceContext;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use codex_skills_extension::HostSkillsService;
 use codex_thread_store::LiveThread;
 use codex_thread_store::ThreadStore;
@@ -74,6 +78,9 @@ pub(crate) struct SessionServices {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
     pub(crate) guardian_rejection_circuit_breaker: Mutex<GuardianRejectionCircuitBreaker>,
+    /// Shared with captured steps so later calls observe newly approved permissions.
+    pub(crate) granted_permissions_by_environment_id:
+        Arc<StdMutex<HashMap<String, AdditionalPermissionProfile>>>,
     pub(crate) runtime_handle: Handle,
     pub(crate) skills_service: Arc<HostSkillsService>,
     pub(crate) agents_md_manager: Arc<AgentsMdManager>,
@@ -102,7 +109,7 @@ pub(crate) struct SessionServices {
     pub(crate) time_provider: Arc<dyn TimeProvider>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
-    pub(crate) executed_tool_calls: Option<Arc<ExecutedToolCallRecorder>>,
+    pub(crate) executed_tool_calls: ExecutedToolCalls,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) orchestrator_memory_generation: AtomicU64,
     pub(crate) orchestrator_supervision: OrchestratorSupervisionStore,
@@ -115,5 +122,25 @@ impl SessionServices {
     pub(crate) fn local_agent_control(&self) -> LocalAgentControl {
         self.local_agent_runtime
             .control(self.agent_control.identity())
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "poisoned grant state must not authorize further operations"
+    )]
+    pub(crate) fn record_granted_permissions(
+        &self,
+        environment_id: &str,
+        permissions: AdditionalPermissionProfile,
+    ) {
+        let mut grants = self
+            .granted_permissions_by_environment_id
+            .lock()
+            .expect("session permission grants lock poisoned");
+        let granted_permissions =
+            merge_permission_profiles(grants.get(environment_id), Some(&permissions));
+        if let Some(granted_permissions) = granted_permissions {
+            grants.insert(environment_id.to_string(), granted_permissions);
+        }
     }
 }

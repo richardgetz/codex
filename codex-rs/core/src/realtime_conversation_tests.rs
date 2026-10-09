@@ -1,7 +1,6 @@
 use super::AGENT_FINAL_MESSAGE_PREFIX;
 use super::ConversationState;
 use super::HANDOFF_STREAM_TRUNCATION_MARKER;
-use super::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::RealtimeConversationManager;
 use super::RealtimeConversationManagerState;
 use super::RealtimeHandoffAdmission;
@@ -15,6 +14,7 @@ use super::RealtimeSessionKind;
 use super::RealtimeStreamedItem;
 use super::classify_realtime_input_error;
 use super::classify_realtime_input_error_with_pending;
+use super::handoff::REALTIME_HANDOFF_DEDUPE_CAPACITY;
 use super::realtime_delegation_from_handoff;
 use super::realtime_delegation_with_routing_input;
 use super::realtime_request_headers;
@@ -49,10 +49,7 @@ async fn shutdown_cancels_realtime_start_before_state_installation() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stop_token.clone());
 
-    assert_eq!(
-        manager.shutdown().await.expect("shutdown should succeed"),
-        None
-    );
+    manager.shutdown().await.expect("shutdown should succeed");
     assert!(stop_token.is_cancelled());
 }
 
@@ -111,7 +108,6 @@ async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retir
         output_send_gate: Arc::new(Semaphore::new(1)),
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
-        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_preambles: false,
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
@@ -129,7 +125,6 @@ async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retir
                 audio_tx: bounded(1).0,
                 text_tx: bounded(1).0,
                 session_kind: RealtimeSessionKind::V1,
-                submission_id: "start-submission".to_string(),
                 handoff,
                 input_task: tokio::spawn(async {}),
                 fanout_task: None,
@@ -140,12 +135,12 @@ async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retir
             }),
             mode_instructions: None,
         }),
+        realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
     };
 
-    let (realtime_active, originating_gate) = manager.turn_realtime_state().await;
-    assert!(realtime_active);
-    let originating_gate = originating_gate.expect("active realtime session has a gate");
+    assert!(manager.running_state().await.is_some());
+    let originating_gate = Arc::clone(&route_handoffs);
     let replacement_gate = Arc::new(RealtimeHandoffAdmission::new());
     manager
         .state
@@ -169,10 +164,7 @@ async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retir
         .expect("late old-session failures must not retire the replacement gate");
     drop(replacement_permit);
 
-    assert_eq!(
-        manager.shutdown().await.expect("shutdown should succeed"),
-        Some("start-submission".to_string())
-    );
+    manager.shutdown().await.expect("shutdown should succeed");
     assert!(
         replacement_gate
             .retired
@@ -184,13 +176,10 @@ async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retir
             .await
             .is_none()
     );
-    assert_eq!(
-        manager
-            .shutdown()
-            .await
-            .expect("repeated shutdown should succeed"),
-        None
-    );
+    manager
+        .shutdown()
+        .await
+        .expect("repeated shutdown should succeed");
 }
 
 #[tokio::test]
@@ -545,7 +534,6 @@ async fn clears_active_handoff_explicitly() {
         output_send_gate: Arc::new(Semaphore::new(1)),
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
-        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_preambles: false,
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
@@ -576,7 +564,6 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
         output_send_gate: Arc::new(Semaphore::new(1)),
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
-        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_preambles: false,
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
@@ -630,7 +617,6 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
                 audio_tx: bounded(1).0,
                 text_tx: bounded(1).0,
                 session_kind: RealtimeSessionKind::V1,
-                submission_id: "submission-1".to_string(),
                 handoff,
                 input_task: tokio::spawn(async {}),
                 fanout_task: None,
@@ -641,19 +627,18 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
             }),
             mode_instructions: None,
         }),
+        realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
     };
     let output_task = tokio::spawn(async move {
         let mut append_texts = Vec::new();
-        while let Ok(output) = output_rx.recv().await {
-            match output {
+        for _ in 0..2 {
+            match output_rx
+                .recv()
+                .await
+                .expect("handoff output should be sent")
+            {
                 RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
-                RealtimeOutbound::Flush { completion } => {
-                    if let Some(completion) = completion.lock().await.take() {
-                        let _ = completion.send(());
-                    }
-                    break;
-                }
                 output => panic!("unexpected realtime output: {output:?}"),
             }
         }
@@ -679,7 +664,6 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
         output_send_gate: Arc::new(Semaphore::new(1)),
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
-        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_preambles: true,
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
@@ -697,7 +681,6 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
                 audio_tx: bounded(1).0,
                 text_tx: bounded(1).0,
                 session_kind: RealtimeSessionKind::V1,
-                submission_id: "submission-2".to_string(),
                 handoff,
                 input_task: tokio::spawn(async {}),
                 fanout_task: None,
@@ -708,6 +691,7 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
             }),
             mode_instructions: None,
         }),
+        realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
     };
     let handoff = manager
@@ -756,20 +740,14 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
     assert!(output_rx.try_recv().is_err());
 
     let output_task = tokio::spawn(async move {
-        let mut append_texts = Vec::new();
-        while let Ok(output) = output_rx.recv().await {
-            match output {
-                RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
-                RealtimeOutbound::Flush { completion } => {
-                    if let Some(completion) = completion.lock().await.take() {
-                        let _ = completion.send(());
-                    }
-                    break;
-                }
-                output => panic!("unexpected realtime output: {output:?}"),
-            }
+        match output_rx
+            .recv()
+            .await
+            .expect("handoff output should be sent")
+        {
+            RealtimeOutbound::HandoffAppend { text, .. } => vec![text],
+            output => panic!("unexpected realtime output: {output:?}"),
         }
-        append_texts
     });
 
     manager
@@ -791,7 +769,6 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
         output_send_gate: Arc::new(Semaphore::new(1)),
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
-        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_preambles: true,
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         client_managed_handoffs: false,
@@ -809,7 +786,6 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
                 audio_tx: bounded(1).0,
                 text_tx: bounded(1).0,
                 session_kind: RealtimeSessionKind::V1,
-                submission_id: "submission-3".to_string(),
                 handoff,
                 input_task: tokio::spawn(async {}),
                 fanout_task: None,
@@ -820,6 +796,7 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
             }),
             mode_instructions: None,
         }),
+        realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
     };
     let handoff = manager
@@ -850,20 +827,14 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
     manager.discard_pending_unphased_handoff_output().await;
 
     let output_task = tokio::spawn(async move {
-        let mut append_texts = Vec::new();
-        while let Ok(output) = output_rx.recv().await {
-            match output {
-                RealtimeOutbound::HandoffAppend { text, .. } => append_texts.push(text),
-                RealtimeOutbound::Flush { completion } => {
-                    if let Some(completion) = completion.lock().await.take() {
-                        let _ = completion.send(());
-                    }
-                    break;
-                }
-                output => panic!("unexpected realtime output: {output:?}"),
-            }
+        match output_rx
+            .recv()
+            .await
+            .expect("handoff output should be sent")
+        {
+            RealtimeOutbound::HandoffAppend { text, .. } => vec![text],
+            output => panic!("unexpected realtime output: {output:?}"),
         }
-        append_texts
     });
 
     manager
@@ -893,7 +864,6 @@ fn internal_continuation_suppression_keeps_final_realtime_output() {
         output_send_gate: Arc::new(Semaphore::new(1)),
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
-        transport_handoff_deduper: Arc::new(Mutex::new(RealtimeHandoffDeduper::default())),
         suppress_preambles: false,
         suppress_non_final_output: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         client_managed_handoffs: false,

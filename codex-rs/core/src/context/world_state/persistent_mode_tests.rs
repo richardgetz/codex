@@ -28,8 +28,8 @@ fn persistent_instructions_follow_mode_and_catalog_updates_without_duplicates() 
             instructions,
             /*send_user_message_async_available*/ false,
         ));
-        let updates = world_state
-            .render_history_diff(previous.as_ref(), &history)
+        let (snapshot, fragments) = world_state.render_history_diff(previous.as_ref(), &history);
+        let updates = fragments
             .into_iter()
             .map(ContextualUserFragment::into_boxed_response_item)
             .collect::<Vec<_>>();
@@ -45,7 +45,7 @@ fn persistent_instructions_follow_mode_and_catalog_updates_without_duplicates() 
                 .collect::<Vec<_>>()
         );
         history.extend(updates);
-        previous = Some(world_state.snapshot());
+        previous = Some(snapshot);
     }
 }
 
@@ -70,6 +70,7 @@ fn retained_persistent_instructions_are_replaced_or_retired_without_a_snapshot()
         assert_eq!(
             world_state
                 .render_history_diff(/*previous*/ None, std::slice::from_ref(&retained))
+                .1
                 .into_iter()
                 .map(ContextualUserFragment::into_boxed_response_item)
                 .collect::<Vec<_>>(),

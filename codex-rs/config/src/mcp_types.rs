@@ -85,8 +85,6 @@ pub enum McpServerDisabledReason {
     Unknown,
     /// The server was disabled by config requirements from the given source.
     Requirements { source: RequirementSource },
-    /// Enterprise authorization was rejected for this registration, not its name.
-    EmaRegistration,
 }
 
 impl fmt::Display for McpServerDisabledReason {
@@ -95,9 +93,6 @@ impl fmt::Display for McpServerDisabledReason {
             McpServerDisabledReason::Unknown => write!(f, "unknown"),
             McpServerDisabledReason::Requirements { source } => {
                 write!(f, "requirements ({source})")
-            }
-            McpServerDisabledReason::EmaRegistration => {
-                write!(f, "invalid enterprise registration")
             }
         }
     }
@@ -209,11 +204,6 @@ pub struct McpServerOAuthConfig {
     #[serde(skip)]
     #[schemars(skip)]
     pub ema_registration: Option<McpEmaRegistration>,
-
-    /// Host-policy rejection retained until catalog finalization; never deserialized.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub ema_registration_error: Option<&'static str>,
 }
 
 /// Authentication flow for an HTTP MCP server. Explicit credentials take

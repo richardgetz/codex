@@ -91,6 +91,7 @@ impl AgentRunner {
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))?;
         let options = StartThreadOptions {
+            session_source: session_source.clone(),
             parent_trace: parent_trace.clone(),
             ..StartThreadOptions::new(config)
         };

@@ -41,8 +41,6 @@ use async_channel::Sender;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
-use codex_api::CompactClient as ApiCompactClient;
-use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::Compression;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
@@ -99,7 +97,6 @@ use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
-use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::create_tools_json_for_responses_api;
@@ -179,20 +176,10 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
 const REALTIME_CALLS_ENDPOINT: &str = "/realtime/calls";
-const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
-// `/responses/compact` is unary, so the timeout covers the full response rather than one idle
-// period between stream events.
-const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
-
-pub(crate) struct CompactConversationRequestSettings {
-    pub(crate) effort: Option<ReasoningEffortConfig>,
-    pub(crate) summary: ReasoningSummaryConfig,
-    pub(crate) service_tier: Option<String>,
-}
 
 fn session_telemetry_for_request(
     session_telemetry: &SessionTelemetry,
@@ -285,6 +272,8 @@ pub struct ModelClient {
     restored_history: bool,
     request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
     executed_tool_calls: Option<ExecutedToolCalls>,
+    // Resolved once when the session is created, like other session feature flags.
+    api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -554,6 +543,8 @@ impl ModelClient {
             restored_history: false,
             request_contributors,
             executed_tool_calls: None,
+            api_key_cyber_access_programs:
+                cyber_access_program::ApiKeyCyberAccessPrograms::UnsupportedProvider,
         }
     }
 
@@ -578,10 +569,12 @@ impl ModelClient {
         prompt_cache_key_override: Option<String>,
         event_sender: Sender<ProtocolEvent>,
         codex_responses_headers: Option<Arc<CodexResponsesHeaders>>,
+        api_key_cyber_access_programs: cyber_access_program::ApiKeyCyberAccessPrograms,
     ) -> Self {
         self.prompt_cache_key_override = prompt_cache_key_override;
         self.event_sender = Some(event_sender);
         self.codex_responses_headers = codex_responses_headers;
+        self.api_key_cyber_access_programs = api_key_cyber_access_programs;
         self
     }
 
@@ -677,136 +670,6 @@ impl ModelClient {
 
         self.store_cached_websocket_session(WebsocketSession::default());
         activated
-    }
-
-    /// Compacts the current conversation history using the Compact endpoint.
-    ///
-    /// This is a unary call (no streaming) that returns a new list of
-    /// `ResponseItem`s representing the compacted transcript.
-    ///
-    /// The model selection and telemetry context are passed explicitly to keep `ModelClient`
-    /// session-scoped.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn compact_conversation_history(
-        &self,
-        prompt: &Prompt,
-        model_info: &ModelInfo,
-        turn_state: Option<Arc<OnceLock<String>>>,
-        settings: CompactConversationRequestSettings,
-        session_telemetry: &SessionTelemetry,
-        compaction_trace: &CompactionTraceContext,
-        responses_metadata: &CodexResponsesMetadata,
-    ) -> Result<Vec<ResponseItem>> {
-        if prompt.input.is_empty() {
-            return Ok(Vec::new());
-        }
-        let client_setup = self
-            .current_client_setup(ClientRouting::ConfiguredProvider)
-            .await?;
-        let transport = self.build_api_transport(
-            &client_setup.api_provider,
-            RESPONSES_COMPACT_ENDPOINT,
-            client_setup.redirect_policy,
-        )?;
-        let request_telemetry = Self::build_request_telemetry(
-            session_telemetry,
-            AuthRequestTelemetryContext::new(
-                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
-                client_setup.api_auth.as_ref(),
-                client_setup.agent_identity_telemetry.clone(),
-                PendingUnauthorizedRetry::default(),
-            ),
-            RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
-            self.state.auth_env_telemetry.clone(),
-        );
-        let include_internal = self
-            .state
-            .provider
-            .include_internal_metadata(&client_setup.api_provider);
-        let request = self.build_responses_request(
-            prompt,
-            model_info,
-            settings.effort,
-            settings.summary,
-            settings.service_tier,
-            responses_metadata,
-            include_internal,
-        )?;
-        let ResponsesApiRequest {
-            model,
-            instructions,
-            mut input,
-            tools,
-            parallel_tool_calls,
-            reasoning,
-            service_tier,
-            prompt_cache_key,
-            text,
-            ..
-        } = request;
-        self.prepare_response_items_for_request(&mut input);
-        let payload = ApiCompactionInput {
-            model: &model,
-            input: &input,
-            instructions: &instructions,
-            tools,
-            parallel_tool_calls,
-            reasoning,
-            service_tier: service_tier.as_deref(),
-            prompt_cache_key: prompt_cache_key.as_deref(),
-            text,
-            access_programs: cyber_access_program::for_auth(
-                client_setup.auth.as_ref(),
-                prompt.cyber_access_program,
-            ),
-        };
-
-        let mut extra_headers = ApiHeaderMap::new();
-        if let Ok(header_value) = HeaderValue::from_str(&responses_metadata.installation_id) {
-            extra_headers.insert(X_CODEX_INSTALLATION_ID_HEADER, header_value);
-        }
-        extra_headers.extend(build_responses_headers(
-            self.state.beta_features_header.as_deref(),
-            turn_state.as_ref(),
-        ));
-        add_originator_header(&mut extra_headers, self.state.originator.as_str());
-        extra_headers.extend(self.build_responses_compatibility_headers(responses_metadata));
-        extra_headers.extend(build_session_headers(
-            Some(responses_metadata.session_id.to_string()),
-            Some(responses_metadata.thread_id.to_string()),
-        ));
-        if let Some(header_value) = self.generate_attestation_header_for().await {
-            extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
-        }
-        let responses_headers = self.responses_headers(client_setup.auth.as_ref(), &model);
-        if let Some(header_value) = self.build_routing_hint_header(
-            client_setup.auth.as_ref(),
-            &responses_headers,
-            &model,
-            service_tier.as_deref(),
-        ) {
-            extra_headers.insert(X_CODEX_ROUTING_HINT_HEADER, header_value);
-        }
-        add_responses_lite_header(&mut extra_headers, model_info.use_responses_lite);
-        let compact_request_timeout = client_setup
-            .api_provider
-            .stream_idle_timeout
-            .saturating_mul(COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER);
-        let client =
-            ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
-                .with_telemetry(Some(request_telemetry));
-        let trace_attempt = compaction_trace.start_attempt(&payload);
-        let result = client
-            .compact_input(
-                &payload,
-                extra_headers,
-                compact_request_timeout,
-                turn_state.as_deref(),
-            )
-            .await
-            .map_err(|error| self.state.provider.map_api_error(error));
-        trace_attempt.record_result(result.as_deref());
-        result
     }
 
     pub(crate) async fn create_realtime_call_with_headers(
@@ -1484,18 +1347,6 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    pub(crate) fn reset_websocket_session(&mut self) {
-        self.websocket_session.connection = None;
-        self.websocket_session.last_request = None;
-        self.websocket_session.last_response_rx = None;
-        self.websocket_session.last_response_from_untraced_warmup = false;
-        self.websocket_session
-            .set_connection_reused(/*connection_reused*/ false);
-    }
-
-    pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
-        Arc::clone(&self.turn_state)
-    }
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///
@@ -1885,9 +1736,13 @@ impl ModelClientSession {
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
                 prompt.cyber_access_program,
-            );
+                self.client.api_key_cyber_access_programs,
+            )?;
             self.client
                 .prepare_response_items_for_request(&mut request.input);
+            if crate::guardian::is_basic_session_source(&self.client.state.session_source) {
+                crate::guardian::observe_guardian_request(session_telemetry, &request);
+            }
             let request_session_telemetry =
                 session_telemetry_for_request(session_telemetry, &request);
             options.extra_headers.extend(responses_headers);
@@ -2041,7 +1896,8 @@ impl ModelClientSession {
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
                 prompt.cyber_access_program,
-            );
+                self.client.api_key_cyber_access_programs,
+            )?;
             let mut websocket_metadata = responses_metadata.clone();
             websocket_metadata.routing_hint = self.client.build_routing_hint_header(
                 client_setup.auth.as_ref(),

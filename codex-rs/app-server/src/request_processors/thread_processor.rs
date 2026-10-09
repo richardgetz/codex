@@ -4339,6 +4339,17 @@ impl ThreadRequestProcessor {
             Ok(value) => value,
             Err(error) => return self.handle_resume_error(target, error).await,
         };
+        // Path-based resume can use an empty request thread ID. Coordinate once its real
+        // identity is known; unrelated loaded threads never wait for this cold startup.
+        let _goal_resume_guard = if let InitialHistory::Resumed(resumed) = &thread_history {
+            Some(
+                self.thread_state_manager
+                    .lock_goal_resume(resumed.conversation_id)
+                    .await,
+            )
+        } else {
+            None
+        };
         if let InitialHistory::Resumed(resumed) = &thread_history
             && self
                 .pending_thread_unloads
@@ -4573,7 +4584,8 @@ impl ThreadRequestProcessor {
         let mut config = match prepared_config.take() {
             Some(prepared) if prepared.state == config_state => prepared.config,
             _ => {
-                // Config loading can call back into Desktop; release the permit during host work.
+                // Config loading can call back into Desktop; release both locks during host work.
+                drop(_goal_resume_guard);
                 drop(_thread_list_state_permit);
                 let config = match self
                     .config_manager
@@ -5343,6 +5355,7 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(thread_store_resume_read_error)?;
             let history = InitialHistory::Resumed(ResumedHistory {
+                history_revision: model_context.revision,
                 conversation_id: model_context.thread_id,
                 history: Arc::new(model_context.items),
                 rollout_path: stored_thread.rollout_path.clone(),
@@ -5437,18 +5450,15 @@ impl ThreadRequestProcessor {
         stored_thread: &mut StoredThread,
     ) -> Result<InitialHistory, JSONRPCErrorError> {
         let thread_id = stored_thread.thread_id;
-        let history = stored_thread
-            .history
-            .take()
-            .map(|history| history.items)
-            .ok_or_else(|| {
-                internal_error(format!(
-                    "thread {thread_id} did not include persisted history"
-                ))
-            })?;
+        let history = stored_thread.history.take().ok_or_else(|| {
+            internal_error(format!(
+                "thread {thread_id} did not include persisted history"
+            ))
+        })?;
         Ok(InitialHistory::Resumed(ResumedHistory {
+            history_revision: history.revision,
             conversation_id: thread_id,
-            history: Arc::new(history),
+            history: Arc::new(history.items),
             rollout_path: stored_thread.rollout_path.clone(),
         }))
     }
@@ -5688,7 +5698,7 @@ impl ThreadRequestProcessor {
             .name
             .as_deref()
             .and_then(codex_core::util::normalize_thread_name);
-        let prepared_fork = if paginated_source {
+        let mut prepared_fork = if paginated_source {
             let boundary = match (last_turn_id.as_deref(), before_turn_id.as_deref()) {
                 (Some(turn_id), None) => {
                     codex_thread_store::ForkBoundary::ThroughTurn(turn_id.to_string())
@@ -5797,8 +5807,9 @@ impl ThreadRequestProcessor {
             || restore_approval_policy
             || restore_approvals_reviewer
             || restore_permission_profile;
+        let loaded_parent = self.thread_manager.get_thread(source_thread_id).await.ok();
         let loaded_parent_settings = if paginated_source && needs_latest_settings {
-            if let Ok(parent) = self.thread_manager.get_thread(source_thread_id).await {
+            if let Some(parent) = loaded_parent.as_ref() {
                 let snapshot = parent.thread_settings_snapshot().await;
                 Some(PersistedResumeSettings {
                     approval_policy: snapshot.approval_policy,
@@ -5813,21 +5824,38 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
-        let latest_context =
-            if paginated_source && needs_latest_settings && loaded_parent_settings.is_none() {
-                Some(
-                    self.thread_store
-                        .load_latest_model_context(StoreLoadThreadHistoryParams {
-                            thread_id: source_thread_id,
-                            include_archived: true,
-                        })
-                        .await
-                        .map_err(thread_store_resume_read_error)?
-                        .items,
-                )
-            } else {
-                None
-            };
+        let latest_context = if paginated_source
+            && needs_latest_settings
+            && loaded_parent.is_none()
+            && (last_turn_id.is_some() || before_turn_id.is_some())
+        {
+            Some(Arc::new(
+                self.thread_store
+                    .load_latest_model_context(StoreLoadThreadHistoryParams {
+                        thread_id: source_thread_id,
+                        include_archived: true,
+                    })
+                    .await
+                    .map_err(thread_store_resume_read_error)?
+                    .items,
+            ))
+        } else {
+            None
+        };
+        // The fork cutoff can remove the only TurnContext that records the selected version.
+        // Recover it from the untrimmed source or live parent, independently of permission overrides.
+        let source_multi_agent_version = InitialHistory::Resumed(ResumedHistory {
+            history_revision: None,
+            conversation_id: source_thread_id,
+            history: Arc::clone(latest_context.as_ref().unwrap_or(&source_history_items)),
+            rollout_path: source_thread.rollout_path.clone(),
+        })
+        .get_multi_agent_version()
+        .or_else(|| {
+            loaded_parent
+                .as_ref()
+                .and_then(|parent| parent.multi_agent_version())
+        });
         let persisted_settings = loaded_parent_settings.or_else(|| {
             latest_persisted_resume_settings(
                 latest_context
@@ -5866,7 +5894,7 @@ impl ThreadRequestProcessor {
         let parent_trace = self.request_trace_context(&request_id).await;
         let thread_source = thread_source.map(Into::into);
 
-        let history_items = if prepared_fork.is_some() {
+        let mut history_items = if prepared_fork.is_some() {
             source_history_items
         } else {
             let source_history_items = Arc::unwrap_or_clone(source_history_items);
@@ -5884,6 +5912,21 @@ impl ThreadRequestProcessor {
             };
             Arc::new(history_items)
         };
+        if let Some(multi_agent_version) = source_multi_agent_version
+            && (last_turn_id.is_some() || before_turn_id.is_some())
+        {
+            // Update only the fork's in-memory metadata; the source rollout stays unchanged.
+            for item in Arc::make_mut(&mut history_items) {
+                if let RolloutItem::SessionMeta(meta) = item
+                    && meta.meta.id == source_thread_id
+                {
+                    meta.meta.multi_agent_version = Some(multi_agent_version);
+                }
+            }
+            if let Some(prepared_fork) = prepared_fork.as_mut() {
+                prepared_fork.model_context = Arc::clone(&history_items);
+            }
+        }
 
         let ephemeral_preview = if ephemeral {
             if paginated_source && last_turn_id.is_none() && before_turn_id.is_none() {
@@ -5939,6 +5982,7 @@ impl ThreadRequestProcessor {
                     ForkSnapshot::Interrupted,
                     config,
                     InitialHistory::Resumed(ResumedHistory {
+                        history_revision: None,
                         conversation_id: source_thread_id,
                         history: history_items,
                         rollout_path: source_thread.rollout_path.clone(),

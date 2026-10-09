@@ -94,6 +94,7 @@ pub use self::token_usage::TokenUsageProjectionSource;
 pub use self::token_usage::TokenUsageProjectionThread;
 pub use self::token_usage::TokenUsageRecord;
 pub use self::token_usage::TokenUsageResponseIdentity;
+
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
@@ -153,6 +154,9 @@ pub const CONTEXT_WINDOW_CLOSE_TAG: &str = "</context_window>";
 pub const CONTEXT_WINDOW_GUIDANCE_OPEN_TAG: &str = "<context_window_guidance>";
 pub const CONTEXT_WINDOW_GUIDANCE_CLOSE_TAG: &str = "</context_window_guidance>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
+
+/// Prompt-level policy shared by the TUI and core realtime session setup.
+pub const REALTIME_NO_PREAMBLES_PROMPT: &str = "You are in a live voice conversation. Respond normally to the user's direct conversational turns, including brief answers and acknowledgements when they are the answer. When a turn requires delegated work, do not emit a standalone backchannel, acknowledgement, filler, or progress preamble while waiting for the delegated result. Avoid phrases such as 'mm-hmm', 'ah', 'okay', 'let me check', or 'I will take a look' as standalone progress messages. This instruction overrides general guidance to send preamble messages. Begin the substantive answer or action directly. Do not announce that you are checking, thinking, or about to respond. If more information is needed, ask the substantive question directly. A normal direct answer is not a preamble and must still be spoken.";
 
 /// Removes the model-context prefix from a user message before displaying it.
 pub fn strip_user_message_prefix(text: &str) -> &str {
@@ -266,9 +270,6 @@ pub enum ConversationStartTransport {
         sideband_base_url: Option<String>,
     },
 }
-
-/// Prompt-level policy shared by the TUI and core realtime session setup.
-pub const REALTIME_NO_PREAMBLES_PROMPT: &str = "You are in a live voice conversation. Respond normally to the user's direct conversational turns, including brief answers and acknowledgements when they are the answer. When a turn requires delegated work, do not emit a standalone backchannel, acknowledgement, filler, or progress preamble while waiting for the delegated result. Avoid phrases such as 'mm-hmm', 'ah', 'okay', 'let me check', or 'I will take a look' as standalone progress messages. This instruction overrides general guidance to send preamble messages. Begin the substantive answer or action directly. Do not announce that you are checking, thinking, or about to respond. If more information is needed, ask the substantive question directly. A normal direct answer is not a preamble and must still be spoken.";
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -546,7 +547,7 @@ pub struct ThreadUsagePolicy {
 /// Partial update for a thread's usage-limit policy.
 ///
 /// `None` leaves a field unchanged. For `minimum_remaining_percent`, `Some(None)`
-/// explicitly clears the configured floor.
+/// explicitly clears the floor.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ThreadUsagePolicyUpdate {
     /// Whether resettable provider usage limits should be retried automatically.
@@ -606,8 +607,7 @@ pub struct ThreadTeamSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_reasoning_effort: Option<ReasoningEffortConfig>,
     /// Whether the Lead should delegate substantial lookup work to a Worker.
-    /// This field was added after the original team snapshot shape, so missing
-    /// values retain the disabled default when older rollouts are resumed.
+    /// Missing values retain the disabled default when older rollouts are resumed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic_handoff: Option<bool>,
     /// Lead execution policy captured with this thread's team assignment.
@@ -623,9 +623,9 @@ pub struct ThreadTeamSettings {
 /// Client-requested team transition or profile patch.
 ///
 /// `role` identifies a single profile to update; `model`, `reasoning_effort`,
-/// or Lead-only `lead_balance` supplies the sparse change.
-/// They are intentionally sparse so a settings update can change one role
-/// without allowing a client to forge the other role or the restoration state.
+/// or Lead-only `lead_balance` supplies the sparse change. These fields are
+/// intentionally sparse so a client can update one role without forging the
+/// other role or the restoration state.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ThreadTeamSettingsUpdate {
     pub mode: TeamMode,
@@ -652,10 +652,7 @@ pub struct ThreadSettingsOverrides {
     pub environments: Option<TurnEnvironmentSelections>,
 
     /// Updated top-level runtime workspace roots for default environments.
-    ///
-    /// These roots are independent of explicit environment selections and are
-    /// carried through thread settings snapshots so resume restores the same
-    /// runtime workspace scope.
+    /// Explicit environment selections own their roots separately.
     pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
 
     /// Updated profile-defined workspace roots for status summaries and
@@ -753,29 +750,27 @@ pub enum Op {
         reply: oneshot::Sender<bool>,
     },
 
-    /// Wake an active reset-aware usage wait and request an immediate account
-    /// usage check. This never starts a new model turn by itself.
+    /// Wake an active reset-aware usage wait and request an immediate account usage check.
     ContinueUsage,
 
     /// Pause execution for the root thread and all loaded ThreadSpawn descendants.
-    /// In-flight side-effectful operations finish at their normal cooperative boundary.
     PauseActivity,
 
-    /// Pause a manually controlled agent tree and acknowledge after Core applies the gate.
-    /// Durable pause recovery uses the acknowledgement before allowing `/continue` to claim it.
-    PauseActivityWithAck { reply: oneshot::Sender<()> },
+    PauseActivityWithAck {
+        reply: oneshot::Sender<()>,
+    },
 
     PauseActivityWithSnapshotAck {
         reply: oneshot::Sender<CodexResult<ThreadActivitySnapshot>>,
     },
 
     /// Resume a manually paused agent tree and release retained usage or mailbox work.
-    /// This never creates a synthetic model turn by itself.
     ContinueActivity,
 
-    /// Resume a manually paused agent tree and acknowledge after Core applies the gate change.
-    /// This is used by durable pause recovery so a queued operation cannot clear its marker.
-    ContinueActivityWithAck { reply: oneshot::Sender<()> },
+    ContinueActivityWithAck {
+        reply: oneshot::Sender<()>,
+    },
+
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
     CleanBackgroundTerminals,
@@ -800,16 +795,10 @@ pub enum Op {
 
     /// User input, optionally with thread-settings overrides applied first.
     UserInput {
-        /// User input items, see [`InputItem`]
         items: Vec<UserInput>,
-        /// Optional JSON Schema used to constrain the final assistant message for this turn.
         final_output_json_schema: Option<Value>,
-        /// Optional turn-scoped Responses API `client_metadata`.
         responsesapi_client_metadata: Option<HashMap<String, String>>,
-        /// Client-supplied context fragments keyed by an opaque source identifier.
         additional_context: BTreeMap<String, AdditionalContextEntry>,
-
-        /// Persistent thread-settings overrides to apply before the input.
         thread_settings: ThreadSettingsOverrides,
     },
 
@@ -833,19 +822,11 @@ pub enum Op {
     },
 
     /// Stop an unfinished regular turn for a sealed cross-process handoff.
-    ///
-    /// Unlike the user-facing operation, this is allowed for a loaded
-    /// descendant after the owning root has sealed admission and coordinated
-    /// child-first draining.
     SuspendTurnAndShutdownForHandoff {
         reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
     },
 
     /// Stop an unfinished regular turn after the coordinator has drained all loaded descendants.
-    ///
-    /// This is separate from `SuspendTurnAndShutdownForHandoff` because a live graph edge remains
-    /// in process-local metadata after a child writer closes; the parent may use this operation
-    /// only after recording successful child receipts.
     SuspendTurnAndShutdownForHandoffAfterDescendants {
         reply: oneshot::Sender<CodexResult<SuspendTurnOutcome>>,
     },
@@ -859,7 +840,6 @@ pub enum Op {
         thread_settings: ThreadSettingsOverrides,
         /// Optional nested usage-policy patch applied atomically with the other settings.
         usage_policy_update: Option<ThreadUsagePolicyUpdate>,
-
         /// When present, report validation errors here instead of emitting an error event.
         /// Successful updates still emit `ThreadSettingsApplied` for all callers.
         reply: Option<oneshot::Sender<CodexResult<()>>>,
@@ -880,8 +860,6 @@ pub enum Op {
         start_options: TurnStartOptions,
     },
 
-    /// Internal completion delivery that was admitted while the recipient owned the Lead role.
-    /// The session drops it if Team mode is disabled before asynchronous delivery completes.
     TeamLeadCompletion {
         communication: InterAgentCommunication,
         start_options: TurnStartOptions,
@@ -957,70 +935,53 @@ pub enum Op {
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
 
-    /// Drop all persisted memory artifacts and memory-tracking DB rows.
-    DropMemories,
-
-    /// Trigger a single pass of the startup memory pipeline.
-    UpdateMemories,
-
-    /// Trigger a single manual orchestrator-memory cleanup/consolidation pass.
     ConsolidateOrchestratorMemory,
 
-    /// Remove matching user-preferences memory entries through the active session.
-    OrchestratorMemoryForget { needle: String },
+    OrchestratorMemoryForget {
+        needle: String,
+    },
 
-    /// Copy legacy orchestrator memory into user-preferences memory through the active session.
     UserPreferencesMemoryMigrate,
 
-    /// Close idle spawned agents in the current session only.
-    ///
-    /// Agents that are running, still initializing, or in a subtree containing a
-    /// running/initializing agent are preserved.
     PruneIdleAgents,
 
-    /// Set a user-facing thread name in the persisted rollout metadata.
-    /// This is a local-only operation handled by codex-core; it does not
-    /// involve the model.
-    SetThreadName { name: String },
+    SetThreadName {
+        name: String,
+    },
 
-    /// Toggle the built-in scratchpad continuous run policy for this thread.
-    /// This is a local-only operation handled by codex-core; it does not
-    /// involve the model.
-    SetScratchpadContinuousPolicy { enabled: bool },
+    SetScratchpadContinuousPolicy {
+        enabled: bool,
+    },
 
     /// Set whether the thread remains eligible for memory generation.
     ///
     /// This persists thread-level memory mode metadata without involving the
     /// model.
-    SetThreadMemoryMode { mode: ThreadMemoryMode },
+    SetThreadMemoryMode {
+        mode: ThreadMemoryMode,
+    },
 
-    /// Set whether this live session can read and write the outer memories
-    /// layer for future turns.
-    ///
-    /// This is a local-only operation handled by codex-core; it does not
-    /// involve the model.
-    SetMemoryAccessPolicy { policy: MemoryAccessPolicy },
+    SetMemoryAccessPolicy {
+        policy: MemoryAccessPolicy,
+    },
 
-    /// Set which user-preferences memory buckets this thread can read and
-    /// write for future turns.
-    ///
-    /// This is a local-only operation handled by codex-core; it does not
-    /// involve the model.
     SetUserPreferencesMemoryPolicy {
         policy: UserPreferencesMemoryBucketPolicy,
     },
 
-    /// Request Codex to drop the last N user turns from in-memory context.
-    ///
-    /// This does not attempt to revert local filesystem changes. Clients are
-    /// responsible for undoing any edits on disk.
-    ThreadRollback { num_turns: u32 },
+    ThreadRollback {
+        num_turns: u32,
+    },
 
     /// Request a code review from the agent.
-    Review { review_request: ReviewRequest },
+    Review {
+        review_request: ReviewRequest,
+    },
 
     /// Record that the user approved one retry of a concrete Guardian-denied action.
-    ApproveGuardianDeniedAction { event: GuardianAssessmentEvent },
+    ApproveGuardianDeniedAction {
+        event: GuardianAssessmentEvent,
+    },
 
     /// Request to shut down codex instance.
     Shutdown,
@@ -1203,14 +1164,9 @@ impl InterAgentCommunication {
 }
 
 impl Op {
-    /// Returns whether this operation can create or mutate work that must be
-    /// admitted before a cross-process handoff seals the root tree.
-    ///
-    /// Explicit cancellation, activity pause, and handoff suspension controls remain usable
-    /// while draining.
-    /// Callback responses are admitted only before the seal; once sealed they are rejected with
-    /// an observable error so pending process-local state remains a blocker. Unknown future
-    /// operations fail closed by requiring admission.
+    /// Whether this operation must be admitted before a cross-process handoff seals the root.
+    /// Callback responses and explicit shutdown controls remain available while draining;
+    /// unknown future operations fail closed by requiring admission.
     pub fn requires_handoff_admission(&self) -> bool {
         match self {
             Self::Interrupt
@@ -1271,8 +1227,6 @@ impl Op {
             Self::RefreshMcpServers => "refresh_mcp_servers",
             Self::ReloadUserConfig => "reload_user_config",
             Self::Compact => "compact",
-            Self::DropMemories => "drop_memories",
-            Self::UpdateMemories => "update_memories",
             Self::ConsolidateOrchestratorMemory => "consolidate_orchestrator_memory",
             Self::OrchestratorMemoryForget { .. } => "orchestrator_memory_forget",
             Self::UserPreferencesMemoryMigrate => "user_preferences_memory_migrate",
@@ -2274,14 +2228,14 @@ pub struct RawResponseCompletedEvent {
     /// one-shot review agents, whose completion event is relayed through their parent.
     #[serde(default)]
     pub thread_id: Option<ThreadId>,
-    /// Parent of the originating thread, when this response came from a child agent.
+    /// Parent of the originating thread, when this response came from a child.
     #[serde(default)]
     pub parent_thread_id: Option<ThreadId>,
     /// Unix timestamp in milliseconds when the response completed.
     #[serde(default)]
     pub completed_at_ms: Option<i64>,
-    /// Exact durable record for this response. This is carried internally so a parent can retain
-    /// usage from a one-shot child whose completion is forwarded through the parent thread.
+    /// Exact durable record for this response, retained when a one-shot child completion is
+    /// forwarded through its parent.
     #[serde(default)]
     pub usage_record: Option<TokenUsageRecord>,
 }
@@ -2613,62 +2567,6 @@ pub struct ThreadSettingsSnapshot {
     pub disabled_plugin_ids: Vec<String>,
 }
 
-/// High-level execution activity for a loaded thread.
-///
-/// Waiting includes approval, user-input, usage-limit, and agent coordination waits. A paused
-/// thread can therefore remain idle or waiting while its retained turn is held for `/continue`.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ThreadActivity {
-    Idle,
-    Working,
-    Waiting,
-}
-
-#[derive(Debug, Clone)]
-pub struct ThreadActivitySnapshotEntry {
-    pub thread_id: ThreadId,
-    pub activity: ThreadActivity,
-    pub turn_id: Option<String>,
-}
-
-pub type ThreadActivitySnapshot = Vec<ThreadActivitySnapshotEntry>;
-
-/// Why a thread is waiting instead of actively executing.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ThreadActivityWaitReason {
-    Approval,
-    UserInput,
-    UsageLimit,
-    Agents,
-}
-
-/// Process-local manual pause state for a thread.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ThreadPauseState {
-    Running,
-    Pausing,
-    Paused,
-}
-
-/// Ephemeral activity and manual-pause state published for a loaded thread.
-///
-/// These events are intentionally not persisted in rollout history. A client that reconnects
-/// should query the live thread state rather than infer a stale pause from history.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-pub struct ThreadActivityUpdatedEvent {
-    pub thread_id: ThreadId,
-    pub root_thread_id: ThreadId,
-    pub activity: ThreadActivity,
-    pub pause_state: ThreadPauseState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub wait_reason: Option<ThreadActivityWaitReason>,
-    pub in_flight_operations: u32,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]
 pub struct TokenUsage {
     #[ts(type = "number")]
@@ -2768,9 +2666,7 @@ impl TokenUsageInfo {
             .add_assign(usage);
     }
 
-    /// Attribute cumulative usage from one response to the model and optional service tier that
-    /// produced it. The aggregate fields remain the source of truth for context-window display;
-    /// these buckets preserve pricing attribution when a thread changes models.
+    /// Attribute usage to the model and optional service tier that produced it.
     pub fn add_model_usage(&mut self, usage: &TokenUsage, model: &str, service_tier: Option<&str>) {
         self.usage_by_model
             .entry(model.to_string())
@@ -2827,10 +2723,66 @@ impl TokenUsageInfo {
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
     pub rate_limits: Option<RateLimitSnapshot>,
-    /// All known provider buckets at the time of this event. Older rollouts only
-    /// contain `rate_limits`, so readers must retain that fallback for compatibility.
+    /// All known provider buckets. Older rollouts only contain `rate_limits`,
+    /// so readers must retain that field as a compatibility fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limit_snapshots: Option<Vec<RateLimitSnapshot>>,
+}
+
+/// High-level execution activity for a loaded thread.
+///
+/// Waiting includes approval, user-input, usage-limit, and agent coordination waits. A paused
+/// thread can therefore remain idle or waiting while its retained turn is held for `/continue`.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadActivity {
+    Idle,
+    Working,
+    Waiting,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThreadActivitySnapshotEntry {
+    pub thread_id: ThreadId,
+    pub activity: ThreadActivity,
+    pub turn_id: Option<String>,
+}
+
+pub type ThreadActivitySnapshot = Vec<ThreadActivitySnapshotEntry>;
+
+/// Why a thread is waiting instead of actively executing.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadActivityWaitReason {
+    Approval,
+    UserInput,
+    UsageLimit,
+    Agents,
+}
+
+/// Process-local manual pause state for a thread.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadPauseState {
+    Running,
+    Pausing,
+    Paused,
+}
+
+/// Ephemeral activity and manual-pause state published for a loaded thread.
+///
+/// These events are intentionally not persisted in rollout history. A client that reconnects
+/// should query the live thread state rather than infer a stale pause from history.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ThreadActivityUpdatedEvent {
+    pub thread_id: ThreadId,
+    pub root_thread_id: ThreadId,
+    pub activity: ThreadActivity,
+    pub pause_state: ThreadPauseState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wait_reason: Option<ThreadActivityWaitReason>,
+    pub in_flight_operations: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -3469,8 +3421,8 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
                 agent_nickname.clone()
             }
-            SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => Some("Memory".to_string()),
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+            SessionSource::SubAgent(SubAgentSource::MemoryExtraction)
+            | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
                 Some("Memory".to_string())
             }
             _ => None,
@@ -3497,10 +3449,8 @@ impl SessionSource {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
                 agent_path.clone()
             }
-            SessionSource::SubAgent(SubAgentSource::MemoryExtraction) => {
-                Some(AgentPath::morpheus())
-            }
-            SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+            SessionSource::SubAgent(SubAgentSource::MemoryExtraction)
+            | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
                 Some(AgentPath::morpheus())
             }
             _ => None,
@@ -3657,8 +3607,10 @@ pub struct SessionMeta {
     pub parent_thread_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
-    /// Top-level runtime workspace roots at creation for default environments.
+    /// Top-level runtime workspace roots at creation for default environments,
+    /// excluding roots supplied by explicit environment selections or permission profiles.
     /// An absent value means unknown; an empty list means no roots.
+    /// Keep native paths parseable across hosts; validate them when restoring settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
@@ -3816,8 +3768,6 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trace_id: Option<String>,
     /// Root turn that owns this subagent turn's attribution.
     /// Only set for subagent turns; persisted so resume keeps the scope frozen at turn start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3867,15 +3817,11 @@ pub struct TurnContextItem {
     pub cyber_access_program: Option<CyberAccessProgram>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
+    // Compatibility-only field written with a default value so older Codex
+    // versions can deserialize turn-context rollout items. It is no longer
+    // read by context reconstruction and should be removed in a future schema
+    // cleanup.
     pub summary: ReasoningSummaryConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub developer_instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub final_output_json_schema: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub truncation_policy: Option<TruncationPolicy>,
 }
 
 impl TurnContextItem {
@@ -4656,16 +4602,6 @@ pub struct ThreadGoal {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "protocol/")]
-pub struct ThreadNameUpdatedEvent {
-    pub thread_id: ThreadId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub thread_name: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "protocol/")]
@@ -4675,6 +4611,16 @@ pub struct ThreadGoalUpdatedEvent {
     #[ts(optional)]
     pub turn_id: Option<String>,
     pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "protocol/")]
+pub struct ThreadNameUpdatedEvent {
+    pub thread_id: ThreadId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_name: Option<String>,
 }
 
 /// One task included in a durable ETA update event. Timestamps are Unix seconds so the event
@@ -6742,46 +6688,6 @@ mod tests {
     }
 
     #[test]
-    fn thread_settings_applied_event_defaults_legacy_memory_policies() -> Result<()> {
-        let event: EventMsg = serde_json::from_value(json!({
-            "type": "thread_settings_applied",
-            "thread_settings": {
-                "model": "gpt-5",
-                "model_provider_id": "openai",
-                "service_tier": null,
-                "approval_policy": "on-request",
-                "approvals_reviewer": "user",
-                "permission_profile": { "type": "disabled" },
-                "cwd": test_path_buf("/tmp"),
-                "reasoning_effort": null,
-                "reasoning_summary": null,
-                "personality": null,
-                "collaboration_mode": {
-                    "mode": "default",
-                    "settings": {
-                        "model": "gpt-5",
-                        "reasoning_effort": null,
-                        "developer_instructions": null
-                    }
-                }
-            }
-        }))?;
-
-        let EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
-            thread_settings, ..
-        }) = event
-        else {
-            panic!("expected thread_settings_applied event");
-        };
-        assert_eq!(thread_settings.memory_policy, MemoryAccessPolicy::default());
-        assert_eq!(
-            thread_settings.user_preferences_memory_policy,
-            UserPreferencesMemoryBucketPolicy::default()
-        );
-        Ok(())
-    }
-
-    #[test]
     fn session_meta_defaults_legacy_history_mode() -> Result<()> {
         let session_meta: SessionMeta = serde_json::from_value(json!({
             "session_id": "00000000-0000-0000-0000-000000000001",
@@ -6816,7 +6722,6 @@ mod tests {
             "summary": "auto",
         }))?;
 
-        assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
         assert_eq!(item.file_system_sandbox_policy, None);
         assert_eq!(item.comp_hash, None);
@@ -6841,7 +6746,6 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
-            trace_id: None,
             root_turn_id: None,
             disabled_plugin_ids: None,
             cwd: test_path_buf("/tmp").abs(),
@@ -6878,13 +6782,9 @@ mod tests {
             cyber_access_program: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
-            user_instructions: None,
-            developer_instructions: None,
-            final_output_json_schema: None,
-            truncation_policy: None,
         };
 
-        let value = serde_json::to_value(item)?;
+        let value = serde_json::to_value(&item)?;
         assert_eq!(
             value["network"],
             json!({
@@ -6901,9 +6801,15 @@ mod tests {
                         "type": "glob_pattern",
                         "pattern": "/tmp/private/**/*.txt"
                     },
-                    "access": "none"
+                    "access": "deny"
                 }]
             })
+        );
+        assert_eq!(value["summary"], json!("auto"));
+        assert_eq!(
+            serde_json::from_value::<TurnContextItem>(value)?,
+            item,
+            "legacy turn metadata should survive rollout serialization"
         );
         Ok(())
     }
@@ -7051,11 +6957,8 @@ mod tests {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
-            usage_by_service_tier: BTreeMap::new(),
-            usage_by_service_tier_and_context_length: BTreeMap::new(),
-            usage_by_model: BTreeMap::new(),
-            usage_by_model_and_service_tier_and_context_length: BTreeMap::new(),
             model_context_window: Some(258_400),
+            ..Default::default()
         });
         let last = Some(TokenUsage {
             input_tokens: 10,
@@ -7074,6 +6977,53 @@ mod tests {
     }
 
     #[test]
+    fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
+        let initial = Some(TokenUsageInfo {
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            model_context_window: Some(258_400),
+            ..Default::default()
+        });
+        let last = Some(TokenUsage {
+            input_tokens: 10,
+            cached_input_tokens: 0,
+            cache_write_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            total_tokens: 10,
+            codex_rollout_budget_units: None,
+        });
+
+        let info =
+            TokenUsageInfo::new_or_append(&initial, &last, /*model_context_window*/ None)
+                .expect("new_or_append should return info");
+
+        assert_eq!(info.model_context_window, Some(258_400));
+    }
+
+    #[test]
+    fn token_usage_info_deserializes_legacy_payload_without_attribution_maps() {
+        let legacy = serde_json::json!({
+            "total_token_usage": TokenUsage::default(),
+            "last_token_usage": TokenUsage::default(),
+            "model_context_window": 128_000,
+        });
+
+        let actual: TokenUsageInfo = serde_json::from_value(legacy).expect("legacy token usage");
+
+        assert_eq!(actual.usage_by_service_tier, BTreeMap::new());
+        assert_eq!(
+            actual.usage_by_service_tier_and_context_length,
+            BTreeMap::new()
+        );
+        assert_eq!(actual.usage_by_model, BTreeMap::new());
+        assert_eq!(
+            actual.usage_by_model_and_service_tier_and_context_length,
+            BTreeMap::new()
+        );
+    }
+
+    #[test]
     fn token_usage_info_attributes_model_and_service_tier_usage() {
         let usage = TokenUsage {
             input_tokens: 100,
@@ -7083,7 +7033,7 @@ mod tests {
         };
         let mut actual = TokenUsageInfo::default();
         actual.append_last_usage(&usage, Some("priority"));
-        actual.add_model_usage(&usage, "gpt-5.4", Some("priority"));
+        actual.add_model_usage(&usage, "gpt-6-sol", Some("priority"));
 
         let expected = TokenUsageInfo {
             total_token_usage: usage.clone(),
@@ -7093,9 +7043,9 @@ mod tests {
                 "priority".to_string(),
                 BTreeMap::from([(usage.context_length().to_string(), usage.clone())]),
             )]),
-            usage_by_model: BTreeMap::from([("gpt-5.4".to_string(), usage.clone())]),
+            usage_by_model: BTreeMap::from([("gpt-6-sol".to_string(), usage.clone())]),
             usage_by_model_and_service_tier_and_context_length: BTreeMap::from([(
-                "gpt-5.4".to_string(),
+                "gpt-6-sol".to_string(),
                 BTreeMap::from([(
                     "priority".to_string(),
                     BTreeMap::from([(usage.context_length().to_string(), usage)]),
@@ -7123,7 +7073,7 @@ mod tests {
     }
 
     #[test]
-    fn token_usage_full_context_window_clears_model_buckets() {
+    fn token_usage_full_context_window_clears_attribution_buckets() {
         let usage = TokenUsage {
             input_tokens: 100,
             total_tokens: 100,
@@ -7131,7 +7081,7 @@ mod tests {
         };
         let mut info = TokenUsageInfo::default();
         info.append_last_usage(&usage, Some("standard"));
-        info.add_model_usage(&usage, "gpt-5.4", Some("standard"));
+        info.add_model_usage(&usage, "gpt-6-sol", Some("standard"));
 
         info.fill_to_context_window(1_000);
 
@@ -7146,41 +7096,10 @@ mod tests {
                     total_tokens: 900,
                     ..TokenUsage::default()
                 },
-                usage_by_service_tier: BTreeMap::new(),
-                usage_by_service_tier_and_context_length: BTreeMap::new(),
-                usage_by_model: BTreeMap::new(),
-                usage_by_model_and_service_tier_and_context_length: BTreeMap::new(),
                 model_context_window: Some(1_000),
+                ..Default::default()
             }
         );
-    }
-
-    #[test]
-    fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
-        let initial = Some(TokenUsageInfo {
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage::default(),
-            usage_by_service_tier: BTreeMap::new(),
-            usage_by_service_tier_and_context_length: BTreeMap::new(),
-            usage_by_model: BTreeMap::new(),
-            usage_by_model_and_service_tier_and_context_length: BTreeMap::new(),
-            model_context_window: Some(258_400),
-        });
-        let last = Some(TokenUsage {
-            input_tokens: 10,
-            cached_input_tokens: 0,
-            cache_write_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_output_tokens: 0,
-            total_tokens: 10,
-            codex_rollout_budget_units: None,
-        });
-
-        let info =
-            TokenUsageInfo::new_or_append(&initial, &last, /*model_context_window*/ None)
-                .expect("new_or_append should return info");
-
-        assert_eq!(info.model_context_window, Some(258_400));
     }
 
     #[test]

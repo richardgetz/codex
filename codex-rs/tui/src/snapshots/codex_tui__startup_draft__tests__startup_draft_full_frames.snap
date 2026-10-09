@@ -1,6 +1,6 @@
 ---
 source: tui/src/startup_draft_tests.rs
-assertion_line: 154
+assertion_line: 144
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
 empty (48 columns):
@@ -10,6 +10,16 @@ empty (48 columns):
 
   Pull up a prompt.
 
+› Ask Codex to do anything
+
+  ? for shortcuts
+---
+configured (48 columns):
+
+  >_ OpenAI Codex (v<VERSION>)
+     workspace
+
+  Pull up a prompt.
 
 › Ask Codex to do anything
 
@@ -42,7 +52,6 @@ multiline (48 columns):
 
   Pull up a prompt.
 
-
 › first startup line
   second startup line
 
@@ -54,7 +63,6 @@ narrow (18 columns):
      loading
 
   Pull up a promp…
-
 
 › first startup
   line

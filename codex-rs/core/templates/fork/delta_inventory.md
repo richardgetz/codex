@@ -20,9 +20,40 @@ release or merge rules.
 
 ## Unreleased
 
+- The TUI composer tracks overall turn activity separately from slash-command
+  availability. Normal turn state updates both; background status work can gate
+  unavailable slash commands without changing the task-running footer state.
+
+- When explicitly enabled, the direct Playwright CLI exception accepts only one
+  plain local Unix command, resolves it to a canonical executable matching the
+  configured path or trusted install roots, and rejects agent-writable paths.
+  Shell wrappers remain sandboxed; remote and non-Unix environments and
+  commands with additional permissions stay on the normal sandbox path.
+
+- MCP history placeholder recovery preserves explicit provenance through history
+  planning, cached tool exposure, and registry dispatch. It only reconstructs
+  unambiguous enabled server/raw-tool identities, retries the affected server
+  after canceled startup, and bounds recovered specs to the latest 64 unique
+  tools found within the latest 4,096 history items.
+
+- Successful MCP results can request a bounded smart wait through
+  `_meta['codex/wait']` v1 `no_update` directives. Retries reuse the same
+  rewritten arguments and request metadata, stop after 12 no-update results,
+  and cap each delay at 10 minutes; malformed or unknown directives and MCP
+  errors retain normal behavior.
+
+- Direct MCP tools retain flat `mcp__server__tool` Function specs when namespace
+  tools are disabled. Each sampling request selects Apps connectors and
+  explicitly named MCP servers from current user input while keeping all
+  other eligible tools deferred for search.
+
 - Guardian conversation-history prompt overrides are capped at 8 KiB; oversized
   values fall back to the complete built-in retrieval instructions instead of
   injecting an unbounded or partially truncated security prompt.
+
+- Legacy subagent runtime-context summaries retain at most 8 entries and 1,024
+  rendered UTF-8 bytes, matching the bounded V2 projection so nested-agent
+  context remains predictable.
 
 - When enabled, Guardian can retrieve only the parent's read-only
   `user_message.search_messages` and `user_message.read_messages` tools through
@@ -43,6 +74,12 @@ release or merge rules.
 - `FileSystemAccessMode::None` remains distinct from explicit `Deny` in the
   fork's four-value protocol/config enum and permission intersections; do not
   collapse the fork value into upstream's legacy alias.
+
+- Core tool planning retains stable utility registrations across upstream API
+  refreshes: ETA stays out of basic Guardian sessions; configured
+  `[session_tmp].enabled` exposes `session_tmp.create` while helper operations
+  remain hidden; and legacy `send_user_message_async` remains root-only,
+  model-gated, and direct-model-only.
 
 - Team Leads can use the standalone `ask_worker_question` tool with either
   multi-agent backend to send a bounded, correlated question to a direct Worker.
@@ -124,6 +161,11 @@ release or merge rules.
   fork's `includeExtensions` discovery request; live backend acceptance of that
   query is not verified.
 
+- Stable refresh `rust-v0.161.0` preserves all shipped migration filenames and
+  checksums through `0067`; the incoming `0058_threads_archive_sort_indexes.sql`
+  is identical to shipped `0067_upstream_threads_archive_sort_indexes.sql`, so
+  it is omitted rather than reapplied.
+
 - Fork operations that start from rollout, loaded history, or prepared history
   preserve explicit per-thread startup options such as environment selection,
   thread instruction providers, MCP extensions, and thread extensions. The
@@ -147,7 +189,22 @@ release or merge rules.
   session, including when a handoff is steered into an already-running turn.
   A misalignment failure retires every originating gate attached to that turn;
   session close rejects ordinary handoffs while allowing at most one configured
-  transcript tail through fanout drain before sealing the old gate.
+  transcript tail through fanout drain before sealing the old gate. Before
+  voice-only UI suppression, queued transcript delta/done notifications are
+  retained in the originating session's bounded replay state so switching back
+  presents the admitted tail once. Before
+  routing a handoff, the fork records bounded classifier metadata: an optional
+  no-tools model classifier falls back to conservative text classification on
+  timeout, malformed output, oversized input, or request failure, and explicit
+  mutation signals prevent a read-only result. The selected transient reasoning
+  effort applies only to a read-only request.
+  Lifecycle admission orders accepted ordinary submissions before realtime
+  handoffs and keeps one bounded queue slot reserved for the final transcript
+  tail. Close, replacement, shutdown, and suspension drain at most the admitted
+  tail before acknowledging teardown; cancellation remains queue-preemptive,
+  and receiver closure guarantees no-hang teardown without a transcript tail.
+  Realtime operation diagnostics include only static operation metadata and
+  submission IDs, never transcript, audio, or setup payloads.
 
 - Stable refresh `rust-v0.155.1` preserves the fork's daemon handoff/apply and
   recovery contract, account and launcher ownership, pause/continue and ETA
@@ -966,6 +1023,11 @@ release or merge rules.
   - Cached normal tool-plan construction registers the complete per-step MCP
     inventory, including recovered placeholders, while retaining handler reuse
     keyed to the immutable MCP binding.
+  - Namespace-disabled normal MCP tools retain flat Function specs, and
+    recovered placeholders preserve direct-only namespace exposure after name
+    flattening. Per-sampling router selection uses current user messages only,
+    applies server-name token boundaries, and keeps serialized exposure aligned
+    with the router used for dispatch.
 - Built-in scratchpad:
   - Namespace: `scratchpad`
   - Default mode exposes it by default; Plan mode does not.
@@ -1081,6 +1143,12 @@ release or merge rules.
     user turn for recovery state.
   - Legacy top-level `[orchestrator]` mode config is removed after
     Orchestrator mode removal.
+- Stable workspace preservation:
+  - Refreshes retain the fork-maintained `core-skills`, `session-tmp`, and
+    `mcp-server` workspace packages and their shared dependency entries, even
+    when an upstream tag removes those packages from its workspace. This keeps
+    core skill dependency handling, session temporary storage, and the
+    `codex-mcp-server` binary connected to workspace tooling.
 - Fast resume:
   - Config: `[resume]`
   - Defaults: `strategy = "latest_compaction"`, `visible_turn_limit = 80`,
@@ -1104,9 +1172,20 @@ release or merge rules.
 
 ## Merge Checklist
 
+- Verify direct Playwright remains disabled by default and requires the local
+  Unix path, one plain `playwright-cli` command, an existing canonical
+  executable, and a configured-path match or trusted install root. Reject
+  agent-writable executable paths. Keep shell wrappers, pipelines, redirects,
+  substitutions, remote/non-Unix execution, and commands with additional
+  permissions sandboxed; the process-manager boundary also requires default
+  sandbox permissions and no additional or preapproved permission profile.
+
 - Keep Guardian conversation-history prompt overrides bounded at 8 KiB. Oversized
   values must use the complete built-in retrieval instructions rather than a
   partial custom policy.
+- Preserve the subagent context ceiling in both legacy and V2 projections: no
+  more than 8 entries and 1,024 rendered UTF-8 bytes, including wrappers,
+  indentation, and line breaks.
 - Keep Guardian history access limited to the parent's two read-only
   `user_message` tools in the isolated reviewer context. Keep responses within
   the hard 8 KiB serialized-output cap; token estimates alone do not bound media
@@ -1140,6 +1219,20 @@ release or merge rules.
   Blocker admission, transfer-started gating, recovery, and quarantine safety
   behavior must remain unchanged.
 
+- Verify realtime handoffs retain optional classifier-routing metadata on the
+  emitted event and classify only the bounded user request with no tools or
+  thread history. Model-classifier timeout, invalid output, oversized input,
+  and request failure must fall back to conservative text classification;
+  explicit mutation signals must prevent a read-only model result. Apply the
+  configured transient reasoning effort only to read-only requests, while
+  retaining upstream transport/fanout handling and the fork's session-scoped
+  handoff admission and transcript-tail cutoff. Verify ordinary FIFO ordering
+  and the reserved realtime queue slot under saturation; configured transcript
+  tails complete before close/replacement/Shutdown acknowledgements, while
+  cancellation preemption and receiver-close no-tail teardown remain bounded.
+  Realtime debug/trace output must not include text, speech, audio, or session
+  setup payloads.
+
 - Verify upstream refreshes keep `.codex/skills/rust-iteration/SKILL.md` and
   its `AGENTS.md` trigger. Preserve proof-matched target selection, source-proven
   oracles, fixture prerequisites/event order, visible mock filters, distinct
@@ -1150,6 +1243,12 @@ release or merge rules.
   independent review of the frozen diff. Keep review fixes in the changed
   scope, rerun only affected narrow validation, and avoid broad review cascades;
   preserve user approval before workspace-wide tests.
+
+- Verify upstream refreshes retain the fork-maintained `core-skills`,
+  `session-tmp`, and `mcp-server` workspace members and their corresponding
+  shared dependency entries (`codex-core-skills`, `codex-session-tmp`,
+  `codex-mcp-server`, and `mcp_test_support`). Retain external dependencies
+  still required by maintained consumers, including TUI audio and WebRTC.
 
 - Verify upstream refreshes retain enough dedicated `codex-main` stack for the
   merged TUI startup futures (or reduce those frames before lowering the
@@ -1205,6 +1304,8 @@ release or merge rules.
   and append only the archive-sort indexes as `0067` after checking SQL object
   overlap. For `rust-v0.160.0`, verify the incoming `0058` archive-sort SQL is
   byte-identical to stable `0067` and is not added again.
+  For `rust-v0.161.0`, preserve every filename/checksum through `0067` and
+  omit the byte-identical incoming archive-sort migration at `0058`.
 - Verify plain-name skill mentions preserve executor, cloud, custom-resource,
   and host priority after upstream changes the source kind from Orchestrator to
   Cloud; executor-owned skills must still win host-name collisions.
@@ -1332,7 +1433,9 @@ release or merge rules.
   originating session gate, including after replacement; it cannot close a
   later voice session. Closing a session rejects ordinary parsed handoffs,
   flushes at most one configured final transcript tail, and seals the gate
-  after fanout drains. A safety failure revokes an unadmitted tail.
+  after fanout drains. A queued voice caption is retained for its source thread
+  when switching away and back, and is returned once. A safety failure revokes
+  an unadmitted tail.
 - Verify named exec-policy rulesets retain their `overlay`/`exclusive`
   semantics and app-server `execPolicy` selection.
 - Verify fork-aware help continues to load the checked-in fork differences and
@@ -1621,14 +1724,27 @@ release or merge rules.
   reads, retains the generated app-server schema types, and ignores unknown
   optional extension variants without dropping the installed inventory.
 - Verify cancelled MCP startup can retry, a plain unavailable MCP placeholder
-  call can recover the configured server namespace instead of permanently
-  reporting the tool unavailable, and eager MCP servers remain listed in the
-  model-visible inventory even if tool listing is temporarily unavailable;
-  confirm the cached normal tool-plan path retains recovered placeholders.
+  call can recover only an unambiguous enabled server/raw-tool identity instead
+  of permanently reporting the tool unavailable, and eager MCP servers remain
+  listed in the model-visible inventory even if tool listing is temporarily
+  unavailable; confirm the cached normal tool-plan path retains recovered
+  placeholders and history recovery remains capped at 64 unique tools from the
+  latest 4,096 history items.
+- Verify successful MCP results retry only for `_meta['codex/wait']` v1
+  `no_update` directives with positive `retry_after_ms`; retries preserve the
+  rewritten arguments and request metadata, stop after 12 no-update results,
+  and cap each wait at 10 minutes. Missing, malformed, or unknown directives
+  and MCP errors retain normal behavior.
 - Verify the fork-preserved `update_plan` default remains enabled when omitted
   or given an empty table, while explicit `enabled = false` removes the tool
   from both registered and model-visible sets.
 - Verify app-server `thread/control/set` rejects Orchestrator mode.
+- Verify ETA is excluded from basic Guardian sessions, configured
+  `[session_tmp].enabled` registers `session_tmp.create` while keeping helper
+  operations hidden, and legacy `send_user_message_async` is exposed only to
+  root sessions whose model advertises it, with direct-model-only exposure.
+  Keep the current `request_user_input_async` and
+  `send_message_to_user_async` registration gates intact.
 - Verify built-in `scratchpad` remains available in Default mode, omitted from
   Plan mode by default, and `open_scratchpad` uses the thread id when no id is
   provided.
@@ -1712,6 +1828,10 @@ release or merge rules.
   `is_running`/`is_closed`, preserve active-turn semantics and the closed/idle
   distinction, and keep labels, row width, keyboard navigation, and the
   no-polling/no-inference boundary unchanged.
+  Verify the TUI composer keeps overall turn activity separate from
+  slash-command availability: normal turn updates synchronize both, while
+  background status updates can gate unavailable slash commands without
+  changing the task-running footer state.
   Verify the running two-row Team/Workers/Subagents layout, direct Worker cap
   denominator, nested parent metadata hydration, and 30-second ordinary-wait
   grace: repeated waits must not extend it, expiry must redraw without a new

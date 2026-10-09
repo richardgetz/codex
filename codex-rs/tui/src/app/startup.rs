@@ -122,6 +122,41 @@ pub(super) fn startup_model(
 }
 
 impl App {
+    /// Keep explicit local launch choices available for new sessions and reconnect recovery.
+    pub(super) fn remember_launch_permissions(&mut self) {
+        if self.app_server_target.thread_params_mode()
+            == crate::app_server_session::ThreadParamsMode::Remote
+        {
+            return;
+        }
+        let selected = crate::resume_permissions::ResumePermissions::from_overrides(
+            &self.config,
+            &self.harness_overrides,
+        );
+        if selected.approval_policy {
+            self.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Explicit(
+                self.config.permissions.approval_policy.value().into(),
+            ));
+        }
+        if selected.approvals_reviewer {
+            self.runtime_approvals_reviewer_override = Some(self.config.approvals_reviewer);
+        }
+        if selected.profile {
+            let profile = RuntimePermissionProfileOverride::from_config(&self.config);
+            // The server owns constrained profiles that legacy turn parameters cannot express.
+            self.runtime_permission_profile_override =
+                (profile.active_permission_profile.is_some()
+                    || crate::app_server_session::turn_permissions_overrides(
+                        TurnPermissionsOverride::LegacySandbox(
+                            self.config.permissions.effective_permission_profile(),
+                        ),
+                        self.config.cwd.as_path(),
+                    )
+                    .is_ok())
+                .then_some(profile);
+        }
+    }
+
     /// Keep the provisional loading frame until queued history reaches the owned transcript.
     /// Visible startup decisions and the agent overview must still render immediately.
     pub(super) fn render_startup_frame(
@@ -959,6 +994,8 @@ Fix the config and retry.\n\
             startup_pending_protected_request: false,
             rate_limit_hard_stop_generation: 0,
             rate_limit_refresh_state: Default::default(),
+            pending_mcp_login_start: None,
+            active_mcp_login_ids: HashMap::new(),
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
             recap: recap::RecapState::default(),

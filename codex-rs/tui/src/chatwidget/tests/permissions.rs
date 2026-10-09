@@ -9,7 +9,6 @@ use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_utils_approval_presets::builtin_permission_profile_for_active_permission_profile;
 use pretty_assertions::assert_eq;
 
 #[cfg(target_os = "windows")]
@@ -61,7 +60,13 @@ async fn permission_discovery_uses_server_catalog_for_remote_custom_selection() 
         }))
         .unwrap(),
     );
-    chat.request_permission_profiles();
+    // Conflicting local availability must not disable server-provided choices.
+    chat.config.config_layer_stack = requirements_stack(codex_config::ConfigRequirementsToml {
+        allowed_sandbox_modes: Some(vec![codex_config::SandboxModeRequirement::ReadOnly]),
+        ..Default::default()
+    });
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_permissions_popup();
     let request_id = chat.permission_popup_request_id.unwrap();
     rx.try_recv().unwrap();
     assert_chatwidget_snapshot!(
@@ -80,16 +85,6 @@ async fn permission_discovery_uses_server_catalog_for_remote_custom_selection() 
         AppEvent::SelectPermissionProfile(PermissionProfileSelection { profile_id, .. })
             if profile_id == "server-only"
     ));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
-    chat.open_permissions_popup();
-    rx.try_recv().unwrap();
-    let request_id = chat.permission_popup_request_id.unwrap();
-    let mut legacy = Discovery::local(&chat.config);
-    legacy.explicit_profile_mode = false;
-    chat.on_permission_profiles_loaded(request_id, Ok(legacy));
-    let actual = render_bottom_popup(&chat, /*width*/ 110);
-    chat.open_legacy_permissions_popup();
-    assert_eq!(actual, render_bottom_popup(&chat, /*width*/ 110));
 }
 
 #[tokio::test]
@@ -266,7 +261,14 @@ async fn profile_permissions_selection_popup_with_disallowed_full_access_snapsho
         ..Default::default()
     });
 
-    chat.open_permission_profiles_popup(Discovery::local(&chat.config));
+    let mut discovery = Discovery::local(&chat.config);
+    discovery
+        .profiles
+        .iter_mut()
+        .find(|profile| profile.id == ":danger-full-access")
+        .unwrap()
+        .allowed = false;
+    chat.open_permission_profiles_popup(discovery);
 
     assert_chatwidget_snapshot!(
         "profile_permissions_selection_popup_with_disallowed_full_access",
@@ -767,6 +769,7 @@ async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
         create_initial_user_message(Some(initial_prompt.clone()), Vec::new(), Vec::new());
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -998,7 +1001,6 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
-                personality: None,
                 ..
             })
         )),
@@ -1009,7 +1011,6 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
-                personality: None,
                 ..
             })
         )),
@@ -1121,152 +1122,6 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
 }
 
 #[tokio::test]
-async fn permissions_selection_remembers_custom_before_switching_to_preset() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    #[cfg(target_os = "windows")]
-    {
-        chat.config.notices.hide_world_writable_warning = Some(true);
-        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
-    }
-    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
-    chat.config.notices.hide_full_access_warning = Some(true);
-    let custom_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
-    chat.config
-        .permissions
-        .approval_policy
-        .set(AskForApproval::OnRequest.to_core())
-        .expect("set approval policy");
-    chat.config
-        .permissions
-        .set_permission_profile(custom_profile.clone())
-        .expect("set permission profile");
-
-    chat.open_permissions_popup();
-    #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let mut remembered = None;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::RememberCustomPermissionSelection(selection) = event {
-            remembered = Some(selection);
-        }
-    }
-
-    let remembered = remembered.expect("custom permissions should be remembered");
-    assert_eq!(remembered.approval_policy, AskForApproval::OnRequest);
-    assert_eq!(remembered.permission_profile, custom_profile);
-    assert_eq!(remembered.approvals_reviewer, ApprovalsReviewer::User);
-}
-
-#[tokio::test]
-async fn permissions_selection_shows_previous_custom_swap_back() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    #[cfg(target_os = "windows")]
-    {
-        chat.config.notices.hide_world_writable_warning = Some(true);
-        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
-    }
-    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
-    let custom_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
-    chat.remember_custom_permission_selection(RestorablePermissionSelection {
-        approval_policy: AskForApproval::OnRequest,
-        permission_profile: custom_profile,
-        approvals_reviewer: ApprovalsReviewer::User,
-    });
-    chat.config
-        .permissions
-        .approval_policy
-        .set(AskForApproval::Never.to_core())
-        .expect("set approval policy");
-    chat.config
-        .permissions
-        .set_permission_profile(PermissionProfile::Disabled)
-        .expect("set permission profile");
-
-    chat.open_permissions_popup();
-
-    let popup = render_bottom_popup(&chat, /*width*/ 120);
-    assert!(
-        popup.contains("Previous Custom"),
-        "expected previous custom swap-back option, got: {popup}"
-    );
-}
-
-#[tokio::test]
-async fn permissions_selection_previous_custom_sends_legacy_permission_profile() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    #[cfg(target_os = "windows")]
-    {
-        chat.config.notices.hide_world_writable_warning = Some(true);
-        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
-    }
-    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
-    chat.config.notices.hide_full_access_warning = Some(true);
-    let custom_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
-    chat.remember_custom_permission_selection(RestorablePermissionSelection {
-        approval_policy: AskForApproval::OnRequest,
-        permission_profile: custom_profile.clone(),
-        approvals_reviewer: ApprovalsReviewer::User,
-    });
-    chat.config
-        .permissions
-        .approval_policy
-        .set(AskForApproval::Never.to_core())
-        .expect("set approval policy");
-    chat.config
-        .permissions
-        .set_permission_profile(PermissionProfile::Disabled)
-        .expect("set permission profile");
-
-    chat.open_permissions_popup();
-
-    let mut selected_previous_custom = false;
-    for _ in 0..10 {
-        let popup = render_bottom_popup(&chat, /*width*/ 120);
-        if popup
-            .lines()
-            .any(|line| line.contains("Previous Custom") && line.contains('›'))
-        {
-            selected_previous_custom = true;
-            break;
-        }
-        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    }
-    assert!(
-        selected_previous_custom,
-        "expected Previous Custom to become selectable"
-    );
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-    let op = std::iter::from_fn(|| rx.try_recv().ok())
-        .find_map(|event| match event {
-            AppEvent::CodexOp(op @ Op::OverrideTurnContext { .. }) => Some(op),
-            _ => None,
-        })
-        .expect("expected OverrideTurnContext op");
-
-    assert_eq!(
-        op,
-        Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(AskForApproval::OnRequest),
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            active_permission_profile: None,
-            permission_profile: Some(custom_profile),
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        }
-    );
-}
-
-#[tokio::test]
 async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     #[cfg(target_os = "windows")]
@@ -1358,6 +1213,7 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
         .set_enabled(Feature::GuardianApproval, /*enabled*/ true);
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -1383,8 +1239,13 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
     });
 
     chat.open_permissions_popup();
+    chat.on_permission_profiles_loaded(
+        chat.permission_popup_request_id.unwrap(),
+        Ok(Discovery::local(&chat.config)),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
+    assert_chatwidget_snapshot!("permissions_unnamed_server_profile", popup);
     assert!(
         popup.contains("Approve for me (current)"),
         "expected Approve for me to be current after SessionConfigured sync: {popup}"
@@ -1408,6 +1269,7 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
     let permission_profile = app_server_workspace_write_profile(extra_root);
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -1433,6 +1295,10 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
     });
 
     chat.open_permissions_popup();
+    chat.on_permission_profiles_loaded(
+        chat.permission_popup_request_id.unwrap(),
+        Ok(Discovery::local(&chat.config)),
+    );
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
@@ -1531,15 +1397,10 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
             cwd: None,
             approval_policy: Some(AskForApproval::OnRequest),
             approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permission_profile: Some(PermissionProfile::workspace_write()),
             active_permission_profile: Some(ActivePermissionProfile::new(
                 BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
-            permission_profile: Some(
-                builtin_permission_profile_for_active_permission_profile(
-                    &ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE),
-                )
-                .expect("workspace permission profile should resolve"),
-            ),
             windows_sandbox_level: None,
             model: None,
             effort: None,

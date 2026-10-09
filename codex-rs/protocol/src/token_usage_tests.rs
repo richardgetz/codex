@@ -103,3 +103,27 @@ fn token_usage_projection_deduplicates_exact_responses_and_keeps_empty_threads()
             && thread.response_ids.is_empty()
     }));
 }
+
+#[test]
+fn legacy_token_usage_records_default_new_attribution_fields() {
+    let thread_id = ThreadId::new();
+    let mut legacy = serde_json::to_value(record(
+        thread_id,
+        None,
+        "response-1",
+        TokenUsage::default(),
+        TokenUsageAttribution::default(),
+    ))
+    .expect("serialize enriched token usage record");
+    let fields = legacy.as_object_mut().expect("record object");
+    fields.remove("parent_thread_id");
+    fields.remove("attribution");
+    fields.remove("completed_at_ms");
+
+    let actual: TokenUsageRecord =
+        serde_json::from_value(legacy).expect("legacy token usage record");
+
+    assert_eq!(actual.parent_thread_id, None);
+    assert_eq!(actual.attribution, TokenUsageAttribution::default());
+    assert_eq!(actual.completed_at_ms, None);
+}

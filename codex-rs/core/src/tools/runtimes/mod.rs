@@ -11,7 +11,6 @@ use crate::exec_env::CODEX_VERSION_ENV_VAR;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
-use crate::tools::sandboxing::ToolError;
 use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
 use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 use codex_file_system::WindowsSandboxSelection;
@@ -27,268 +26,23 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 pub(crate) use codex_network_proxy::is_managed_proxy_env_var;
 pub(crate) use codex_network_proxy::strip_managed_proxy_env;
-use codex_protocol::models::AdditionalPermissionProfile;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
-use codex_sandboxing::SandboxCommand;
-use codex_shell_command::bash::parse_shell_script_into_commands;
 use codex_shell_command::shell_snapshot::posix_env_path_expansion_function;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::path::Path;
 
 pub(crate) mod apply_patch;
+mod playwright;
 pub(crate) mod unified_exec;
+pub(crate) mod zsh_fork;
+pub(crate) use playwright::resolve_direct_playwright_cli_script;
 
 const SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_BASH_ENV";
 const SNAPSHOT_ORIGINAL_POSIX_ENV_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_POSIX_ENV";
 const SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_ZDOTDIR";
 const SNAPSHOT_BROKERED_VALUE_ENV_PREFIX: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_VALUE_";
 const SNAPSHOT_BROKERED_UNSET_ENV_PREFIX: &str = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_UNSET_";
-
-pub(crate) fn prepare_brokered_shell_snapshot_env(
-    env: &mut HashMap<String, String>,
-    shell_snapshot: Option<&AbsolutePathBuf>,
-    shell: &Shell,
-) {
-    if shell_snapshot.is_some()
-        && env
-            .get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
-            .is_some_and(|active| active == "1")
-    {
-        if !cfg!(windows) {
-            env.retain(|key, _| {
-                !key.starts_with(SNAPSHOT_BROKERED_VALUE_ENV_PREFIX)
-                    && !key.starts_with(SNAPSHOT_BROKERED_UNSET_ENV_PREFIX)
-            });
-            for key in codex_network_proxy::brokered_credential_value_env_keys(env) {
-                if is_valid_shell_variable_name(&key)
-                    && let Some(value) = env.get(&key).cloned()
-                {
-                    env.insert(format!("{SNAPSHOT_BROKERED_VALUE_ENV_PREFIX}{key}"), value);
-                }
-            }
-            for key in codex_network_proxy::brokered_credential_marker_env_keys(env) {
-                if !is_valid_shell_variable_name(&key) {
-                    continue;
-                }
-                if let Some(value) = env.get(&key).cloned() {
-                    env.entry(format!("{SNAPSHOT_BROKERED_VALUE_ENV_PREFIX}{key}"))
-                        .or_insert(value);
-                } else {
-                    env.insert(
-                        format!("{SNAPSHOT_BROKERED_UNSET_ENV_PREFIX}{key}"),
-                        "1".to_string(),
-                    );
-                }
-            }
-        }
-        let bash_env = env.remove("BASH_ENV");
-        if !cfg!(windows)
-            && let Some(bash_env) = bash_env
-            && !bash_env.is_empty()
-        {
-            env.insert(SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY.to_string(), bash_env);
-        } else {
-            env.remove(SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY);
-        }
-        if shell.shell_type == ShellType::Zsh {
-            if let Some(zdotdir) = env.remove("ZDOTDIR") {
-                env.insert(SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY.to_string(), zdotdir);
-            } else {
-                env.remove(SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY);
-            }
-            env.insert("ZDOTDIR".to_string(), "/dev/null".to_string());
-        }
-    }
-}
-
-/// Resolve a plain Playwright CLI script to a direct executable command.
-///
-/// The browser exception must not turn a shell wrapper, pipeline, redirect, or
-/// command substitution into an unsandboxed execution path. The tree-sitter
-/// parser rejects those constructs before we inspect the executable name. The
-/// returned argv intentionally omits the shell wrapper so no shell startup
-/// files, aliases, functions, or snapshots run outside the sandbox.
-/// This exception is intentionally Unix-only; other hosts continue to use the
-/// normal process sandbox until they have an equivalent direct-command path.
-pub(crate) fn resolve_direct_playwright_cli_script(
-    script: &str,
-    configured_path: Option<&AbsolutePathBuf>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &AbsolutePathBuf,
-) -> Option<Vec<String>> {
-    #[cfg(unix)]
-    {
-        let commands = parse_shell_script_into_commands(script)?;
-        let [single_command] = commands.as_slice() else {
-            return None;
-        };
-        resolve_playwright_cli_words(
-            single_command,
-            configured_path,
-            file_system_sandbox_policy,
-            cwd.as_path(),
-        )
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (script, configured_path, file_system_sandbox_policy, cwd);
-        None
-    }
-}
-
-#[cfg(unix)]
-fn resolve_playwright_cli_words(
-    command: &[String],
-    configured_path: Option<&AbsolutePathBuf>,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) -> Option<Vec<String>> {
-    let program = command.first()?;
-    let program_name = Path::new(program).file_name()?.to_str()?;
-    if program_name != "playwright-cli" {
-        return None;
-    }
-
-    if configured_path.is_some_and(|path| {
-        path.as_path()
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_none_or(|name| name != "playwright-cli")
-    }) {
-        return None;
-    }
-
-    let resolved_program = if program.contains('/') {
-        if let Some(configured_path) = configured_path {
-            let resolved_configured_path = resolve_playwright_cli_path(
-                configured_path.as_path(),
-                file_system_sandbox_policy,
-                cwd,
-                /*require_trusted_path*/ false,
-            )?;
-            (configured_path.as_path() == Path::new(program)
-                || resolved_configured_path == program.as_str())
-            .then_some(resolved_configured_path)?
-        } else {
-            resolve_playwright_cli_path(
-                Path::new(program),
-                file_system_sandbox_policy,
-                cwd,
-                /*require_trusted_path*/ true,
-            )?
-        }
-    } else if let Some(configured_path) = configured_path {
-        resolve_playwright_cli_path(
-            configured_path.as_path(),
-            file_system_sandbox_policy,
-            cwd,
-            /*require_trusted_path*/ false,
-        )?
-    } else {
-        let resolved_path = which::which(program).ok()?;
-        resolve_playwright_cli_path(
-            &resolved_path,
-            file_system_sandbox_policy,
-            cwd,
-            /*require_trusted_path*/ true,
-        )?
-    };
-
-    let mut command = command.to_vec();
-    command[0] = resolved_program;
-    Some(command)
-}
-
-#[cfg(unix)]
-fn is_trusted_playwright_cli_path(path: &Path) -> bool {
-    const TRUSTED_PLAYWRIGHT_ROOTS: &[&str] = &[
-        "/bin",
-        "/usr/bin",
-        "/usr/local",
-        "/opt/homebrew/bin",
-        "/opt/homebrew",
-        "/opt/local/bin",
-        "/opt/local",
-    ];
-
-    TRUSTED_PLAYWRIGHT_ROOTS
-        .iter()
-        .map(Path::new)
-        .any(|trusted_dir| path.starts_with(trusted_dir))
-}
-
-#[cfg(unix)]
-fn resolve_playwright_cli_path(
-    path: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-    require_trusted_path: bool,
-) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::metadata(path).ok()?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
-        return None;
-    }
-
-    let canonical_path = path.canonicalize().ok()?;
-    let canonical_metadata = std::fs::metadata(&canonical_path).ok()?;
-    if !canonical_metadata.is_file() || canonical_metadata.permissions().mode() & 0o111 == 0 {
-        return None;
-    }
-
-    if is_agent_writable_path(path, file_system_sandbox_policy, cwd)
-        || is_agent_writable_path(&canonical_path, file_system_sandbox_policy, cwd)
-    {
-        return None;
-    }
-
-    if require_trusted_path && !is_trusted_playwright_cli_path(&canonical_path) {
-        return None;
-    }
-
-    Some(canonical_path.to_string_lossy().into_owned())
-}
-
-#[cfg(unix)]
-fn is_agent_writable_path(
-    path: &Path,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) -> bool {
-    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(cwd);
-    file_system_sandbox_policy.can_write_path_with_cwd(path, cwd)
-        || writable_roots
-            .iter()
-            .any(|writable_root| writable_root.is_path_writable(path))
-}
-
-/// Shared helper to construct sandbox transform inputs from a tokenized command line and native
-/// working directory. Validates that at least a program is present.
-pub(crate) fn build_sandbox_command(
-    command: &[String],
-    cwd: &AbsolutePathBuf,
-    env: &HashMap<String, String>,
-    additional_permissions: Option<AdditionalPermissionProfile>,
-) -> Result<SandboxCommand, ToolError> {
-    let (program, args) = command
-        .split_first()
-        .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
-    let cwd = PathUri::from_abs_path(cwd);
-    Ok(SandboxCommand {
-        program: program.clone().into(),
-        args: args.to_vec(),
-        cwd,
-        env: env.clone(),
-        managed_network: None,
-        additional_permissions,
-    })
-}
-pub(crate) mod zsh_fork;
 
 pub(crate) fn exec_env_for_sandbox_permissions(
     env: &HashMap<String, String>,
@@ -456,14 +210,77 @@ fn prepare_powershell_command_for_windows_sandbox_with_fallback(
     command
 }
 
+pub(crate) fn prepare_brokered_shell_snapshot_env(
+    env: &mut HashMap<String, String>,
+    shell_snapshot: Option<&AbsolutePathBuf>,
+    shell: &Shell,
+) {
+    if shell_snapshot.is_some()
+        && env
+            .get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
+            .is_some_and(|active| active == "1")
+    {
+        if !cfg!(windows) {
+            env.retain(|key, _| {
+                !key.starts_with(SNAPSHOT_BROKERED_VALUE_ENV_PREFIX)
+                    && !key.starts_with(SNAPSHOT_BROKERED_UNSET_ENV_PREFIX)
+            });
+            for key in codex_network_proxy::brokered_credential_value_env_keys(env) {
+                if is_valid_shell_variable_name(&key)
+                    && let Some(value) = env.get(&key).cloned()
+                {
+                    env.insert(format!("{SNAPSHOT_BROKERED_VALUE_ENV_PREFIX}{key}"), value);
+                }
+            }
+            for key in codex_network_proxy::brokered_credential_marker_env_keys(env) {
+                if !is_valid_shell_variable_name(&key) {
+                    continue;
+                }
+                if let Some(value) = env.get(&key).cloned() {
+                    env.entry(format!("{SNAPSHOT_BROKERED_VALUE_ENV_PREFIX}{key}"))
+                        .or_insert(value);
+                } else {
+                    env.insert(
+                        format!("{SNAPSHOT_BROKERED_UNSET_ENV_PREFIX}{key}"),
+                        "1".to_string(),
+                    );
+                }
+            }
+        }
+        let bash_env = env.remove("BASH_ENV");
+        if !cfg!(windows)
+            && let Some(bash_env) = bash_env
+            && !bash_env.is_empty()
+        {
+            env.insert(SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY.to_string(), bash_env);
+        } else {
+            env.remove(SNAPSHOT_ORIGINAL_BASH_ENV_ENV_KEY);
+        }
+        if shell.shell_type == ShellType::Zsh {
+            if let Some(zdotdir) = env.remove("ZDOTDIR") {
+                env.insert(SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY.to_string(), zdotdir);
+            } else {
+                env.remove(SNAPSHOT_ORIGINAL_ZDOTDIR_ENV_KEY);
+            }
+            env.insert("ZDOTDIR".to_string(), "/dev/null".to_string());
+        }
+    }
+}
+
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
-/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
+/// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]` or brokered
+/// `[shell_path, "-c", "<script>"]`, and
 /// when a snapshot is configured on the session shell, rewrite the argv
 /// to a single non-login shell that sources the snapshot before running
 /// the original script:
 ///
 ///   shell -lc "<script>"
 ///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
+///
+/// Brokered Bash and Zsh commands targeting the session shell run in that process
+/// to preserve captured shell functions and avoid asking patched Zsh to exec itself.
+/// Brokered Zsh wrappers use `-f` so startup files cannot overwrite credentials
+/// after the proxy has replaced them with dummies.
 ///
 /// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
 /// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
@@ -541,9 +358,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         CODEX_PERMISSION_PROFILE_ENV_VAR,
         CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
         PLUGIN_METRICS_OUTPUT_ENV_VAR,
-        "TMPDIR",
-        "TMP",
-        "TEMP",
     ] {
         if let Some(value) = env.get(key) {
             override_env.insert(key.to_string(), value.clone());
@@ -715,55 +529,6 @@ unset __CODEX_SNAPSHOT_ORIGINAL_ENV_SET __CODEX_SNAPSHOT_ORIGINAL_ENV \
     rewritten
 }
 
-fn build_override_exports(
-    explicit_env_overrides: &HashMap<String, String>,
-    restore_even_when_absent: &[&str],
-) -> (String, String) {
-    let mut keys = explicit_env_overrides
-        .keys()
-        .map(String::as_str)
-        .chain(restore_even_when_absent.iter().copied())
-        .filter(|key| !is_non_inheritable_env_var(key))
-        .filter(|key| is_valid_shell_variable_name(key))
-        .collect::<Vec<_>>();
-    keys.sort_unstable();
-    keys.dedup();
-
-    build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
-}
-
-fn build_proxy_env_exports(env: &HashMap<String, String>) -> (String, String) {
-    let mut keys = PROXY_ENV_KEYS
-        .iter()
-        .copied()
-        .chain(codex_network_proxy::brokered_credential_env_keys(env))
-        .chain(CUSTOM_CA_ENV_KEYS)
-        .chain(
-            env.get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
-                .filter(|active| active.as_str() == "1")
-                .map(|_| "BASH_ENV"),
-        )
-        .filter(|key| is_valid_shell_variable_name(key))
-        .collect::<Vec<_>>();
-    keys.sort_unstable();
-    keys.dedup();
-
-    let (captures, restores) =
-        build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
-    let key = PROXY_ACTIVE_ENV_KEY;
-    let proxy_blocks = (
-        format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
-        format!(
-            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
-        ),
-    );
-    let git_blocks = build_codex_proxy_git_ssh_command_exports();
-    (
-        join_shell_blocks([proxy_blocks.0, git_blocks.0]),
-        join_shell_blocks([proxy_blocks.1, git_blocks.1]),
-    )
-}
-
 fn build_brokered_credential_exports(env: &HashMap<String, String>, remove_copies: bool) -> String {
     let mut value_copies = env
         .keys()
@@ -815,6 +580,55 @@ fn build_brokered_credential_exports(env: &HashMap<String, String>, remove_copie
     }
     format!(
         "case $- in\n  *x*) __CODEX_SNAPSHOT_BROKER_XTRACE=1; set +x ;;\n  *) __CODEX_SNAPSHOT_BROKER_XTRACE= ;;\nesac\n{exports}\nif [ -n \"$__CODEX_SNAPSHOT_BROKER_XTRACE\" ]; then\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\n  set -x\nelse\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\nfi"
+    )
+}
+
+fn build_override_exports(
+    explicit_env_overrides: &HashMap<String, String>,
+    restore_even_when_absent: &[&str],
+) -> (String, String) {
+    let mut keys = explicit_env_overrides
+        .keys()
+        .map(String::as_str)
+        .chain(restore_even_when_absent.iter().copied())
+        .filter(|key| !is_non_inheritable_env_var(key))
+        .filter(|key| is_valid_shell_variable_name(key))
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+
+    build_override_exports_for_keys("__CODEX_SNAPSHOT_OVERRIDE", &keys)
+}
+
+fn build_proxy_env_exports(env: &HashMap<String, String>) -> (String, String) {
+    let mut keys = PROXY_ENV_KEYS
+        .iter()
+        .copied()
+        .chain(codex_network_proxy::brokered_credential_env_keys(env))
+        .chain(CUSTOM_CA_ENV_KEYS)
+        .chain(
+            env.get(CREDENTIAL_BROKER_ACTIVE_ENV_KEY)
+                .filter(|active| active.as_str() == "1")
+                .map(|_| "BASH_ENV"),
+        )
+        .filter(|key| is_valid_shell_variable_name(key))
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.dedup();
+
+    let (captures, restores) =
+        build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
+    let key = PROXY_ACTIVE_ENV_KEY;
+    let proxy_blocks = (
+        format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
+        format!(
+            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
+        ),
+    );
+    let git_blocks = build_codex_proxy_git_ssh_command_exports();
+    (
+        join_shell_blocks([proxy_blocks.0, git_blocks.0]),
+        join_shell_blocks([proxy_blocks.1, git_blocks.1]),
     )
 }
 

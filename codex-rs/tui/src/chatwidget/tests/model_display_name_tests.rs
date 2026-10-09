@@ -319,6 +319,7 @@ async fn status_line_setup_team_profiles_remain_authoritative_after_settings_cha
     );
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -421,6 +422,7 @@ async fn status_command_uses_team_profiles_and_returns_to_session_model_when_tea
     pretty_assertions::assert_eq!(status_field(&states[1], "Collaboration mode"), "Default");
 
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,

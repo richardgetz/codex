@@ -441,7 +441,6 @@ impl LocalAgentControl {
     /// Mark `agent_id` as explicitly closed in persisted spawn-edge state, then shut down the
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<AgentInfo> {
-        let eta_dispatch = self.lock_eta_reminders().await;
         let state = self.runtime.upgrade()?;
         let metadata = self.get_agent_metadata(agent_id);
         let known_agent = metadata.is_some();
@@ -464,8 +463,6 @@ impl LocalAgentControl {
                 {
                     warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
                 }
-                self.cancel_eta_reminders_for_owner_locked(agent_id, &eta_dispatch)
-                    .await;
                 AgentInfo::Loaded { agent, config }
             }
             Err(err)
@@ -483,13 +480,10 @@ impl LocalAgentControl {
                         "failed to persist stale thread-spawn edge status for {agent_id}: {err}"
                     )));
                 }
-                self.cancel_eta_reminders_for_owner_locked(agent_id, &eta_dispatch)
-                    .await;
                 AgentInfo::Unloaded(metadata.unwrap_or_default())
             }
             Err(err) => return Err(err),
         };
-        drop(eta_dispatch);
         match Box::pin(self.shutdown_agent_tree(agent_id)).await {
             Err(err)
                 if known_agent

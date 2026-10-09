@@ -14,6 +14,7 @@ mod provider_selection_tests;
 mod realtime;
 mod rollout_history;
 mod thread_list;
+mod web_search;
 
 #[cfg(test)]
 #[path = "app_server_session/collaboration_catalog_tests.rs"]
@@ -528,16 +529,33 @@ impl AppServerSession {
                     })
             })
             .transpose()?;
-        let thread_start_params = thread_start_params_from_config(
+        let mut thread_start_params = thread_start_params_from_config(
             &config,
             self.thread_params_mode(),
             self.remote_cwd_override(),
             /*session_start_source*/ None,
         );
+        let daybreak_launch_override = config
+            .config_layer_stack
+            .layers_high_to_low()
+            .find(|layer| layer.config.get("daybreak").is_some())
+            .is_some_and(|layer| {
+                matches!(
+                    layer.name,
+                    codex_config::ConfigLayerSource::SessionFlags
+                        | codex_config::ConfigLayerSource::User {
+                            profile: Some(_),
+                            ..
+                        }
+                )
+            });
+        thread_start_params.daybreak_enabled =
+            daybreak_launch_override.then_some(config.daybreak_enabled);
         self.dynamic_tool_mcp = Some(Arc::new(
             DynamicToolMcpServer::start(
                 self.request_handle(),
                 thread_start_params,
+                config.features.get().clone(),
                 app_event_tx,
                 status_updates,
                 managed_requirement,
@@ -830,6 +848,7 @@ impl AppServerSession {
             .model_provider_override
             .clone()
             .or(params.model_provider);
+        params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
         if let Some(selected_profile) = selected_profile {
             params.runtime_workspace_roots = None;
             params.permissions = Some(PermissionProfileSelectionParams::new(
@@ -940,6 +959,7 @@ impl AppServerSession {
         local_settings: &LocalSettings,
         config: Config,
         thread_id: ThreadId,
+        selected_profile: Option<&PermissionProfileSelection>,
     ) -> Result<AppServerStartedThread> {
         self.fork_thread_at_with_presentation(
             local_settings,
@@ -949,7 +969,7 @@ impl AppServerSession {
             /*before_turn_id*/ None,
             ForkGoalContinuation::StartIfIdle,
             ForkPresentation::SideConversation,
-            /*selected_profile*/ None,
+            selected_profile,
             ForkPermissionMode::InheritSaved,
             ForkConfigSource::Session,
         )
@@ -1018,6 +1038,7 @@ impl AppServerSession {
         }
         if self.thread_params_mode() == ThreadParamsMode::Remote
             && permission_mode == ForkPermissionMode::InheritSaved
+            && selected_profile.is_none()
         {
             params.approval_policy = None;
             params.approvals_reviewer = None;
@@ -1706,6 +1727,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadGoalSet {
                 request_id,
                 params: ThreadGoalSetParams {
+                    origin: Some(codex_app_server_protocol::ThreadGoalMutationOrigin::User),
                     thread_id: thread_id.to_string(),
                     objective,
                     status,
@@ -1725,6 +1747,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadGoalClear {
                 request_id,
                 params: ThreadGoalClearParams {
+                    origin: Some(codex_app_server_protocol::ThreadGoalMutationOrigin::User),
                     thread_id: thread_id.to_string(),
                 },
             })
@@ -2167,6 +2190,7 @@ pub(crate) async fn start_thread_with_request_handle(
         /*session_start_source*/ None,
     );
     params.model_provider = model_provider_override.or(params.model_provider);
+    params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true);
     thread_tool_transport.configure(&mut params);
     let (response, _history_support, task_tools_available) =
         request_thread_start_with_history_fallback(&request_handle, request_id, params)
@@ -2218,7 +2242,7 @@ pub(crate) fn status_account_display_from_account(
     }
 }
 
-fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
+pub(crate) fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
     let upgrade = model.upgrade.map(|upgrade_id| {
         let upgrade_info = model.upgrade_info.clone();
         ModelUpgrade {
@@ -2295,6 +2319,7 @@ pub(crate) fn personality_opt_out_only(personality: Option<Personality>) -> Opti
 
 fn config_request_overrides_from_config(
     config: &Config,
+    thread_params_mode: ThreadParamsMode,
 ) -> Option<HashMap<String, serde_json::Value>> {
     let mut session_config = toml::Value::Table(toml::Table::new());
     for layer in config.config_layer_stack.layers_low_to_high() {
@@ -2341,13 +2366,16 @@ fn config_request_overrides_from_config(
         "personality",
         personality_opt_out_only(config.personality).map(|personality| personality.to_string()),
     );
-    insert(
-        "web_search",
-        Some(config.web_search_mode.value().to_string()),
-    );
     // Only winning launch choices may replace server defaults or saved thread settings.
     let origins = config.config_layer_stack.origins();
     let effective = config.config_layer_stack.effective_config();
+    web_search::apply_launch_override(
+        config,
+        thread_params_mode,
+        &effective,
+        &origins,
+        &mut overrides,
+    );
     for key in ["model_reasoning_summary", "model_verbosity"] {
         if origins.get(key).is_some_and(|origin| {
             matches!(
@@ -2391,7 +2419,8 @@ fn remove_permission_config_overrides(config: &mut Option<HashMap<String, serde_
 }
 
 fn new_thread_reasoning_overrides(config: &Config) -> Option<HashMap<String, serde_json::Value>> {
-    let mut overrides = config_request_overrides_from_config(config).unwrap_or_default();
+    let mut overrides = config_request_overrides_from_config(config, ThreadParamsMode::Embedded)
+        .unwrap_or_default();
     let summary = config
         .model_reasoning_summary
         .unwrap_or(codex_protocol::config_types::ReasoningSummary::None);
@@ -2561,7 +2590,9 @@ pub(crate) fn thread_start_params_from_config(
         permissions,
         config: match thread_params_mode {
             ThreadParamsMode::Embedded => new_thread_reasoning_overrides(config),
-            ThreadParamsMode::Remote => config_request_overrides_from_config(config),
+            ThreadParamsMode::Remote => {
+                config_request_overrides_from_config(config, thread_params_mode)
+            }
         },
         ephemeral: Some(config.ephemeral),
         history_mode: (!config.ephemeral).then_some(ThreadHistoryMode::Paginated),
@@ -2606,7 +2637,7 @@ fn thread_resume_params_from_config(
             )
         })
         .flatten();
-    let mut config_overrides = config_request_overrides_from_config(&config);
+    let mut config_overrides = config_request_overrides_from_config(&config, thread_params_mode);
     if model_settings == ResumeModelSettings::RestoreFromThread
         && let Some(overrides) = config_overrides.as_mut()
     {
@@ -2690,7 +2721,7 @@ fn thread_fork_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
         permissions,
-        config: config_request_overrides_from_config(&config),
+        config: config_request_overrides_from_config(&config, thread_params_mode),
         base_instructions: config.base_instructions.clone().filter(|_| {
             !matches!(
                 config.base_instructions_provenance,
@@ -2806,7 +2837,7 @@ async fn thread_session_state_from_thread_start_response(
         config,
         thread_params_mode,
     );
-    thread_session_state_from_thread_response_with_team(
+    let mut session = thread_session_state_from_thread_response_with_team(
         &response.thread.id,
         crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
@@ -2827,7 +2858,12 @@ async fn thread_session_state_from_thread_start_response(
         config.personality,
         local_settings,
     )
-    .await
+    .await?;
+    session.daybreak_enabled = response
+        .thread
+        .daybreak_enabled
+        .unwrap_or(response.thread.ephemeral && config.daybreak_enabled);
+    Ok(session)
 }
 
 async fn thread_session_state_from_thread_resume_response(
@@ -2865,6 +2901,7 @@ async fn thread_session_state_from_thread_resume_response(
     .await?;
     session.team = response.team.clone();
     session.collaboration_mode = response.collaboration_mode.clone().map(Box::new);
+    session.daybreak_enabled = response.thread.daybreak_enabled.unwrap_or(false);
     Ok(session)
 }
 
@@ -2880,7 +2917,7 @@ async fn thread_session_state_from_thread_fork_response(
         config,
         thread_params_mode,
     );
-    thread_session_state_from_thread_response_with_team(
+    let mut session = thread_session_state_from_thread_response_with_team(
         &response.thread.id,
         crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
@@ -2901,7 +2938,12 @@ async fn thread_session_state_from_thread_fork_response(
         config.personality,
         local_settings,
     )
-    .await
+    .await?;
+    session.daybreak_enabled = response
+        .thread
+        .daybreak_enabled
+        .unwrap_or(config.daybreak_enabled && !response.thread.ephemeral);
+    Ok(session)
 }
 
 fn display_permission_profile_from_thread_response(
@@ -2966,6 +3008,7 @@ async fn thread_session_state_from_thread_response(
     );
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host,
         thread_id,
         forked_from_id,
@@ -4085,7 +4128,6 @@ mod tests {
         let string = |value: &str| serde_json::Value::String(value.to_string());
         let expected_config = HashMap::from([
             ("model_reasoning_effort".to_string(), string("high")),
-            ("web_search".to_string(), string("disabled")),
             ("bypass_hook_trust".to_string(), true.into()),
             ("features.realtime_conversation".to_string(), true.into()),
         ]);
@@ -4154,8 +4196,8 @@ mod tests {
                 })
                 .build()
                 .await?;
-            let overrides =
-                config_request_overrides_from_config(&config).expect("config overrides");
+            let overrides = config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
             assert_eq!(
                 ["model_reasoning_summary", "model_verbosity"]
                     .map(|key| overrides.get(key).and_then(serde_json::Value::as_str)),
@@ -4345,6 +4387,7 @@ mod tests {
                 &LocalSettings::from(&ephemeral_config),
                 ephemeral_config,
                 source_thread_id,
+                /*selected_profile*/ None,
             )
             .await?;
 
@@ -4471,6 +4514,7 @@ mod tests {
                 &LocalSettings::from(&side_config),
                 side_config,
                 source_thread_id,
+                /*selected_profile*/ None,
             )
             .await?;
 
@@ -4495,7 +4539,8 @@ mod tests {
         config.personality = None;
 
         let implicit_overrides =
-            config_request_overrides_from_config(&config).expect("config overrides");
+            config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
 
         assert!(!implicit_overrides.contains_key("personality"));
         assert_eq!(
@@ -4505,19 +4550,22 @@ mod tests {
 
         config.realtime.enabled = false;
         let disabled_overrides =
-            config_request_overrides_from_config(&config).expect("config overrides");
+            config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
         assert!(!disabled_overrides.contains_key("features.realtime_conversation"));
 
         for personality in [Personality::Friendly, Personality::Pragmatic] {
             config.personality = Some(personality);
             let ordinary_overrides =
-                config_request_overrides_from_config(&config).expect("config overrides");
+                config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                    .expect("config overrides");
             assert!(!ordinary_overrides.contains_key("personality"));
         }
 
         config.personality = Some(Personality::None);
         let explicit_overrides =
-            config_request_overrides_from_config(&config).expect("config overrides");
+            config_request_overrides_from_config(&config, ThreadParamsMode::Remote)
+                .expect("config overrides");
 
         assert_eq!(
             explicit_overrides.get("personality"),
@@ -4611,7 +4659,12 @@ mod tests {
             .fork_thread(&LocalSettings::from(&config), config.clone(), thread_id)
             .await?;
         let side = app_server
-            .fork_side_thread(&LocalSettings::from(&config), config, thread_id)
+            .fork_side_thread(
+                &LocalSettings::from(&config),
+                config,
+                thread_id,
+                /*selected_profile*/ None,
+            )
             .await?;
 
         assert_eq!(regular.turns.len(), 1);

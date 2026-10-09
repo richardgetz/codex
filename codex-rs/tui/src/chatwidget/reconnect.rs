@@ -31,7 +31,10 @@ impl ChatWidget {
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ false);
         self.set_status_header("Reconnecting to server…".to_string());
-        self.set_footer_hint_override(Some(vec![("ctrl+c".into(), "quit".into())]));
+        self.set_footer_hint_override(Some(vec![(
+            crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
+            "quit".into(),
+        )]));
     }
 
     /// Restore local input only after replay, which can otherwise move interrupted queues into the draft.
@@ -41,25 +44,13 @@ impl ChatWidget {
         confirmed_message_ids: &[String],
     ) {
         let running = self.turn_lifecycle.agent_turn_running;
-        let reconnect_pending = input
-            .as_ref()
-            .is_some_and(|input| input.reconnect_pending || input.has_unconfirmed_messages());
+        let reconnect_pending = input.as_ref().is_some_and(|input| input.reconnect_pending);
         if let Some(mut input) = input {
             // Navigation can continue an unresolved recovery while new steers are in flight.
-            input.reconnect_pending = reconnect_pending;
-            // Pending compact/review requests have no message receipt to reconcile. Receipt-
-            // tracked reconnect input keeps its own Unconfirmed gate until reconciliation, so it
-            // does not need the broader recovered-queue hold as well.
-            let reconnect_has_receipt_tracked_input = input.reconnect_pending
-                && (!input.pending_steers.is_empty()
-                    || input.has_unconfirmed_messages()
-                    || input
-                        .pending_user_message_client_id
-                        .as_ref()
-                        .is_some_and(|id| confirmed_message_ids.contains(id)));
-            input.recovered_queue |= input.user_turn_pending_start
-                && input.safety_buffering_prompt.is_none()
-                && !reconnect_has_receipt_tracked_input;
+            input.reconnect_pending |= input.has_unconfirmed_messages();
+            // Pending compact/review requests have no message receipt to reconcile.
+            input.recovered_queue |=
+                input.user_turn_pending_start && input.safety_buffering_prompt.is_none();
             // Only an exact submission ID confirms receipt; missing or legacy history
             // must never cause us to retry an already submitted message automatically.
             if input.user_turn_pending_start

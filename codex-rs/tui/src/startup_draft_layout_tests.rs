@@ -23,6 +23,8 @@ fn owned_startup_keeps_the_live_bottom_geometry() {
             (area.x..area.right())
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
+                .trim_end()
+                .to_owned()
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -108,16 +110,12 @@ async fn configured_welcome_opt_out_disables_blossom_and_clicks() -> anyhow::Res
             /*config_cwd*/ None,
         )
         .await?;
-        let config = crate::legacy_core::config::ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await?;
         let mut pump = crate::startup_draft::tests::quiet_startup_test_pump();
         // The provisional frame uses the bootstrap value; subsequent frames use effective config.
         pump.motion = presentation.screen.welcome_motion;
         for effective in [false, true] {
             if effective {
-                pump.apply_config(&config);
+                pump.apply_settings(&presentation.local_settings, codex_home.path());
             }
             let mut buffer = Buffer::empty(area);
             OwnedStartupLayout::new(&pump).render(area, &mut buffer);

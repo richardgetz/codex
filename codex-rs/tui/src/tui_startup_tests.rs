@@ -200,7 +200,8 @@ async fn startup_typeahead_pty_child() {
         return;
     };
     let signals = PathBuf::from(signals);
-    let initialized_terminal = crate::tui::init(false).expect("initialize startup terminal");
+    let initialized_terminal =
+        crate::tui::init(/*realtime_voice_enabled*/ false).expect("initialize startup terminal");
     let terminal_restore_guard = crate::TerminalRestoreGuard::new();
     let mut startup_draft = crate::startup_draft::StartupDraft::new(
         initialized_terminal,

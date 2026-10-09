@@ -123,9 +123,6 @@ async fn resumed_session_hides_unknown_token_usage_until_an_update_arrives() {
 #[tokio::test]
 async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(Some("gpt-5.6-sol")).await;
-    chat.cyber_policy_notice
-        .set(crate::daybreak::Notice::Apply)
-        .unwrap();
 
     handle_error(
         &mut chat,
@@ -140,6 +137,89 @@ async fn app_server_cyber_policy_error_renders_dedicated_notice() {
     assert!(rendered.contains("We take extra care with some cybersecurity requests"));
     assert!(rendered.contains("Apply for Daybreak"));
     assert!(!rendered.contains("server fallback message"));
+}
+
+#[tokio::test]
+async fn daybreak_refusal_offers_enable_for_the_next_turn() {
+    let (mut chat, mut events, mut ops) = make_chatwidget_manual_with_auth(
+        Some("gpt-5.6-sol"),
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+        FrameRequester::test_dummy(),
+    )
+    .await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let mut model = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+    model.model = "gpt-5.6-sol".into();
+    model.available_access_programs = Some(codex_protocol::openai_models::ModelAccessPrograms {
+        cyber: vec![codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue],
+    });
+    chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![model]));
+
+    for explicitly_disabled in [false, true] {
+        if explicitly_disabled {
+            chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ false);
+        }
+        chat.on_cyber_policy_error();
+        let cells = drain_insert_history(&mut events);
+        assert!(lines_to_single_string(&cells[0]).contains("Apply for Daybreak"));
+        assert!(chat.bottom_pane.no_modal_or_popup_active());
+        assert!(ops.try_recv().is_err());
+        assert!(
+            !std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(
+                event,
+                AppEvent::PersistDaybreakSelection { enabled: true, .. }
+            ))
+        );
+        chat.set_daybreak_enabled(/*enabled*/ true);
+        assert!(!chat.daybreak_enabled);
+    }
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
+
+    chat.thread_usage.replaying_turn_completion = true;
+    chat.on_cyber_policy_error();
+    let cells = drain_insert_history(&mut events);
+    assert!(lines_to_single_string(&cells[0]).contains("Daybreak is currently off"));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    chat.thread_usage.replaying_turn_completion = false;
+
+    chat.daybreak_enabled = true;
+    chat.on_cyber_policy_error();
+    let cells = drain_insert_history(&mut events);
+    assert!(lines_to_single_string(&cells[0]).contains("even when Daybreak is on"));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    chat.daybreak_enabled = false;
+
+    chat.on_cyber_policy_error();
+    assert_chatwidget_snapshot!(
+        "daybreak_refusal_enable_picker",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event,
+            AppEvent::PersistDaybreakSelection { thread_id: id, enabled: true } if id == thread_id
+        ))
+    );
+    assert!(ops.try_recv().is_err());
+
+    chat.set_parent_owned_thread();
+    handle_error(
+        &mut chat,
+        "server fallback message",
+        Some(CodexErrorInfo::CyberPolicy),
+    );
+    let cells = drain_insert_history(&mut events);
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    assert_chatwidget_snapshot!(
+        "daybreak_refusal_parent_owned",
+        normalize_snapshot_paths(format!(
+            "{}\n{}",
+            lines_to_single_string(cells.last().unwrap()),
+            render_bottom_popup(&chat, /*width*/ 80)
+        ))
+    );
 }
 
 #[tokio::test]
@@ -515,9 +595,9 @@ async fn configured_pet_load_is_deferred_until_after_construction() {
         config: cfg.clone(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         frame_requester: FrameRequester::test_dummy(),
-        app_event_tx: tx,
         state_db: None,
-        provenance_commands_enabled: true,
+        app_event_tx: tx,
+        provenance_commands_enabled: false,
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
@@ -1147,75 +1227,6 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
 }
 
 #[tokio::test]
-async fn account_switch_clears_cached_status_line_rate_limits() {
-    let (mut chat, mut rx, _) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 92.0)));
-    drain_insert_history(&mut rx);
-    assert_eq!(
-        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        Some("usage 8% left".to_string())
-    );
-
-    chat.set_active_account_alias(Some("personal".to_string()));
-
-    assert_eq!(
-        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        None
-    );
-}
-
-#[tokio::test]
-async fn account_switch_rejects_stale_rate_limit_refresh_alias() {
-    let (mut chat, _, _) = make_chatwidget_manual(/*model_override*/ None).await;
-    let default_generation = chat.account_generation();
-
-    chat.set_active_account_alias(Some("personal".to_string()));
-
-    assert!(!chat.rate_limit_refresh_matches_active_account(
-        /*account_alias*/ None,
-        default_generation
-    ));
-    assert!(!chat.rate_limit_refresh_matches_active_account(
-        /*account_alias*/ Some("personal"),
-        default_generation
-    ));
-    assert!(chat.rate_limit_refresh_matches_active_account(
-        /*account_alias*/ Some("personal"),
-        chat.account_generation()
-    ));
-}
-
-#[tokio::test]
-async fn account_switch_rejects_stale_rate_limit_refresh_after_alias_returns() {
-    let (mut chat, _, _) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.set_active_account_alias(Some("personal".to_string()));
-    let first_personal_generation = chat.account_generation();
-    chat.set_active_account_alias(Some("work".to_string()));
-    chat.set_active_account_alias(Some("personal".to_string()));
-
-    assert!(!chat.rate_limit_refresh_matches_active_account(
-        /*account_alias*/ Some("personal"),
-        first_personal_generation
-    ));
-}
-
-#[tokio::test]
-async fn account_switch_ignores_untagged_rate_limit_notifications() {
-    let (mut chat, mut rx, _) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.set_active_account_alias(Some("personal".to_string()));
-    chat.on_untagged_rate_limit_snapshot(snapshot(/*percent*/ 92.0));
-    drain_insert_history(&mut rx);
-
-    assert_eq!(
-        chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        None
-    );
-}
-
-#[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
     chat.has_chatgpt_account = true;
@@ -1254,90 +1265,6 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Idle
     ));
-}
-
-#[tokio::test]
-async fn exhausted_usage_auto_rotates_to_next_configured_account() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.accounts.active = Some("work".to_string());
-    chat.config.accounts.rotation = vec!["work".to_string(), "personal".to_string()];
-
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SwitchAccount {
-            alias: Some(alias),
-            reason: crate::app_event::AccountSwitchReason::AutoRotation,
-        }) if alias == "personal"
-    );
-}
-
-#[tokio::test]
-async fn exhausted_usage_auto_rotation_can_switch_to_default_auth_store() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.accounts.active = Some("work".to_string());
-    chat.config.accounts.rotation = vec!["work".to_string(), "default".to_string()];
-
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SwitchAccount {
-            alias: None,
-            reason: crate::app_event::AccountSwitchReason::AutoRotation,
-        })
-    );
-}
-
-#[tokio::test]
-async fn exhausted_usage_auto_rotation_skips_unavailable_candidate() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.accounts.active = Some("work".to_string());
-    chat.config.accounts.rotation = vec![
-        "work".to_string(),
-        "personal".to_string(),
-        "backup".to_string(),
-    ];
-
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SwitchAccount {
-            alias: Some(alias),
-            reason: crate::app_event::AccountSwitchReason::AutoRotation,
-        }) if alias == "personal"
-    );
-
-    chat.mark_account_rotation_alias_unavailable(Some("personal"));
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SwitchAccount {
-            alias: Some(alias),
-            reason: crate::app_event::AccountSwitchReason::AutoRotation,
-        }) if alias == "backup"
-    );
-}
-
-#[tokio::test]
-async fn exhausted_usage_does_not_auto_rotate_without_configured_sequence() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.config.accounts.active = Some("work".to_string());
-
-    chat.on_rate_limit_snapshot(Some(snapshot(/*percent*/ 100.0)));
-
-    assert!(
-        !matches!(
-            rx.try_recv(),
-            Ok(AppEvent::SwitchAccount {
-                reason: crate::app_event::AccountSwitchReason::AutoRotation,
-                ..
-            })
-        ),
-        "unexpected auto account rotation"
-    );
 }
 
 #[tokio::test]
@@ -2974,30 +2901,6 @@ async fn warning_event_adds_warning_history_cell() {
 }
 
 #[tokio::test]
-async fn lead_idle_and_deadline_warnings_render_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    handle_warning(
-        &mut chat,
-        "Lead wait parked; next oversight deadline: 2030-01-01T00:00:00Z.",
-    );
-    handle_warning(
-        &mut chat,
-        "Lead oversight deadline reached; review 1 active Worker.",
-    );
-
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 2, "expected idle and deadline warning cells");
-    insta::assert_snapshot!(
-        lines_to_single_string(&cells.concat()),
-        @r###"
-⚠ Lead wait parked; next oversight deadline: 2030-01-01T00:00:00Z.
-
-⚠ Lead oversight deadline reached; review 1 active Worker.
-"###
-    );
-}
-
-#[tokio::test]
 async fn unsupported_code_mode_warning_renders_as_warning_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_warning(
@@ -4475,6 +4378,7 @@ async fn session_configured_clears_goal_status_footer() {
 
     let rollout_file = NamedTempFile::new().unwrap();
     chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,

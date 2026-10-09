@@ -148,6 +148,12 @@ thread originator, Daybreak enablement, attachments, creator identity, and
 Guardian metadata cleanup already match shipped stable migrations and must not
 be applied a second time.
 
+The `rust-v0.160.0` refresh preserves every shipped filename and checksum
+through `0067`; incoming `0058_threads_archive_sort_indexes.sql` is byte-identical
+to stable's `0067_upstream_threads_archive_sort_indexes.sql` and is not applied
+again. The `rust-v0.161.0` refresh keeps the same sequence and also omits the
+duplicate `0058` archive-sort migration.
+
 ## Conflict Policy
 
 Resolve conflicts locally regardless of how many files or crates are involved.

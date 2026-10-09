@@ -49,9 +49,8 @@ pub use executed_tool_calls::ToolResultMetadata;
 pub use executed_tool_calls::ToolResultSource;
 pub use executed_tool_calls::ToolResultSources;
 pub use executed_tool_calls::bound_executed_tool_calls_for_message;
-pub use executed_tool_calls::bound_executed_tool_calls_for_prompt;
-pub use executed_tool_calls::bound_executed_tool_calls_for_prompt_prioritizing_recent;
 pub use executed_tool_calls::executed_tool_call_metadata_bytes;
+pub use executed_tool_calls::normalize_executed_tool_call_arguments;
 pub use item_metadata::ContentItemKind;
 
 /// Controls the per-command sandbox override requested by a shell-like tool call.
@@ -448,8 +447,8 @@ pub struct ActivePermissionProfile {
     /// profile.
     pub id: String,
 
-    /// Optional parent profile identifier once permissions profiles support
-    /// inheritance. This is always `None` until that config feature exists.
+    /// Optional parent profile identifier from the selected permissions
+    /// profile's `extends` setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extends: Option<String>,
@@ -875,10 +874,11 @@ pub enum ResponseInputItem {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[derive(derive_more::Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
     InputText {
+        #[debug("{:?} <{} bytes>", &text[..text.floor_char_boundary(/*index*/ 512)], text.len())]
         text: String,
     },
     InputImage {
@@ -3557,6 +3557,35 @@ mod tests {
     }
 
     #[test]
+    fn serializes_encrypted_function_output_content_as_array() -> Result<()> {
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::EncryptedContent {
+                    encrypted_content: "enc_opaque".into(),
+                },
+            ]),
+        };
+
+        let json = serde_json::to_value(&item)?;
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call1",
+                "output": [
+                    {
+                        "type": "encrypted_content",
+                        "encrypted_content": "enc_opaque",
+                    }
+                ],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn preserves_existing_image_data_urls() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![serde_json::json!({
@@ -3676,6 +3705,30 @@ mod tests {
                 detail: None,
             },
         ];
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::ContentItems(expected_items.clone())
+        );
+        assert_eq!(
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&expected_items)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_encrypted_array_payload_into_items() -> Result<()> {
+        let json = r#"[
+            {"type": "encrypted_content", "encrypted_content": "enc_opaque"}
+        ]"#;
+
+        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
+        let expected_items = vec![FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".into(),
+        }];
+
+        assert_eq!(payload.success, None);
         assert_eq!(
             payload.body,
             FunctionCallOutputBody::ContentItems(expected_items.clone())
@@ -3903,6 +3956,25 @@ mod tests {
                 }]
             })
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn encrypted_content_item_round_trips() -> Result<()> {
+        let item = ContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".to_string(),
+        };
+
+        let serialized = serde_json::to_value(&item)?;
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "type": "encrypted_content",
+                "encrypted_content": "enc_opaque",
+            })
+        );
+        assert_eq!(serde_json::from_value::<ContentItem>(serialized)?, item);
 
         Ok(())
     }

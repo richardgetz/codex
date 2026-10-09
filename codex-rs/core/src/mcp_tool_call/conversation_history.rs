@@ -200,8 +200,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
                             .to_owned(),
                     );
                 }
-                let history_text = text_segments.join("\n");
-                result.content = vec![json!({"type": "text", "text": history_text})];
+                result.content = vec![json!({"type": "text", "text": text_segments.join("\n")})];
                 result.structured_content = None;
                 result.meta = None;
                 Ok(Box::new(McpToolOutput {

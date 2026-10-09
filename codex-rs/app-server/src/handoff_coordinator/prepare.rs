@@ -284,6 +284,31 @@ impl HandoffCoordinator {
                     manager_guard.abort();
                     return Ok(response);
                 }
+                Ok(SuspendTurnOutcome::BlockedAndShutdown { turn_id, blockers }) => {
+                    journal.update_node(
+                        &thread_id,
+                        HandoffNodeState::NeedsAttention,
+                        blockers,
+                        Some(turn_id),
+                    );
+                    journal.set_state(HandoffJournalState::NeedsAttention);
+                    let journal_result = self.persist_journal(&journal).await;
+                    // Core awaits this session's termination before returning the outcome. Remove
+                    // only that exact runtime before admission reopens, including when journal
+                    // persistence fails, so new requests can never reach its closed services.
+                    self.thread_manager
+                        .remove_thread_if_matches(&thread_id_value, &thread)
+                        .await;
+                    if let Err(error) = journal_result {
+                        drop(tree_guards);
+                        manager_guard.abort();
+                        return Err(error);
+                    }
+                    let response = self.receipt_response(&journal);
+                    drop(tree_guards);
+                    manager_guard.abort();
+                    return Ok(response);
+                }
                 Ok(SuspendTurnOutcome::UnsupportedTask) => {
                     journal.update_node(
                         &thread_id,

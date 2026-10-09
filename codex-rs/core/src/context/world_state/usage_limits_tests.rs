@@ -39,6 +39,7 @@ fn usage_limits_fragment_describes_provider_windows_and_policy() {
 
     let fragment = state
         .render_diff(PreviousSectionState::Absent)
+        .1
         .expect("usage status should be rendered");
 
     assert_eq!(fragment.content_kind().0, "usage_limits.status");
@@ -81,6 +82,7 @@ fn usage_limits_fragment_is_not_repeated_when_snapshot_is_unchanged() {
     assert!(
         state
             .render_diff(PreviousSectionState::Known(&snapshot))
+            .1
             .is_none()
     );
 }
@@ -99,6 +101,7 @@ fn usage_limits_fragment_reports_when_previous_status_is_retired() {
 
     let fragment = current
         .render_diff(PreviousSectionState::Known(&previous))
+        .1
         .expect("retiring usage status should be rendered");
 
     assert!(
@@ -127,19 +130,22 @@ fn usage_limits_removal_is_not_rediscovered_from_legacy_history() {
     );
     let mut previous_world_state = crate::context::world_state::WorldState::default();
     previous_world_state.add_section(previous_state);
-    let previous = previous_world_state.snapshot();
+    let (previous, previous_fragments) = previous_world_state.render_full();
+    let previous_history = previous_fragments
+        .into_iter()
+        .map(crate::context::ContextualUserFragment::into_boxed_response_item)
+        .collect::<Vec<_>>();
 
     let current = UsageLimitsState::new(ThreadUsagePolicy::default(), &[]);
     let mut world_state = crate::context::world_state::WorldState::default();
     world_state.add_section(current);
-    let removal = world_state
-        .render_diff(&previous)
-        .pop()
-        .expect("first removal should be rendered");
+    let (_, mut removals) = world_state.render_history_diff(Some(&previous), &previous_history);
+    let removal = removals.pop().expect("first removal should be rendered");
     let removal = crate::context::ContextualUserFragment::into_boxed_response_item(removal);
     assert!(
         world_state
             .render_history_diff(Some(&previous), std::slice::from_ref(&removal))
+            .1
             .is_empty(),
         "a removal tombstone must not count as retained usage status"
     );
@@ -198,6 +204,7 @@ fn usage_limits_context_has_a_token_bound_for_multibyte_limit_ids() {
         .collect::<Vec<_>>();
     let fragment = UsageLimitsState::new(ThreadUsagePolicy::default(), &rate_limits)
         .render_diff(PreviousSectionState::Absent)
+        .1
         .expect("usage status should be rendered");
 
     assert!(approx_token_count(&fragment.body()) <= 1_000);

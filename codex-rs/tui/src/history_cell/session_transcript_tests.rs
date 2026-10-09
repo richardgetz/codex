@@ -9,7 +9,40 @@ use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
+
+#[test]
+fn session_greeting_binds_through_nested_session_info() {
+    let greeting = Arc::new(OnceLock::new());
+    let expected = Greeting {
+        phrase: "A retained session greeting.",
+    };
+    greeting
+        .set(expected)
+        .expect("greeting is initialized once");
+    let header = SessionHeaderHistoryCell::new(
+        "gpt-5".to_string(),
+        /*reasoning_effort*/ None,
+        PathBuf::from("project"),
+        "test",
+    );
+    let mut info = SessionInfoCell(CompositeHistoryCell {
+        parts: vec![Box::new(header)],
+    });
+
+    set_session_greeting(&mut info, &greeting);
+
+    let contains_greeting = |lines: &[Line<'static>]| {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .any(|span| span.content.contains(expected.phrase))
+    };
+    assert!(contains_greeting(&info.display_lines(/*width*/ 80)));
+    assert!(contains_greeting(&info.raw_lines()));
+}
 
 #[test]
 fn wheel_at_hidden_session_header_keeps_the_loaded_message_anchor() {

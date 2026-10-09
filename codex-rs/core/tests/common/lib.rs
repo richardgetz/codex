@@ -387,17 +387,15 @@ where
 {
     use tokio::time::Duration;
     use tokio::time::timeout;
-    let mut observed = Vec::new();
     loop {
         // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
         let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
             .await
-            .unwrap_or_else(|_| panic!("timeout waiting for event; observed: {observed:#?}"))
+            .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
         if predicate(&ev.msg) {
             return ev.msg;
         }
-        observed.push(ev.msg);
     }
 }
 

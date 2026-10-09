@@ -8,6 +8,7 @@ use crate::app::eta_view::EtaTaskStatus;
 use crate::app::eta_view::EtaViewState;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadActivityUpdatedNotification;
 use codex_app_server_protocol::ThreadEtaAccuracy;
 use codex_app_server_protocol::ThreadEtaListResponse;
 use codex_app_server_protocol::ThreadEtaOverall;

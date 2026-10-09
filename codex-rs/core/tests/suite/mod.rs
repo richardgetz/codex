@@ -36,6 +36,7 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
     })
 };
 
+mod abort_lifecycle;
 #[cfg(not(target_os = "windows"))]
 mod abort_tasks;
 mod additional_context;
@@ -54,6 +55,8 @@ mod approvals;
 mod audio_truncation;
 mod auth_recovery_policy;
 mod auto_review;
+#[path = "bedrock_multi_agent_tests.rs"]
+mod bedrock_multi_agent;
 mod capacity_retry;
 mod catalog_permission_messages;
 mod cli_stream;
@@ -215,7 +218,6 @@ mod stream_error_allows_next_turn;
 mod stream_no_completed;
 mod subagent_notifications;
 mod subagent_service_tier;
-mod team;
 mod token_budget;
 mod token_usage_rollout;
 mod tool_harness;
@@ -226,6 +228,7 @@ mod truncation;
 #[path = "turn_error_details_tests.rs"]
 mod turn_error_details;
 mod turn_input_submission;
+mod turn_phase_trace;
 mod turn_state;
 mod unified_exec;
 #[path = "unified_exec_launch_failure_tests.rs"]

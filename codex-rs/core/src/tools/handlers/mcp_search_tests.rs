@@ -6,8 +6,7 @@ use serde_json::json;
 
 #[test]
 fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
-    let handler = McpHandler::new(tool_info(), /*namespace_tools_enabled*/ true)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(tool_info()).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
@@ -24,11 +23,32 @@ fn search_info_uses_mcp_tool_metadata_and_parameter_names() {
 }
 
 #[test]
+fn namespace_disabled_mcp_handler_flattens_tools_with_schema_budget() {
+    let handler = McpHandler::new_with_schema_max_bytes_and_namespace_tools(
+        tool_info(),
+        1_000,
+        /*namespace_tools_enabled*/ false,
+    )
+    .expect("MCP tool spec should build");
+
+    assert_eq!(
+        handler.tool_name,
+        ToolName::plain("mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent")
+    );
+    let ToolSpec::Function(tool) = handler.spec.as_ref() else {
+        panic!("namespace-disabled MCP handlers should return flat function specs");
+    };
+    assert_eq!(
+        tool.name,
+        "mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent"
+    );
+}
+
+#[test]
 fn search_info_uses_connector_name_for_output_namespace_description() {
     let mut tool_info = tool_info();
     tool_info.namespace_description = None;
-    let handler = McpHandler::new(tool_info, /*namespace_tools_enabled*/ true)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(tool_info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     let LoadableToolSpec::Namespace(namespace) = search_info.entry.to_loadable_spec() else {
@@ -49,8 +69,7 @@ fn mcp_namespace_descriptions_preserve_complete_metadata() {
     let full_description = format!("{}🦀keep the complete app metadata", "é".repeat(499));
     let mut info = tool_info();
     info.namespace_description = Some(full_description.clone());
-    let handler = McpHandler::new(info, /*namespace_tools_enabled*/ true)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
@@ -76,8 +95,7 @@ fn mcp_namespace_descriptions_are_bounded_at_512_kib() {
     let full_description = format!("{expected_description}🦀overflow");
     let mut info = tool_info();
     info.namespace_description = Some(full_description.clone());
-    let handler = McpHandler::new(info, /*namespace_tools_enabled*/ true)
-        .expect("MCP tool spec should build");
+    let handler = McpHandler::new(info).expect("MCP tool spec should build");
     let search_info = handler.search_info().expect("MCP search info");
 
     assert_eq!(
@@ -112,6 +130,27 @@ fn agent_plugin_namespace_descriptions_use_the_stricter_bound() {
         panic!("expected namespace search output");
     };
     assert_eq!(namespace.description, expected_description);
+}
+
+#[test]
+fn namespace_disabled_agent_plugin_handler_flattens_function_specs() {
+    let handler = McpHandler::new_agent_plugin_with_namespace_tools(
+        tool_info(),
+        /*namespace_tools_enabled*/ false,
+    )
+    .expect("agent-plugin MCP tool spec should build");
+
+    assert_eq!(
+        handler.tool_name,
+        ToolName::plain("mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent")
+    );
+    let ToolSpec::Function(tool) = handler.spec.as_ref() else {
+        panic!("namespace-disabled MCP handlers should return flat function specs");
+    };
+    assert_eq!(
+        tool.name,
+        "mcp____mcp_x5f_x5fcalendar_x5f_x5f___x5fcreate_x5fevent"
+    );
 }
 
 fn tool_info() -> ToolInfo {

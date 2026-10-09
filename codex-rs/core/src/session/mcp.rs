@@ -2,6 +2,7 @@ use super::mcp_refresh::McpRefreshInvalidationGuard;
 use super::*;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::environment_selection::combine_selected_capability_roots;
+use crate::tools::handlers::mcp::McpToolRecovery;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::MAX_SELECTED_CAPABILITY_ROOTS;
@@ -14,12 +15,11 @@ use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::ToolInfo;
 use codex_mcp::effective_mcp_servers_from_configured;
 use codex_mcp::tool_is_model_visible;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::mcp::CallToolResult;
-
 use codex_protocol::mcp::is_node_repl_backed_connector;
 use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_ELICITATION_APPROVAL_KIND_KEY;
@@ -41,14 +41,8 @@ use codex_protocol::mcp_approval_meta::TOOL_TITLE_KEY as MCP_ELICITATION_TOOL_TI
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::ModelInfo;
 use codex_rmcp_client::Elicitation;
-use codex_tools::ToolName;
 use rmcp::model::ElicitationAction;
 use rmcp::model::JsonObject;
-use rmcp::model::ListResourceTemplatesResult;
-use rmcp::model::ListResourcesResult;
-use rmcp::model::PaginatedRequestParams;
-use rmcp::model::ReadResourceRequestParams;
-use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestMetaObject;
 use rmcp::model::Tool;
 use serde_json::Map;
@@ -58,6 +52,11 @@ const TOOL_SUGGESTION_ACTION_INSTALL: &str = "install";
 const TOOL_SUGGESTION_ACTION_KEY: &str = "suggest_type";
 const TOOL_SUGGESTION_TOOL_ID_KEY: &str = "tool_id";
 const TOOL_SUGGESTION_TOOL_TYPE_KEY: &str = "tool_type";
+
+pub(crate) struct ResolvedConfiguredMcpTool {
+    pub(crate) tool_info: ToolInfo,
+    pub(crate) recovery: McpToolRecovery,
+}
 
 #[derive(Debug, PartialEq)]
 enum GuardianElicitationReview {
@@ -195,6 +194,152 @@ impl Session {
         config: &Config,
     ) -> HashMap<String, McpServerConfig> {
         codex_mcp::configured_mcp_servers(&self.runtime_mcp_config(config).await)
+    }
+
+    pub(crate) async fn resolve_configured_mcp_tool_info(
+        &self,
+        turn_context: &TurnContext,
+        tool_name: &ToolName,
+    ) -> Option<ToolInfo> {
+        self.resolve_configured_mcp_tool_info_with_recovery(turn_context, tool_name)
+            .await
+            .map(|resolved| resolved.tool_info)
+    }
+
+    pub(crate) async fn resolve_configured_mcp_tool_info_with_recovery(
+        &self,
+        turn_context: &TurnContext,
+        tool_name: &ToolName,
+    ) -> Option<ResolvedConfiguredMcpTool> {
+        let available_tools = self.services.mcp_runtime.latest_list_all_tools().await;
+        self.resolve_configured_mcp_tool_info_from_tools(turn_context, tool_name, &available_tools)
+            .await
+    }
+
+    pub(crate) async fn resolve_configured_mcp_tool_info_from_tools(
+        &self,
+        turn_context: &TurnContext,
+        tool_name: &ToolName,
+        available_tools: &[ToolInfo],
+    ) -> Option<ResolvedConfiguredMcpTool> {
+        let (callable_namespace, tool) = parse_non_app_mcp_tool_name(tool_name)?;
+        let resolved_tool_name = ToolName::namespaced(callable_namespace.clone(), tool.clone());
+        let mcp_config = self.services.mcp_runtime.current_config()?;
+        let auth = self.services.auth_manager.auth().await;
+        let effective_servers = effective_mcp_servers_from_configured(
+            codex_mcp::configured_mcp_servers(&mcp_config),
+            &mcp_config,
+            auth.as_ref(),
+        );
+        let mut configured_servers = Vec::with_capacity(effective_servers.len());
+        let mut enabled_configured_servers = Vec::new();
+        for (server_name, effective_server) in effective_servers {
+            let server_config = effective_server.config().clone();
+            if effective_server.enabled() {
+                enabled_configured_servers.push((server_name.clone(), server_config.clone()));
+            }
+            configured_servers.push((server_name, server_config));
+        }
+        let mut matching_tools = available_tools
+            .iter()
+            .filter(|tool| tool.canonical_tool_name() == resolved_tool_name);
+        if let Some(tool_info) = matching_tools.next().cloned() {
+            if matching_tools.next().is_some()
+                || !configured_mcp_catalog_tool_matches_identity(
+                    &callable_namespace,
+                    &tool_info.server_name,
+                    &configured_servers,
+                    &enabled_configured_servers,
+                )
+            {
+                return None;
+            }
+            if !tool_is_model_visible(&tool_info)
+                || !crate::enablement::mcp_tool_parts_allowed_in_mode(
+                    &turn_context.config,
+                    turn_context.mode,
+                    &tool_info.server_name,
+                    &tool_info.callable_namespace,
+                    &tool_info.callable_name,
+                )
+            {
+                return None;
+            }
+            return Some(ResolvedConfiguredMcpTool {
+                tool_info,
+                recovery: McpToolRecovery::None,
+            });
+        }
+
+        let (server, server_config) = unique_configured_mcp_server_for_namespace(
+            &callable_namespace,
+            configured_servers.into_iter(),
+        )?;
+        if !server_config.enabled
+            || !enabled_configured_servers
+                .iter()
+                .any(|(enabled_server, _)| enabled_server == &server)
+        {
+            return None;
+        }
+        let raw_tool_name =
+            recoverable_raw_mcp_tool_name(&server_config, &callable_namespace, &tool)?;
+
+        if !crate::enablement::mcp_tool_parts_allowed_in_mode(
+            &turn_context.config,
+            turn_context.mode,
+            &server,
+            &callable_namespace,
+            &tool,
+        ) || !mcp_server_config_allows_tool(&server_config, &raw_tool_name)
+        {
+            return None;
+        }
+
+        Some(ResolvedConfiguredMcpTool {
+            tool_info: ToolInfo {
+                server_name: server,
+                supports_parallel_tool_calls: false,
+                server_origin: None,
+                callable_name: tool.clone(),
+                callable_namespace,
+                namespace_description: None,
+                tool: Tool::new(
+                    raw_tool_name,
+                    "Configured MCP tool placeholder recovered after tool listing was unavailable.",
+                    Arc::new(JsonObject::default()),
+                ),
+                connector_id: None,
+                connector_name: None,
+                plugin_display_names: Vec::new(),
+                openai_file_input_optional_fields: Default::default(),
+            },
+            recovery: McpToolRecovery::ConfiguredPlaceholder,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn resolve_configured_mcp_tool_call(
+        &self,
+        turn_context: &TurnContext,
+        tool_name: &ToolName,
+    ) -> Option<(ToolName, String, String)> {
+        let tool_info = self
+            .resolve_configured_mcp_tool_info(turn_context, tool_name)
+            .await?;
+        Some((
+            tool_info.canonical_tool_name(),
+            tool_info.server_name,
+            tool_info.tool.name.to_string(),
+        ))
+    }
+
+    pub(crate) async fn set_openai_form_elicitation_support(
+        &self,
+        _supported: bool,
+    ) -> anyhow::Result<()> {
+        // The capability is fixed in `ClientMcpExtensions` when the thread is created.
+        Ok(())
     }
 
     /// Publishes changed MCP state, waiting for any refresh already in progress.
@@ -356,7 +501,9 @@ impl Session {
             input.mcp_servers.contains_key(CODEX_APPS_MCP_SERVER_NAME),
             "unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"
         );
-        let refreshed = self.services.mcp_runtime.replace_fresh(input).await;
+        let refreshed = AuthStorageOriginator::from_client_name(&desired.originator)
+            .scope(self.services.mcp_runtime.replace_fresh(input))
+            .await;
         self.services.thread_extension_data.insert(selected_plugins);
         refreshed
     }
@@ -388,11 +535,14 @@ impl Session {
             self.mark_mcp_runtime_dirty();
         }
 
-        let recovered_oauth_servers = self
-            .services
-            .mcp_runtime
-            .updated_oauth_credentials_after_auth_failure()
-            .await;
+        let recovered_oauth_servers =
+            AuthStorageOriginator::from_client_name(&turn_context.originator)
+                .scope(
+                    self.services
+                        .mcp_runtime
+                        .updated_oauth_credentials_after_auth_failure(),
+                )
+                .await;
         if !recovered_oauth_servers.is_empty()
             && let Ok(_refresh) = self.mcp_refresh.acquire().await
             && self
@@ -432,12 +582,6 @@ impl Session {
         ready_selected_capability_roots: &[SelectedCapabilityRoot],
         environments: &TurnEnvironmentSnapshot,
     ) -> Option<Arc<ExecutorCapabilityDiscoverySnapshot>> {
-        // Capability roots can currently be selected independently of turn environments, so a
-        // root may be ready when there is no primary `TurnEnvironment`. Keep using the thread
-        // policy in that case so restricted discovery fails closed below. Once every selected
-        // root belongs to a thread/environment attachment whose `EnvironmentConfig` is installed
-        // before the root becomes ready, discovery can use the root owner's policy and this
-        // fallback can be removed.
         let restricted_file_system = environments.primary().map_or_else(
             || {
                 !config
@@ -512,6 +656,7 @@ impl Session {
         &self,
         environments: &TurnEnvironmentSnapshot,
     ) -> Vec<ResolvedSelectedCapabilityRoot> {
+        let captured_environments = environments.captured_environments();
         let thread_root_count = self.services.selected_capability_roots.len();
         let mut root_locations_by_id = HashMap::new();
         let mut selected_capability_roots = Vec::new();
@@ -528,6 +673,16 @@ impl Session {
             }),
         );
         for (index, root) in combined_roots.into_iter().enumerate() {
+            let CapabilityRootLocation::Environment { environment_id, .. } = &root.location;
+            // Filter before readiness resolution, which can reconnect a historical executor.
+            if !captured_environments.contains_key(environment_id) {
+                tracing::warn!(
+                    root_id = root.id,
+                    environment_id,
+                    "ignoring capability root without a captured turn environment"
+                );
+                continue;
+            }
             if let Some(kept_location) = root_locations_by_id.get(&root.id) {
                 if kept_location != &root.location {
                     tracing::warn!(
@@ -555,10 +710,7 @@ impl Session {
         self.services
             .turn_environments
             .environment_manager()
-            .resolve_selected_capability_roots(
-                &selected_capability_roots,
-                &environments.captured_environments(),
-            )
+            .resolve_selected_capability_roots(&selected_capability_roots, &captured_environments)
             .await
     }
 
@@ -688,307 +840,6 @@ impl Session {
             .await
     }
 
-    pub async fn list_resources(
-        &self,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> anyhow::Result<ListResourcesResult> {
-        self.services
-            .mcp_runtime
-            .latest_list_resources(server, params)
-            .await
-    }
-
-    pub async fn list_resources_with_reconnect(
-        &self,
-        turn_context: &TurnContext,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> anyhow::Result<ListResourcesResult> {
-        let first_error = match self.list_resources(server, params.clone()).await {
-            Ok(result) => return Ok(result),
-            Err(error) => error,
-        };
-
-        if !should_refresh_mcp_manager_after_resource_error(&first_error)
-            || !self.effective_mcp_server_names().await.contains(server)
-        {
-            return Err(first_error);
-        }
-
-        self.refresh_mcp_servers_after_call_error(
-            turn_context,
-            server,
-            "resources/list",
-            &first_error,
-        )
-        .await;
-        self.list_resources(server, params).await
-    }
-
-    pub async fn list_resource_templates(
-        &self,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> anyhow::Result<ListResourceTemplatesResult> {
-        self.services
-            .mcp_runtime
-            .latest_list_resource_templates(server, params)
-            .await
-    }
-
-    pub async fn list_resource_templates_with_reconnect(
-        &self,
-        turn_context: &TurnContext,
-        server: &str,
-        params: Option<PaginatedRequestParams>,
-    ) -> anyhow::Result<ListResourceTemplatesResult> {
-        let first_error = match self.list_resource_templates(server, params.clone()).await {
-            Ok(result) => return Ok(result),
-            Err(error) => error,
-        };
-
-        if !should_refresh_mcp_manager_after_resource_error(&first_error)
-            || !self.effective_mcp_server_names().await.contains(server)
-        {
-            return Err(first_error);
-        }
-
-        self.refresh_mcp_servers_after_call_error(
-            turn_context,
-            server,
-            "resources/templates/list",
-            &first_error,
-        )
-        .await;
-        self.list_resource_templates(server, params).await
-    }
-
-    pub async fn read_resource(
-        &self,
-        server: &str,
-        params: ReadResourceRequestParams,
-    ) -> anyhow::Result<ReadResourceResult> {
-        self.services
-            .mcp_runtime
-            .latest_read_resource(server, params)
-            .await
-    }
-
-    pub async fn read_resource_with_reconnect(
-        &self,
-        turn_context: &TurnContext,
-        server: &str,
-        params: ReadResourceRequestParams,
-    ) -> anyhow::Result<ReadResourceResult> {
-        let first_error = match self.read_resource(server, params.clone()).await {
-            Ok(result) => return Ok(result),
-            Err(error) => error,
-        };
-
-        if !should_refresh_mcp_manager_after_resource_error(&first_error)
-            || !self.effective_mcp_server_names().await.contains(server)
-        {
-            return Err(first_error);
-        }
-
-        self.refresh_mcp_servers_after_call_error(
-            turn_context,
-            server,
-            "resources/read",
-            &first_error,
-        )
-        .await;
-        self.read_resource(server, params).await
-    }
-
-    pub async fn call_tool(
-        &self,
-        server: &str,
-        tool: &str,
-        arguments: Option<serde_json::Value>,
-        meta: Option<serde_json::Value>,
-    ) -> anyhow::Result<CallToolResult> {
-        self.services
-            .mcp_runtime
-            .latest_call_tool(
-                server, tool, /*environment_id*/ None, arguments, meta,
-                /*requested_timeout*/ None, /*wait_for_server*/ true,
-            )
-            .await
-    }
-
-    pub async fn call_tool_with_reconnect(
-        &self,
-        turn_context: &TurnContext,
-        server: &str,
-        tool: &str,
-        arguments: Option<serde_json::Value>,
-        meta: Option<serde_json::Value>,
-    ) -> anyhow::Result<CallToolResult> {
-        let first_error = match self
-            .call_tool(server, tool, arguments.clone(), meta.clone())
-            .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) => error,
-        };
-
-        let should_retry = should_retry_mcp_call_after_refresh(&first_error);
-        if !(should_retry || should_refresh_mcp_manager_after_live_error(&first_error))
-            || !self.effective_mcp_server_names().await.contains(server)
-        {
-            return Err(first_error);
-        }
-
-        self.refresh_mcp_servers_after_call_error(turn_context, server, tool, &first_error)
-            .await;
-
-        if should_retry {
-            self.call_tool(server, tool, arguments, meta).await
-        } else {
-            Err(first_error)
-        }
-    }
-
-    async fn refresh_mcp_servers_after_call_error(
-        &self,
-        turn_context: &TurnContext,
-        server: &str,
-        operation: &str,
-        first_error: &anyhow::Error,
-    ) {
-        warn!(
-            "refreshing MCP servers after call failed for server '{server}', operation '{operation}': {first_error:#}"
-        );
-        let config = self.get_config().await;
-        self.refresh_mcp_servers_now(
-            turn_context,
-            config.as_ref(),
-            /*elicitation_reviewer*/ None,
-        )
-        .await;
-    }
-
-    async fn resolve_mcp_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
-        self.services
-            .mcp_runtime
-            .latest_list_all_tools()
-            .await
-            .into_iter()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
-    }
-
-    pub(crate) async fn resolve_configured_mcp_tool_info(
-        &self,
-        turn_context: &TurnContext,
-        tool_name: &ToolName,
-    ) -> Option<ToolInfo> {
-        let (callable_namespace, tool) = parse_non_app_mcp_tool_name(tool_name)?;
-        let resolved_tool_name = ToolName::namespaced(callable_namespace.clone(), tool.clone());
-        if let Some(tool_info) = self.resolve_mcp_tool_info(&resolved_tool_name).await {
-            if !tool_is_model_visible(&tool_info) {
-                return None;
-            }
-            if !crate::enablement::mcp_tool_parts_allowed_in_mode(
-                &turn_context.config,
-                turn_context.mode,
-                &tool_info.server_name,
-                &tool_info.callable_namespace,
-                &tool_info.callable_name,
-            ) {
-                return None;
-            }
-            return Some(tool_info);
-        }
-
-        let (server, server_config) = self
-            .services
-            .mcp_runtime
-            .latest_configured_server_config_for_callable_namespace(&callable_namespace)?;
-        if !crate::enablement::mcp_tool_parts_allowed_in_mode(
-            &turn_context.config,
-            turn_context.mode,
-            &server,
-            &callable_namespace,
-            &tool,
-        ) {
-            return None;
-        }
-
-        if !mcp_server_config_allows_tool(&server_config, &tool) {
-            return None;
-        }
-
-        if !self
-            .services
-            .mcp_runtime
-            .latest_has_enabled_server_config(&server)
-        {
-            return None;
-        }
-
-        Some(ToolInfo {
-            server_name: server,
-            supports_parallel_tool_calls: false,
-            server_origin: None,
-            callable_name: tool.clone(),
-            callable_namespace,
-            namespace_description: None,
-            tool: Tool::new(
-                tool.clone(),
-                "Configured MCP tool placeholder recovered after tool listing was unavailable.",
-                Arc::new(JsonObject::default()),
-            ),
-            connector_id: None,
-            connector_name: None,
-            plugin_display_names: Vec::new(),
-            openai_file_input_optional_fields: Default::default(),
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn resolve_configured_mcp_tool_call(
-        &self,
-        turn_context: &TurnContext,
-        tool_name: &ToolName,
-    ) -> Option<(ToolName, String, String)> {
-        let tool_info = self
-            .resolve_configured_mcp_tool_info(turn_context, tool_name)
-            .await?;
-        Some((
-            tool_info.canonical_tool_name(),
-            tool_info.server_name,
-            tool_info.tool.name.to_string(),
-        ))
-    }
-
-    async fn configured_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
-        let config = self.get_config().await;
-        self.runtime_mcp_servers(config.as_ref()).await
-    }
-
-    async fn effective_mcp_server_names(&self) -> HashSet<String> {
-        let auth = self.services.auth_manager.auth().await;
-        let config = self.get_config().await;
-        let mcp_config = self.runtime_mcp_config(config.as_ref()).await;
-        effective_mcp_servers_from_configured(
-            codex_mcp::configured_mcp_servers(&mcp_config),
-            &mcp_config,
-            auth.as_ref(),
-        )
-        .into_keys()
-        .collect()
-    }
-
-    pub(crate) async fn set_openai_form_elicitation_support(
-        &self,
-        _supported: bool,
-    ) -> anyhow::Result<()> {
-        // The capability is now fixed in `ClientMcpExtensions` when the thread
-        // is created. Keep this compatibility entry point for older callers.
-        Ok(())
-    }
     pub(crate) async fn refresh_mcp_servers_now(
         &self,
         turn_context: &TurnContext,
@@ -1066,94 +917,6 @@ impl Session {
     }
 }
 
-fn mcp_server_config_allows_tool(config: &McpServerConfig, tool: &str) -> bool {
-    if let Some(enabled_tools) = &config.enabled_tools
-        && !enabled_tools
-            .iter()
-            .any(|enabled_tool| enabled_tool == tool)
-    {
-        return false;
-    }
-
-    !config
-        .disabled_tools
-        .as_ref()
-        .is_some_and(|disabled_tools| {
-            disabled_tools
-                .iter()
-                .any(|disabled_tool| disabled_tool == tool)
-        })
-}
-
-fn should_retry_mcp_call_after_refresh(error: &anyhow::Error) -> bool {
-    let message = format!("{error:#}");
-    message.contains("failed to get client") || message.contains("unknown MCP server")
-}
-
-fn should_refresh_mcp_manager_after_live_error(error: &anyhow::Error) -> bool {
-    format!("{error:#}").contains("tool call failed for `")
-}
-
-fn should_refresh_mcp_manager_after_resource_error(error: &anyhow::Error) -> bool {
-    should_retry_mcp_call_after_refresh(error) || format!("{error:#}").contains(" failed for `")
-}
-
-fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)> {
-    let (callable_namespace, tool) = match tool_name.namespace.as_deref() {
-        Some(namespace) if namespace != codex_protocol::DEFAULT_FUNCTION_NAMESPACE => {
-            let namespace = namespace.strip_suffix("__").unwrap_or(namespace);
-            (namespace.to_string(), tool_name.name.clone())
-        }
-        None | Some(_) => {
-            let raw = tool_name.name.strip_prefix("mcp__")?;
-            if let Some(encoded) = raw.strip_prefix("__") {
-                let (namespace, tool) = encoded.split_once("__")?;
-                (
-                    decode_flat_mcp_tool_name_component(namespace)?,
-                    decode_flat_mcp_tool_name_component(tool)?,
-                )
-            } else {
-                let (server, tool) = raw.split_once("__")?;
-                (format!("mcp__{server}"), tool.to_string())
-            }
-        }
-    };
-
-    if callable_namespace == codex_mcp::CODEX_APPS_MCP_SERVER_NAME
-        || callable_namespace == format!("mcp__{}", codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
-        || callable_namespace
-            .strip_prefix("mcp__")
-            .is_some_and(|namespace| namespace.starts_with("codex_apps__"))
-        || callable_namespace.starts_with("codex_apps__")
-        || callable_namespace == "mcp____"
-        || tool.is_empty()
-    {
-        return None;
-    }
-
-    Some((callable_namespace, tool))
-}
-
-fn decode_flat_mcp_tool_name_component(component: &str) -> Option<String> {
-    let bytes = component.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'_' {
-            if bytes.get(i + 1) != Some(&b'x') {
-                return None;
-            }
-            let hex = std::str::from_utf8(bytes.get(i + 2..i + 4)?).ok()?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 4;
-        } else {
-            decoded.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(decoded).ok()
-}
-
 async fn review_guardian_mcp_elicitation(
     session: Arc<Session>,
     request: ElicitationReviewRequest,
@@ -1229,41 +992,6 @@ async fn review_guardian_mcp_elicitation(
         (None, GuardianScope::for_mcp_server(&request.server_name))
     };
 
-    let trusted_mcp_app_call = if request.server_name == CODEX_APPS_MCP_SERVER_NAME {
-        let call_id = request
-            .elicitation
-            .meta()
-            .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
-            .and_then(Value::as_object)
-            .and_then(|meta| meta.get("call_id"))
-            .and_then(Value::as_str);
-        match call_id {
-            Some(call_id) => {
-                match session.mcp_tool_approval_metadata(&request.server_name, call_id) {
-                    Some((Some(invocation), metadata)) => {
-                        let connector_id = elicitation_connector_id(&request.elicitation);
-                        let tool_name = request
-                            .elicitation
-                            .meta()
-                            .and_then(|meta| metadata_str(meta, MCP_ELICITATION_TOOL_NAME_KEY));
-                        (invocation.server == request.server_name
-                            && connector_id == metadata.connector_id.as_deref()
-                            && tool_name == Some(invocation.tool.as_str()))
-                        .then_some((call_id, invocation, metadata))
-                    }
-                    _ => None,
-                }
-            }
-            None => None,
-        }
-    } else {
-        None
-    };
-    let connector_id = elicitation_connector_id(&request.elicitation);
-    let link_id = trusted_mcp_app_call
-        .as_ref()
-        .and_then(|(_, _, metadata)| metadata.link_id());
-
     let require_synchronous_review = matches!(
         request
             .elicitation
@@ -1338,7 +1066,7 @@ async fn review_guardian_mcp_elicitation(
                 Some(turn_context.model_info().slug.as_str()),
                 request.server_name.as_str(),
                 connector_id,
-                /*link_id*/ link_id,
+                /*link_id*/ None,
             ) != ApprovalsReviewer::AutoReview
             || request
                 .elicitation
@@ -1399,13 +1127,9 @@ async fn review_guardian_mcp_elicitation(
                 .unwrap_or(mcp_config.approvals_reviewer),
             Some(turn_context.model_info().slug.as_str()),
             request.server_name.as_str(),
-            connector_id,
-            /*link_id*/ link_id,
+            elicitation_connector_id(&request.elicitation),
+            /*link_id*/ None,
         );
-        if !crate::guardian::routes_approval_policy_to_guardian(approval_policy, approvals_reviewer)
-        {
-            return Ok(None);
-        }
         review_context.approval_policy = approval_policy;
         review_context.approvals_reviewer = approvals_reviewer;
         match guardian_elicitation_review_request(&request, originating_call_id) {
@@ -1668,6 +1392,205 @@ fn mcp_elicitation_auto_meta() -> serde_json::Value {
     serde_json::json!({
         MCP_ELICITATION_APPROVALS_REVIEWER_KEY: ApprovalsReviewer::AutoReview,
     })
+}
+
+fn mcp_server_config_allows_tool(config: &McpServerConfig, tool: &str) -> bool {
+    if let Some(enabled_tools) = &config.enabled_tools
+        && !enabled_tools
+            .iter()
+            .any(|enabled_tool| enabled_tool == tool)
+    {
+        return false;
+    }
+
+    !config
+        .disabled_tools
+        .as_ref()
+        .is_some_and(|disabled_tools| {
+            disabled_tools
+                .iter()
+                .any(|disabled_tool| disabled_tool == tool)
+        })
+}
+
+fn configured_mcp_server_namespace_matches(callable_namespace: &str, server_name: &str) -> bool {
+    if has_mcp_collision_hash_suffix(callable_namespace) {
+        return false;
+    }
+
+    let qualified_namespace = codex_mcp::qualified_mcp_tool_name_prefix(server_name);
+    let qualified_namespace_without_delimiter = qualified_namespace
+        .strip_suffix("__")
+        .unwrap_or(&qualified_namespace);
+    let non_prefixed_namespace = qualified_namespace_without_delimiter
+        .strip_prefix("mcp__")
+        .unwrap_or(qualified_namespace_without_delimiter);
+
+    callable_namespace == qualified_namespace
+        || callable_namespace == qualified_namespace_without_delimiter
+        || callable_namespace == non_prefixed_namespace
+}
+
+fn configured_mcp_catalog_tool_matches_identity(
+    callable_namespace: &str,
+    tool_server_name: &str,
+    configured_servers: &[(String, McpServerConfig)],
+    enabled_servers: &[(String, McpServerConfig)],
+) -> bool {
+    if !enabled_servers
+        .iter()
+        .any(|(server_name, config)| server_name == tool_server_name && config.enabled)
+    {
+        return false;
+    }
+
+    if has_mcp_collision_hash_suffix(callable_namespace) {
+        let Some((namespace_base, _)) = callable_namespace.rsplit_once('_') else {
+            return false;
+        };
+        if configured_mcp_server_namespace_matches(namespace_base, tool_server_name) {
+            return true;
+        }
+        return !configured_servers.iter().any(|(server_name, _)| {
+            server_name != tool_server_name
+                && configured_mcp_server_namespace_matches(namespace_base, server_name)
+        });
+    }
+
+    let mut matching_servers = configured_servers.iter().filter(|(server_name, _)| {
+        configured_mcp_server_namespace_matches(callable_namespace, server_name)
+    });
+    matching_servers.next().is_some_and(|(server_name, _)| {
+        server_name == tool_server_name && matching_servers.next().is_none()
+    })
+}
+
+fn has_mcp_collision_hash_suffix(name: &str) -> bool {
+    let Some((_, suffix)) = name.rsplit_once('_') else {
+        return false;
+    };
+    suffix.len() == 12
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn unique_configured_mcp_server_for_namespace(
+    callable_namespace: &str,
+    servers: impl Iterator<Item = (String, McpServerConfig)>,
+) -> Option<(String, McpServerConfig)> {
+    let mut matching_servers = servers.filter(|(server_name, _)| {
+        configured_mcp_server_namespace_matches(callable_namespace, server_name)
+    });
+    let server = matching_servers.next()?;
+    matching_servers.next().is_none().then_some(server)
+}
+
+fn recoverable_raw_mcp_tool_name(
+    config: &McpServerConfig,
+    callable_namespace: &str,
+    callable_name: &str,
+) -> Option<String> {
+    if has_mcp_collision_hash_suffix(callable_name) {
+        return None;
+    }
+
+    let raw_tool_name = if let Some(enabled_tools) = &config.enabled_tools {
+        let mut matching_enabled_tools = enabled_tools
+            .iter()
+            .filter(|enabled_tool| sanitize_mcp_tool_name(enabled_tool) == callable_name);
+        let raw_tool_name = matching_enabled_tools.next()?.clone();
+        if matching_enabled_tools.next().is_some() {
+            return None;
+        }
+        raw_tool_name
+    } else if callable_name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric())
+    {
+        callable_name.to_string()
+    } else {
+        return None;
+    };
+
+    (callable_namespace.len() + raw_tool_name.len() + "__".len() <= 128
+        && mcp_server_config_allows_tool(config, &raw_tool_name))
+    .then_some(raw_tool_name)
+}
+
+fn sanitize_mcp_tool_name(tool_name: &str) -> String {
+    let sanitized = tool_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    if sanitized.is_empty() {
+        "_".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn parse_non_app_mcp_tool_name(tool_name: &ToolName) -> Option<(String, String)> {
+    let (callable_namespace, tool) = match tool_name.namespace.as_deref() {
+        Some(namespace) if namespace != codex_protocol::DEFAULT_FUNCTION_NAMESPACE => {
+            let namespace = namespace.strip_suffix("__").unwrap_or(namespace);
+            (namespace.to_string(), tool_name.name.clone())
+        }
+        None | Some(_) => {
+            let raw = tool_name.name.strip_prefix("mcp__")?;
+            if let Some(encoded) = raw.strip_prefix("__") {
+                let (namespace, tool) = encoded.split_once("__")?;
+                (
+                    decode_flat_mcp_tool_name_component(namespace)?,
+                    decode_flat_mcp_tool_name_component(tool)?,
+                )
+            } else {
+                let (server, tool) = raw.split_once("__")?;
+                (format!("mcp__{server}"), tool.to_string())
+            }
+        }
+    };
+
+    if callable_namespace == codex_mcp::CODEX_APPS_MCP_SERVER_NAME
+        || callable_namespace == format!("mcp__{}", codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+        || callable_namespace
+            .strip_prefix("mcp__")
+            .is_some_and(|namespace| namespace.starts_with("codex_apps__"))
+        || callable_namespace.starts_with("codex_apps__")
+        || callable_namespace == "mcp____"
+        || tool.is_empty()
+    {
+        return None;
+    }
+
+    Some((callable_namespace, tool))
+}
+
+fn decode_flat_mcp_tool_name_component(component: &str) -> Option<String> {
+    let bytes = component.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'_' {
+            if bytes.get(i + 1) != Some(&b'x') {
+                return None;
+            }
+            let hex = std::str::from_utf8(bytes.get(i + 2..i + 4)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 4;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 #[cfg(test)]

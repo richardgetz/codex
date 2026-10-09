@@ -30,11 +30,6 @@ fn resume_history(
     let turn_id = "resume-warning-seed-turn".to_string();
     let turn_ctx = TurnContextItem {
         turn_id: Some(turn_id.clone()),
-        trace_id: None,
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: None,
         root_turn_id: None,
         disabled_plugin_ids: None,
         cwd: config.cwd.clone(),
@@ -63,6 +58,7 @@ fn resume_history(
     };
 
     InitialHistory::Resumed(ResumedHistory {
+        history_revision: None,
         conversation_id: ThreadId::default(),
         history: Arc::new(vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {

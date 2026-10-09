@@ -1,8 +1,8 @@
+use super::super::guardian_output_schema;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::context::ContextualUserFragment;
 use crate::context_manager::ContextManager;
-use crate::guardian::assessment::guardian_output_schema;
 use crate::session::Submission;
 use codex_guardian_reviewer::ReviewerRequest;
 use codex_guardian_reviewer::guardian_output_contract_prompt;
@@ -86,6 +86,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             /*reference_context_item*/ None,
             /*world_state_baseline*/ None,
             crate::compact::CompactedHistoryMetadata {
+                input_goal_ids: Default::default(),
                 message: String::new(),
                 window_number,
                 window_ids,
@@ -151,6 +152,10 @@ async fn test_review_session() -> (
             session,
             io: SessionIo {
                 tx_sub,
+                ordinary_submission_slots: Arc::new(tokio::sync::Semaphore::new(
+                    crate::session::SUBMISSION_CHANNEL_CAPACITY,
+                )),
+                submission_lifecycle_gate: Arc::new(tokio::sync::RwLock::new(())),
                 rx_event,
                 agent_status,
                 session_loop_termination: crate::session::completed_session_loop_termination(),

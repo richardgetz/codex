@@ -1,6 +1,7 @@
 //! Opportunistic attachment may fall back; automatic startup requires a shared server.
 
 use super::*;
+use crate::daemon_startup::connect_default_daemon;
 use crate::legacy_core::config::ConfigBuilder;
 use codex_app_server_daemon::ApplyOutput;
 use codex_app_server_daemon::ApplyStatus;
@@ -391,7 +392,7 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
 #[tokio::test]
 async fn default_daemon_discovery_distinguishes_absent_and_stale_sockets() -> color_eyre::Result<()>
 {
-    let home = TempDir::new()?;
+    let home = TempDir::new_in("/tmp")?;
     assert!(connect_default_daemon(home.path()).await?.is_none());
 
     let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
@@ -415,7 +416,7 @@ async fn default_daemon_discovery_distinguishes_absent_and_stale_sockets() -> co
 #[tokio::test]
 async fn default_daemon_startup_reuses_authoritative_handshake_for_resume() -> color_eyre::Result<()>
 {
-    let home = TempDir::new()?;
+    let home = TempDir::new_in("/tmp")?;
     let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
     std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
     let mut listener = codex_uds::UnixListener::bind(socket_path.as_path()).await?;
@@ -458,34 +459,17 @@ async fn default_daemon_startup_reuses_authoritative_handshake_for_resume() -> c
     let prepared = connect_default_daemon(home.path())
         .await?
         .expect("the bound daemon socket should be discovered");
-    let config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .build()
-        .await?;
-    let mut target = AppServerTarget::LocalDaemon {
+    let target = AppServerTarget::LocalDaemon {
         allow_embedded_fallback: false,
         endpoint: RemoteAppServerEndpoint::UnixSocket {
             socket_path: prepared.socket_path.clone(),
         },
     };
-    let mut state_db = None;
-    let app_server = start_app_server_with_preconnected(
-        &mut target,
-        Arg0DispatchPaths::default(),
-        config,
-        Vec::new(),
-        LoaderOverrides::default(),
-        /*strict_config*/ false,
-        CloudConfigBundleLoader::default(),
-        codex_feedback::CodexFeedback::new(),
-        /*log_db*/ None,
-        &mut state_db,
-        Arc::new(EnvironmentManager::default_for_tests()),
-        Some(prepared.app_server),
-        codex_app_server_client::EmbeddedNetworkPolicy::default(),
-    )
-    .await?;
-    drop(app_server);
+    // Reuse the connection that already completed `initialize`; startup must not handshake a
+    // second connection before sending thread-resume requests.
+    let app_server = AppServerSession::new(prepared.app_server, target.thread_params_mode());
+    assert!(!app_server.uses_embedded_app_server());
+    app_server.shutdown().await?;
 
     let methods = tokio::time::timeout(Duration::from_secs(5), server)
         .await??

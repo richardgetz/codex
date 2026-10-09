@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -11,8 +10,6 @@ use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memory_usage::emit_metric_for_tool_read;
 use crate::memory_usage::shell_script_for_invocation;
-use crate::sandbox_tags::permission_profile_policy_tag;
-use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
@@ -22,7 +19,8 @@ use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::control_tool_analytics::ControlToolCallGuard;
 use crate::tools::flat_tool_name;
-use crate::tools::handlers::mcp::McpHandler;
+use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::mcp::McpToolRecovery;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::lifecycle::notify_tool_finish;
@@ -54,47 +52,15 @@ pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 pub use codex_tools::ToolExecutor;
 pub use codex_tools::ToolExposure;
 
-/// Describes whether a tool runtime occupies the thread's execution activity while it runs.
-///
-/// Wait and approval runtimes remain quiescent so a paused thread can report the retained wait
-/// instead of pretending that it is still executing. Runtimes that perform actual side effects
-/// or external work retain the default execution classification.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ToolActivityKind {
-    Execution,
-    Quiescent,
-}
-
 /// Typed runtime contract for locally executed tools.
 ///
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
-    /// Returns whether dispatch should contribute to the session's in-flight activity count.
-    fn activity_operation_kind(&self) -> ToolActivityKind {
-        let tool_name = self.tool_name();
-        if self.mcp_server_name().is_some()
-            || matches!(
-                tool_name.name.as_str(),
-                "apply_patch"
-                    | "code_mode_wait"
-                    | "exec_command"
-                    | "exec"
-                    | "shell"
-                    | "shell_command"
-                    | "request_permissions"
-                    | "request_user_input"
-                    | "request_user_input_async"
-                    | "sleep"
-                    | "wait_agent"
-                    | "wait_for_environment"
-                    | "wait"
-            )
-        {
-            ToolActivityKind::Quiescent
-        } else {
-            ToolActivityKind::Execution
-        }
+    /// Whether cancellation should let the handler finish teardown before the
+    /// host returns an aborted tool response.
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        false
     }
 
     /// Whether this built-in control tool needs a structured tool-call event.
@@ -130,12 +96,6 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
             payload,
             ToolPayload::Function { .. } | ToolPayload::ToolSearch { .. }
         )
-    }
-
-    /// Whether cancellation should let the handler finish teardown before the
-    /// host returns an aborted tool response.
-    fn waits_for_runtime_cancellation(&self) -> bool {
-        false
     }
 
     fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
@@ -302,6 +262,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
     fn wait_handle(&self) -> Option<codex_tools::ToolWaitHandle> {
         self.original.wait_handle()
     }
+
+    fn tool_result_metadata(&self) -> Option<&Value> {
+        self.original.tool_result_metadata()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -342,8 +306,6 @@ pub(crate) struct RegisteredTool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
-    // Keep the registration source so role policies cannot trust an external tool by name alone.
-    trusted_tool_names: HashSet<ToolName>,
     first_collision: Option<ToolName>,
     pub(crate) tool_policy: Arc<ToolPolicy>,
 }
@@ -395,11 +357,9 @@ impl ToolRegistry {
         if !self.tool_policy.allows(&tool_name) {
             return;
         }
-        let trusted_tool_name = tool_name.clone();
         match self.tools.entry(tool_name) {
             Entry::Vacant(entry) => {
                 entry.insert(RegisteredTool { runtime, exposure });
-                self.trusted_tool_names.insert(trusted_tool_name);
             }
             Entry::Occupied(entry) => {
                 let tool_name = entry.key();
@@ -419,10 +379,8 @@ impl ToolRegistry {
         }
 
         let exposure = runtime.exposure();
-        let trusted_tool_name = tool_name.clone();
         self.tools
             .shift_insert(0, tool_name, RegisteredTool { runtime, exposure });
-        self.trusted_tool_names.insert(trusted_tool_name);
     }
 
     pub(crate) fn register_external(&mut self, runtime: Arc<dyn CoreToolRuntime>) -> bool {
@@ -475,18 +433,13 @@ impl ToolRegistry {
     }
 
     pub(crate) fn remove(&mut self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
-        let tool_name = tool_name.clone().with_default_namespace();
-        self.trusted_tool_names.remove(&tool_name);
-        self.tools.shift_remove(&tool_name).map(|tool| tool.runtime)
+        self.tools
+            .shift_remove(&tool_name.clone().with_default_namespace())
+            .map(|tool| tool.runtime)
     }
 
     pub(crate) fn entries(&self) -> impl Iterator<Item = &RegisteredTool> {
         self.tools.values()
-    }
-
-    pub(crate) fn is_trusted_tool(&self, tool_name: &ToolName) -> bool {
-        self.trusted_tool_names
-            .contains(&tool_name.clone().with_default_namespace())
     }
 
     pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut RegisteredTool> {
@@ -554,22 +507,10 @@ impl ToolRegistry {
     }
 
     #[cfg(test)]
-    pub(crate) fn has_tool(&self, name: &ToolName) -> bool {
-        self.tools.contains_key(name)
-    }
-
-    #[cfg(test)]
     pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
         let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
         names.sort();
         names
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tool_exposure_for_test(&self, name: &ToolName) -> Option<ToolExposure> {
-        self.tools
-            .get(&name.clone().with_default_namespace())
-            .map(|tool| tool.exposure)
     }
 
     #[cfg(test)]
@@ -607,7 +548,6 @@ impl ToolRegistry {
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
-        let permission_profile = invocation.turn.permission_profile();
         let otel = invocation
             .step_context
             .session_telemetry
@@ -615,24 +555,6 @@ impl ToolRegistry {
             .with_product_sku(invocation.turn.config.apps_mcp_product_sku.as_deref());
         // TODO(anp): Reconcile these tags with TurnEnvironment::sandbox_context
         // instead of reporting the thread-wide backend for environment-scoped tools.
-        let base_tool_result_tags = [
-            (
-                "sandbox",
-                permission_profile_sandbox_tag(
-                    &permission_profile,
-                    invocation.turn.windows_sandbox_level,
-                    invocation.turn.network.is_some(),
-                ),
-            ),
-            (
-                "sandbox_policy",
-                permission_profile_policy_tag(
-                    &permission_profile,
-                    #[allow(deprecated)]
-                    invocation.turn.cwd.as_path(),
-                ),
-            ),
-        ];
         let sandbox_tags = invocation.turn.turn_metadata_state.sandbox_tags;
 
         {
@@ -643,64 +565,86 @@ impl ToolRegistry {
             }
         }
 
-        let mut missing_tool_result_tags = Vec::with_capacity(2 + base_tool_result_tags.len());
-        missing_tool_result_tags.extend_from_slice(&base_tool_result_tags);
-        sandbox_tags.append_metric_tags(&mut missing_tool_result_tags);
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
         let tool = match self.tool(&tool_name) {
             Some(tool) => tool,
             None => {
-                if let Some(tool_info) = invocation
-                    .session
-                    .resolve_configured_mcp_tool_info(invocation.turn.as_ref(), &tool_name)
-                    .await
+                let recovered_tool = if self
+                    .tool_policy
+                    .allows(&tool_name.clone().with_default_namespace())
                 {
-                    match McpHandler::new(
-                        tool_info,
-                        recovered_mcp_namespace_tools_enabled(invocation.turn.as_ref()),
-                    ) {
-                        Ok(handler) => Arc::new(handler) as Arc<dyn CoreToolRuntime>,
-                        Err(err) => {
-                            let message = format!("failed to build MCP tool spec: {err}");
-                            otel.tool_result_with_tags(
-                                &tool_name,
-                                &call_id_owned,
-                                tool_log_payload(&invocation.payload, &invocation.source).as_ref(),
-                                Duration::ZERO,
-                                /*success*/ false,
-                                &message,
-                                &missing_tool_result_tags,
-                                /*extra_trace_fields*/ &[],
-                            );
-                            let err = FunctionCallError::RespondToModel(message);
-                            dispatch_trace.record_failed(&err);
-                            return Err(err);
-                        }
-                    }
+                    invocation
+                        .session
+                        .resolve_configured_mcp_tool_info_with_recovery(
+                            invocation.turn.as_ref(),
+                            &tool_name,
+                        )
+                        .await
+                        .filter(|resolved| {
+                            resolved.recovery == McpToolRecovery::ConfiguredPlaceholder
+                        })
+                        .map(|resolved| {
+                            McpHandler::new_recovered_placeholder(
+                                resolved.tool_info,
+                                crate::mcp_tool_exposure::recovered_mcp_namespace_tools_enabled(
+                                    invocation.turn.as_ref(),
+                                ),
+                                resolved.recovery,
+                                /*agent_plugin*/ false,
+                                /*schema_max_bytes*/ None,
+                            )
+                            .map(|handler| Arc::new(handler) as Arc<dyn CoreToolRuntime>)
+                        })
                 } else {
-                    let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
-                    let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
-                    otel.tool_result_with_tags(
-                        &tool_name,
-                        &call_id_owned,
-                        log_payload.as_ref(),
-                        Duration::ZERO,
-                        /*success*/ false,
-                        &message,
-                        &missing_tool_result_tags,
-                        /*extra_trace_fields*/ &[],
-                    );
-                    let err = FunctionCallError::RespondToModel(message);
-                    dispatch_trace.record_failed(&err);
-                    return Err(err);
+                    None
+                };
+                match recovered_tool {
+                    Some(Ok(tool)) => tool,
+                    Some(Err(err)) => {
+                        let message = format!("failed to build MCP tool spec: {err}");
+                        let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+                        let mut tool_result_tags = Vec::with_capacity(2);
+                        sandbox_tags.append_metric_tags(&mut tool_result_tags);
+                        otel.tool_result_with_tags(
+                            &tool_name,
+                            &call_id_owned,
+                            log_payload.as_ref(),
+                            Duration::ZERO,
+                            /*success*/ false,
+                            &message,
+                            &tool_result_tags,
+                            /*extra_trace_fields*/ &[],
+                        );
+                        let err = FunctionCallError::RespondToModel(message);
+                        dispatch_trace.record_failed(&err);
+                        return Err(err);
+                    }
+                    None => {
+                        let message =
+                            unsupported_tool_call_message(&invocation.payload, &tool_name);
+                        let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+                        let mut tool_result_tags = Vec::with_capacity(2);
+                        sandbox_tags.append_metric_tags(&mut tool_result_tags);
+                        otel.tool_result_with_tags(
+                            &tool_name,
+                            &call_id_owned,
+                            log_payload.as_ref(),
+                            Duration::ZERO,
+                            /*success*/ false,
+                            &message,
+                            &tool_result_tags,
+                            /*extra_trace_fields*/ &[],
+                        );
+                        let err = FunctionCallError::RespondToModel(message);
+                        dispatch_trace.record_failed(&err);
+                        return Err(err);
+                    }
                 }
             }
         };
         let telemetry_tags = tool.telemetry_tags(&invocation);
-        let mut tool_result_tags =
-            Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len() + 2);
+        let mut tool_result_tags = Vec::with_capacity(2 + telemetry_tags.len() + 1);
         let mut extra_trace_fields = Vec::new();
-        tool_result_tags.extend_from_slice(&base_tool_result_tags);
         sandbox_tags.append_metric_tags(&mut tool_result_tags);
         for (key, value) in &telemetry_tags {
             if matches!(*key, "mcp_server" | "mcp_server_origin") {
@@ -982,42 +926,12 @@ fn function_hook_tool_input(arguments: &str) -> Value {
 }
 
 fn unsupported_tool_call_message(payload: &ToolPayload, tool_name: &ToolName) -> String {
-    if is_codex_apps_tool_name(tool_name) {
-        return match payload {
-            ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
-            _ => format!("unsupported call: {tool_name}"),
-        };
-    }
-    if is_mcp_tool_name(tool_name) {
-        return format!("MCP tool `{tool_name}` is not currently available.");
-    }
-
     match payload {
         ToolPayload::Custom { .. } => format!("unsupported custom tool call: {tool_name}"),
         _ => format!("unsupported call: {tool_name}"),
     }
 }
 
-fn recovered_mcp_namespace_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.provider.capabilities().namespace_tools
-        && turn_context.tools_config.namespace_tools
-}
-
-fn is_mcp_tool_name(tool_name: &ToolName) -> bool {
-    tool_name
-        .namespace
-        .as_deref()
-        .is_some_and(|namespace| namespace.starts_with("mcp__"))
-        || tool_name.name.starts_with("mcp__")
-}
-
-fn is_codex_apps_tool_name(tool_name: &ToolName) -> bool {
-    tool_name
-        .namespace
-        .as_deref()
-        .is_some_and(|namespace| namespace.starts_with("mcp__codex_apps"))
-        || tool_name.name.starts_with("mcp__codex_apps")
-}
 #[cfg(test)]
 #[path = "registry_tests.rs"]
 mod tests;

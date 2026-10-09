@@ -173,7 +173,7 @@ impl ToolRouter {
     }
 
     // Answers if the tool plan lets the model invoke the tool directly, through code mode, or deferred tool search.
-    pub(super) fn exposes_tool(&self, name: &ToolName) -> bool {
+    pub(crate) fn exposes_tool(&self, name: &ToolName) -> bool {
         let name = name.clone().with_default_namespace();
         if self
             .code_mode_tool_names
@@ -224,7 +224,7 @@ impl ToolRouter {
         &self,
         name: &ToolName,
     ) -> Option<codex_tools::ToolExposure> {
-        self.registry.tool_exposure_for_test(name)
+        self.registry.tool_exposure(name)
     }
 
     pub(crate) fn create_diff_consumer(

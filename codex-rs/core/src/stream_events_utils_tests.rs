@@ -306,16 +306,11 @@ fn output_context(session: Arc<Session>, turn_context: Arc<TurnContext>) -> Hand
     ));
     let step_context = step_context.with_tool_router_for_test(router);
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let tool_runtime = ToolCallRuntime::new(
-        Arc::clone(&session),
-        Arc::clone(&step_context),
-        Arc::clone(&step_context.tool_router),
-        tracker,
-    );
+    let tool_runtime =
+        ToolCallRuntime::new(Arc::clone(&session), Arc::clone(&step_context), tracker);
     HandleOutputCtx {
         sess: session,
-        turn_context: Arc::clone(&turn_context),
-        session_telemetry: step_context.session_telemetry.clone(),
+        step_context,
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
         tool_runtime,
         cancellation_token: CancellationToken::new(),
@@ -375,9 +370,12 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     }
 
     // Reapplying an enabled config keeps the same recording lifetime.
-    session
-        .refresh_runtime_config((*session.get_config().await).clone())
-        .await;
+    let current_config = session.get_config().await;
+    let config = current_config.as_ref().clone();
+    assert_eq!(
+        session.refresh_runtime_config(current_config, config).await,
+        crate::ConfigRefreshOutcome::Published
+    );
     // Await in reverse order: each result must already own its record before history attachment.
     let mut outputs = Vec::new();
     for (arguments, future) in pending.into_iter().rev() {
@@ -409,8 +407,6 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     session
         .services
         .executed_tool_calls
-        .as_ref()
-        .expect("metadata-enabled test config creates an executed-call recorder")
         .attach_to_prompt(&mut outputs, &mut Default::default());
     assert_eq!(outputs, original);
 
@@ -429,12 +425,15 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
                 .expect("dispatched direct call"),
         );
     }
-    let mut config = (*session.get_config().await).clone();
+    let current_config = session.get_config().await;
+    let mut config = current_config.as_ref().clone();
     config
         .features
         .disable(Feature::ExecutedToolCallMetadata)
         .expect("disable metadata");
-    session.refresh_runtime_config(config.clone()).await;
+    let _ = session
+        .refresh_runtime_config(current_config, config.clone())
+        .await;
     let result = pending
         .remove(0)
         .await
@@ -443,8 +442,6 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
     session
         .services
         .executed_tool_calls
-        .as_ref()
-        .expect("the recorder remains allocated after runtime feature changes")
         .attach_to_prompt(&mut outputs, &mut Default::default());
     let mut expected = original;
     for item in &mut expected {
@@ -456,7 +453,8 @@ async fn direct_results_keep_their_own_records_when_call_ids_repeat() {
         .features
         .enable(Feature::ExecutedToolCallMetadata)
         .expect("re-enable metadata");
-    session.refresh_runtime_config(config).await;
+    let current_config = session.get_config().await;
+    let _ = session.refresh_runtime_config(current_config, config).await;
     let result = pending
         .pop()
         .expect("call prepared before disable")

@@ -76,9 +76,11 @@ pub async fn history_with_tool_call_metadata(
 ) -> Vec<codex_protocol::models::ResponseItem> {
     let history = thread.conversation_history_snapshot().await;
     let mut items = history.items().cloned().collect::<Vec<_>>();
-    if let Some(executed_tool_calls) = thread.session.services.executed_tool_calls.as_ref() {
-        executed_tool_calls.attach_to_prompt(&mut items, &mut Default::default());
-    }
+    thread
+        .session
+        .services
+        .executed_tool_calls
+        .attach_to_prompt(&mut items, &mut Default::default());
     items
 }
 
@@ -91,9 +93,7 @@ pub fn mcp_attribution_snapshot(
         .session
         .services
         .executed_tool_calls
-        .as_ref()
-        .map(|executed_tool_calls| executed_tool_calls.mcp_attribution_snapshot())
-        .unwrap_or_default()
+        .mcp_attribution_snapshot()
 }
 
 /// Test-only provider that supplies no user instructions.

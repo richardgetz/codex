@@ -1,6 +1,5 @@
-//! Read-only Daybreak eligibility used to choose cyber refusal copy.
-//! Account-scoped discovery runs in the background; pending/failed reads use neutral copy.
-//! Astra takes precedence; the TUI does not configure the app’s Daybreak access program.
+//! Account-scoped Daybreak refusal guidance and per-turn program selection.
+//! Pending or failed discovery never implies access.
 
 use crate::app_server_session::AppServerSession;
 use crate::legacy_core::config::Config;
@@ -13,6 +12,9 @@ use codex_app_server_protocol::RequestId;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::RouteAwareClientPool;
 use codex_login::CodexAuth;
+use codex_protocol::openai_models::ModelAccessPrograms;
+use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::turn_input::CyberAccessProgram;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,14 +22,7 @@ use tokio::sync::OnceCell;
 
 pub(crate) type NoticeCache = Arc<OnceCell<Notice>>;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum Notice {
-    Apply,
-    Astra,
-    #[default]
-    Limited,
-}
-
+/// Fetch account-scoped eligibility without blocking startup or turn handling.
 pub(crate) fn prefetch_notice(config: &Config, server: &AppServerSession, cache: NoticeCache) {
     if config.model_provider_id != "openai"
         || server.uses_remote_workspace()
@@ -46,7 +41,6 @@ pub(crate) fn prefetch_notice(config: &Config, server: &AppServerSession, cache:
 
 async fn read_notice(config: &Config, request_handle: &AppServerRequestHandle) -> Notice {
     tokio::time::timeout(Duration::from_secs(3), async {
-        // Allow the server to refresh its token before reading local credentials.
         let status: GetAuthStatusResponse = request_handle
             .request_typed(ClientRequest::GetAuthStatus {
                 request_id: RequestId::String(uuid::Uuid::new_v4().to_string()),
@@ -112,6 +106,7 @@ async fn read_notice(config: &Config, request_handle: &AppServerRequestHandle) -
 struct VerifiedAccess {
     programs: Vec<Program>,
 }
+
 #[derive(Deserialize)]
 #[serde(tag = "program", rename_all = "snake_case")]
 enum Program {
@@ -122,6 +117,7 @@ enum Program {
     #[serde(other)]
     Other,
 }
+
 impl VerifiedAccess {
     fn notice(&self) -> Notice {
         let absent = self.programs.iter().all(|program| match program {
@@ -136,16 +132,109 @@ impl VerifiedAccess {
     }
 }
 
+pub(crate) fn program_for_turn(
+    models: &[ModelPreset],
+    model: &str,
+    eligible_account: bool,
+    enabled: bool,
+) -> Result<Option<CyberAccessProgram>, String> {
+    if !eligible_account {
+        return if enabled {
+            Err("Daybreak requires a signed-in ChatGPT account and the OpenAI provider. Turn it off to continue.".into())
+        } else {
+            Ok(None)
+        };
+    }
+    let programs = models
+        .iter()
+        .find(|entry| entry.model == model)
+        .and_then(|entry| entry.available_access_programs.as_ref());
+    if enabled {
+        programs
+            .and_then(codex_protocol::openai_models::ModelAccessPrograms::daybreak)
+            .map(Some)
+            .ok_or_else(|| format!("Daybreak support for model {model} could not be confirmed by the connected server. Use /daybreak to turn it off, or choose a compatible model and server."))
+    } else {
+        Ok(programs.and_then(codex_protocol::openai_models::ModelAccessPrograms::standard))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Notice {
+    Apply,
+    Astra,
+    #[default]
+    Limited,
+    Disabled,
+    Enabled,
+}
+
 impl Notice {
+    /// Preserve the stable refusal copy where the catalog does not provide a more specific one.
     pub(crate) fn for_model(self, model: &str) -> Self {
         match model {
-            // Same identifiers as the app's isDaybreakUnavailableModel.
             "gpt-6-astra" | "gpt-6-astra-wm" => Self::Astra,
-            "gpt-5.6-sol" => self,
-            // Other model/access-program mappings are not established for the TUI.
-            _ => Self::Limited,
+            _ => self,
         }
     }
+}
+
+pub(crate) fn notice_for_setting(
+    models: &[ModelPreset],
+    model: &str,
+    enabled: bool,
+    can_enable_daybreak: bool,
+) -> Notice {
+    if enabled {
+        return Notice::Enabled;
+    }
+    if can_enable_daybreak {
+        let programs = models
+            .iter()
+            .find(|entry| entry.model == model)
+            .and_then(|entry| entry.available_access_programs.as_ref());
+        if matches!(model, "gpt-6-astra" | "gpt-6-astra-wm")
+            && programs.is_some_and(|programs| {
+                programs.cyber.contains(&CyberAccessProgram::Standard)
+                    && programs.daybreak().is_none()
+            })
+        {
+            return Notice::Astra;
+        }
+        if programs.and_then(ModelAccessPrograms::daybreak).is_some() {
+            return Notice::Disabled;
+        }
+    }
+    Notice::Apply
+}
+
+pub(crate) fn available(models: &[ModelPreset]) -> bool {
+    models.iter().any(|model| {
+        model
+            .available_access_programs
+            .as_ref()
+            .and_then(codex_protocol::openai_models::ModelAccessPrograms::daybreak)
+            .is_some()
+    })
+}
+
+/// Missing or empty program lists do not establish that the account lacks access.
+pub(crate) fn availability(models: &[ModelPreset]) -> Option<bool> {
+    if available(models) {
+        return Some(true);
+    }
+    if models.is_empty() {
+        return None;
+    }
+    models
+        .iter()
+        .all(|model| {
+            model
+                .available_access_programs
+                .as_ref()
+                .is_some_and(|programs| !programs.cyber.is_empty())
+        })
+        .then_some(false)
 }
 
 #[cfg(test)]

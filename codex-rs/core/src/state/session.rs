@@ -1,10 +1,9 @@
 //! Session-wide mutable state.
 
-use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
-use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_state::ThreadControlRecord;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -24,7 +23,6 @@ use crate::session::time_reminder::CurrentTimeReminderState;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageAttribution;
@@ -78,15 +76,11 @@ pub(crate) struct SessionState {
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
-    /// Original request effort for the current model while configuration updates remain active.
-    pub(crate) reasoning_effort_pin: ReasoningEffortPin,
     /// Cancels work bound to discarded history or a superseded Guardian evidence policy.
     pub(crate) history_reset: CancellationToken,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) rate_limits_by_limit_id: BTreeMap<String, RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
-    /// Exact response records observed by this thread. Forked sessions retain their context
-    /// snapshot but rebuild this ledger from records carrying the new thread id.
     pub(crate) token_usage_records: Vec<TokenUsageRecord>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) dependency_env: HashMap<String, String>,
@@ -101,6 +95,8 @@ pub(crate) struct SessionState {
     pub(crate) last_started_turn_id: Option<String>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
+    /// Original request effort for the current model while configuration updates remain active.
+    pub(crate) reasoning_effort_pin: ReasoningEffortPin,
     /// Set under the state lock before shutdown takes the last warmup handle.
     pub(crate) shutting_down: bool,
     /// Background model warmup scheduled at startup or while resuming an idle thread.
@@ -111,7 +107,6 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     active_thread_control: Option<ThreadControlRecord>,
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
-    granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     next_turn_is_first: bool,
 }
 
@@ -156,7 +151,6 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             active_thread_control: None,
             pending_session_start_sources: VecDeque::new(),
-            granted_permissions_by_environment_id: HashMap::new(),
             next_turn_is_first: true,
         }
     }
@@ -302,10 +296,6 @@ impl SessionState {
         record
     }
 
-    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.history.set_reference_context_item(item);
-    }
-
     pub(crate) fn set_token_usage_records(
         &mut self,
         records: Vec<TokenUsageRecord>,
@@ -313,6 +303,10 @@ impl SessionState {
     ) {
         self.token_usage_records = records;
         self.latest_token_usage_record = latest_token_usage_record;
+    }
+
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        self.history.set_reference_context_item(item);
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -459,9 +453,7 @@ impl SessionState {
     }
 
     pub(crate) fn set_dependency_env(&mut self, values: HashMap<String, String>) {
-        for (key, value) in values {
-            self.dependency_env.insert(key, value);
-        }
+        self.dependency_env.extend(values);
     }
 
     pub(crate) fn dependency_env(&self) -> HashMap<String, String> {
@@ -498,6 +490,13 @@ impl SessionState {
         self.active_connector_selection.clear();
     }
 
+    pub(crate) fn queue_pending_session_start_source(
+        &mut self,
+        value: codex_hooks::SessionStartSource,
+    ) {
+        self.pending_session_start_sources.push_back(value);
+    }
+
     pub(crate) fn set_pending_session_start_source(
         &mut self,
         value: Option<codex_hooks::SessionStartSource>,
@@ -513,36 +512,11 @@ impl SessionState {
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_sources.pop_front()
     }
-
-    pub(crate) fn record_granted_permissions(
-        &mut self,
-        environment_id: &str,
-        permissions: AdditionalPermissionProfile,
-    ) {
-        let granted_permissions = merge_permission_profiles(
-            self.granted_permissions_by_environment_id
-                .get(environment_id),
-            Some(&permissions),
-        );
-        if let Some(granted_permissions) = granted_permissions {
-            self.granted_permissions_by_environment_id
-                .insert(environment_id.to_string(), granted_permissions);
-        }
-    }
-
-    pub(crate) fn granted_permissions(
-        &self,
-        environment_id: &str,
-    ) -> Option<AdditionalPermissionProfile> {
-        self.granted_permissions_by_environment_id
-            .get(environment_id)
-            .cloned()
-    }
 }
 
-// Sometimes new snapshots don't include previously reported budget information.
-// Preserve account-wide metadata from the previous snapshot when missing. Window
-// fields belong to a specific `limit_id` and are only retained within that bucket.
+// Sometimes new snapshots don't include credits or plan information.
+// Preserve those from the previous snapshot when missing. For `limit_id`, treat
+// missing values as the default `"codex"` bucket.
 fn merge_rate_limit_fields(
     previous: Option<&RateLimitSnapshot>,
     mut snapshot: RateLimitSnapshot,

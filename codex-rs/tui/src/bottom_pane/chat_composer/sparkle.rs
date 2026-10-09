@@ -1,9 +1,8 @@
 //! Sparse Astra stars on the existing composer surface, fading with the terminal's colors.
 //! `enabled_foreground` owns eligibility, including late-arriving terminal colors.
 //! Rendering owns frame scheduling, so hidden composers do not keep animating. The original glyph
-//! sparkles remain opt-in through `tui.whimsy`, which is disabled by default so ordinary terminal
-//! copies stay clean. If upstream gains a native selection-safe sparkle renderer, adopt that
-//! visual improvement on refresh while preserving this fork gate and default.
+//! sparkles remain opt-in through explicit `tui.whimsy` or `tui.effects.starfield` configuration;
+//! packaged defaults do not opt users in, so ordinary terminal copies stay clean.
 //! One short Astra flourish for a confirmed new task with an untouched prompt.
 //!
 //! Ordinary draft content ends the opportunity permanently; slash commands can still select Astra

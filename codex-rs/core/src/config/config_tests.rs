@@ -43,75 +43,31 @@ use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
-use codex_config::types::ConventionalCommitsToml;
-use codex_config::types::EnablementConfig;
-use codex_config::types::EnablementFilterConfig;
-use codex_config::types::EnablementFilterMode;
 use codex_config::types::FeedbackConfigToml;
-use codex_config::types::GitIntentNotesToml;
 use codex_config::types::HistoryPersistence;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerOAuthConfig;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::MemoriesConfig;
-use codex_config::types::MemoriesScope;
 use codex_config::types::MemoriesToml;
-use codex_config::types::ModeEnablementConfig;
 use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
-use indexmap::IndexMap;
-
-use codex_config::types::OrchestratorMemoryCleanupConfig;
-use codex_config::types::OrchestratorMemoryCleanupToml;
-use codex_config::types::OrchestratorMemoryConfig;
-use codex_config::types::OrchestratorMemoryToml;
-use codex_config::types::OrchestratorThreadControlToml;
-
 use codex_config::types::OtelConfigToml;
 use codex_config::types::OtelExporterKind;
-use codex_config::types::ResumeConfig;
 use codex_config::types::ResumeCwdMode;
-use codex_config::types::ResumeStrategy;
-use codex_config::types::ResumeToml;
 use codex_config::types::SandboxWorkspaceWrite;
-use codex_config::types::ScheduleModeToml;
-use codex_config::types::ScheduleToml;
-use codex_config::types::ScratchpadCapacityRetryToml;
-use codex_config::types::ScratchpadConfig;
-use codex_config::types::ScratchpadFanoutConfig;
-use codex_config::types::ScratchpadFanoutToml;
-use codex_config::types::ScratchpadLoopbackConfig;
-use codex_config::types::ScratchpadLoopbackToml;
-use codex_config::types::ScratchpadModeToml;
-use codex_config::types::ScratchpadRollbackConfig;
-use codex_config::types::ScratchpadRollbackToml;
-use codex_config::types::ScratchpadToml;
-use codex_config::types::ScratchpadViewConfig;
-use codex_config::types::ScratchpadViewToml;
 use codex_config::types::SessionPickerViewMode;
-use codex_config::types::SituationalRequirementAction;
-use codex_config::types::SituationalRequirementActionToml;
-use codex_config::types::SituationalRequirementRuleToml;
-use codex_config::types::SituationalRequirementTrigger;
-use codex_config::types::SituationalRequirementsToml;
-use codex_config::types::SkillModeFilterConfig;
-use codex_config::types::SkillModeFilterMode;
 use codex_config::types::SkillsConfig;
-use codex_config::types::ThreadControlToml;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_config::types::Tui;
 use codex_config::types::TuiKeymap;
 use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
-use codex_config::types::UserPreferencesMemoryBucket;
-use codex_config::types::UserPreferencesMemoryBucketPolicy;
-use codex_config::types::UserPreferencesMemoryConfig;
-use codex_config::types::UserPreferencesMemoryToml;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
 use codex_exec_server::LOCAL_FS;
@@ -126,8 +82,8 @@ use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
 use codex_prompts::ResolvedMessage;
-use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ModelProviderAuthInfo;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -136,7 +92,6 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -156,6 +111,7 @@ use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
 use core_test_support::test_absolute_path;
+use indexmap::IndexMap;
 use pretty_assertions::assert_eq;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::FormElicitationCapability;
@@ -186,9 +142,9 @@ fn stdio_mcp_with_args(command: &str, args: &[&str]) -> McpServerConfig {
         enabled: true,
         required: false,
         startup_readiness: Default::default(),
+        startup: Default::default(),
+        sharing: Default::default(),
         supports_parallel_tool_calls: false,
-        startup: codex_config::McpServerStartupMode::Auto,
-        sharing: codex_config::McpServerSharingMode::Auto,
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -218,9 +174,9 @@ fn http_mcp(url: &str) -> McpServerConfig {
         enabled: true,
         required: false,
         startup_readiness: Default::default(),
+        startup: Default::default(),
+        sharing: Default::default(),
         supports_parallel_tool_calls: false,
-        startup: codex_config::McpServerStartupMode::Auto,
-        sharing: codex_config::McpServerSharingMode::Auto,
         tool_input_schema_max_bytes: None,
         omit_tools_from: None,
         disabled_reason: None,
@@ -372,7 +328,6 @@ persistence = "none"
 disable_on_external_context = true
 generate_memories = false
 use_memories = false
-scope = "orchestrator"
 dedicated_tools = true
 max_raw_memories_for_consolidation = 512
 max_unused_days = 21
@@ -381,9 +336,7 @@ max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
 min_rate_limit_remaining_percent = 12
 extract_model = "gpt-5-mini"
-extract_reasoning_effort = "low"
 consolidation_model = "gpt-5.2"
-consolidation_reasoning_effort = "high"
 "#;
     let memories_cfg =
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
@@ -394,7 +347,6 @@ consolidation_reasoning_effort = "high"
             disable_on_external_context: Some(true),
             generate_memories: Some(false),
             use_memories: Some(false),
-            scope: Some(MemoriesScope::Orchestrator),
             dedicated_tools: Some(true),
             max_raw_memories_for_consolidation: Some(512),
             max_unused_days: Some(21),
@@ -403,9 +355,8 @@ consolidation_reasoning_effort = "high"
             min_rollout_idle_hours: Some(24),
             min_rate_limit_remaining_percent: Some(12),
             extract_model: Some("gpt-5-mini".to_string()),
-            extract_reasoning_effort: Some(ReasoningEffort::Low),
             consolidation_model: Some("gpt-5.2".to_string()),
-            consolidation_reasoning_effort: Some(ReasoningEffort::High),
+            ..Default::default()
         }),
         memories_cfg.memories
     );
@@ -425,7 +376,7 @@ consolidation_reasoning_effort = "high"
             disable_on_external_context: true,
             generate_memories: false,
             use_memories: false,
-            scope: MemoriesScope::Orchestrator,
+            scope: Default::default(),
             dedicated_tools: true,
             max_raw_memories_for_consolidation: 512,
             max_unused_days: 21,
@@ -434,184 +385,9 @@ consolidation_reasoning_effort = "high"
             min_rollout_idle_hours: 24,
             min_rate_limit_remaining_percent: 12,
             extract_model: Some("gpt-5-mini".to_string()),
-            extract_reasoning_effort: Some(ReasoningEffort::Low),
+            extract_reasoning_effort: None,
             consolidation_model: Some("gpt-5.2".to_string()),
-            consolidation_reasoning_effort: Some(ReasoningEffort::High),
-        }
-    );
-
-    let write_enabled_memories = r#"
-[memories]
-generate_memories = true
-use_memories = false
-"#;
-    let write_enabled_memories_cfg = toml::from_str::<ConfigToml>(write_enabled_memories)
-        .expect("TOML deserialization should succeed");
-    let config = Config::load_from_base_config_with_overrides(
-        write_enabled_memories_cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").abs(),
-    )
-    .await
-    .expect("load config from write-enabled memories settings");
-    assert!(config.memories.generate_memories);
-    assert!(config.memories.use_memories);
-
-    let orchestrator_memory = r#"
-[orchestrator_memory]
-enabled = true
-scope = "orchestrator"
-debounce_seconds = 15
-min_observations = 3
-recent_turn_window = 6
-max_summary_items = 10
-model_on_heuristic_miss = true
-model_consolidation = true
-
-[orchestrator_memory.cleanup]
-enabled = true
-schedule = "04:15"
-run_missed_on_startup = true
-dedupe_raw_events = true
-deep_consolidation = false
-model_consolidation = false
-retain_forget_events_days = 14
-"#;
-    let orchestrator_memory_cfg = toml::from_str::<ConfigToml>(orchestrator_memory)
-        .expect("TOML deserialization should succeed");
-    assert_eq!(
-        Some(OrchestratorMemoryToml {
-            enabled: Some(true),
-            scope: Some(MemoriesScope::Orchestrator),
-            debounce_seconds: Some(15),
-            min_observations: Some(3),
-            recent_turn_window: Some(6),
-            max_summary_items: Some(10),
-            model_on_heuristic_miss: Some(true),
-            model_consolidation: Some(true),
-            cleanup: Some(OrchestratorMemoryCleanupToml {
-                enabled: Some(true),
-                schedule: Some("04:15".to_string()),
-                run_missed_on_startup: Some(true),
-                dedupe_raw_events: Some(true),
-                deep_consolidation: Some(false),
-                model_consolidation: Some(false),
-                retain_forget_events_days: Some(14),
-            }),
-        }),
-        orchestrator_memory_cfg.orchestrator_memory
-    );
-
-    let config = Config::load_from_base_config_with_overrides(
-        orchestrator_memory_cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").abs(),
-    )
-    .await
-    .expect("load config from orchestrator memory settings");
-    assert_eq!(
-        config.orchestrator_memory,
-        OrchestratorMemoryConfig {
-            enabled: true,
-            scope: MemoriesScope::Orchestrator,
-            debounce_seconds: 15,
-            min_observations: 3,
-            recent_turn_window: 6,
-            max_summary_items: 10,
-            model_on_heuristic_miss: true,
-            model_consolidation: true,
-            cleanup: OrchestratorMemoryCleanupConfig {
-                enabled: true,
-                schedule: "04:15".to_string(),
-                run_missed_on_startup: true,
-                dedupe_raw_events: true,
-                deep_consolidation: false,
-                model_consolidation: false,
-                retain_forget_events_days: 14,
-            },
-        }
-    );
-
-    let user_preferences_memory = r#"
-[user_preferences_memory]
-enabled = true
-scope = "all"
-debounce_seconds = 20
-min_observations = 4
-recent_turn_window = 12
-max_summary_items = 40
-read_buckets = ["durable_preference", "operator_playbook"]
-write_buckets = ["operator_playbook"]
-migrate_from_orchestrator_memory = true
-disable_orchestrator_memory_after_migration = true
-
-[user_preferences_memory.cleanup]
-enabled = false
-schedule = "05:45"
-"#;
-    let user_preferences_memory_cfg = toml::from_str::<ConfigToml>(user_preferences_memory)
-        .expect("TOML deserialization should succeed");
-    assert_eq!(
-        Some(UserPreferencesMemoryToml {
-            enabled: Some(true),
-            scope: Some(MemoriesScope::All),
-            debounce_seconds: Some(20),
-            min_observations: Some(4),
-            recent_turn_window: Some(12),
-            max_summary_items: Some(40),
-            read_buckets: Some(vec![
-                UserPreferencesMemoryBucket::DurablePreference,
-                UserPreferencesMemoryBucket::OperatorPlaybook,
-            ]),
-            write_buckets: Some(vec![UserPreferencesMemoryBucket::OperatorPlaybook]),
-            model_on_heuristic_miss: None,
-            model_consolidation: None,
-            migrate_from_orchestrator_memory: Some(true),
-            disable_orchestrator_memory_after_migration: Some(true),
-            cleanup: Some(OrchestratorMemoryCleanupToml {
-                enabled: Some(false),
-                schedule: Some("05:45".to_string()),
-                run_missed_on_startup: None,
-                dedupe_raw_events: None,
-                deep_consolidation: None,
-                model_consolidation: None,
-                retain_forget_events_days: None,
-            }),
-        }),
-        user_preferences_memory_cfg.user_preferences_memory
-    );
-    let config = Config::load_from_base_config_with_overrides(
-        user_preferences_memory_cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").abs(),
-    )
-    .await
-    .expect("load config from user preferences memory settings");
-    assert_eq!(
-        config.user_preferences_memory,
-        UserPreferencesMemoryConfig {
-            enabled: true,
-            scope: MemoriesScope::All,
-            debounce_seconds: 20,
-            min_observations: 4,
-            recent_turn_window: 12,
-            max_summary_items: 40,
-            model_on_heuristic_miss: false,
-            model_consolidation: false,
-            bucket_policy: UserPreferencesMemoryBucketPolicy {
-                read_buckets: vec![
-                    UserPreferencesMemoryBucket::DurablePreference,
-                    UserPreferencesMemoryBucket::OperatorPlaybook,
-                ],
-                write_buckets: vec![UserPreferencesMemoryBucket::OperatorPlaybook],
-            },
-            migrate_from_orchestrator_memory: true,
-            disable_orchestrator_memory_after_migration: true,
-            cleanup: OrchestratorMemoryCleanupConfig {
-                enabled: false,
-                schedule: "05:45".to_string(),
-                ..OrchestratorMemoryCleanupConfig::default()
-            },
+            consolidation_reasoning_effort: None,
         }
     );
 
@@ -625,99 +401,6 @@ schedule = "05:45"
                 .expect("legacy memories config")
         )
         .disable_on_external_context
-    );
-
-    let migration_home = tempdir().expect("tempdir").abs();
-    std::fs::create_dir_all(migration_home.join("orchestrator_memory"))
-        .expect("create orchestrator memory root");
-    std::fs::write(
-        migration_home.join("orchestrator_memory/summary.md"),
-        "legacy orchestration preference",
-    )
-    .expect("write orchestrator memory summary");
-    let migrated_config = Config::load_from_base_config_with_overrides(
-        toml::from_str::<ConfigToml>(
-            r#"
-[orchestrator_memory]
-enabled = true
-
-[user_preferences_memory]
-migrate_from_orchestrator_memory = true
-disable_orchestrator_memory_after_migration = true
-"#,
-        )
-        .expect("TOML deserialization should succeed"),
-        ConfigOverrides::default(),
-        migration_home.clone(),
-    )
-    .await
-    .expect("load config with user preferences migration");
-    assert!(!migrated_config.orchestrator_memory.enabled);
-    assert_eq!(
-        std::fs::read_to_string(
-            migration_home.join("memories/extensions/user_preferences/summary.md")
-        )
-        .expect("read migrated summary"),
-        "legacy orchestration preference"
-    );
-
-    let migration_home = tempdir().expect("tempdir").abs();
-    std::fs::create_dir_all(migration_home.join("user_preferences_memory"))
-        .expect("create legacy user preferences memory root");
-    std::fs::write(
-        migration_home.join("user_preferences_memory/summary.md"),
-        "legacy user preference",
-    )
-    .expect("write legacy user preferences summary");
-    std::fs::create_dir_all(migration_home.join("orchestrator_memory"))
-        .expect("create orchestrator memory root");
-    std::fs::write(
-        migration_home.join("orchestrator_memory/profile.md"),
-        "legacy orchestrator profile",
-    )
-    .expect("write orchestrator memory profile");
-    Config::load_from_base_config_with_overrides(
-        toml::from_str::<ConfigToml>(
-            r#"
-[user_preferences_memory]
-migrate_from_orchestrator_memory = false
-"#,
-        )
-        .expect("TOML deserialization should succeed"),
-        ConfigOverrides::default(),
-        migration_home.clone(),
-    )
-    .await
-    .expect("load config with user preferences extension migration");
-    assert_eq!(
-        std::fs::read_to_string(
-            migration_home.join("memories/extensions/user_preferences/summary.md")
-        )
-        .expect("read migrated legacy user preferences summary"),
-        "legacy user preference"
-    );
-    assert!(
-        !migration_home
-            .join("memories/extensions/user_preferences/profile.md")
-            .exists(),
-        "orchestrator memory should not migrate when migrate_from_orchestrator_memory is false"
-    );
-
-    let thread_control = r#"
-[thread_control.orchestrator]
-model = "gpt-5.3-codex-spark"
-reasoning_effort = "low"
-"#;
-    let thread_control_cfg =
-        toml::from_str::<ConfigToml>(thread_control).expect("TOML deserialization should succeed");
-    assert_eq!(
-        Some(ThreadControlToml {
-            orchestrator: Some(OrchestratorThreadControlToml {
-                model: Some("gpt-5.3-codex-spark".to_string()),
-                reasoning_effort: Some(ReasoningEffort::Low),
-            }),
-        }),
-        thread_control_cfg.thread_control
     );
 }
 
@@ -764,509 +447,11 @@ enabled = false
             include_instructions: Some(false),
             max_context_tokens: std::num::NonZeroUsize::new(1_200),
             config: Vec::new(),
-            modes: Default::default(),
+            modes: HashMap::new(),
         })
     );
 
     assert!(toml::from_str::<ConfigToml>("[skills]\nmax_context_tokens = 0\n").is_err());
-}
-
-#[test]
-fn parses_mode_scoped_skills_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[skills.modes.plan]
-mode = "include"
-skills = ["agent-state", "scratchpad"]
-
-[skills.modes.default]
-mode = "exclude"
-skills = ["skill-recorder"]
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.skills,
-        Some(SkillsConfig {
-            bundled: None,
-            include_instructions: None,
-            max_context_tokens: None,
-            config: Vec::new(),
-            modes: [
-                (
-                    ModeKind::Plan,
-                    SkillModeFilterConfig {
-                        mode: SkillModeFilterMode::Include,
-                        skills: vec!["agent-state".to_string(), "scratchpad".to_string()],
-                    },
-                ),
-                (
-                    ModeKind::Default,
-                    SkillModeFilterConfig {
-                        mode: SkillModeFilterMode::Exclude,
-                        skills: vec!["skill-recorder".to_string()],
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        })
-    );
-}
-
-#[test]
-fn parses_unified_mode_enablement_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[enablement.modes.plan.skills]
-mode = "include"
-items = ["agent-state", "scratchpad"]
-
-[enablement.modes.plan.mcps]
-mode = "include"
-items = ["scratchpad", "imessage"]
-
-[enablement.modes.default.plugins]
-mode = "exclude"
-items = ["canva@openai-curated"]
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.enablement,
-        Some(EnablementConfig {
-            modes: [
-                (
-                    ModeKind::Plan,
-                    ModeEnablementConfig {
-                        skills: Some(EnablementFilterConfig {
-                            mode: EnablementFilterMode::Include,
-                            items: vec!["agent-state".to_string(), "scratchpad".to_string()],
-                        }),
-                        mcps: Some(EnablementFilterConfig {
-                            mode: EnablementFilterMode::Include,
-                            items: vec!["scratchpad".to_string(), "imessage".to_string()],
-                        }),
-                        plugins: None,
-                    },
-                ),
-                (
-                    ModeKind::Default,
-                    ModeEnablementConfig {
-                        skills: None,
-                        mcps: None,
-                        plugins: Some(EnablementFilterConfig {
-                            mode: EnablementFilterMode::Exclude,
-                            items: vec!["canva@openai-curated".to_string()],
-                        }),
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        })
-    );
-}
-
-#[test]
-fn ignores_legacy_orchestrator_mode_enablement_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[enablement.modes.orchestrator.mcps]
-mode = "include"
-items = ["fs-guard"]
-
-[enablement.modes.default.mcps]
-mode = "include"
-items = ["aws-auth-guard"]
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.enablement,
-        Some(EnablementConfig {
-            modes: [(
-                ModeKind::Default,
-                ModeEnablementConfig {
-                    skills: None,
-                    mcps: Some(EnablementFilterConfig {
-                        mode: EnablementFilterMode::Include,
-                        items: vec!["aws-auth-guard".to_string()],
-                    }),
-                    plugins: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-        })
-    );
-}
-
-#[test]
-fn ignores_legacy_mode_alias_config_blocks() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[skills.modes.orchestrator]
-old_field = "ignored"
-
-[scratchpad.modes.continuous]
-old_field = "ignored"
-
-[schedule.modes.execute]
-old_field = "ignored"
-"#,
-    )
-    .expect("legacy mode config blocks should be ignored");
-
-    assert_eq!(
-        cfg.skills,
-        Some(SkillsConfig {
-            bundled: None,
-            include_instructions: None,
-            max_context_tokens: None,
-            config: Vec::new(),
-            modes: Default::default(),
-        })
-    );
-    assert_eq!(
-        cfg.scratchpad,
-        Some(ScratchpadToml {
-            modes: Default::default(),
-            ..Default::default()
-        })
-    );
-    assert_eq!(
-        cfg.schedule,
-        Some(ScheduleToml {
-            enabled: None,
-            modes: Default::default(),
-        })
-    );
-}
-
-#[test]
-fn parses_mode_scoped_scratchpad_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[scratchpad]
-enabled = true
-default_continuous = true
-recover_after_compaction = true
-auto_archive_after_days = 14
-delete_archived_after_days = 120
-outcomes_enabled = true
-
-[scratchpad.capacity_retry]
-enabled = true
-delay_minutes = 7
-
-[scratchpad.loopback]
-max_loopbacks = 7
-window_minutes = 9
-
-[scratchpad.rollback]
-max_user_turn_checkpoints = 12
-
-[scratchpad.fanout]
-enabled = true
-max_agents = 6
-
-[scratchpad.view]
-enabled = true
-show_id = false
-completed_items = 2
-next_steps = 3
-pending_waits = 4
-blocked = 5
-
-[scratchpad.modes.plan]
-enabled = false
-default_continuous = false
-recover_after_compaction = false
-
-[scratchpad.modes.default]
-default_continuous = false
-recover_after_compaction = false
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.scratchpad,
-        Some(ScratchpadToml {
-            enabled: Some(true),
-            default_continuous: Some(true),
-            recover_after_compaction: Some(true),
-            auto_archive_after_days: Some(14),
-            delete_archived_after_days: Some(120),
-            outcomes_enabled: Some(true),
-            capacity_retry: Some(ScratchpadCapacityRetryToml {
-                enabled: Some(true),
-                delay_minutes: Some(7),
-            }),
-            loopback: Some(ScratchpadLoopbackToml {
-                max_loopbacks: Some(7),
-                window_minutes: Some(9),
-            }),
-            fanout: Some(ScratchpadFanoutToml {
-                enabled: Some(true),
-                max_agents: Some(6),
-            }),
-            rollback: Some(ScratchpadRollbackToml {
-                max_user_turn_checkpoints: Some(12),
-            }),
-            view: Some(ScratchpadViewToml {
-                enabled: Some(true),
-                show_id: Some(false),
-                completed_items: Some(2),
-                next_steps: Some(3),
-                pending_waits: Some(4),
-                blocked: Some(5),
-            }),
-            modes: [
-                (
-                    ModeKind::Plan,
-                    ScratchpadModeToml {
-                        enabled: Some(false),
-                        default_continuous: Some(false),
-                        recover_after_compaction: Some(false),
-                    },
-                ),
-                (
-                    ModeKind::Default,
-                    ScratchpadModeToml {
-                        enabled: None,
-                        default_continuous: Some(false),
-                        recover_after_compaction: Some(false),
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        })
-    );
-}
-
-#[test]
-fn parses_mode_scoped_schedule_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[schedule]
-enabled = false
-
-[schedule.modes.default]
-enabled = true
-
-[schedule.modes.plan]
-enabled = true
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.schedule,
-        Some(ScheduleToml {
-            enabled: Some(false),
-            modes: [
-                (
-                    ModeKind::Default,
-                    ScheduleModeToml {
-                        enabled: Some(true),
-                    },
-                ),
-                (
-                    ModeKind::Plan,
-                    ScheduleModeToml {
-                        enabled: Some(true),
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        })
-    );
-}
-
-#[test]
-fn parses_situational_requirements_config() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[situational_requirements]
-enabled = true
-
-[[situational_requirements.rules]]
-trigger = "code_change"
-actions = [
-  { action = "git_intent_note", mcp = "git-intent-notes", reason = "record code-change intent" },
-]
-
-[[situational_requirements.rules]]
-trigger = "iac_change"
-actions = [
-  { action = "aws_docs_check", mcp = "aws-docs" },
-  { action = "post_change_review", skill = "post-change-review" },
-]
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.situational_requirements,
-        Some(SituationalRequirementsToml {
-            enabled: Some(true),
-            rules: vec![
-                SituationalRequirementRuleToml {
-                    trigger: Some(SituationalRequirementTrigger::CodeChange),
-                    actions: vec![SituationalRequirementActionToml {
-                        action: Some(SituationalRequirementAction::GitIntentNote),
-                        mcp: Some("git-intent-notes".to_string()),
-                        skill: None,
-                        reason: Some("record code-change intent".to_string()),
-                    }],
-                },
-                SituationalRequirementRuleToml {
-                    trigger: Some(SituationalRequirementTrigger::IacChange),
-                    actions: vec![
-                        SituationalRequirementActionToml {
-                            action: Some(SituationalRequirementAction::AwsDocsCheck),
-                            mcp: Some("aws-docs".to_string()),
-                            skill: None,
-                            reason: None,
-                        },
-                        SituationalRequirementActionToml {
-                            action: Some(SituationalRequirementAction::PostChangeReview),
-                            mcp: None,
-                            skill: Some("post-change-review".to_string()),
-                            reason: None,
-                        },
-                    ],
-                },
-            ],
-        })
-    );
-}
-
-#[tokio::test]
-async fn scratchpad_defaults_on_except_plan_and_supports_mode_overrides() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        toml::from_str::<ConfigToml>(
-            r#"
-[scratchpad.modes.default]
-enabled = false
-
-[scratchpad.modes.plan]
-enabled = true
-default_continuous = true
-recover_after_compaction = true
-
-[scratchpad.view]
-enabled = false
-show_id = false
-completed_items = 1
-next_steps = 2
-pending_waits = 3
-blocked = 4
-
-[scratchpad.fanout]
-enabled = true
-max_agents = 5
-
-[scratchpad.rollback]
-max_user_turn_checkpoints = 11
-
-[scratchpad.loopback]
-max_loopbacks = 7
-window_minutes = 9
-"#,
-        )
-        .expect("TOML deserialization should succeed"),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(!config.scratchpad.for_mode(ModeKind::Default).enabled);
-    assert!(config.scratchpad.for_mode(ModeKind::Plan).enabled);
-    assert!(
-        config
-            .scratchpad
-            .for_mode(ModeKind::Plan)
-            .default_continuous
-    );
-    assert_eq!(config.scratchpad.auto_archive_after_days, 30);
-    assert_eq!(config.scratchpad.delete_archived_after_days, 90);
-    assert_eq!(
-        config.scratchpad.fanout,
-        ScratchpadFanoutConfig {
-            enabled: true,
-            max_agents: 5,
-        }
-    );
-    assert_eq!(
-        config.scratchpad.rollback,
-        ScratchpadRollbackConfig {
-            max_user_turn_checkpoints: 11,
-        }
-    );
-    assert_eq!(
-        config.scratchpad.loopback,
-        ScratchpadLoopbackConfig {
-            max_loopbacks: 7,
-            window: std::time::Duration::from_secs(9 * 60),
-        }
-    );
-    assert_eq!(
-        ScratchpadConfig::default().rollback,
-        ScratchpadRollbackConfig {
-            max_user_turn_checkpoints: 10,
-        }
-    );
-    assert_eq!(
-        config.scratchpad.view,
-        ScratchpadViewConfig {
-            enabled: false,
-            show_id: false,
-            completed_items: 1,
-            next_steps: 2,
-            pending_waits: 3,
-            blocked: 4,
-        }
-    );
-    assert!(
-        config
-            .scratchpad
-            .for_mode(ModeKind::Plan)
-            .recover_after_compaction
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn schedule_defaults_disabled_and_supports_mode_overrides() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        toml::from_str::<ConfigToml>(
-            r#"
-[schedule.modes.default]
-enabled = true
-
-[schedule.modes.plan]
-enabled = false
-"#,
-        )
-        .expect("TOML deserialization should succeed"),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(config.schedule.for_mode(ModeKind::Default).enabled);
-    assert!(!config.schedule.for_mode(ModeKind::Plan).enabled);
-    Ok(())
 }
 
 #[test]
@@ -1435,8 +620,8 @@ async fn load_config_resolves_non_prefixed_mcp_tool_servers() -> std::io::Result
 async fn load_config_resolves_update_plan_enabled() -> std::io::Result<()> {
     let codex_home = tempdir()?;
     for (config_toml, expected_enabled) in [
-        ("", true),
-        ("[tools.update_plan]", true),
+        ("", false),
+        ("[tools.update_plan]", false),
         ("[tools.update_plan]\nenabled = false", false),
         ("[tools.update_plan]\nenabled = true", true),
     ] {
@@ -1804,70 +989,6 @@ sleep_tool = true
     Ok(())
 }
 
-#[tokio::test]
-async fn load_config_resolves_eta_freshness_window() -> std::io::Result<()> {
-    let default_config = load_current_time_reminder_config("\n").await?;
-    assert_eq!(
-        default_config.eta,
-        EtaConfig {
-            freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
-            use_local_timezone: false,
-            timezone: None,
-            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
-        }
-    );
-
-    let configured =
-        load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 45\n").await?;
-    assert_eq!(
-        configured.eta,
-        EtaConfig {
-            freshness_minimum_minutes: 45,
-            use_local_timezone: false,
-            timezone: None,
-            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
-        }
-    );
-
-    let configured = load_current_time_reminder_config(
-        "\n[eta]\nuse_local_timezone = true\ntimezone = \"America/New_York\"\n",
-    )
-    .await?;
-    assert_eq!(
-        configured.eta,
-        EtaConfig {
-            freshness_minimum_minutes: DEFAULT_ETA_FRESHNESS_MINIMUM_MINUTES,
-            use_local_timezone: true,
-            timezone: Some("America/New_York".to_string()),
-            history_retention_days: DEFAULT_ETA_HISTORY_RETENTION_DAYS,
-        }
-    );
-
-    let configured =
-        load_current_time_reminder_config("\n[eta]\nhistory_retention_days = 0\n").await?;
-    assert_eq!(configured.eta.history_retention_days, 0);
-
-    let error = load_current_time_reminder_config("\n[eta]\nfreshness_minimum_minutes = 0\n")
-        .await
-        .expect_err("zero freshness window should be rejected");
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        error
-            .to_string()
-            .contains("eta.freshness_minimum_minutes must be between 1")
-    );
-
-    for timezone in ["", "Mars/Olympus"] {
-        let error =
-            load_current_time_reminder_config(&format!("\n[eta]\ntimezone = \"{timezone}\"\n"))
-                .await
-                .expect_err("invalid ETA timezone should be rejected");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(error.to_string().contains("eta.timezone"));
-    }
-    Ok(())
-}
-
 async fn load_current_time_reminder_config(config_toml: &str) -> std::io::Result<Config> {
     let codex_home = tempdir()?;
     let config_toml = toml::from_str(config_toml).expect("TOML should deserialize");
@@ -2146,7 +1267,6 @@ fn config_toml_deserializes_model_availability_nux() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
-            whimsy: false,
             screen_reader_detection_done: None,
             effects: Default::default(),
             rendering: Default::default(),
@@ -2163,8 +1283,6 @@ fn config_toml_deserializes_model_availability_nux() {
             alternate_screen: AltScreenMode::default(),
             status_line: None,
             status_line_use_colors: true,
-            status_token_usage: Default::default(),
-            usage_auto_resume: Default::default(),
             terminal_title: None,
             theme: None,
             pet: None,
@@ -2179,6 +1297,7 @@ fn config_toml_deserializes_model_availability_nux() {
                 ]),
             },
             terminal_resize_reflow_max_rows: None,
+            ..Default::default()
         }
     );
 }
@@ -2200,53 +1319,6 @@ status_line_use_colors = false
 }
 
 #[test]
-fn config_toml_deserializes_status_token_usage_config() {
-    let toml = r#"
-[tui.status_token_usage]
-enabled = true
-
-[tui.status_token_usage.model_rates."custom-model"]
-input_usd_per_1m = 2.0
-cached_input_usd_per_1m = 0.5
-output_usd_per_1m = 8.0
-
-[tui.status_token_usage.model_rates."custom-model".service_tiers.priority]
-input_usd_per_1m = 5.0
-cached_input_usd_per_1m = 1.0
-output_usd_per_1m = 20.0
-"#;
-    let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for TUI config");
-    let status_token_usage = cfg
-        .tui
-        .expect("tui config should deserialize")
-        .status_token_usage;
-
-    assert!(status_token_usage.enabled);
-    assert_eq!(
-        status_token_usage
-            .model_rates
-            .get("custom-model")
-            .expect("custom model rate should deserialize"),
-        &codex_config::types::TuiStatusTokenUsageRate {
-            input_usd_per_1m: 2.0,
-            cached_input_usd_per_1m: 0.5,
-            cache_write_usd_per_1m: 0.0,
-            output_usd_per_1m: 8.0,
-            service_tiers: std::collections::BTreeMap::from([(
-                "priority".to_string(),
-                codex_config::types::TuiStatusTokenUsageServiceTierRate {
-                    input_usd_per_1m: 5.0,
-                    cached_input_usd_per_1m: 1.0,
-                    cache_write_usd_per_1m: 0.0,
-                    output_usd_per_1m: 20.0,
-                },
-            )]),
-        }
-    );
-}
-
-#[test]
 fn config_toml_deserializes_terminal_resize_reflow_config() {
     let toml = r#"
 [tui]
@@ -2260,47 +1332,6 @@ terminal_resize_reflow_max_rows = 9000
             .expect("tui config should deserialize")
             .terminal_resize_reflow_max_rows,
         Some(9000)
-    );
-}
-
-#[tokio::test]
-async fn config_toml_deserializes_resume_settings() {
-    let resume = r#"
-[resume]
-strategy = "full"
-visible_turn_limit = 24
-lazy_hydrate_history = false
-load_timeout_seconds = 12
-inject_scratchpad = false
-"#;
-    let resume_cfg =
-        toml::from_str::<ConfigToml>(resume).expect("TOML deserialization should succeed");
-    assert_eq!(
-        Some(ResumeToml {
-            strategy: Some(ResumeStrategy::Full),
-            visible_turn_limit: 24,
-            lazy_hydrate_history: false,
-            load_timeout_seconds: 12,
-            inject_scratchpad: false,
-        }),
-        resume_cfg.resume
-    );
-    let config = Config::load_from_base_config_with_overrides(
-        resume_cfg,
-        ConfigOverrides::default(),
-        tempdir().expect("tempdir").abs(),
-    )
-    .await
-    .expect("load config from resume settings");
-    assert_eq!(
-        config.resume,
-        ResumeConfig {
-            strategy: ResumeStrategy::Full,
-            visible_turn_limit: 24,
-            lazy_hydrate_history: false,
-            load_timeout_seconds: 12,
-            inject_scratchpad: false,
-        }
     );
 }
 
@@ -2388,39 +1419,53 @@ async fn tui_auto_recap_defaults_and_cli_overrides() -> anyhow::Result<()> {
 #[test]
 fn config_toml_deserializes_permission_profiles() {
     let toml = r#"
-default_permissions = "workspace"
+default_permissions = "dev"
 
-[permissions.workspace.workspace_roots]
+[permissions.dev]
+description = "Day-to-day workspace access."
+
+[permissions.dev.workspace_roots]
 "~/code/openai" = true
 "~/code/ignored" = false
 
-[permissions.workspace.filesystem]
+[permissions.dev.filesystem]
 ":minimal" = "read"
+"/tmp/secret.env" = "deny"
 
-[permissions.workspace.filesystem.":workspace_roots"]
+[permissions.dev.filesystem.":workspace_roots"]
 "." = "write"
 "docs" = "read"
 
-[permissions.workspace.network]
+[permissions.dev.network]
 enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
 allow_upstream_proxy = false
+mode = "full"
 
-[permissions.workspace.network.domains]
+[permissions.dev.network.domains]
 "openai.com" = "allow"
+
+[permissions.dev.network.mitm.hooks.github_write]
+host = "api.github.com"
+methods = ["POST", "PUT"]
+path_prefixes = ["/repos/openai/"]
+action = ["strip_auth"]
+
+[permissions.dev.network.mitm.actions.strip_auth]
+strip_request_headers = ["authorization"]
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
 
-    assert_eq!(cfg.default_permissions.as_deref(), Some("workspace"));
+    assert_eq!(cfg.default_permissions.as_deref(), Some("dev"));
     assert_eq!(
         cfg.permissions.expect("[permissions] should deserialize"),
         PermissionsToml {
             entries: BTreeMap::from([(
-                "workspace".to_string(),
+                "dev".to_string(),
                 PermissionProfileToml {
-                    description: None,
+                    description: Some("Day-to-day workspace access.".to_string()),
                     extends: None,
                     workspace_roots: Some(WorkspaceRootsToml {
                         entries: BTreeMap::from([
@@ -2434,6 +1479,10 @@ allow_upstream_proxy = false
                             (
                                 ":minimal".to_string(),
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            ),
+                            (
+                                "/tmp/secret.env".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Deny),
                             ),
                             (
                                 ":workspace_roots".to_string(),
@@ -2453,7 +1502,7 @@ allow_upstream_proxy = false
                         allow_upstream_proxy: Some(false),
                         dangerously_allow_non_loopback_proxy: None,
                         dangerously_allow_all_unix_sockets: None,
-                        mode: None,
+                        mode: Some(NetworkMode::Full),
                         domains: Some(NetworkDomainPermissionsToml {
                             entries: BTreeMap::from([(
                                 "openai.com".to_string(),
@@ -2462,7 +1511,27 @@ allow_upstream_proxy = false
                         }),
                         unix_sockets: None,
                         allow_local_binding: None,
-                        mitm: None,
+                        mitm: Some(NetworkMitmToml {
+                            hooks: Some(IndexMap::from([(
+                                "github_write".to_string(),
+                                NetworkMitmHookToml {
+                                    host: "api.github.com".to_string(),
+                                    methods: vec!["POST".to_string(), "PUT".to_string()],
+                                    path_prefixes: vec!["/repos/openai/".to_string()],
+                                    query: BTreeMap::new(),
+                                    headers: BTreeMap::new(),
+                                    body: None,
+                                    action: vec!["strip_auth".to_string()],
+                                },
+                            )])),
+                            actions: Some(IndexMap::from([(
+                                "strip_auth".to_string(),
+                                NetworkMitmActionToml {
+                                    strip_request_headers: vec!["authorization".to_string()],
+                                    inject_request_headers: Vec::new(),
+                                },
+                            )])),
+                        }),
                     }),
                 },
             )]),
@@ -2613,10 +1682,60 @@ async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
+                    PermissionProfileToml {
+                        description: None,
+                        extends: None,
+                        workspace_roots: None,
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(NetworkToml {
+                            enabled: Some(true),
+                            ..Default::default()
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+    assert_eq!(
+        config.permissions.network_sandbox_policy(),
+        NetworkSandboxPolicy::Enabled
+    );
+    assert!(
+        config.permissions.network.is_none(),
+        "bare profile network.enabled should not start the managed network proxy"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("dev".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -2769,10 +1888,10 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
             .then(|| toml::from_str("network_proxy = true").expect("valid features"));
         let base_config = match case.surface {
             Surface::PermissionProfile => ConfigToml {
-                default_permissions: Some("workspace".to_string()),
+                default_permissions: Some("dev".to_string()),
                 permissions: Some(PermissionsToml {
                     entries: BTreeMap::from([(
-                        "workspace".to_string(),
+                        "dev".to_string(),
                         PermissionProfileToml {
                             description: None,
                             extends: None,
@@ -3152,10 +2271,10 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             features: Some(toml::from_str("network_proxy = true").expect("valid features")),
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -3216,10 +2335,10 @@ enabled = false
                 )
                 .expect("valid features"),
             ),
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -3267,10 +2386,10 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -3316,10 +2435,10 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
 
     let cfg = ConfigToml {
-        default_permissions: Some("workspace".to_string()),
+        default_permissions: Some("dev".to_string()),
         permissions: Some(PermissionsToml {
             entries: BTreeMap::from([(
-                "workspace".to_string(),
+                "dev".to_string(),
                 PermissionProfileToml {
                     description: None,
                     extends: None,
@@ -3358,10 +2477,6 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     .await?;
 
     let cwd_root = cwd.path().abs();
-    let memories_root = codex_home.path().join("memories").abs();
-    let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
-    let scratchpad_root = codex_home.path().join("scratchpad").abs();
-    let schedule_root = codex_home.path().join("schedule").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
@@ -3386,45 +2501,12 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: memories_root.clone().into(),
-                },
-                access: FileSystemAccessMode::Write,
-                missing_path_behavior: None,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: orchestrator_supervision_root.clone().into(),
-                },
-                access: FileSystemAccessMode::Write,
-                missing_path_behavior: None,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: scratchpad_root.clone().into(),
-                },
-                access: FileSystemAccessMode::Write,
-                missing_path_behavior: None,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: schedule_root.clone().into(),
-                },
-                access: FileSystemAccessMode::Write,
-                missing_path_behavior: None,
-            },
         ]),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                memories_root,
-                orchestrator_supervision_root,
-                scratchpad_root,
-                schedule_root
-            ],
+            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -3446,7 +2528,66 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
             .active_permission_profile()
             .as_ref()
             .map(|active| active.id.as_str()),
-        Some("workspace")
+        Some("dev")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_permissions_extended_profile_preserves_parent_metadata() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("dev".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([
+                    (
+                        "base".to_string(),
+                        PermissionProfileToml {
+                            description: None,
+                            extends: None,
+                            workspace_roots: None,
+                            filesystem: Some(FilesystemPermissionsToml {
+                                glob_scan_max_depth: None,
+                                entries: BTreeMap::from([(
+                                    ":minimal".to_string(),
+                                    FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                                )]),
+                            }),
+                            network: None,
+                        },
+                    ),
+                    (
+                        "dev".to_string(),
+                        PermissionProfileToml {
+                            description: None,
+                            extends: Some("base".to_string()),
+                            workspace_roots: None,
+                            filesystem: None,
+                            network: None,
+                        },
+                    ),
+                ]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.permissions.active_permission_profile(),
+        Some(ActivePermissionProfile {
+            id: "dev".to_string(),
+            extends: Some("base".to_string()),
+        })
     );
     Ok(())
 }
@@ -3816,9 +2957,6 @@ async fn permission_profile_override_keeps_memories_root_out_of_legacy_projectio
     .await?;
 
     let memories_root = codex_home.path().join("memories").abs();
-    let orchestrator_supervision_root = codex_home.path().join("orchestrator_supervision").abs();
-    let scratchpad_root = codex_home.path().join("scratchpad").abs();
-    let schedule_root = codex_home.path().join("schedule").abs();
     assert!(
         !config
             .permissions
@@ -3828,11 +2966,7 @@ async fn permission_profile_override_keeps_memories_root_out_of_legacy_projectio
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                orchestrator_supervision_root,
-                scratchpad_root,
-                schedule_root,
-            ],
+            writable_roots: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -3850,10 +2984,10 @@ async fn permission_profile_override_preserves_configured_network_policy_without
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -3912,10 +3046,10 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -3926,7 +3060,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                                 ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
-                                    ("**/*.env".to_string(), FileSystemAccessMode::None),
+                                    ("**/*.env".to_string(), FileSystemAccessMode::Deny),
                                 ])),
                             )]),
                         }),
@@ -3965,7 +3099,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                     path: FileSystemPath::GlobPattern {
                         pattern: expected_pattern,
                     },
-                    access: FileSystemAccessMode::None,
+                    access: FileSystemAccessMode::Deny,
                     missing_path_behavior: None,
                 })
         );
@@ -3997,7 +3131,7 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
         ConfigToml {
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -4807,10 +3941,10 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: Some("Workspace access.".to_string()),
                         extends: None,
@@ -4839,23 +3973,11 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     assert_eq!(
         config.custom_permission_profiles,
         vec![PermissionProfileCatalogEntry {
-            id: "workspace".to_string(),
+            id: "dev".to_string(),
             description: Some("Workspace access.".to_string()),
             allowed: true,
         }]
     );
-    let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("memories"),
-    )?)?;
-    let orchestrator_supervision_root = AbsolutePathBuf::from_absolute_path(
-        std::fs::canonicalize(codex_home.path().join("orchestrator_supervision"))?,
-    )?;
-    let scratchpad_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("scratchpad"),
-    )?)?;
-    let schedule_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
-        codex_home.path().join("schedule"),
-    )?)?;
     assert!(
         config
             .permissions
@@ -4865,13 +3987,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![
-                external_write_path,
-                memories_root,
-                orchestrator_supervision_root,
-                scratchpad_root,
-                schedule_root,
-            ],
+            writable_roots: vec![external_write_path],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -4889,10 +4005,10 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
 
     let err = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -4939,9 +4055,9 @@ async fn load_workspace_permission_profile(
 
     Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([("workspace".to_string(), profile)]),
+                entries: BTreeMap::from([("dev".to_string(), profile)]),
             }),
             ..Default::default()
         },
@@ -5064,7 +4180,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
-            "Permissions profile `workspace` does not define any recognized filesystem entries for this version of Codex."
+            "Permissions profile `dev` does not define any recognized filesystem entries for this version of Codex."
         )),
         "{:?}",
         config.startup_warnings
@@ -5092,7 +4208,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
     );
     assert!(
         config.startup_warnings.iter().any(|warning| warning.contains(
-            "Permissions profile `workspace` does not define any recognized filesystem entries for this version of Codex."
+            "Permissions profile `dev` does not define any recognized filesystem entries for this version of Codex."
         )),
         "{:?}",
         config.startup_warnings
@@ -5108,10 +4224,10 @@ async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::i
 
     let err = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -5157,10 +4273,10 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some("workspace".to_string()),
+            default_permissions: Some("dev".to_string()),
             permissions: Some(PermissionsToml {
                 entries: BTreeMap::from([(
-                    "workspace".to_string(),
+                    "dev".to_string(),
                     PermissionProfileToml {
                         description: None,
                         extends: None,
@@ -5293,7 +4409,6 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
-            whimsy: false,
             screen_reader_detection_done: None,
             effects: Default::default(),
             rendering: Default::default(),
@@ -5310,8 +4425,6 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
             status_line_use_colors: true,
-            status_token_usage: Default::default(),
-            usage_auto_resume: Default::default(),
             terminal_title: None,
             theme: None,
             pet: None,
@@ -5321,6 +4434,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             keymap: TuiKeymap::default(),
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
+            ..Default::default()
         }
     );
 }
@@ -5350,32 +4464,6 @@ async fn runtime_config_resolves_disable_paste_burst() -> anyhow::Result<()> {
 
         assert_eq!(config.disable_paste_burst, expected, "config: {toml}");
     }
-    Ok(())
-}
-
-#[tokio::test]
-async fn runtime_config_resolves_tui_whimsy_default_and_opt_in() -> anyhow::Result<()> {
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        tempdir()?.abs(),
-    )
-    .await?;
-    assert!(!config.tui_whimsy);
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            tui: Some(Tui {
-                whimsy: true,
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides::default(),
-        tempdir()?.abs(),
-    )
-    .await?;
-    assert!(config.tui_whimsy);
     Ok(())
 }
 
@@ -6455,21 +5543,6 @@ async fn rebuild_with_session_layers_refreshes_requirements() -> std::io::Result
         requirements_toml,
     )
     .map_err(std::io::Error::other)?;
-    let refreshed_toml = refreshed_layer_stack
-        .effective_config()
-        .try_into()
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-    let refreshed_config = Config::load_config_with_layer_stack(
-        LOCAL_FS.as_ref(),
-        refreshed_toml,
-        ConfigOverrides {
-            cwd: Some(codex_home.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-        refreshed_layer_stack,
-    )
-    .await?;
     let thread_layer_stack = ConfigLayerStack::new(
         vec![
             ConfigLayerEntry::new(
@@ -6537,13 +5610,12 @@ async fn rebuild_with_session_layers_refreshes_requirements() -> std::io::Result
         thread_layer_stack,
     )
     .await?;
-    let zsh_path = refreshed_config.zsh_path.clone();
     let config = Config::rebuild_with_session_layers(
         &thread_config.config_layer_stack,
         thread_config.cwd.to_path_buf(),
-        &refreshed_config.config_layer_stack,
-        refreshed_config.codex_home.clone(),
-        zsh_path.map(AbsolutePathBuf::try_from).transpose()?,
+        &refreshed_layer_stack,
+        codex_home.abs(),
+        /*default_zsh_path*/ None,
     )
     .await?;
 
@@ -6625,17 +5697,6 @@ async fn rebuild_with_session_layers_refreshes_plugin_derived_mcp_config() -> an
         Default::default(),
         Default::default(),
     )?;
-    let refreshed_config = Config::load_config_with_layer_stack(
-        LOCAL_FS.as_ref(),
-        refreshed_layer_stack.effective_config().try_into()?,
-        ConfigOverrides {
-            cwd: Some(codex_home.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-        refreshed_layer_stack,
-    )
-    .await?;
     let thread_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
             ConfigLayerSource::User {
@@ -6665,13 +5726,12 @@ async fn rebuild_with_session_layers_refreshes_plugin_derived_mcp_config() -> an
         thread_layer_stack,
     )
     .await?;
-    let zsh_path = refreshed_config.zsh_path.clone();
     let config = Config::rebuild_with_session_layers(
         &thread_config.config_layer_stack,
         thread_config.cwd.to_path_buf(),
-        &refreshed_config.config_layer_stack,
-        refreshed_config.codex_home.clone(),
-        zsh_path.map(AbsolutePathBuf::try_from).transpose()?,
+        &refreshed_layer_stack,
+        codex_home.abs(),
+        /*default_zsh_path*/ None,
     )
     .await?;
     let plugins_manager =
@@ -7019,21 +6079,15 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
 }
 
 #[tokio::test]
-async fn workspace_write_includes_runtime_roots_and_configured_root_once() -> std::io::Result<()> {
+async fn workspace_write_includes_configured_writable_root_once_without_memories_root()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let memories_root = codex_home.path().join("memories");
-    let scratchpad_root = codex_home.path().join("scratchpad");
-    let schedule_root = codex_home.path().join("schedule");
     let writable_root = codex_home.path().join("writable").abs();
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
-                writable_roots: vec![
-                    memories_root.abs(),
-                    scratchpad_root.abs(),
-                    writable_root.clone(),
-                    writable_root.clone(),
-                ],
+                writable_roots: vec![writable_root.clone(), writable_root.clone()],
                 ..Default::default()
             }),
             ..Default::default()
@@ -7057,30 +6111,10 @@ async fn workspace_write_includes_runtime_roots_and_configured_root_once() -> st
             "expected config load not to create memories root at {}",
             memories_root.display()
         );
-        assert!(
-            scratchpad_root.is_dir(),
-            "expected scratchpad root directory to exist at {}",
-            scratchpad_root.display()
-        );
-        assert!(
-            schedule_root.is_dir(),
-            "expected schedule root directory to exist at {}",
-            schedule_root.display()
-        );
         let expected_memories_root = memories_root.abs();
-        let expected_scratchpad_root = scratchpad_root.abs();
-        let expected_schedule_root = schedule_root.abs();
-        match config.legacy_sandbox_policy() {
+        match &config.legacy_sandbox_policy() {
             SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_memories_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for explicitly configured {}",
-                    expected_memories_root.display()
-                );
+                assert!(!writable_roots.contains(&expected_memories_root));
                 assert_eq!(
                     writable_roots
                         .iter()
@@ -7089,24 +6123,6 @@ async fn workspace_write_includes_runtime_roots_and_configured_root_once() -> st
                     1,
                     "expected single writable root entry for {}",
                     writable_root.display()
-                );
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_scratchpad_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_scratchpad_root.display()
-                );
-                assert_eq!(
-                    writable_roots
-                        .iter()
-                        .filter(|root| **root == expected_schedule_root)
-                        .count(),
-                    1,
-                    "expected single writable root entry for {}",
-                    expected_schedule_root.display()
                 );
             }
             other => panic!("expected workspace-write policy, got {other:?}"),
@@ -7197,86 +6213,6 @@ async fn config_defaults_to_file_cli_auth_store_mode() -> std::io::Result<()> {
 }
 
 #[tokio::test]
-async fn memory_policy_controls_automatic_memory_sandbox_roots() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let memories_root = codex_home.path().join("memories").abs();
-    let legacy_user_preferences_root = codex_home.path().join("user_preferences_memory").abs();
-
-    let read_only = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
-            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
-                read: true,
-                write: false,
-            }),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-    assert!(read_only.memories.use_memories);
-    assert!(!read_only.memories.generate_memories);
-    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = read_only.legacy_sandbox_policy()
-    else {
-        panic!("expected workspace-write sandbox policy");
-    };
-    assert!(!writable_roots.contains(&memories_root));
-    assert!(!writable_roots.contains(&legacy_user_preferences_root));
-    assert!(!memories_root.exists());
-
-    let disabled = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
-            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
-                read: false,
-                write: false,
-            }),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-    assert!(!disabled.memories.use_memories);
-    assert!(!disabled.memories.generate_memories);
-    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = disabled.legacy_sandbox_policy()
-    else {
-        panic!("expected workspace-write sandbox policy");
-    };
-    assert!(!writable_roots.contains(&memories_root));
-    assert!(!writable_roots.contains(&legacy_user_preferences_root));
-
-    let write_only_normalized = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            sandbox_mode: Some(SandboxMode::WorkspaceWrite),
-            memory_policy: Some(codex_protocol::config_types::MemoryAccessPolicy {
-                read: false,
-                write: true,
-            }),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-    assert!(write_only_normalized.memories.use_memories);
-    assert!(write_only_normalized.memories.generate_memories);
-    let SandboxPolicy::WorkspaceWrite { writable_roots, .. } =
-        write_only_normalized.legacy_sandbox_policy()
-    else {
-        panic!("expected workspace-write sandbox policy");
-    };
-    assert!(writable_roots.contains(&memories_root));
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
@@ -7299,115 +6235,6 @@ async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<(
         ),
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn managed_account_alias_defaults_cli_auth_store_to_auto() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cfg = ConfigToml {
-        accounts: Some(codex_config::types::AccountsToml {
-            active: Some("work".to_string()),
-            rotation: None,
-        }),
-        ..Default::default()
-    };
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.effective_cli_auth_credentials_store_mode(),
-        resolve_cli_auth_credentials_store_mode(
-            AuthCredentialsStoreMode::Auto,
-            env!("CARGO_PKG_VERSION"),
-        ),
-    );
-    assert_eq!(
-        config.auth_storage_home(),
-        codex_home.path().join("accounts").join("work"),
-    );
-    assert_eq!(
-        config.auth_config().auth_credentials_store_mode,
-        config.effective_cli_auth_credentials_store_mode(),
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn invalid_configured_account_alias_is_rejected() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cfg = ConfigToml {
-        accounts: Some(codex_config::types::AccountsToml {
-            active: Some("../work".to_string()),
-            rotation: None,
-        }),
-        ..Default::default()
-    };
-
-    let error = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await
-    .expect_err("invalid configured account aliases must fail startup");
-
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert!(
-        error
-            .to_string()
-            .contains("invalid configured account alias `../work` in `[accounts].active`")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn explicit_cli_account_alias_overrides_invalid_configured_alias() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        "[accounts]\nactive = \"../work\"\n",
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .cli_overrides(vec![(
-            "accounts.active".to_string(),
-            toml::Value::String("personal".to_string()),
-        )])
-        .build()
-        .await?;
-
-    assert_eq!(config.active_account_alias(), Some("personal"));
-    assert_eq!(
-        config.auth_storage_home(),
-        codex_home.path().join("accounts/personal")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn default_account_keeps_file_cli_auth_store_for_mainline_compat() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cfg = ConfigToml::default();
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.effective_cli_auth_credentials_store_mode(),
-        AuthCredentialsStoreMode::File,
-    );
-    assert_eq!(config.auth_storage_home(), codex_home.path());
     Ok(())
 }
 
@@ -7454,6 +6281,7 @@ async fn config_applies_managed_auth_store_and_chatgpt_base_url() -> std::io::Re
     assert!(config.startup_warnings.iter().any(|warning| {
         warning.contains("Configured value for `chatgpt_base_url` is overridden")
     }));
+
     Ok(())
 }
 
@@ -8052,9 +6880,9 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: std::num::NonZeroUsize::new(8_000),
             omit_tools_from: None,
             disabled_reason: None,
@@ -8495,9 +7323,9 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8577,9 +7405,9 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8644,9 +7472,9 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8702,9 +7530,9 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8763,9 +7591,9 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8841,9 +7669,9 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8930,9 +7758,9 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -8972,9 +7800,9 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9050,9 +7878,9 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 enabled: true,
                 required: false,
                 startup_readiness: Default::default(),
+                startup: Default::default(),
+                sharing: Default::default(),
                 supports_parallel_tool_calls: false,
-                startup: codex_config::McpServerStartupMode::Auto,
-                sharing: codex_config::McpServerSharingMode::Auto,
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -9082,9 +7910,9 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                 enabled: true,
                 required: false,
                 startup_readiness: Default::default(),
+                startup: Default::default(),
+                sharing: Default::default(),
                 supports_parallel_tool_calls: false,
-                startup: codex_config::McpServerStartupMode::Auto,
-                sharing: codex_config::McpServerSharingMode::Auto,
                 tool_input_schema_max_bytes: None,
                 omit_tools_from: None,
                 disabled_reason: None,
@@ -9176,9 +8004,9 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
             enabled: false,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9232,9 +8060,9 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
             enabled: true,
             required: true,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9288,9 +8116,9 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9349,9 +8177,9 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
             enabled: true,
             required: false,
             startup_readiness: Default::default(),
+            startup: Default::default(),
+            sharing: Default::default(),
             supports_parallel_tool_calls: false,
-            startup: codex_config::McpServerStartupMode::Auto,
-            sharing: codex_config::McpServerSharingMode::Auto,
             tool_input_schema_max_bytes: None,
             omit_tools_from: None,
             disabled_reason: None,
@@ -9667,36 +8495,6 @@ async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> s
         )
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_caps_guardian_history_tool_output_tokens() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            auto_review: Some(AutoReviewToml {
-                conversation_history_max_output_tokens: Some(
-                    std::num::NonZeroUsize::new(90_000).expect("positive limit"),
-                ),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(codex_home.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config
-            .guardian_conversation_history_max_output_tokens
-            .map(std::num::NonZeroUsize::get),
-        Some(8_000)
-    );
     Ok(())
 }
 
@@ -11331,7 +10129,7 @@ alpha = "one\ntwo"
 }
 
 #[tokio::test]
-async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
+async fn explicit_null_service_tier_override_maps_to_default_service_tier() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 
     let config = Config::load_from_base_config_with_overrides(
@@ -11345,8 +10143,33 @@ async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std:
     )
     .await?;
 
-    assert_eq!(config.service_tier, None);
-    assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    assert_eq!(
+        config.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
+    assert_eq!(config.notices.fast_default_opt_out, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_service_tier_override_uses_default_request_value() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            service_tier: Some(Some("default".to_string())),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
     Ok(())
 }
 
@@ -11469,7 +10292,6 @@ async fn fast_default_opt_out_notice_config_is_respected() -> std::io::Result<()
 }
 
 #[tokio::test]
-
 async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> anyhow::Result<()>
 {
     let fixture = create_test_fixture()?;
@@ -11497,7 +10319,6 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_web_search_modes: Some(vec![codex_config::WebSearchModeRequirement::Cached]),
         application: None,
         allow_managed_hooks_only: None,
-
         allow_appshots: None,
         allow_remote_control: None,
         allow_browser_and_computer_use: None,
@@ -12036,38 +10857,6 @@ allow_login_shell = false
 }
 
 #[tokio::test]
-async fn config_loads_allow_browser_from_toml() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let playwright_cli_path = if cfg!(windows) {
-        r"C:\Program Files\nodejs\playwright-cli.cmd"
-    } else {
-        "/opt/homebrew/bin/playwright-cli"
-    };
-    let cfg: ConfigToml = toml::from_str(&format!(
-        "model = \"gpt-5.4\"\nallow_browser = true\nplaywright_cli_path = {playwright_cli_path:?}\n"
-    ))
-    .expect("TOML deserialization should succeed for allow_browser");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert!(config.permissions.allow_browser);
-    assert_eq!(
-        config
-            .permissions
-            .playwright_cli_path
-            .as_ref()
-            .map(AbsolutePathBuf::as_path),
-        Some(std::path::Path::new(playwright_cli_path)),
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let toml = r#"
@@ -12355,22 +11144,41 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
 #[tokio::test]
 async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<()> {
     use codex_sandboxing::SandboxType::WindowsMxc;
-    use codex_sandboxing::SandboxType::WindowsRestrictedToken;
+    use codex_sandboxing::SandboxType::WindowsRestrictedToken as RestrictedToken;
 
     let codex_home = TempDir::new()?;
-    for (prefer, resolved_preference, binding, mode, expected) in [
-        (true, true, true, "unelevated", WindowsMxc),
-        (true, false, true, "unelevated", WindowsRestrictedToken),
-        (true, false, false, "unelevated", WindowsRestrictedToken),
-        (false, false, true, "unelevated", WindowsRestrictedToken),
-        (false, false, false, "mxc", WindowsMxc),
+    for (prefer, resolved_preference, binding, allow_mxc, mode, expected) in [
+        (true, true, true, true, "unelevated", WindowsMxc),
+        (true, false, true, true, "unelevated", RestrictedToken),
+        (true, false, true, false, "unelevated", RestrictedToken),
+        (true, false, false, true, "unelevated", RestrictedToken),
+        (false, false, true, true, "unelevated", RestrictedToken),
+        (false, false, false, true, "mxc", WindowsMxc),
     ] {
         let cfg: ConfigToml = toml::from_str(&format!(
             "[windows]\nsandbox = {mode:?}\n[features]\nprefer_mxc = {prefer}\n\
              [features.network_proxy]\nenabled = true\nallow_local_binding = {binding}\n"
         ))?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&cfg)?,
+        )?;
+        let mut config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                    "[windows]\nallow_mxc = {allow_mxc}\n"
+                )),
+            )
+            .build()
+            .await?;
         assert_eq!(
-            network_config_allows_mxc(
+            config_allows_mxc(
+                &config
+                    .config_layer_stack
+                    .requirements()
+                    .windows_sandbox_mode,
                 &EffectivePermissionSelection {
                     profiles: None,
                     selected_profile_id: None,
@@ -12383,20 +11191,11 @@ async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<(
                 cfg.features.as_ref(),
                 /*enable_network_proxy*/ true,
             )?,
-            binding,
+            binding && allow_mxc,
         );
-        let mut config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides {
-                cwd: Some(codex_home.path().to_path_buf()),
-                ..Default::default()
-            },
-            codex_home.abs(),
-        )
-        .await?;
         assert_eq!(
             config.prefer_mxc,
-            prefer && binding && codex_sandboxing::windows_mxc_available(),
+            prefer && binding && allow_mxc && codex_sandboxing::windows_mxc_available(),
         );
         // Exercise both resolved decisions independently of the host's native support.
         config.prefer_mxc = resolved_preference;
@@ -12409,7 +11208,7 @@ async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<(
                 if mode == "mxc" {
                     WindowsMxc
                 } else {
-                    WindowsRestrictedToken
+                    RestrictedToken
                 },
                 expected
             ),
@@ -12802,6 +11601,7 @@ use_xaa = true
 
     assert!(config.features.enabled(Feature::ViewImage));
     assert!(!config.features.enabled(Feature::ShellTool));
+    assert!(config.features.enabled(Feature::UseXaa));
     assert!(
         !config
             .startup_warnings
@@ -12841,6 +11641,7 @@ use_xaa = false
     assert!(!config.features.enabled(Feature::UnifiedExec));
     assert!(config.features.enabled(Feature::ShellTool));
     assert!(!config.features.enabled(Feature::UnifiedExecZshFork));
+    assert!(!config.features.enabled(Feature::UseXaa));
     assert!(
         !config
             .startup_warnings
@@ -12898,6 +11699,7 @@ async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
                 r#"
 [features]
 in_app_browser = false
+browser_annotation_api = false
 browser_use = false
 browser_use_full_cdp_access = false
 "#,
@@ -12907,6 +11709,7 @@ browser_use_full_cdp_access = false
         .await?;
 
     assert!(!config.features.enabled(Feature::InAppBrowser));
+    assert!(!config.features.enabled(Feature::BrowserAnnotationApi));
     assert!(!config.features.enabled(Feature::BrowserUse));
     assert!(!config.features.enabled(Feature::BrowserUseFullCdpAccess));
 
@@ -13117,380 +11920,6 @@ include_instructions = false
     assert!(!config.include_collaboration_mode_instructions);
     assert!(!config.include_skill_instructions);
     assert!(!config.include_environment_context);
-    Ok(())
-}
-
-#[tokio::test]
-async fn first_class_commit_guidance_defaults_enabled_and_can_be_disabled() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let default_config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(default_config.conventional_commits.enabled);
-    assert!(default_config.git_intent_notes.enabled);
-    assert!(default_config.git_intent_notes.allow_git_metadata_writes);
-
-    let disabled_config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            conventional_commits: Some(ConventionalCommitsToml {
-                enabled: Some(false),
-            }),
-            git_intent_notes: Some(GitIntentNotesToml {
-                enabled: Some(false),
-                allow_git_metadata_writes: Some(false),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(codex_home.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-
-    assert!(!disabled_config.conventional_commits.enabled);
-    assert!(!disabled_config.git_intent_notes.enabled);
-    assert!(!disabled_config.git_intent_notes.allow_git_metadata_writes);
-    Ok(())
-}
-
-#[tokio::test]
-async fn git_intent_notes_adds_narrow_git_metadata_write_roots() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
-    assert!(!cwd.path().join(".git/refs/notes").exists());
-    assert!(!cwd.path().join(".git/logs/refs/notes").exists());
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(cwd.path().join(".git/refs/notes").is_dir());
-    assert!(cwd.path().join(".git/logs/refs/notes").is_dir());
-    assert!(
-        policy.can_write_path_with_cwd(&cwd.path().join(".git/refs/notes/intention"), cwd.path(),),
-        "expected intent notes refs to be writable, policy: {policy:?}"
-    );
-    assert!(
-        policy.can_write_path_with_cwd(
-            &cwd.path().join(".git/logs/refs/notes/intention"),
-            cwd.path(),
-        ),
-        "expected intent notes reflogs to be writable, policy: {policy:?}"
-    );
-    assert!(
-        policy.can_write_path_with_cwd(&cwd.path().join(".git/objects/aa/bb"), cwd.path()),
-        "expected git object storage to be writable for note objects, policy: {policy:?}"
-    );
-    assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git/config"), cwd.path()),
-        "expected git config to remain protected, policy: {policy:?}"
-    );
-    assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git/hooks/pre-commit"), cwd.path()),
-        "expected git hooks to remain protected, policy: {policy:?}"
-    );
-
-    let disabled_config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            git_intent_notes: Some(GitIntentNotesToml {
-                enabled: Some(true),
-                allow_git_metadata_writes: Some(false),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let disabled_policy = disabled_config.permissions.file_system_sandbox_policy();
-
-    assert!(
-        !disabled_policy
-            .can_write_path_with_cwd(&cwd.path().join(".git/refs/notes/intention"), cwd.path(),),
-        "expected git intent note metadata writes to respect config opt-out"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn git_intent_notes_rejects_linked_worktree_common_dir_escape() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let workspace = TempDir::new()?;
-    let main_repo = workspace.path().join("repo");
-    let main_git = main_repo.join(".git");
-    let worktree = workspace.path().join("worktree");
-    let worktree_git_dir = main_git.join("worktrees/main");
-    std::fs::create_dir_all(&main_repo)?;
-    std::fs::create_dir_all(&worktree)?;
-    std::fs::create_dir_all(&worktree_git_dir)?;
-    std::fs::create_dir_all(main_git.join("objects"))?;
-    std::fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}\n", worktree_git_dir.display()),
-    )?;
-    std::fs::write(worktree_git_dir.join("commondir"), "../..")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(worktree.clone()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!main_git.join("refs/notes").exists());
-    assert!(!main_git.join("logs/refs/notes").exists());
-    assert!(
-        !policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_abs_path().is_ok_and(|path| path.as_path().starts_with(&main_git)))
-        }),
-        "expected escaped linked-worktree common dir to avoid explicit writable roots, policy: {policy:?}"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn git_intent_notes_rejects_commondir_escape() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let outside = TempDir::new()?;
-    let dot_git = cwd.path().join(".git");
-    let escaped_git = outside.path().join("escaped.git");
-    std::fs::create_dir_all(&dot_git)?;
-    std::fs::create_dir_all(escaped_git.join("objects"))?;
-    std::fs::write(dot_git.join("commondir"), escaped_git.display().to_string())?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!escaped_git.join("refs/notes").exists());
-    assert!(!escaped_git.join("logs/refs/notes").exists());
-    assert!(
-        !policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_abs_path().is_ok_and(|path| path.as_path().starts_with(&escaped_git)))
-        }),
-        "expected escaped commondir to avoid explicit writable roots, policy: {policy:?}"
-    );
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn git_intent_notes_rejects_symlinked_dot_git_escape() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let outside = TempDir::new()?;
-    let escaped_git = outside.path().join("escaped.git");
-    std::fs::create_dir_all(escaped_git.join("objects"))?;
-    std::os::unix::fs::symlink(&escaped_git, cwd.path().join(".git"))?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!escaped_git.join("refs/notes").exists());
-    assert!(!escaped_git.join("logs/refs/notes").exists());
-    assert!(
-        !policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_abs_path().is_ok_and(|path| path.as_path().starts_with(&escaped_git)))
-        }),
-        "expected symlinked .git escape to avoid explicit writable roots, policy: {policy:?}"
-    );
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn git_intent_notes_rejects_symlinked_child_metadata_escape() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let outside = TempDir::new()?;
-    let escaped_refs = outside.path().join("refs");
-    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
-    std::fs::create_dir_all(&escaped_refs)?;
-    std::os::unix::fs::symlink(&escaped_refs, cwd.path().join(".git/refs"))?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!escaped_refs.join("notes").exists());
-    assert!(
-        !policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_abs_path().is_ok_and(|path| path.as_path().starts_with(&escaped_refs)))
-        }),
-        "expected symlinked refs escape to avoid explicit writable roots, policy: {policy:?}"
-    );
-    assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git/objects/aa/bb"), cwd.path()),
-        "expected unsafe child metadata to skip all intent-note roots"
-    );
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn git_intent_notes_rejects_dangling_symlinked_child_metadata_escape() -> std::io::Result<()>
-{
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let outside = TempDir::new()?;
-    let escaped_refs = outside.path().join("missing-refs");
-    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
-    std::os::unix::fs::symlink(&escaped_refs, cwd.path().join(".git/refs"))?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!escaped_refs.exists());
-    assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git/objects/aa/bb"), cwd.path()),
-        "expected dangling symlinked refs to skip all intent-note roots"
-    );
-    assert!(
-        !policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_abs_path().is_ok_and(|path| path.as_path().starts_with(cwd.path().join(".git/refs"))))
-        }),
-        "expected dangling symlinked refs to avoid explicit writable roots, policy: {policy:?}"
-    );
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn git_intent_notes_rejects_symlinked_objects_escape() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    let outside = TempDir::new()?;
-    let escaped_objects = outside.path().join("objects");
-    std::fs::create_dir_all(cwd.path().join(".git"))?;
-    std::fs::create_dir_all(&escaped_objects)?;
-    std::os::unix::fs::symlink(&escaped_objects, cwd.path().join(".git/objects"))?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!cwd.path().join(".git/refs/notes").exists());
-    assert!(
-        !policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(&entry.path, FileSystemPath::Path { path } if path.to_abs_path().is_ok_and(|path| path.as_path().starts_with(&escaped_objects)))
-        }),
-        "expected symlinked objects escape to avoid explicit writable roots, policy: {policy:?}"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn git_intent_notes_does_not_create_note_dirs_for_read_only() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cwd = TempDir::new()?;
-    std::fs::create_dir_all(cwd.path().join(".git/objects"))?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some(":read-only".to_string()),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.path().abs(),
-    )
-    .await?;
-    let policy = config.permissions.file_system_sandbox_policy();
-
-    assert!(!cwd.path().join(".git/refs/notes").exists());
-    assert!(!cwd.path().join(".git/logs/refs/notes").exists());
-    assert!(
-        !policy.can_write_path_with_cwd(&cwd.path().join(".git/refs/notes/intention"), cwd.path(),),
-        "expected read-only sessions to avoid intent-note write access"
-    );
     Ok(())
 }
 
@@ -13759,102 +12188,6 @@ max_concurrent_threads_per_session = 9
     assert!(config.multi_agent_v2.message_board_in_memory);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn team_worker_max_concurrent_is_loaded_from_worker_profile() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[team]
-enabled = true
-
-[team.lead]
-model = "gpt-lead"
-reasoning_effort = "high"
-
-[team.worker]
-model = "gpt-worker"
-reasoning_effort = "max"
-max_concurrent = 4
-"#,
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert_eq!(config.team.worker_max_concurrent, Some(4));
-    Ok(())
-}
-
-#[tokio::test]
-async fn team_lead_dynamic_handoff_is_loaded_from_lead_profile() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[team]
-enabled = true
-
-[team.lead]
-model = "gpt-lead"
-reasoning_effort = "high"
-dynamic_handoff = true
-
-[team.worker]
-model = "gpt-worker"
-reasoning_effort = "max"
-"#,
-    )?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(
-        config
-            .team
-            .profiles
-            .as_ref()
-            .is_some_and(|profiles| profiles.lead_dynamic_handoff)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn team_lead_rejects_worker_only_max_concurrent() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[team]
-enabled = false
-
-[team.lead]
-model = "gpt-lead"
-reasoning_effort = "high"
-max_concurrent = 4
-
-[team.worker]
-model = "gpt-worker"
-reasoning_effort = "max"
-"#,
-    )?;
-
-    let result = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await;
-    let error = match result {
-        Ok(_) => panic!("Lead must reject the Worker-only concurrency setting"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains("unknown field"));
     Ok(())
 }
 
@@ -14884,20 +13217,10 @@ async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [realtime]
-enabled = false
-enable_preambles = false
-non_substantive_reasoning_effort = "low"
-non_substantive_classifier_model = "gpt-5.3-codex-spark"
-non_substantive_classifier_reasoning_effort = "minimal"
-acknowledgement_sound = true
-acknowledgement_sound_file = "/tmp/codex-ding.wav"
 version = "v2"
 type = "transcription"
 transport = "webrtc"
 voice = "cedar"
-voice_rotation = ["arbor", "marin"]
-voice_profile_rotation = ["jarvis", "robot-cove"]
-hotkey = "f13"
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -14905,24 +13228,11 @@ hotkey = "f13"
     assert_eq!(
         cfg.realtime,
         Some(RealtimeToml {
-            enabled: Some(false),
-            enable_preambles: Some(false),
-            non_substantive_reasoning_effort: Some(ReasoningEffort::Low),
-            non_substantive_classifier_model: Some("gpt-5.3-codex-spark".to_string()),
-            non_substantive_classifier_reasoning_effort: Some(ReasoningEffort::Minimal),
-            acknowledgement_sound: Some(true),
-            acknowledgement_sound_file: Some(
-                codex_utils_absolute_path::test_support::test_path_buf("/tmp/codex-ding.wav")
-                    .try_into()
-                    .expect("absolute test path"),
-            ),
             version: Some(RealtimeWsVersion::V2),
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
-            voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
-            voice_profile_rotation: Some(vec!["jarvis".to_string(), "robot-cove".to_string()]),
-            hotkey: Some("f13".to_string()),
+            ..RealtimeToml::default()
         })
     );
 
@@ -14937,24 +13247,11 @@ hotkey = "f13"
     assert_eq!(
         config.realtime,
         RealtimeConfig {
-            enabled: false,
-            enable_preambles: false,
-            non_substantive_reasoning_effort: Some(ReasoningEffort::Low),
-            non_substantive_classifier_model: Some("gpt-5.3-codex-spark".to_string()),
-            non_substantive_classifier_reasoning_effort: Some(ReasoningEffort::Minimal),
-            acknowledgement_sound: true,
-            acknowledgement_sound_file: Some(
-                codex_utils_absolute_path::test_support::test_path_buf("/tmp/codex-ding.wav")
-                    .try_into()
-                    .expect("absolute test path"),
-            ),
             version: RealtimeWsVersion::V2,
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
-            voice_rotation: Some(vec![RealtimeVoice::Arbor, RealtimeVoice::Marin]),
-            voice_profile_rotation: Some(vec!["jarvis".to_string(), "robot-cove".to_string()]),
-            hotkey: Some("f13".to_string()),
+            ..RealtimeConfig::default()
         }
     );
     Ok(())
@@ -14962,63 +13259,34 @@ hotkey = "f13"
 
 #[tokio::test]
 async fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[audio]
-microphone = "USB Mic"
-speaker = "Desk Speakers"
-
-[audio.microphone_aliases]
-airpods = "USB Mic"
-
-[audio.speaker_aliases]
-desk = "Desk Speakers"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let realtime_audio = cfg
-        .audio
-        .as_ref()
-        .expect("realtime audio config should be present");
-    assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
-    assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
-    assert_eq!(
-        realtime_audio.microphone_aliases,
-        Some(std::collections::BTreeMap::from([(
-            "airpods".to_string(),
-            "USB Mic".to_string(),
-        )]))
-    );
-    assert_eq!(
-        realtime_audio.speaker_aliases,
-        Some(std::collections::BTreeMap::from([(
-            "desk".to_string(),
-            "Desk Speakers".to_string(),
-        )]))
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
-    assert_eq!(
-        config.realtime_audio.speaker.as_deref(),
-        Some("Desk Speakers")
-    );
-    assert_eq!(
-        config.realtime_audio.microphone_aliases,
-        std::collections::BTreeMap::from([("airpods".to_string(), "USB Mic".to_string())])
-    );
-    assert_eq!(
-        config.realtime_audio.speaker_aliases,
-        std::collections::BTreeMap::from([("desk".to_string(), "Desk Speakers".to_string())])
-    );
+    for selection in ["1", "[1, 2]"] {
+        let cfg: ConfigToml = toml::from_str(&format!(
+            "[audio]\nmicrophone = \"USB Mic\"\nmicrophone_channel = {selection}\nspeaker = \"Desk Speakers\"\n"
+        )).expect("TOML deserialization should succeed");
+        let expected_audio = cfg.audio.as_ref().unwrap().clone();
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(
+            config.realtime_audio,
+            codex_config::config_toml::RealtimeAudioConfig {
+                microphone: Some("USB Mic".into()),
+                speaker: Some("Desk Speakers".into()),
+                microphone_channel: expected_audio.microphone_channel,
+                ..Default::default()
+            }
+        );
+    }
+    for invalid in ["0", "[1, 0]"] {
+        assert!(
+            toml::from_str::<ConfigToml>(&format!("[audio]\nmicrophone_channel = {invalid}"))
+                .is_err()
+        );
+    }
     Ok(())
 }
 
@@ -15143,7 +13411,6 @@ async fn exact_requirements_apply_to_runtime_config() -> std::io::Result<()> {
         r#"
 check_for_update_on_startup = true
 allow_login_shell = true
-allow_browser = true
 
 [feedback]
 enabled = true
@@ -15159,7 +13426,6 @@ log_dir = {:?}
 model_catalog_json = {:?}
 check_for_update_on_startup = false
 allow_login_shell = false
-allow_browser = false
 
 [feedback]
 enabled = false
@@ -15175,16 +13441,10 @@ enabled = false
     assert_eq!(config.model_catalog, Some(catalog));
     assert!(!config.check_for_update_on_startup);
     assert!(!config.permissions.allow_login_shell);
-    assert!(!config.permissions.allow_browser);
     assert!(!config.feedback_enabled);
     assert!(config.startup_warnings.iter().any(|warning| {
         warning.contains("Configured value for `check_for_update_on_startup` is overridden")
     }));
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Configured value for `allow_browser` is overridden")
-        })
-    );
     Ok(())
 }
 

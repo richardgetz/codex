@@ -360,6 +360,24 @@ impl App {
             ServerNotification::McpServerStatusUpdated(_) => {
                 self.refresh_mcp_startup_expected_servers_from_config();
             }
+            ServerNotification::McpServerOauthLoginCompleted(notification) => {
+                // Wait for the start response before surfacing a cancellation; the response
+                // identifies whether this is the current attempt or a superseded retry.
+                if let Some(pending) = self.pending_mcp_login_start.as_mut()
+                    && pending.name == notification.name
+                {
+                    pending.completions.push(notification.clone());
+                    return;
+                }
+                if notification.login_id.is_some() {
+                    if notification.login_id.as_ref()
+                        != self.active_mcp_login_ids.get(&notification.name)
+                    {
+                        return;
+                    }
+                    self.active_mcp_login_ids.remove(&notification.name);
+                }
+            }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 let workspace_hard_stop = matches!(
                     notification.rate_limits.rate_limit_reached_type,
@@ -720,11 +738,13 @@ impl App {
             app_server_client
                 .thread_tool_transport()
                 .configure(&mut thread_start_params);
+            let features = self.config.features.get().clone();
             let task = tokio::spawn(async move {
                 let response = crate::dynamic_tools::execute(
                     request_handle,
                     params,
                     thread_start_params,
+                    features,
                     status_updates,
                     Some(&app_event_tx),
                 )

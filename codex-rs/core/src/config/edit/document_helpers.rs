@@ -3,8 +3,6 @@ use codex_config::types::AppToolApproval;
 use codex_config::types::McpServerAuth;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
-use codex_config::types::McpServerSharingMode;
-use codex_config::types::McpServerStartupMode;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_config::types::McpStartupReadiness;
@@ -124,20 +122,6 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> anyhow::Result<TomlTa
     }
     if config.supports_parallel_tool_calls {
         entry["supports_parallel_tool_calls"] = value(true);
-    }
-    if config.startup != McpServerStartupMode::Auto {
-        entry["startup"] = value(match config.startup {
-            McpServerStartupMode::Auto => "auto",
-            McpServerStartupMode::Eager => "eager",
-            McpServerStartupMode::Lazy => "lazy",
-        });
-    }
-    if config.sharing != McpServerSharingMode::Auto {
-        entry["sharing"] = value(match config.sharing {
-            McpServerSharingMode::Auto => "auto",
-            McpServerSharingMode::Standalone => "standalone",
-            McpServerSharingMode::Shared => "shared",
-        });
     }
     if let Some(budget) = config.tool_input_schema_max_bytes {
         entry["tool_input_schema_max_bytes"] = value(i64::try_from(budget.get())?);

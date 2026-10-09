@@ -14,10 +14,10 @@ pub(crate) async fn make_test_app() -> App {
     let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
     let usage_rollup = chat_widget.usage_rollup_handle();
+    let realtime_mic_mode = RealtimeMicMode::from_config_enabled(config.realtime.enabled);
 
     App {
         feature_write_lock: Arc::default(),
@@ -101,7 +101,6 @@ pub(crate) async fn make_test_app() -> App {
         reconnect: Default::default(),
         daemon_cli_executable: None,
         pending_update_action: None,
-        pending_startup_thread_start: false,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
@@ -128,6 +127,7 @@ pub(crate) async fn make_test_app() -> App {
         pending_app_server_requests: PendingAppServerRequests::default(),
         dynamic_tool_status_updates: tokio::sync::broadcast::channel(/*capacity*/ 64).0,
         dynamic_tool_tasks: HashMap::new(),
+        pending_startup_thread_start: false,
         pending_server_version_notice: None,
         pending_open_resume_picker: false,
         pending_working_directory_change: None,
@@ -140,6 +140,8 @@ pub(crate) async fn make_test_app() -> App {
         startup_pending_protected_request: false,
         rate_limit_hard_stop_generation: 0,
         rate_limit_refresh_state: Default::default(),
+        pending_mcp_login_start: None,
+        active_mcp_login_ids: HashMap::new(),
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
         recap: recap::RecapState::default(),

@@ -1,6 +1,9 @@
-//! Request-scoped settings and capabilities, including the durable context snapshot.
+//! Request-scoped settings and capabilities, with live grants bound to the originating turn.
 
 use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use codex_config::TeamLeadWorkPolicy;
 
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::TokenBudgetConfig;
@@ -8,13 +11,12 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::realtime_conversation::RealtimeConversationSnapshot;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::turn_context::TurnContext;
+use crate::session::turn_context::TurnEnvironment;
 use crate::tools::router::ToolRouter;
-use arc_swap::ArcSwap;
-use codex_config::TeamLeadWorkPolicy;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
+use codex_file_system::EnvironmentAccess;
 use codex_mcp::McpBinding;
-use codex_mcp::ToolInfo;
 use codex_otel::SessionTelemetry;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::protocol::TurnContextItem;
@@ -23,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
-    /// Monotonic ID for the sampled request; all of its tool calls share this value.
+    /// Monotonic ID shared by all tool calls in this sampled request.
     pub(crate) passive_poll_sample_id: u64,
     /// Preempts this request and yields its code-mode observations when user input arrives.
     pub(crate) preempt: Option<CancellationToken>,
@@ -32,8 +34,7 @@ pub(crate) struct StepContext {
     /// One immutable settings version captured before request preparation.
     pub(crate) settings: Arc<ResolvedStepSettings>,
     /// Lead work policy advertised by this sampling request's latest WorldState.
-    /// Unlike turn settings, this policy can change while the turn is active.
-    pub(crate) team_lead_work_policy: ArcSwap<TeamLeadWorkPolicy>,
+    pub(crate) team_lead_work_policy: Arc<ArcSwap<TeamLeadWorkPolicy>>,
     /// Frozen turn preferences resolved against this step's captured model.
     pub(crate) token_budget: Option<TokenBudgetConfig>,
     /// Telemetry context tagged with this sampling request's model.
@@ -45,8 +46,6 @@ pub(crate) struct StepContext {
     pub(crate) executor_capability_discovery: Option<Arc<ExecutorCapabilityDiscoverySnapshot>>,
     /// The exact MCP connections, configuration, and catalog captured for this step.
     pub(crate) mcp: Arc<McpBinding>,
-    /// The fixed MCP tool list used for this exact sampling request.
-    pub(crate) mcp_tools: Vec<ToolInfo>,
     /// The finalized tool plan advertised and executed for this exact sampling request.
     pub(crate) tool_router: Arc<ToolRouter>,
     /// The canonical AGENTS.md value observed with this environment snapshot.
@@ -54,6 +53,19 @@ pub(crate) struct StepContext {
 }
 
 impl StepContext {
+    /// Pairs the step's environments with access using current session and originating-turn grants.
+    pub(crate) fn environments(&self) -> Vec<(&TurnEnvironment, impl EnvironmentAccess + '_)> {
+        self.environments
+            .turn_environments()
+            .map(|environment| {
+                let grants = self
+                    .turn
+                    .granted_permissions(&environment.selection.environment_id);
+                (environment, environment.fs_accessor(grants))
+            })
+            .collect()
+    }
+
     /// Persist the context captured for this request, even after a live update.
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         let mut item = self.turn.to_turn_context_item();

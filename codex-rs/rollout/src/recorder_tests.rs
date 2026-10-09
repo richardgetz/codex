@@ -2004,7 +2004,6 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
         ordinal: None,
         item: RolloutItem::TurnContext(TurnContextItem {
             turn_id: Some("turn-1".to_string()),
-            trace_id: None,
             root_turn_id: None,
             disabled_plugin_ids: None,
             cwd: serde_json::from_value(serde_json::json!(&latest_cwd))
@@ -2029,10 +2028,6 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             cyber_access_program: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
-            user_instructions: None,
-            developer_instructions: None,
-            final_output_json_schema: None,
-            truncation_policy: None,
         }),
     };
     writeln!(file, "{}", serde_json::to_string(&turn_context)?)?;

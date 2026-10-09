@@ -73,6 +73,13 @@ pub enum SuspendTurnOutcome {
     Blocked {
         blockers: Vec<HandoffBlocker>,
     },
+    /// Handoff was blocked after session services shut down, so the old runtime must terminate
+    /// before the coordinator reopens admission and recovers it from durable history.
+    BlockedAndShutdown {
+        /// The exact unfinished turn left in the rollout for operator or recovery handling.
+        turn_id: String,
+        blockers: Vec<HandoffBlocker>,
+    },
     UnsupportedTask,
 }
 
@@ -191,7 +198,7 @@ pub enum TurnInputMode {
     Steer { expected_turn_id: String },
 }
 
-/// Requested cyber treatment for a ChatGPT-authenticated Codex turn.
+/// Requested cyber treatment for an OpenAI model turn.
 /// Authorization and model-tier restrictions remain server-owned.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
