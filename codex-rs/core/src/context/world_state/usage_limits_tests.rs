@@ -143,6 +143,60 @@ fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
 }
 
 #[test]
+fn usage_limits_fragment_emits_for_policy_changes_and_a_new_window() {
+    let rate_limits = |resets_at| {
+        RateLimitSnapshot {
+            limit_id: None,
+            limit_name: None,
+            normal_model_slug: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 68.0,
+                window_minutes: Some(300),
+                resets_at: Some(resets_at),
+            }),
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            spend_control_reached: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        }
+    };
+    let previous = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(1_700_000_000)),
+    )
+    .snapshot();
+
+    let policy_change = UsageLimitsState::new(
+        ThreadUsagePolicy {
+            auto_resume: true,
+            minimum_remaining_percent: Some(20),
+        },
+        std::slice::from_ref(&rate_limits(1_700_000_000)),
+    );
+    assert!(
+        policy_change
+            .render_diff(PreviousSectionState::Known(&previous))
+            .1
+            .is_some(),
+        "a continuation-floor policy change should be reported immediately"
+    );
+
+    let new_window = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(1_700_018_000)),
+    );
+    assert!(
+        new_window
+            .render_diff(PreviousSectionState::Known(&previous))
+            .1
+            .is_some(),
+        "a reset timestamp advanced by one window should be reported immediately"
+    );
+}
+
+#[test]
 fn usage_limits_fragment_reports_when_previous_status_is_retired() {
     let previous = UsageLimitsState::new(
         ThreadUsagePolicy {

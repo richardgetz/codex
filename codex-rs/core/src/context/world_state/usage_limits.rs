@@ -20,6 +20,7 @@ const MAX_LIMIT_ID_CHARS: usize = 64;
 // Keep this comfortably below the 1K-token review threshold even after the
 // truncation marker is included in the rendered text.
 const MAX_USAGE_CONTEXT_TOKENS: usize = 512;
+const USAGE_PERCENT_BUCKET_SIZE: f64 = 5.0;
 const REPLACEMENT_NOTICE: &str =
     "These thread usage instructions replace all previously provided thread usage instructions.";
 const REMOVAL_NOTICE: &str = "The previously provided thread usage status no longer applies.";
@@ -102,6 +103,62 @@ impl UsageLimitsState {
     }
 }
 
+fn materially_differs(current: &UsageLimitsSnapshot, previous: &UsageLimitsSnapshot) -> bool {
+    if current.policy != previous.policy || current.limits.len() != previous.limits.len() {
+        return true;
+    }
+
+    let window_differs = |current: &Option<UsageWindowSnapshot>,
+                          previous: &Option<UsageWindowSnapshot>| {
+        match (current, previous) {
+            (Some(current), Some(previous)) => {
+                if current.window_minutes != previous.window_minutes
+                    || (current.remaining_percent / USAGE_PERCENT_BUCKET_SIZE).floor()
+                        != (previous.remaining_percent / USAGE_PERCENT_BUCKET_SIZE).floor()
+                {
+                    return true;
+                }
+
+                let Some(reset_shift) = current
+                    .resets_at
+                    .zip(previous.resets_at)
+                    .map(|(current, previous)| current.abs_diff(previous))
+                else {
+                    return false;
+                };
+                let Some(window_seconds) = current
+                    .window_minutes
+                    .and_then(|minutes| minutes.checked_mul(60))
+                    .filter(|seconds| *seconds > 0)
+                else {
+                    return false;
+                };
+
+                // Reset timestamps can have small provider jitter; a shift near a full window
+                // indicates a new reset cycle instead of another observation of the same one.
+                let reset_shift_threshold = window_seconds
+                    .saturating_sub(60)
+                    .max(window_seconds / 2)
+                    .max(1);
+                u64::try_from(reset_shift_threshold)
+                    .is_ok_and(|threshold| reset_shift >= threshold)
+            }
+            (None, None) => false,
+            _ => true,
+        }
+    };
+
+    current
+        .limits
+        .iter()
+        .zip(&previous.limits)
+        .any(|(current, previous)| {
+            current.limit_id != previous.limit_id
+                || window_differs(&current.primary, &previous.primary)
+                || window_differs(&current.secondary, &previous.secondary)
+        })
+}
+
 impl WorldStateSection for UsageLimitsState {
     const ID: &'static str = "usage_limits";
     type Snapshot = UsageLimitsSnapshot;
@@ -136,7 +193,7 @@ impl WorldStateSection for UsageLimitsState {
         let current = self.snapshot();
         let current_should_persist = self.should_persist();
         if current_should_persist
-            && matches!(&previous, PreviousSectionState::Known(previous) if *previous == &current)
+            && matches!(&previous, PreviousSectionState::Known(previous) if !materially_differs(&current, previous))
         {
             return (None, None);
         }
