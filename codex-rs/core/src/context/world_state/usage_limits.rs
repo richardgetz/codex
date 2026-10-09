@@ -20,7 +20,7 @@ const MAX_LIMIT_ID_CHARS: usize = 64;
 // Keep this comfortably below the 1K-token review threshold even after the
 // truncation marker is included in the rendered text.
 const MAX_USAGE_CONTEXT_TOKENS: usize = 512;
-const USAGE_PERCENT_BUCKET_SIZE: f64 = 5.0;
+const MIN_USAGE_PERCENT_CHANGE_FOR_CONTEXT: f64 = 5.0;
 const REPLACEMENT_NOTICE: &str =
     "These thread usage instructions replace all previously provided thread usage instructions.";
 const REMOVAL_NOTICE: &str = "The previously provided thread usage status no longer applies.";
@@ -113,8 +113,8 @@ fn materially_differs(current: &UsageLimitsSnapshot, previous: &UsageLimitsSnaps
         match (current, previous) {
             (Some(current), Some(previous)) => {
                 if current.window_minutes != previous.window_minutes
-                    || (current.remaining_percent / USAGE_PERCENT_BUCKET_SIZE).floor()
-                        != (previous.remaining_percent / USAGE_PERCENT_BUCKET_SIZE).floor()
+                    || (current.remaining_percent - previous.remaining_percent).abs()
+                        >= MIN_USAGE_PERCENT_CHANGE_FOR_CONTEXT
                 {
                     return true;
                 }
