@@ -119,29 +119,30 @@ fn materially_differs(current: &UsageLimitsSnapshot, previous: &UsageLimitsSnaps
                     return true;
                 }
 
-                let Some(reset_shift) = current
-                    .resets_at
-                    .zip(previous.resets_at)
-                    .map(|(current, previous)| current.abs_diff(previous))
-                else {
-                    return false;
-                };
-                let Some(window_seconds) = current
-                    .window_minutes
-                    .and_then(|minutes| minutes.checked_mul(60))
-                    .filter(|seconds| *seconds > 0)
-                else {
-                    return false;
-                };
+                match (current.resets_at, previous.resets_at) {
+                    (Some(current_reset), Some(previous_reset)) => {
+                        let Some(window_seconds) = current
+                            .window_minutes
+                            .and_then(|minutes| minutes.checked_mul(60))
+                            .filter(|seconds| *seconds > 0)
+                        else {
+                            return false;
+                        };
 
-                // Reset timestamps can have small provider jitter; a shift near a full window
-                // indicates a new reset cycle instead of another observation of the same one.
-                let reset_shift_threshold = window_seconds
-                    .saturating_sub(60)
-                    .max(window_seconds / 2)
-                    .max(1);
-                u64::try_from(reset_shift_threshold)
-                    .is_ok_and(|threshold| reset_shift >= threshold)
+                        // Reset timestamps can have small provider jitter; a shift near a full
+                        // window indicates a new reset cycle instead of another observation of
+                        // the same one.
+                        let reset_shift_threshold = window_seconds
+                            .saturating_sub(60)
+                            .max(window_seconds / 2)
+                            .max(1);
+                        u64::try_from(reset_shift_threshold).is_ok_and(|threshold| {
+                            current_reset.abs_diff(previous_reset) >= threshold
+                        })
+                    }
+                    (None, None) => false,
+                    _ => true,
+                }
             }
             (None, None) => false,
             _ => true,
