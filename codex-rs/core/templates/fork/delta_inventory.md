@@ -88,6 +88,12 @@ release or merge rules.
   the Worker turn resumes; unrelated finals and normal completion batching are
   unchanged. The helper stays outside the reserved V2 `collaboration` namespace.
 
+- Default V2 multi-agent guidance follows the active tool catalog: collaboration
+  helpers exposed inside `functions.exec` are called through its `tools`
+  namespace, while helpers exposed directly are called by their registered
+  names. This guidance does not change the standalone fork helper registrations
+  or the reserved V2 `collaboration` namespace.
+
 - `app-server daemon apply --codex-bin PATH` lets installers apply selected launchers safely: unconfigured
   daemons skip, stopped daemons defer, and running daemons reconcile prior handoffs before a new
   checkpoint. Prepared journals are read back from the initialized server's canonical `CODEX_HOME`
@@ -707,6 +713,13 @@ release or merge rules.
   - The model receives bounded advisory status for provider usage windows,
     including remaining percentage and reset time for 5-hour, weekly, and
     other known windows.
+  - Status replacements are coalesced against the last emitted snapshot:
+    policy or window identity changes, a remaining-usage change of at least five
+    percentage points, reset-time availability changes between unknown and
+    known, or a reset-time shift near a full known window emits an update.
+    Smaller percentage drift and timestamp jitter do not append another
+    fragment, and suppressed observations do not move the comparison baseline.
+    Prior context remains append-only until normal compaction.
   - Resettable provider limits can be retried after reset with cancellation
     awareness and a bounded retry count. The opted-in scheduler refreshes the
     authenticated account at most once per configured mechanical interval
@@ -1607,6 +1620,12 @@ release or merge rules.
 - Verify ManagerOnly Code Mode nested `send_message_action` carries the
   supplied message as Worker `input_text`, not as encrypted content; direct
   provider messaging continues to preserve encrypted message handling.
+- Verify default V2 multi-agent guidance tells the model to follow the current
+  tool catalog for collaboration helpers, including tools exposed under
+  `functions.exec`'s `tools` namespace and directly registered tools. It must
+  not claim that collaboration tools are always absent from Code Mode, and the
+  guidance must not change the registered helper namespaces or reserved
+  `collaboration` contract.
 - Verify Team model status-line items display the assigned Team profile model
   and reasoning level for the active role plus the other role's configured
   default. Thread model and effort patches are canonicalized by the active Team
@@ -1776,6 +1795,14 @@ release or merge rules.
   and interval bounds,
   known-reset scheduling, hourly fallback account refresh, floor-paused work,
   `/continue` wake/report behavior, and cancellation/manual-stop preservation.
+  Verify status replacements coalesce against the last emitted snapshot:
+  sub-five-point percentage drift and small timestamp jitter stay suppressed
+  even across a nominal five-point boundary, while cumulative changes of at
+  least five points, policy/window identity changes, reset-time availability
+  transitions between unknown and known, and a near-full-window reset-time
+  shift emit updated status. Suppressed observations do not advance the
+  comparison snapshot, and historical fragments remain intact until normal
+  compaction.
 - Verify `server/lifecycle/read` reports a process-local daemon identity and
   truthful `ready`/`draining`/`forced` phase, `server/lifecycle/updated` attempts
   delivery to opted-in clients for phase and running-turn changes before a
