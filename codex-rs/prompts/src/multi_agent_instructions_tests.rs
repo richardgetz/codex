@@ -40,3 +40,26 @@ fn role_segment_filters_base_and_appends_bundled_guidance() {
         );
     }
 }
+
+#[test]
+fn role_segment_guidance_allows_collaboration_tools_exposed_inside_exec() {
+    let instructions = MultiAgentRoleInstructions::Composed {
+        base: "Delegate through the team tools.".to_string(),
+        marked: false,
+        omit_update_plan_instructions: false,
+        max_concurrency: 2,
+        wait_agent_enabled: false,
+        expose_model_overrides: false,
+    };
+    let body = instructions.body();
+
+    assert!(body.contains(
+        "When a collaboration tool is listed in `functions.exec`'s `tools` namespace, call it through that namespace."
+    ));
+    assert!(body.contains(
+        "When a collaboration tool is exposed directly, call it directly by its registered name."
+    ));
+    assert!(!body.contains(
+        "since they are intentionally absent from the `functions.exec` `tools.*` namespace"
+    ));
+}
