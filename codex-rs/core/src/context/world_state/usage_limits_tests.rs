@@ -115,8 +115,7 @@ fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(68.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) =
-        minor_change.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) = minor_change.render_diff(PreviousSectionState::Known(&previous));
 
     assert!(
         fragment.is_none(),
@@ -131,8 +130,7 @@ fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(73.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) =
-        material_change.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) = material_change.render_diff(PreviousSectionState::Known(&previous));
     assert!(snapshot.is_some());
     assert!(
         fragment
@@ -144,23 +142,21 @@ fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
 
 #[test]
 fn usage_limits_fragment_emits_for_policy_changes_and_a_new_window() {
-    let rate_limits = |resets_at| {
-        RateLimitSnapshot {
-            limit_id: None,
-            limit_name: None,
-            normal_model_slug: None,
-            primary: Some(RateLimitWindow {
-                used_percent: 68.0,
-                window_minutes: Some(300),
-                resets_at: Some(resets_at),
-            }),
-            secondary: None,
-            credits: None,
-            individual_limit: None,
-            spend_control_reached: None,
-            plan_type: None,
-            rate_limit_reached_type: None,
-        }
+    let rate_limits = |resets_at| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 68.0,
+            window_minutes: Some(300),
+            resets_at: Some(resets_at),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
     };
     let previous = UsageLimitsState::new(
         ThreadUsagePolicy::default(),
@@ -224,8 +220,7 @@ fn usage_limits_fragment_suppresses_small_boundary_jitter_against_last_notice() 
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(70.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) =
-        boundary_jitter.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) = boundary_jitter.render_diff(PreviousSectionState::Known(&previous));
 
     assert!(
         fragment.is_none(),
@@ -240,8 +235,7 @@ fn usage_limits_fragment_suppresses_small_boundary_jitter_against_last_notice() 
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(75.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) =
-        material_change.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) = material_change.render_diff(PreviousSectionState::Known(&previous));
     assert!(snapshot.is_some());
     assert!(
         fragment
@@ -288,7 +282,8 @@ fn usage_limits_fragment_emits_after_cumulative_subthreshold_changes() {
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(73.0)),
     );
-    let (snapshot, fragment) = cumulative_change.render_diff(PreviousSectionState::Known(&last_emitted));
+    let (snapshot, fragment) =
+        cumulative_change.render_diff(PreviousSectionState::Known(&last_emitted));
     assert!(snapshot.is_some());
     assert!(fragment.is_some());
 }
@@ -364,7 +359,11 @@ fn usage_limits_fragment_emits_when_reset_timestamp_availability_changes() {
         .render_diff(PreviousSectionState::Known(&without_reset))
         .1
         .expect("newly available reset time should be reported");
-    assert!(fragment.body().contains("resets at 2023-11-14T22:13:20+00:00"));
+    assert!(
+        fragment
+            .body()
+            .contains("resets at 2023-11-14T22:13:20+00:00")
+    );
 
     let with_reset = UsageLimitsState::new(
         ThreadUsagePolicy::default(),
