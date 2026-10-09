@@ -210,6 +210,7 @@ fn usage_limits_fragment_suppresses_small_boundary_jitter_against_last_notice() 
         secondary: None,
         credits: None,
         spend_control_reached: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     };
