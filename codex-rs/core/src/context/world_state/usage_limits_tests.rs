@@ -88,6 +88,61 @@ fn usage_limits_fragment_is_not_repeated_when_snapshot_is_unchanged() {
 }
 
 #[test]
+fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
+    let rate_limits = |used_percent, resets_at| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent,
+            window_minutes: Some(300),
+            resets_at: Some(resets_at),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let previous = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(68.0, 1_700_000_000)),
+    )
+    .snapshot();
+
+    let minor_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(68.1, 1_700_000_001)),
+    );
+    let (snapshot, fragment) =
+        minor_change.render_diff(PreviousSectionState::Known(&previous));
+
+    assert!(
+        fragment.is_none(),
+        "sub-bucket usage drift and one-second reset jitter should not append a status"
+    );
+    assert!(
+        snapshot.is_none(),
+        "the comparison baseline should stay at the last emitted status"
+    );
+
+    let material_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(73.1, 1_700_000_001)),
+    );
+    let (snapshot, fragment) =
+        material_change.render_diff(PreviousSectionState::Known(&previous));
+    assert!(snapshot.is_some());
+    assert!(
+        fragment
+            .expect("material usage change should be rendered")
+            .body()
+            .contains("26.9% remaining")
+    );
+}
+
+#[test]
 fn usage_limits_fragment_reports_when_previous_status_is_retired() {
     let previous = UsageLimitsState::new(
         ThreadUsagePolicy {
