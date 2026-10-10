@@ -201,6 +201,57 @@ async fn usage_policy_and_provider_budget_are_model_visible() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn minor_usage_status_changes_do_not_accumulate_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let usage_response = |response_id: &str, used_percent: &str, resets_at: &str| {
+        sse_response(sse(vec![
+            ev_response_created(response_id),
+            ev_assistant_message("message", "status recorded"),
+            ev_completed(response_id),
+        ]))
+        .insert_header("x-codex-primary-used-percent", used_percent)
+        .insert_header("x-codex-primary-window-minutes", "300")
+        .insert_header("x-codex-primary-reset-at", resets_at)
+    };
+    let responses = mount_response_sequence(
+        &server,
+        vec![
+            usage_response("response-1", "68.0", FUTURE_RESET_AT),
+            usage_response("response-2", "68.1", "4102444801"),
+            sse_response(sse(vec![
+                ev_response_created("response-3"),
+                ev_assistant_message("message-3", "status observed"),
+                ev_completed("response-3"),
+            ])),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex();
+    let test = builder.build_with_auto_env(&server).await?;
+
+    test.submit_text_turn("record provider usage").await?;
+    test.submit_text_turn("refresh provider usage").await?;
+    test.submit_text_turn("show provider usage").await?;
+
+    let request = responses
+        .requests()
+        .get(2)
+        .cloned()
+        .context("third request should be captured")?;
+    let developer_text = request.message_input_texts("developer").join("\n");
+    assert_eq!(
+        developer_text.matches("<thread_usage_limits>").count(),
+        1,
+        "sub-percent usage drift and a one-second reset change should not append another status"
+    );
+    assert!(developer_text.contains("5-hour window: 32% remaining"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_resume_is_disabled_by_default() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

@@ -88,6 +88,300 @@ fn usage_limits_fragment_is_not_repeated_when_snapshot_is_unchanged() {
 }
 
 #[test]
+fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
+    let rate_limits = |used_percent, resets_at| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent,
+            window_minutes: Some(300),
+            resets_at: Some(resets_at),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let previous = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(68.0, 1_700_000_000)),
+    )
+    .snapshot();
+
+    let minor_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(68.1, 1_700_000_001)),
+    );
+    let (snapshot, fragment) = minor_change.render_diff(PreviousSectionState::Known(&previous));
+
+    assert!(
+        fragment.is_none(),
+        "sub-bucket usage drift and one-second reset jitter should not append a status"
+    );
+    assert!(
+        snapshot.is_none(),
+        "the comparison baseline should stay at the last emitted status"
+    );
+
+    let material_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(73.1, 1_700_000_001)),
+    );
+    let (snapshot, fragment) = material_change.render_diff(PreviousSectionState::Known(&previous));
+    assert!(snapshot.is_some());
+    assert!(
+        fragment
+            .expect("material usage change should be rendered")
+            .body()
+            .contains("26.9% remaining")
+    );
+}
+
+#[test]
+fn usage_limits_fragment_emits_for_policy_changes_and_a_new_window() {
+    let rate_limits = |resets_at| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 68.0,
+            window_minutes: Some(300),
+            resets_at: Some(resets_at),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let previous = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(1_700_000_000)),
+    )
+    .snapshot();
+
+    let policy_change = UsageLimitsState::new(
+        ThreadUsagePolicy {
+            auto_resume: true,
+            minimum_remaining_percent: Some(20),
+        },
+        std::slice::from_ref(&rate_limits(1_700_000_000)),
+    );
+    assert!(
+        policy_change
+            .render_diff(PreviousSectionState::Known(&previous))
+            .1
+            .is_some(),
+        "a continuation-floor policy change should be reported immediately"
+    );
+
+    let new_window = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(1_700_018_000)),
+    );
+    assert!(
+        new_window
+            .render_diff(PreviousSectionState::Known(&previous))
+            .1
+            .is_some(),
+        "a reset timestamp advanced by one window should be reported immediately"
+    );
+}
+
+#[test]
+fn usage_limits_fragment_suppresses_small_boundary_jitter_against_last_notice() {
+    let rate_limits = |used_percent, resets_at| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent,
+            window_minutes: Some(300),
+            resets_at: Some(resets_at),
+        }),
+        secondary: None,
+        credits: None,
+        spend_control_reached: None,
+        individual_limit: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let previous = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(69.9, 1_700_000_000)),
+    )
+    .snapshot();
+
+    let boundary_jitter = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(70.1, 1_700_000_001)),
+    );
+    let (snapshot, fragment) = boundary_jitter.render_diff(PreviousSectionState::Known(&previous));
+
+    assert!(
+        fragment.is_none(),
+        "a 0.2-point change across a bucket boundary should not append a status"
+    );
+    assert!(
+        snapshot.is_none(),
+        "the comparison baseline should stay at the last emitted status"
+    );
+
+    let material_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(75.1, 1_700_000_001)),
+    );
+    let (snapshot, fragment) = material_change.render_diff(PreviousSectionState::Known(&previous));
+    assert!(snapshot.is_some());
+    assert!(
+        fragment
+            .expect("material usage change should be rendered")
+            .body()
+            .contains("24.9% remaining")
+    );
+}
+
+#[test]
+fn usage_limits_fragment_emits_after_cumulative_subthreshold_changes() {
+    let rate_limits = |used_percent| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent,
+            window_minutes: Some(300),
+            resets_at: Some(1_700_000_000),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let last_emitted = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(68.0)),
+    )
+    .snapshot();
+
+    let first_small_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(68.1)),
+    );
+    let (snapshot, fragment) =
+        first_small_change.render_diff(PreviousSectionState::Known(&last_emitted));
+    assert!(fragment.is_none());
+    assert!(snapshot.is_none());
+
+    let cumulative_change = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(73.0)),
+    );
+    let (snapshot, fragment) =
+        cumulative_change.render_diff(PreviousSectionState::Known(&last_emitted));
+    assert!(snapshot.is_some());
+    assert!(fragment.is_some());
+}
+
+#[test]
+fn usage_limits_fragment_emits_when_window_duration_changes() {
+    let rate_limits = |window_minutes| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 68.0,
+            window_minutes: Some(window_minutes),
+            resets_at: Some(1_700_000_000),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let previous = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(300)),
+    )
+    .snapshot();
+    let current = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(360)),
+    );
+
+    assert!(
+        current
+            .render_diff(PreviousSectionState::Known(&previous))
+            .1
+            .is_some(),
+        "a provider window duration change should be reported immediately"
+    );
+}
+
+#[test]
+fn usage_limits_fragment_emits_when_reset_timestamp_availability_changes() {
+    let rate_limits = |resets_at| RateLimitSnapshot {
+        limit_id: None,
+        limit_name: None,
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 68.0,
+            window_minutes: Some(300),
+            resets_at,
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: None,
+        spend_control_reached: None,
+        plan_type: None,
+        rate_limit_reached_type: None,
+    };
+    let without_reset: super::UsageLimitsSnapshot = serde_json::from_value(serde_json::json!({
+        "policy": {},
+        "limits": [{
+            "limit_id": "codex",
+            "primary": { "remaining_percent": 32.0, "window_minutes": 300 }
+        }]
+    }))
+    .expect("missing reset metadata should deserialize");
+    let with_reset = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(Some(1_700_000_000))),
+    );
+    let fragment = with_reset
+        .render_diff(PreviousSectionState::Known(&without_reset))
+        .1
+        .expect("newly available reset time should be reported");
+    assert!(
+        fragment
+            .body()
+            .contains("resets at 2023-11-14T22:13:20+00:00")
+    );
+
+    let with_reset = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(Some(1_700_000_000))),
+    )
+    .snapshot();
+    let without_reset = UsageLimitsState::new(
+        ThreadUsagePolicy::default(),
+        std::slice::from_ref(&rate_limits(None)),
+    );
+    let fragment = without_reset
+        .render_diff(PreviousSectionState::Known(&with_reset))
+        .1
+        .expect("no longer available reset time should be reported");
+    assert!(fragment.body().contains("resets at unknown"));
+}
+
+#[test]
 fn usage_limits_fragment_reports_when_previous_status_is_retired() {
     let previous = UsageLimitsState::new(
         ThreadUsagePolicy {
