@@ -1901,6 +1901,7 @@ async fn build_sampling_step_context(
         environments: step_context.environments.clone(),
         selected_capability_roots: step_context.selected_capability_roots.clone(),
         executor_capability_discovery: step_context.executor_capability_discovery.clone(),
+        extension_data: Arc::clone(&step_context.extension_data),
         mcp: Arc::clone(&step_context.mcp),
         tool_router,
         loaded_agents_md: step_context.loaded_agents_md.clone(),

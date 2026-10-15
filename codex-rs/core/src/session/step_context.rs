@@ -46,7 +46,7 @@ pub(crate) struct StepContext {
     /// Executor-materialized capability files shared by MCP and skills in this exact step.
     pub(crate) executor_capability_discovery: Option<Arc<ExecutorCapabilityDiscoverySnapshot>>,
     /// Keeps the extension inputs used to build this step's tools for its World State as well.
-    pub(crate) extension_data: ExtensionData,
+    pub(crate) extension_data: Arc<ExtensionData>,
     /// The exact MCP connections, configuration, and catalog captured for this step.
     pub(crate) mcp: Arc<McpBinding>,
     /// The finalized tool plan advertised and executed for this exact sampling request.

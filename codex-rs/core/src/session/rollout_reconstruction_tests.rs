@@ -7,6 +7,7 @@ use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateUpdateContent;
 use codex_features::Feature;
 use codex_history::CompactedItem;
 use codex_history::InitialHistory;
@@ -2500,7 +2501,10 @@ async fn record_initial_history_partial_environment_context_does_not_seed_baseli
         .render_full()
         .1
         .into_iter()
-        .find_map(|fragment| {
+        .find_map(|update| {
+            let WorldStateUpdateContent::Fragment(fragment) = update.content else {
+                return None;
+            };
             let rendered = fragment.render();
             EnvironmentsState::matches_text(&rendered).then_some(rendered)
         })
@@ -2553,7 +2557,10 @@ async fn step_environment_snapshot_world_state_includes_subagents() {
         .render_full()
         .1
         .into_iter()
-        .find_map(|fragment| {
+        .find_map(|update| {
+            let WorldStateUpdateContent::Fragment(fragment) = update.content else {
+                return None;
+            };
             let rendered = fragment.render();
             EnvironmentsState::matches_text(&rendered).then_some(rendered)
         })

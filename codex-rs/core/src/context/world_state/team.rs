@@ -3,6 +3,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateHash;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::TeamInstructions;
 use codex_protocol::config_types::MultiAgentMode;
@@ -140,7 +141,7 @@ impl WorldStateSection for TeamPolicyState {
                 && previous.multi_agent_usage_hint_hash == self.multi_agent_usage_hint_hash
         );
         if unchanged {
-            return (Some(current), None);
+            return (Some(current), Vec::new());
         }
         let fragment = match self.role {
             Some(role) => Some(Box::new(
@@ -158,7 +159,10 @@ impl WorldStateSection for TeamPolicyState {
             }
             None => None,
         };
-        (Some(current), fragment)
+        (
+            Some(current),
+            WorldStateUpdate::optional_standalone_boxed_fragment(fragment),
+        )
     }
 }
 

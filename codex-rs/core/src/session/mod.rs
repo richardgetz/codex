@@ -426,7 +426,10 @@ fn reconstructed_environment_context_matches_current(
             .render_full()
             .1
             .into_iter()
-            .find_map(|fragment| {
+            .find_map(|update| {
+                let WorldStateUpdateContent::Fragment(fragment) = update.content else {
+                    return None;
+                };
                 let rendered = fragment.render();
                 EnvironmentsState::matches_text(&rendered).then_some(rendered)
             })
@@ -5444,7 +5447,7 @@ impl Session {
             environments,
             selected_capability_roots,
             executor_capability_discovery,
-            extension_data,
+            extension_data: Arc::new(extension_data),
             mcp,
             tool_router,
             loaded_agents_md,
@@ -5921,7 +5924,7 @@ impl Session {
                     self.thread_id,
                 )
             {
-                developer_sections.push(active_scratchpad.render_fragment());
+                separate_developer_sections.push(active_scratchpad.render_fragment());
             }
         }
         if !separate_guardian_developer_message && turn_context.config.session_tmp.enabled {
@@ -6151,10 +6154,7 @@ impl Session {
                     {
                         separate_developer_sections.push(fragment.render_fragment());
                     }
-                    "developer"
-                        if update.placement == Placement::Standalone
-                            && fragment.markers().0.is_empty() =>
-                    {
+                    "developer" if update.placement == Placement::Standalone => {
                         separate_developer_sections.push(fragment.render_fragment());
                     }
                     "developer" => developer_sections.push(fragment.render_fragment()),
