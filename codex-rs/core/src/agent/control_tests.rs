@@ -4857,6 +4857,27 @@ async fn unloaded_manager_only_v2_completion_keeps_durable_batch_metadata() {
         .registry
         .register_root_thread(parent_thread_id);
 
+    // The inbound-message row references persisted thread metadata even when the root
+    // deliberately has no loaded session or poller.
+    let mut parent_metadata = codex_state::ThreadMetadataBuilder::new(
+        parent_thread_id,
+        harness
+            .config
+            .codex_home
+            .to_path_buf()
+            .join(format!("rollout-{parent_thread_id}.jsonl")),
+        chrono::Utc::now(),
+        SessionSource::Exec,
+    );
+    parent_metadata.cwd = harness.config.cwd.to_path_buf();
+    harness
+        .state_db
+        .as_ref()
+        .expect("state database is initialized")
+        .upsert_thread(&parent_metadata.build("test-provider"))
+        .await
+        .expect("persist unloaded root metadata for the inbound foreign key");
+
     let child_thread_id = ThreadId::new();
     let child_agent_path = AgentPath::root().join("worker_a").expect("child path");
     harness
@@ -4914,6 +4935,11 @@ async fn unrelated_worker_completion_preserves_another_workers_pending_question(
         control,
     };
     let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    harness
+        .control
+        .runtime
+        .registry
+        .register_root_thread(parent_thread_id);
     let questioned_agent_path = AgentPath::root()
         .join("questioned_worker")
         .expect("questioned Worker path");
