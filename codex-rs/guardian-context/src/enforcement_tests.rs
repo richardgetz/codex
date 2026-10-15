@@ -449,3 +449,47 @@ fn image_accounting_preserves_later_eviction_policy() {
         );
     }
 }
+
+#[test]
+fn encrypted_content_omission_reports_ciphertext_bytes() {
+    let encrypted_content = "opaque ciphertext ".repeat(/*n*/ 128);
+    let encrypted = ContentItem::EncryptedContent {
+        encrypted_content: encrypted_content.clone(),
+    };
+    let required = text("user restriction");
+    let context = ComposedContext {
+        sections: vec![SectionOutput {
+            id: "evidence",
+            delivery: SectionDelivery::user_content(vec![
+                Budgeted::optional(encrypted.clone(), BudgetPriority::Commentary),
+                Budgeted::required(required.clone()),
+            ]),
+        }],
+        truncations: Vec::new(),
+    };
+    let notice = SectionOutput {
+        id: "budget_omission",
+        delivery: SectionDelivery::user_content(vec![Budgeted::required(text("evidence omitted"))]),
+    };
+    let available = context.estimated_tokens() - content_tokens(&encrypted) + section_tokens(&notice);
+
+    let selected = context
+        .enforce_budget(
+            RequestBudget {
+                max_input_tokens: available,
+                existing_context_tokens: 0,
+            },
+            "evidence omitted".to_owned(),
+            HistoryTruncation::Preserve,
+        )
+        .unwrap();
+
+    assert_eq!(selected.truncations.len(), 1);
+    assert_eq!(selected.truncations[0].component, "evidence");
+    assert_eq!(selected.truncations[0].original_bytes, encrypted_content.len());
+    assert_eq!(selected.truncations[0].retained_bytes, 0);
+    assert_eq!(
+        selected.into_messages(),
+        vec![user_message(vec![required, text("evidence omitted")])]
+    );
+}
