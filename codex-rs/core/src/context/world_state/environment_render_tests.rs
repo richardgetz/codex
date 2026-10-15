@@ -236,58 +236,75 @@ fn serialize_environment_context_with_full_filesystem_profile() {
 }
 
 #[test]
-fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
-    let repo = test_abs_path("/repo");
-    let other_repo = test_abs_path("/other-repo");
-    let repo_private = repo.join("private");
+fn legacy_turn_context_item_filesystem_uses_cwd_as_workspace_root() {
+    let cwd = test_abs_path("/not-the-workspace");
     let item = TurnContextItem {
         turn_id: None,
         root_turn_id: None,
         disabled_plugin_ids: None,
-        cwd: test_abs_path("/not-the-workspace"),
-        workspace_roots: Some(vec![repo.clone(), other_repo.clone()]),
-        current_date: None,
-        timezone: None,
+        cwd: cwd.clone(),
         approval_policy: AskForApproval::Never,
         approvals_reviewer: None,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
-        permission_profile: Some(workspace_write_permission_profile_with_private_denials()),
+        permission_profile: Some(PermissionProfile::Disabled),
         active_permission_profile: None,
-        network: None,
         file_system_sandbox_policy: None,
         model: "gpt-5".to_string(),
         comp_hash: None,
-        personality: None,
         collaboration_mode: None,
         multi_agent_version: None,
-        multi_agent_mode: None,
         realtime_active: None,
         cyber_access_program: None,
         effort: None,
-        summary: codex_protocol::config_types::ReasoningSummary::Auto,
+        summary: None,
     };
 
     let context = EnvironmentsState::from_turn_context_item(&item).render();
+    let cwd = cwd.to_string_lossy();
 
     assert!(
-        context.contains(&format!(
-            "<root>{}</root><root>{}</root>",
-            repo.to_string_lossy(),
-            other_repo.to_string_lossy()
-        )),
+        context.contains(&format!("<workspace_roots><root>{cwd}</root></workspace_roots>")),
         "{context}"
     );
     assert!(
-        context.contains(&format!("<path>{}</path>", repo_private.to_string_lossy())),
+        !context.contains("<root>/repo</root>") && !context.contains("<root>/other-repo</root>"),
         "{context}"
     );
+}
+
+#[tokio::test]
+async fn selected_environment_workspace_roots_come_from_turn_snapshot() {
+    let (_session, turn_context) = crate::session::tests::make_session_and_context().await;
+    let mut environments = turn_context.initial_environments.clone();
+    let Some(TurnEnvironmentState::Ready(primary)) = environments.environments.first_mut() else {
+        panic!("test session should have a ready primary environment");
+    };
+    let workspace_roots = vec![
+        PathUri::from_abs_path(&test_abs_path("/selected-one")),
+        PathUri::from_abs_path(&test_abs_path("/selected-two")),
+    ];
+    primary.selection.workspace_roots = workspace_roots.clone();
+    let codex_protocol::protocol::EnvironmentConfigState::Ready(config) =
+        &mut primary.selection.config
+    else {
+        panic!("ready environment should have resolved configuration");
+    };
+    config.workspace_roots = workspace_roots.clone();
+
+    let context = EnvironmentsState::from_turn_context_with_environments(
+        &turn_context,
+        &environments,
+        /*current_date*/ None,
+    )
+    .await
+    .render();
+    let expected_roots = workspace_roots
+        .iter()
+        .map(|root| format!("<root>{}</root>", root.inferred_native_path_string()))
+        .collect::<String>();
+
     assert!(
-        !context.contains(
-            test_abs_path("/not-the-workspace")
-                .join("private")
-                .to_string_lossy()
-                .as_ref()
-        ),
+        context.contains(&format!("<workspace_roots>{expected_roots}</workspace_roots>")),
         "{context}"
     );
 }

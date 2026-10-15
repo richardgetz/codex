@@ -83,12 +83,14 @@ impl EnvironmentsState {
             // environments do not get a fabricated local environment that later becomes unavailable.
             environments: BTreeMap::new(),
             shell_version: None,
-            current_date: turn_context_item.current_date.clone(),
-            timezone: turn_context_item.timezone.clone(),
-            network: network_from_turn_context_item(turn_context_item),
+            // Current date, timezone, network settings, and selected workspace roots live outside
+            // the persisted legacy turn-context item.
+            current_date: None,
+            timezone: None,
+            network: None,
             filesystem: Some(FileSystemContext::from_permission_profile(
                 &turn_context_item.permission_profile(),
-                &workspace_roots_from_turn_context_item(turn_context_item),
+                &[PathUri::from_abs_path(&turn_context_item.cwd)],
             )),
             subagents: None,
         }
@@ -575,31 +577,6 @@ fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContex
             .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
             .unwrap_or_default(),
     ))
-}
-
-#[cfg(test)]
-fn network_from_turn_context_item(
-    turn_context_item: &codex_protocol::protocol::TurnContextItem,
-) -> Option<NetworkContext> {
-    let codex_protocol::protocol::TurnContextNetworkItem {
-        allowed_domains,
-        denied_domains,
-    } = turn_context_item.network.as_ref()?;
-    Some(NetworkContext::new(
-        allowed_domains.clone(),
-        denied_domains.clone(),
-    ))
-}
-
-#[cfg(test)]
-fn workspace_roots_from_turn_context_item(
-    turn_context_item: &codex_protocol::protocol::TurnContextItem,
-) -> Vec<PathUri> {
-    if let Some(workspace_roots) = turn_context_item.workspace_roots.as_ref() {
-        return workspace_roots.iter().map(PathUri::from_abs_path).collect();
-    }
-
-    vec![PathUri::from_abs_path(&turn_context_item.cwd)]
 }
 
 #[cfg(test)]

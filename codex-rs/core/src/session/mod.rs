@@ -6525,7 +6525,7 @@ impl Session {
         &self,
         _turn_context: &TurnContext,
         step_context: &StepContext,
-    ) -> Arc<WorldState> {
+    ) {
         self.record_context_updates_and_set_reference_context_item(step_context)
             .await
             .expect("recording step environment context should succeed")
