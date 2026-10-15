@@ -106,7 +106,10 @@ pub async fn run_codex_tool_session(
         .start_turn_if_idle(prompt_request(initial_prompt))
         .await
     {
-        Ok(StartIfIdleSubmission::Started { turn_id }) => turn_id,
+        Ok(StartIfIdleSubmission::Started {
+            turn_id,
+            root_turn_id: _,
+        }) => turn_id,
         Ok(StartIfIdleSubmission::NotSubmitted { reason }) => {
             tracing::error!("Failed to submit initial prompt: {reason:?}");
             let result = create_call_tool_result_with_thread_id(
