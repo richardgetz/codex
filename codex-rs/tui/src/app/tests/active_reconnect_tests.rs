@@ -660,7 +660,10 @@ async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Resul
     assert_snapshot!(
         "reconnect_failed",
         elapsed
-            .replace_all(&render_bottom_popup(&app.chat_widget, /*width*/ 80), "(<elapsed>)")
+            .replace_all(
+                &render_bottom_popup(&app.chat_widget, /*width*/ 80),
+                "(<elapsed>)"
+            )
             .into_owned()
     );
     tokio::time::resume();
