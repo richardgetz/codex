@@ -471,7 +471,8 @@ fn encrypted_content_omission_reports_ciphertext_bytes() {
         id: "budget_omission",
         delivery: SectionDelivery::user_content(vec![Budgeted::required(text("evidence omitted"))]),
     };
-    let available = context.estimated_tokens() - content_tokens(&encrypted) + section_tokens(&notice);
+    let available =
+        context.estimated_tokens() - content_tokens(&encrypted) + section_tokens(&notice);
 
     let selected = context
         .enforce_budget(
@@ -486,7 +487,10 @@ fn encrypted_content_omission_reports_ciphertext_bytes() {
 
     assert_eq!(selected.truncations.len(), 1);
     assert_eq!(selected.truncations[0].component, "evidence");
-    assert_eq!(selected.truncations[0].original_bytes, encrypted_content.len());
+    assert_eq!(
+        selected.truncations[0].original_bytes,
+        encrypted_content.len()
+    );
     assert_eq!(selected.truncations[0].retained_bytes, 0);
     assert_eq!(
         selected.into_messages(),

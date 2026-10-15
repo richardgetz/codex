@@ -138,14 +138,13 @@ impl LocalAgentControl {
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = trace.is_enabled().then(|| message.clone());
-        let (parent_is_loaded, parent_is_team_lead) =
-            match self.runtime.upgrade() {
-                Ok(state) => match state.get_thread(parent_thread_id).await {
-                    Ok(parent_thread) => (true, parent_thread.session.is_team_lead().await),
-                    Err(_) => (false, false),
-                },
+        let (parent_is_loaded, parent_is_team_lead) = match self.runtime.upgrade() {
+            Ok(state) => match state.get_thread(parent_thread_id).await {
+                Ok(parent_thread) => (true, parent_thread.session.is_team_lead().await),
                 Err(_) => (false, false),
-            };
+            },
+            Err(_) => (false, false),
+        };
         let use_team_lead_completion = parent_is_team_lead
             || (!parent_is_loaded && matches!(status, AgentStatus::Completed(_)));
         let communication = InterAgentCommunication::new(

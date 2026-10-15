@@ -4841,8 +4841,7 @@ async fn unloaded_manager_only_v2_completion_keeps_durable_batch_metadata() {
         lead_work_policy: codex_config::TeamLeadWorkPolicy::ManagerOnly,
         lead_dynamic_handoff: false,
         lead_balance: codex_config::DEFAULT_TEAM_LEAD_BALANCE,
-        lead_oversight_timeout_minutes:
-            codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
+        lead_oversight_timeout_minutes: codex_config::DEFAULT_TEAM_LEAD_OVERSIGHT_TIMEOUT_MINUTES,
     });
     config.team_mode = codex_protocol::protocol::TeamMode::LeadWorker;
     config.team_state_persisted = true;

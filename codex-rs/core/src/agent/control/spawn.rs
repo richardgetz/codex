@@ -990,16 +990,10 @@ impl LocalAgentControl {
         };
         let input_admission_started_at = Instant::now();
         let input_result = match initial_input {
-            SpawnInitialInput::UserInput(input) => {
-                self.send_input_with_admission(
-                    new_thread.thread_id,
-                    input,
-                    start_options,
-                    &_admission,
-                )
+            SpawnInitialInput::UserInput(input) => self
+                .send_input_with_admission(new_thread.thread_id, input, start_options, &_admission)
                 .await
-                .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission))
-            }
+                .map_err(|err| err.with_agent_context(AgentErrorContext::InputAdmission)),
             SpawnInitialInput::InterAgentCommunication(communication, context) => {
                 self.send_inter_agent_communication_after_capacity_check(
                     new_thread.thread_id,

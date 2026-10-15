@@ -422,17 +422,13 @@ fn reconstructed_environment_context_matches_current(
     world_state: &WorldState,
 ) -> bool {
     let Some(expected_environment_context) =
-        world_state
-            .render_full()
-            .1
-            .into_iter()
-            .find_map(|update| {
-                let WorldStateUpdateContent::Fragment(fragment) = update.content else {
-                    return None;
-                };
-                let rendered = fragment.render();
-                EnvironmentsState::matches_text(&rendered).then_some(rendered)
-            })
+        world_state.render_full().1.into_iter().find_map(|update| {
+            let WorldStateUpdateContent::Fragment(fragment) = update.content else {
+                return None;
+            };
+            let rendered = fragment.render();
+            EnvironmentsState::matches_text(&rendered).then_some(rendered)
+        })
     else {
         return false;
     };
@@ -1675,9 +1671,7 @@ pub(crate) fn get_service_tier(
     let explicit_fast_override = explicitly_configured
         && service_tier == ServiceTier::Fast.request_value()
         && !features.enabled(Feature::FastMode);
-    if !explicit_fast_override
-        && !features.service_tier_enabled(&service_tier)
-    {
+    if !explicit_fast_override && !features.service_tier_enabled(&service_tier) {
         return None;
     }
     service_tier_supported_by_model(&service_tier, model_info).then_some(service_tier)

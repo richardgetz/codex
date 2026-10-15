@@ -1976,8 +1976,8 @@ async fn guardian_reuse_respects_effective_policy_and_personality_opt_out(
         different_personality,
         omit_personality,
     ]
-        .into_iter()
-        .enumerate()
+    .into_iter()
+    .enumerate()
     {
         let (outcome, _) = run_guardian_review_session_for_test(
             Arc::clone(&session),

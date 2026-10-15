@@ -961,7 +961,9 @@ pub enum Op {
     /// This persists thread-level memory mode metadata without involving the
     /// model.
     #[debug("SetThreadMemoryMode {{ mode: {mode:?} }}")]
-    SetThreadMemoryMode { mode: ThreadMemoryMode },
+    SetThreadMemoryMode {
+        mode: ThreadMemoryMode,
+    },
 
     SetMemoryAccessPolicy {
         policy: MemoryAccessPolicy,
@@ -985,12 +987,16 @@ pub enum Op {
             ReviewTarget::Custom { .. } => "custom",
         },
     )]
-    Review { review_request: ReviewRequest },
+    Review {
+        review_request: ReviewRequest,
+    },
 
     /// Record that the user approved one retry of a concrete Guardian-denied action.
     // Assessment events are transient; retain the review identity when approving a retry.
     #[debug("ApproveGuardianDeniedAction {{ review_id: {:?}, target_item_id: {:?}, turn_id: {:?}, status: {:?} }}", event.id, event.target_item_id, event.turn_id, event.status)]
-    ApproveGuardianDeniedAction { event: GuardianAssessmentEvent },
+    ApproveGuardianDeniedAction {
+        event: GuardianAssessmentEvent,
+    },
 
     /// Request to shut down codex instance.
     Shutdown,

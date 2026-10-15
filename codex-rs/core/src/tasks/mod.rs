@@ -889,7 +889,8 @@ impl Session {
                     }
                 },
             };
-            let Some((turn_state, previous_options)) = self.reserve_pending_work_turn().await else {
+            let Some((turn_state, previous_options)) = self.reserve_pending_work_turn().await
+            else {
                 return;
             };
             let config = self.get_config().await;

@@ -263,7 +263,9 @@ fn legacy_turn_context_item_filesystem_uses_cwd_as_workspace_root() {
     let cwd = cwd.to_string_lossy();
 
     assert!(
-        context.contains(&format!("<workspace_roots><root>{cwd}</root></workspace_roots>")),
+        context.contains(&format!(
+            "<workspace_roots><root>{cwd}</root></workspace_roots>"
+        )),
         "{context}"
     );
     assert!(
@@ -304,7 +306,9 @@ async fn selected_environment_workspace_roots_come_from_turn_snapshot() {
         .collect::<String>();
 
     assert!(
-        context.contains(&format!("<workspace_roots>{expected_roots}</workspace_roots>")),
+        context.contains(&format!(
+            "<workspace_roots>{expected_roots}</workspace_roots>"
+        )),
         "{context}"
     );
 }

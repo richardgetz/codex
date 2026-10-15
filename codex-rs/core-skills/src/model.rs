@@ -84,10 +84,7 @@ impl SkillLoadOutcome {
     }
 
     /// Returns the logical path used to discover a canonical skill path.
-    pub fn skill_discovery_path_for_path(
-        &self,
-        path: &PathUri,
-    ) -> Option<&PathUri> {
+    pub fn skill_discovery_path_for_path(&self, path: &PathUri) -> Option<&PathUri> {
         self.skill_discovery_path_by_path.get(path)
     }
 
@@ -122,7 +119,7 @@ impl SkillLoadOutcome {
             ReadFileOptions::default(),
             /*sandbox*/ None,
         )
-            .await
+        .await
     }
 }
 

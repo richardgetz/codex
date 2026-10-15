@@ -101,9 +101,9 @@ impl LocalAgentControl {
                 };
                 let state_db = state.state_db().await;
                 let child_thread = state.get_thread(child_thread_id).await.ok();
-                let child_uses_multi_agent_v2 = child_thread
-                    .as_ref()
-                    .is_none_or(|thread| thread.multi_agent_version() == Some(MultiAgentVersion::V2));
+                let child_uses_multi_agent_v2 = child_thread.as_ref().is_none_or(|thread| {
+                    thread.multi_agent_version() == Some(MultiAgentVersion::V2)
+                });
                 if child_agent_path.is_some() && child_uses_multi_agent_v2 {
                     let Some(child_agent_path) = child_agent_path.clone() else {
                         return;
@@ -124,9 +124,7 @@ impl LocalAgentControl {
                     };
                     let (parent_is_loaded, parent_is_team_lead) =
                         match state.get_thread(parent_thread_id).await {
-                            Ok(parent_thread) => {
-                                (true, parent_thread.session.is_team_lead().await)
-                            }
+                            Ok(parent_thread) => (true, parent_thread.session.is_team_lead().await),
                             Err(_) => (false, false),
                         };
                     let trigger_turn = parent_is_team_lead;
@@ -139,8 +137,10 @@ impl LocalAgentControl {
                         message,
                         trigger_turn,
                     );
-                    let context =
-                        AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
+                    let context = AgentCommunicationContext::new(
+                        AgentCommunicationKind::Result,
+                        child_thread_id,
+                    );
                     let _ = if use_team_lead_completion {
                         control
                             .send_team_lead_completion(
@@ -203,8 +203,7 @@ impl LocalAgentControl {
                             &child_reference,
                             child_agent_path.as_ref(),
                             &status,
-                            parent_team_lead_hint
-                                && !matches!(status, AgentStatus::Completed(_)),
+                            parent_team_lead_hint && !matches!(status, AgentStatus::Completed(_)),
                             parent_team_lead_hint,
                         )
                         .await
@@ -235,7 +234,9 @@ impl LocalAgentControl {
                         && let Some(parent_agent_path) = child_agent_path
                             .as_str()
                             .rsplit_once('/')
-                            .and_then(|(parent, _)| codex_protocol::AgentPath::try_from(parent).ok())
+                            .and_then(|(parent, _)| {
+                                codex_protocol::AgentPath::try_from(parent).ok()
+                            })
                         && let Some(message) = format_inter_agent_completion_message(
                             parent_agent_path.clone(),
                             child_agent_path.clone(),

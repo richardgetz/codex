@@ -1,5 +1,5 @@
-use super::super::test_support::render_section_cases;
 use super::super::test_support::FragmentSectionTestExt as _;
+use super::super::test_support::render_section_cases;
 use super::*;
 
 fn state(active: bool, start_instructions: Option<&str>) -> RealtimeState {

@@ -431,7 +431,7 @@ impl InputQueue {
         progress.completion_pending_since = None;
     }
 
-pub(crate) fn with_controller(thread_id: ThreadId, control: Arc<dyn AgentControl>) -> Self {
+    pub(crate) fn with_controller(thread_id: ThreadId, control: Arc<dyn AgentControl>) -> Self {
         let updates = control.watch_mailbox(thread_id);
         Self {
             controller: Some((thread_id, control, updates)),

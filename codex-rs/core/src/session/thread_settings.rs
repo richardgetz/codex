@@ -49,8 +49,7 @@ pub(super) async fn update(
     handoff_admission: Option<&HandoffAdmissionGuard>,
     reply: Option<oneshot::Sender<CodexResult<()>>>,
 ) {
-    let mut updates =
-        prepare_update(overrides, &session.services.selected_capability_roots);
+    let mut updates = prepare_update(overrides, &session.services.selected_capability_roots);
     updates.usage_policy_update = usage_policy_update;
     if let Err(error) = apply_update_with_policy(
         session,

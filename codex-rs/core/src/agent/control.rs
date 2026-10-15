@@ -242,11 +242,12 @@ impl LocalAgentControl {
             }
         }
         if communication.trigger_turn
-            && let Ok(thread) = state.get_thread(agent_id).await {
-                thread
-                    .ensure_execution_capacity_for_turn_start(self)
-                    .await?;
-            }
+            && let Ok(thread) = state.get_thread(agent_id).await
+        {
+            thread
+                .ensure_execution_capacity_for_turn_start(self)
+                .await?;
+        }
         self.send_inter_agent_communication_with_delivery_kind(
             agent_id,
             communication,

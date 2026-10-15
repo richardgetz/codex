@@ -651,7 +651,10 @@ async fn turn_start_with_nonempty_input_returns_root_turn_id() -> Result<()> {
     .await??;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.id, turn.id);
-    assert_eq!(completed.turn.root_turn_id.as_deref(), Some(turn.id.as_str()));
+    assert_eq!(
+        completed.turn.root_turn_id.as_deref(),
+        Some(turn.id.as_str())
+    );
     assert_eq!(completed.turn.status, TurnStatus::Completed);
     assert_eq!(completed.turn.items_view, TurnItemsView::Summary);
     assert!(matches!(

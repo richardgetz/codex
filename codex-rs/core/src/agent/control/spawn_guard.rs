@@ -130,9 +130,7 @@ fn spawn_pending_spawn_cleanup(
                 .await
         {
             let error_kind = match &error {
-                AgentGraphStoreError::InvalidRequest { .. } => {
-                    "agent_graph_store_invalid_request"
-                }
+                AgentGraphStoreError::InvalidRequest { .. } => "agent_graph_store_invalid_request",
                 AgentGraphStoreError::Internal { .. } => "agent_graph_store_internal",
             };
             teardown.record_shutdown_failure("close_spawn_edge", error_kind);
