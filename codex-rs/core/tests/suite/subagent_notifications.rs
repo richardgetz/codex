@@ -1675,13 +1675,14 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     }
     if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
         #[derive(Default)]
-        struct FailFirstClockRead(std::sync::atomic::AtomicBool);
+        struct FailReminderClockRead(std::sync::atomic::AtomicUsize);
 
-        impl codex_core::TimeProvider for FailFirstClockRead {
+        impl codex_core::TimeProvider for FailReminderClockRead {
             fn current_time(&self, _thread_id: ThreadId) -> codex_core::TimeFuture<'_> {
-                let already_read = self.0.swap(true, std::sync::atomic::Ordering::Relaxed);
+                let read_index = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Box::pin(async move {
-                    anyhow::ensure!(already_read, "parent clock unavailable");
+                    // The initial world state reads time for usage-limit status before reminder sampling.
+                    anyhow::ensure!(read_index != 1, "parent reminder clock unavailable");
                     Ok(chrono::Utc::now())
                 })
             }
@@ -1695,8 +1696,8 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             }
         }
 
-        builder =
-            builder.with_external_time_provider(std::sync::Arc::new(FailFirstClockRead::default()));
+        builder = builder
+            .with_external_time_provider(std::sync::Arc::new(FailReminderClockRead::default()));
     }
     let test = builder.build_with_auto_env(&server).await?;
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {

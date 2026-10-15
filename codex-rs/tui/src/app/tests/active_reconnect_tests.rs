@@ -656,9 +656,12 @@ async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Resul
     assert_eq!(start.elapsed().as_secs(), 120);
     app.begin_reconnect();
     app.chat_widget.reconnect_failed();
+    let elapsed = regex_lite::Regex::new(r"\(\d+s\)").unwrap();
     assert_snapshot!(
         "reconnect_failed",
-        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        elapsed
+            .replace_all(&render_bottom_popup(&app.chat_widget, /*width*/ 80), "(<elapsed>)")
+            .into_owned()
     );
     tokio::time::resume();
     Ok(())
