@@ -2105,8 +2105,7 @@ async fn handle_start_inner(
         }
         if handoff_error.is_none()
             && let Ok(text) = transcript_tail_rx.recv().await
-        {
-            if let Some(_permit) = route_handoffs
+            && let Some(_permit) = route_handoffs
                 .acquire_route_permit(RealtimeDelegationSource::TranscriptTailFlush)
                 .await
                 && let Err(err) = transcript_tail::record(&sess_clone, text).await
@@ -2114,7 +2113,6 @@ async fn handle_start_inner(
                 warn!("failed to flush realtime transcript before closure: {err}");
                 handoff_error = Some("failed to save the realtime transcript before closure");
             }
-        }
         // Make realtime_end eligible only after the tail has reached history.
         sess_clone.conversation.state.lock().await.context_active = false;
         if let Some(error) = handoff_error {

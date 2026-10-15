@@ -11,7 +11,6 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
-use crate::context::world_state::WorldState;
 use crate::cyber_access_program;
 use crate::enablement::filter_connectors_for_mode;
 use crate::enablement::filter_discoverable_tools_for_mode;
