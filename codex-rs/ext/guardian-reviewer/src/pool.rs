@@ -155,7 +155,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         let session_cancellation = self.runtime.cancellation.child_token();
         *self.trunk.lock().await = Some(Arc::new(Trunk {
             session,
-            review_lock: Semaphore::new(/*permits*/ 1),
+            review_lock: Arc::new(Semaphore::new(/*permits*/ 1)),
             cancellation: session_cancellation,
         }));
     }
