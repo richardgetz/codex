@@ -151,7 +151,7 @@ fn manager_only_policy_updates_lead_context_without_changing_worker_context() {
         .1
         .expect("manager-only change should update Lead context");
     assert!(fragment.body().contains("Lead work policy: manager_only"));
-    assert!(fragment.body().contains("normal tool access"));
+    assert!(fragment.body().contains("normal Lead tools remain available"));
 
     let prompt_guided_worker = TeamPolicyState::new(TeamRole::Worker, None);
     let worker_snapshot = prompt_guided_worker.snapshot();
