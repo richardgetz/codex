@@ -2476,6 +2476,7 @@ url = "ws://127.0.0.1:8765"
         let local = resolve_turn_environments(
             Arc::new(EnvironmentManager::default_for_tests()),
             &[TurnEnvironmentSelection {
+                selected_capability_roots: Default::default(),
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: PathUri::from_abs_path(&cwd),
                 workspace_roots: Vec::new(),
@@ -2496,6 +2497,7 @@ url = "ws://127.0.0.1:8765"
         );
 
         let remote_selection = TurnEnvironmentSelection {
+            selected_capability_roots: Default::default(),
             environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
             cwd: PathUri::from_abs_path(&cwd),
             workspace_roots: Vec::new(),

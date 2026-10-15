@@ -191,6 +191,9 @@ impl GuardianReviewSession {
             reuse_key,
             state: Mutex::new(GuardianReviewState {
                 conversation: ConversationState::default(),
+                fresh_parent_checkpoint: false,
+                transcript_history_version: 0,
+                transcript_source: None,
                 last_admitted_node_repl_response_sequence: 0,
                 pending_node_repl_evidence_admission: None,
             }),

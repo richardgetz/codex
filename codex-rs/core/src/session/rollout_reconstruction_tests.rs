@@ -263,6 +263,7 @@ fn compacted_rollout_items(
     vec![
         RolloutItem::EventMsg(EventMsg::TurnStarted(
             codex_protocol::protocol::TurnStartedEvent {
+                turn_attribution: None,
                 root_turn_id: Some(turn_id.clone()),
                 turn_id: turn_id.clone(),
                 trace_id: None,
@@ -303,6 +304,7 @@ fn compacted_rollout_items(
         RolloutItem::TurnContext(turn_context.to_turn_context_item()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
+                root_turn_id: Some(turn_id.clone()),
                 turn_id,
                 last_agent_message: None,
                 completed_at: None,
