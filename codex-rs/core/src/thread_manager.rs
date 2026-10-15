@@ -4128,6 +4128,7 @@ fn recovery_submission_is_reconciled(
     match submission {
         StartIfIdleSubmission::Started {
             turn_id: started_turn_id,
+            root_turn_id: _,
         } => started_turn_id == turn_id,
         StartIfIdleSubmission::NotSubmitted {
             reason: NotSubmittedReason::NotIdle | NotSubmittedReason::PendingTriggerTurn,

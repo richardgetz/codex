@@ -46,7 +46,7 @@ pub(crate) fn skill_allowed_in_mode(
         if filter.items.is_empty() {
             return true;
         }
-        let path = skill.path_to_skills_md.as_path().to_string_lossy();
+        let path = skill.path_to_skills_md.inferred_native_path_string();
         let matches = filter.items.iter().any(|selector| {
             let selector = selector.trim();
             !selector.is_empty()
@@ -66,7 +66,7 @@ pub(crate) fn skill_allowed_in_mode(
         return true;
     }
 
-    let path = skill.path_to_skills_md.as_path().to_string_lossy();
+    let path = skill.path_to_skills_md.inferred_native_path_string();
     let matches = filter.skills.iter().any(|selector| {
         let selector = selector.trim();
         !selector.is_empty()

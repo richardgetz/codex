@@ -184,7 +184,7 @@ impl ThreadConfigSnapshot {
 
     fn into_thread_settings_overrides(self) -> CodexThreadSettingsOverrides {
         CodexThreadSettingsOverrides {
-            environments: Some(self.environments),
+            environments: Some(self.environments.into_requests()),
             runtime_workspace_roots: Some(self.runtime_workspace_roots),
             profile_workspace_roots: Some(self.profile_workspace_roots),
             approval_policy: Some(self.approval_policy),
