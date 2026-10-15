@@ -65,8 +65,10 @@ release or merge rules.
   `user_message.search_messages` and `user_message.read_messages` tools through
   its isolated reviewer context. Guardian history tool responses are bounded to
   8 KiB after serialization; configured output limits are capped at 8,000, and
-  media and encrypted content is omitted with an explicit notice. Unknown MCP
-  content-block variants are rejected by the RMCP decoder before sanitization.
+  media and encrypted content is omitted with an explicit notice. The Guardian
+  Decisions adapter rejects encrypted evidence as unsupported instead of
+  forwarding opaque content. Unknown MCP content-block variants are rejected by
+  the RMCP decoder before sanitization.
 
 - Built-in TUI API-equivalent rates recognize `gpt-6.1-sol` across Standard,
   Fast, and Flex/Batch tiers for short and long contexts, keeping its cached-
@@ -1209,7 +1211,8 @@ release or merge rules.
   `user_message` tools in the isolated reviewer context. Keep responses within
   the hard 8 KiB serialized-output cap; token estimates alone do not bound media
   or encrypted content. Unknown MCP content-block variants are rejected by the
-  RMCP decoder before sanitization.
+  RMCP decoder before sanitization. Verify the Guardian Decisions adapter
+  rejects `ContentItem::EncryptedContent` without forwarding its payload.
 
 - Verify API-equivalent usage estimates recognize `gpt-6.1-sol` with its
   public Standard, Fast, and Flex/Batch rates for short and long contexts.

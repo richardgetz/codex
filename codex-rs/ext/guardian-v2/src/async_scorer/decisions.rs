@@ -270,6 +270,7 @@ fn request_body(
                 }
                 ContentItem::InputImage { .. }
                 | ContentItem::InputAudio { .. }
+                | ContentItem::EncryptedContent { .. }
                 | ContentItem::OutputText { .. } => {
                     return Err(DecisionsError::UnsupportedEvidence);
                 }

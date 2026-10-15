@@ -47,6 +47,14 @@ fn adapter_rejects_unsupported_evidence() {
         request_body(&rubric, &[image], /*parent_compaction*/ None),
         Err(DecisionsError::UnsupportedEvidence)
     );
+    let encrypted: ResponseItem = serde_json::from_value(json!({"type":"message", "role":"user", "content":[
+        {"type":"encrypted_content", "encrypted_content":"synthetic-ciphertext"}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        request_body(&rubric, &[encrypted], /*parent_compaction*/ None),
+        Err(DecisionsError::UnsupportedEvidence)
+    );
 }
 
 #[test]
