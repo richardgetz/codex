@@ -399,7 +399,8 @@ mod tests {
             path: AbsolutePathBuf::from_absolute_path(PathBuf::from(format!(
                 "/tmp/{name}/SKILL.md"
             )))
-            .expect("absolute skill path"),
+            .expect("absolute skill path")
+            .into(),
             scope: codex_app_server_protocol::SkillScope::User,
             enabled,
             plugin_id: None,
@@ -429,7 +430,8 @@ mod tests {
         repo_skill.path = AbsolutePathBuf::from_absolute_path(PathBuf::from(
             "/tmp/remote-project/.codex/skills/repo-local-proof/SKILL.md",
         ))
-        .expect("repo skill path");
+        .expect("repo skill path")
+        .into();
         let disabled = test_skill("disabled-proof", /*enabled*/ false);
 
         chat.set_skills_from_response(&SkillsListResponse {

@@ -1941,6 +1941,7 @@ async fn status_snapshot_includes_credits_and_limits() {
     set_workspace_cwd(&mut config, test_path_buf("/workspace/tests").abs());
 
     let account_display = Some(StatusAccountDisplay::ChatGpt {
+        alias: None,
         email: Some("user@example.com".into()),
         plan: Some("Pro 200".into()),
     });

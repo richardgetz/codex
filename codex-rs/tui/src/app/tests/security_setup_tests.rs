@@ -179,6 +179,7 @@ async fn security_setup_fetch_with_default_features_uses_authenticated_codex_end
         assert_eq!(
             app.chat_widget.status_account_display(),
             Some(&StatusAccountDisplay::ChatGpt {
+                alias: None,
                 email: Some("user@example.com".into()),
                 plan: None,
             })

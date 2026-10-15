@@ -2617,6 +2617,7 @@ impl App {
         };
         let phase = match phase {
             Some(MessagePhase::Commentary) => "commentary",
+            Some(MessagePhase::PartialAnswer) => "partial_answer",
             Some(MessagePhase::FinalAnswer) => "final_answer",
             None => "<missing>",
         };

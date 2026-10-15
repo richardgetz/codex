@@ -336,6 +336,7 @@ async fn disabled_preambles_keep_gpt_live_progress_suppressed_through_turn_start
             thread_id: thread_id.to_string(),
             turn: AppServerTurn {
                 id: "turn-through-handoff".to_string(),
+                root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
@@ -385,6 +386,7 @@ async fn disabled_preambles_keep_direct_realtime_output_after_handoff() {
             thread_id: thread_id.to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
