@@ -45,6 +45,7 @@ pub struct SkillModeFilterConfig {
     pub mode: SkillModeFilterMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
+}
 
 /// Skills required from one environment or plugin before inference.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
