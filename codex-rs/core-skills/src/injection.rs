@@ -20,7 +20,6 @@ pub use codex_skills::extract_tool_mentions_with_sigil;
 pub use codex_skills::normalize_skill_path;
 pub use codex_skills::plugin_config_name_from_path;
 pub use codex_skills::tool_kind_for_path;
-use codex_utils_path_uri::PathUri;
 use codex_utils_string::take_bytes_at_char_boundary;
 
 use crate::MAX_SKILL_PROMPT_BYTES;
@@ -97,7 +96,7 @@ pub async fn build_skill_injections(
 
     for skill in mentioned_skills {
         if injected_host_skill_prompts.is_some_and(|prompts| {
-            prompts.contains_path(&skill.path_to_skills_md.to_string_lossy())
+            prompts.contains_path(&skill.path_to_skills_md.inferred_native_path_string())
         }) {
             continue;
         }
@@ -105,9 +104,12 @@ pub async fn build_skill_injections(
         let fs = loaded_skills
             .and_then(|outcome| outcome.file_system_for_skill(skill))
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        let path = PathUri::from_abs_path(&skill.path_to_skills_md);
         match fs
-            .read_file_text(&path, ReadFileOptions::default(), /*sandbox*/ None)
+            .read_file_text(
+                &skill.path_to_skills_md,
+                ReadFileOptions::default(),
+                /*sandbox*/ None,
+            )
             .await
         {
             Ok(contents) => {
@@ -127,7 +129,7 @@ pub async fn build_skill_injections(
                 invocations.push(SkillInvocation {
                     skill_name: skill.name.clone(),
                     location: SkillInvocationLocation::Host {
-                        path: skill.path_to_skills_md.to_path_buf(),
+                        path: skill.path_to_skills_md.clone(),
                         scope: skill.scope,
                     },
                     plugin_id: skill.plugin_id.clone(),
@@ -136,7 +138,7 @@ pub async fn build_skill_injections(
                 });
                 result.items.push(SkillInjection {
                     name: skill.name.clone(),
-                    path: skill.path_to_skills_md.to_string_lossy().into_owned(),
+                    path: skill.path_to_skills_md.inferred_native_path_string(),
                     contents,
                 });
             }
@@ -145,7 +147,7 @@ pub async fn build_skill_injections(
                 let message = format!(
                     "Failed to load skill {name} at {path}: {err:#}",
                     name = skill.name,
-                    path = skill.path_to_skills_md.display()
+                    path = skill.path_to_skills_md.inferred_native_path_string()
                 );
                 result.warnings.push(message);
             }

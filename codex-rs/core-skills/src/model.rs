@@ -26,14 +26,14 @@ pub struct SkillError {
 pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
-    pub disabled_paths: HashSet<AbsolutePathBuf>,
+    pub disabled_paths: HashSet<PathUri>,
     pub(crate) skill_roots: Vec<AbsolutePathBuf>,
-    pub(crate) skill_root_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
-    pub(crate) skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
-    pub(crate) agent_plugin_skill_paths: HashSet<AbsolutePathBuf>,
+    pub(crate) skill_root_by_path: Arc<HashMap<PathUri, AbsolutePathBuf>>,
+    pub(crate) skill_discovery_path_by_path: Arc<HashMap<PathUri, PathUri>>,
+    pub(crate) agent_plugin_skill_paths: HashSet<PathUri>,
     pub(crate) file_systems_by_skill_path: SkillFileSystemsByPath,
-    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
-    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
+    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<PathUri, SkillMetadata>>,
+    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<PathUri, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {
@@ -59,7 +59,7 @@ impl SkillLoadOutcome {
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
 
-    pub fn with_disabled_paths(mut self, disabled_paths: HashSet<AbsolutePathBuf>) -> Self {
+    pub fn with_disabled_paths(mut self, disabled_paths: HashSet<PathUri>) -> Self {
         self.disabled_paths = disabled_paths;
         let (by_scripts_dir, by_doc_path) = crate::build_implicit_skill_path_indexes(
             self.skills
@@ -79,15 +79,15 @@ impl SkillLoadOutcome {
     }
 
     /// Returns the discovery root that supplied a loaded skill path.
-    pub fn skill_root_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
+    pub fn skill_root_for_path(&self, path: &PathUri) -> Option<&AbsolutePathBuf> {
         self.skill_root_by_path.get(path)
     }
 
     /// Returns the logical path used to discover a canonical skill path.
     pub fn skill_discovery_path_for_path(
         &self,
-        path: &AbsolutePathBuf,
-    ) -> Option<&AbsolutePathBuf> {
+        path: &PathUri,
+    ) -> Option<&PathUri> {
         self.skill_discovery_path_by_path.get(path)
     }
 
@@ -117,19 +117,24 @@ impl SkillLoadOutcome {
         let fs = self
             .file_system_for_skill(skill)
             .unwrap_or_else(|| Arc::clone(&LOCAL_FS));
-        let path = PathUri::from_abs_path(&skill.path_to_skills_md);
-        fs.read_file_text(&path, ReadFileOptions::default(), /*sandbox*/ None)
+        fs.read_file_text(
+            &skill.path_to_skills_md,
+            ReadFileOptions::default(),
+            /*sandbox*/ None,
+        )
             .await
     }
 }
 
 impl codex_skills::ImplicitSkillLookup for SkillLoadOutcome {
     fn implicit_skill_for_scripts_dir(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata> {
-        self.implicit_skills_by_scripts_dir.get(path)
+        self.implicit_skills_by_scripts_dir
+            .get(&PathUri::from_abs_path(path))
     }
 
     fn implicit_skill_for_doc_path(&self, path: &AbsolutePathBuf) -> Option<&SkillMetadata> {
-        self.implicit_skills_by_doc_path.get(path)
+        self.implicit_skills_by_doc_path
+            .get(&PathUri::from_abs_path(path))
     }
 }
 
@@ -138,11 +143,11 @@ impl codex_skills::ExplicitSkillLookup for SkillLoadOutcome {
         &self.skills
     }
 
-    fn disabled_paths(&self) -> &HashSet<AbsolutePathBuf> {
+    fn disabled_paths(&self) -> &HashSet<PathUri> {
         &self.disabled_paths
     }
 
-    fn skill_discovery_path_for_path(&self, path: &AbsolutePathBuf) -> Option<&AbsolutePathBuf> {
+    fn skill_discovery_path_for_path(&self, path: &PathUri) -> Option<&PathUri> {
         SkillLoadOutcome::skill_discovery_path_for_path(self, path)
     }
 
@@ -153,21 +158,21 @@ impl codex_skills::ExplicitSkillLookup for SkillLoadOutcome {
 
 #[derive(Clone, Default)]
 pub(crate) struct SkillFileSystemsByPath {
-    values: Arc<HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>>,
+    values: Arc<HashMap<PathUri, Arc<dyn ExecutorFileSystem>>>,
 }
 
 impl SkillFileSystemsByPath {
-    pub(crate) fn new(values: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>) -> Self {
+    pub(crate) fn new(values: HashMap<PathUri, Arc<dyn ExecutorFileSystem>>) -> Self {
         Self {
             values: Arc::new(values),
         }
     }
 
-    fn get(&self, path: &AbsolutePathBuf) -> Option<Arc<dyn ExecutorFileSystem>> {
+    fn get(&self, path: &PathUri) -> Option<Arc<dyn ExecutorFileSystem>> {
         self.values.get(path).map(Arc::clone)
     }
 
-    fn retain_paths(&mut self, paths: &HashSet<AbsolutePathBuf>) {
+    fn retain_paths(&mut self, paths: &HashSet<PathUri>) {
         self.values = Arc::new(
             self.values
                 .iter()
@@ -193,7 +198,7 @@ pub fn filter_skill_load_outcome_for_product(
     outcome
         .skills
         .retain(|skill| skill.matches_product_restriction_for_product(restriction_product));
-    let retained_paths: HashSet<AbsolutePathBuf> = outcome
+    let retained_paths: HashSet<PathUri> = outcome
         .skills
         .iter()
         .map(|skill| skill.path_to_skills_md.clone())

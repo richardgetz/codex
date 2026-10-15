@@ -173,7 +173,7 @@ pub struct SkillRootSnapshot {
     pub(crate) root: AbsolutePathBuf,
     pub(crate) is_agent_plugin: bool,
     pub(crate) skills: Vec<SkillMetadata>,
-    pub(crate) skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+    pub(crate) skill_discovery_path_by_path: Arc<HashMap<PathUri, PathUri>>,
     pub(crate) errors: Vec<SkillError>,
     pub(crate) file_system: Arc<dyn ExecutorFileSystem>,
 }
@@ -182,7 +182,7 @@ impl SkillRootSnapshot {
     pub fn new(
         root: AbsolutePathBuf,
         skills: Vec<SkillMetadata>,
-        skill_discovery_path_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
+        skill_discovery_path_by_path: Arc<HashMap<PathUri, PathUri>>,
         errors: Vec<SkillError>,
         file_system: Arc<dyn ExecutorFileSystem>,
     ) -> Self {
@@ -360,11 +360,7 @@ async fn load_skills_under_root(
         .map(|skill| {
             let plugin_root = plugin_root.as_ref();
             async move {
-                let discovery_path = skill
-                    .skill
-                    .path
-                    .to_abs_path()
-                    .unwrap_or_else(|_| skill.path.clone());
+                let discovery_path = skill.skill.path.clone();
                 let result = parse_skill_file(
                     fs,
                     &skill.skill,
@@ -448,7 +444,7 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: path.clone(),
+        path_to_skills_md: path_uri.clone(),
         scope,
         plugin_id: plugin_identity.map(|identity| identity.plugin_id.clone()),
         remote_plugin_id: plugin_identity.and_then(|identity| identity.remote_plugin_id.clone()),

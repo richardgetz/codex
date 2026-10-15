@@ -180,10 +180,14 @@ async fn load_user_skills_for_test(codex_home: &TempDir) -> SkillLoadOutcome {
     .await
 }
 
-fn normalized(path: &Path) -> AbsolutePathBuf {
+fn normalized_abs(path: &Path) -> AbsolutePathBuf {
     canonicalize_path(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .abs()
+}
+
+fn normalized(path: &Path) -> PathUri {
+    PathUri::from_abs_path(&normalized_abs(path))
 }
 fn write_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) -> PathBuf {
     write_skill_at(&codex_home.path().join("skills"), dir, name, description)
@@ -367,7 +371,7 @@ async fn loads_skill_interface_metadata_from_yaml() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from json");
     let skill_dir = skill_path.parent().expect("skill dir");
-    let normalized_skill_dir = normalized(skill_dir);
+    let normalized_skill_dir = normalized_abs(skill_dir);
 
     write_skill_interface_at(
         skill_dir,
@@ -564,7 +568,7 @@ interface:
         "unexpected errors: {:?}",
         outcome.errors
     );
-    let expected_icon_path = normalized(&plugin_root.join("assets/logo.svg"));
+    let expected_icon_path = normalized_abs(&plugin_root.join("assets/logo.svg"));
     assert_eq!(
         outcome.skills,
         vec![SkillMetadata {
@@ -633,10 +637,12 @@ async fn loads_skills_via_symlinked_subdir_for_user_scope() {
         }]
     );
     let canonical_skill_path = normalized(&shared_skill_path);
-    let discovery_path = outcome
-        .skill_root_for_path(&canonical_skill_path)
-        .expect("symlinked skill should retain its discovery root")
-        .join("shared/demo/SKILL.md");
+    let discovery_path = PathUri::from_abs_path(
+        &outcome
+            .skill_root_for_path(&canonical_skill_path)
+            .expect("symlinked skill should retain its discovery root")
+            .join("shared/demo/SKILL.md"),
+    );
     assert_eq!(
         outcome.skill_discovery_path_for_path(&canonical_skill_path),
         Some(&discovery_path)
@@ -820,10 +826,12 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
         }]
     );
     let canonical_skill_path = normalized(&linked_skill_path);
-    let discovery_path = outcome
-        .skill_root_for_path(&canonical_skill_path)
-        .expect("repo skill should retain its discovery root")
-        .join("shared/demo/SKILL.md");
+    let discovery_path = PathUri::from_abs_path(
+        &outcome
+            .skill_root_for_path(&canonical_skill_path)
+            .expect("repo skill should retain its discovery root")
+            .join("shared/demo/SKILL.md"),
+    );
     assert_eq!(
         outcome.skill_discovery_path_for_path(&canonical_skill_path),
         Some(&discovery_path)
@@ -1935,8 +1943,9 @@ async fn deduplicated_symlinked_skill_preserves_first_discovery_path() {
     ])
     .await;
     let canonical_skill_path = normalized(&skill_path);
-    let expected_root = normalized(first_root.path());
-    let expected_discovery_path = expected_root.join("first-link/SKILL.md");
+    let expected_root = normalized_abs(first_root.path());
+    let expected_discovery_path =
+        PathUri::from_abs_path(&expected_root.join("first-link/SKILL.md"));
 
     assert_eq!(outcome.skills.len(), 1);
     assert_eq!(
@@ -2029,13 +2038,23 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
         "unexpected errors: {:?}",
         outcome.errors
     );
-    let root_path = normalized(&root_skill_path);
-    let nested_path = normalized(&nested_skill_path);
+    let root_path = normalized_abs(&root_skill_path);
+    let nested_path = normalized_abs(&nested_skill_path);
     let (first_path, second_path, first_description, second_description) =
         if root_path <= nested_path {
-            (root_path, nested_path, "from root", "from nested")
+            (
+                normalized(&root_skill_path),
+                normalized(&nested_skill_path),
+                "from root",
+                "from nested",
+            )
         } else {
-            (nested_path, root_path, "from nested", "from root")
+            (
+                normalized(&nested_skill_path),
+                normalized(&root_skill_path),
+                "from nested",
+                "from root",
+            )
         };
     assert_eq!(
         outcome.skills,
