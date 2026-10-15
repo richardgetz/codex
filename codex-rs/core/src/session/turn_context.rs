@@ -455,7 +455,6 @@ impl TurnContext {
             permission_profile: &self.permission_profile(),
             windows_sandbox_level: self.windows_sandbox_level,
         })
-        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
         .with_image_generation_capability(provider_capabilities.image_generation)
         .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode(unified_exec_shell_mode.clone())
@@ -1150,7 +1149,6 @@ impl Session {
             permission_profile: &session_configuration.permission_profile(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
-        .with_namespace_tools_capability(provider_capabilities.namespace_tools)
         .with_image_generation_capability(provider_capabilities.image_generation)
         .with_web_search_capability(provider_capabilities.web_search)
         .with_unified_exec_shell_mode(unified_exec_shell_mode.clone())

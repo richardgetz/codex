@@ -249,7 +249,7 @@ fn build_tool_router_with_recovered_mcp_tools_and_selection(
     add_core_tool_sources(&context, &mut registry);
 
     let namespace_tools_enabled = recovered_mcp_namespace_tools_enabled(turn_context);
-    let search_enabled = search_tool_enabled(turn_context, model_info);
+    let search_enabled = model_info.supports_search_tool;
     let registered_mcp_tools = if let Some(selection) = mcp_selection {
         session
             .services
@@ -883,7 +883,7 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
 }
 
 pub(crate) fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.provider.capabilities().namespace_tools
+    turn_context.tools_config.namespace_tools
 }
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
     turn_context.multi_agent_version == MultiAgentVersion::V2

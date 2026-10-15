@@ -26,8 +26,7 @@ use crate::tools::handlers::mcp::McpToolRecovery;
 use crate::tools::registry::ToolRegistry;
 
 pub(crate) fn recovered_mcp_namespace_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.provider.capabilities().namespace_tools
-        && turn_context.tools_config.namespace_tools
+    turn_context.tools_config.namespace_tools
 }
 
 #[derive(Default)]
