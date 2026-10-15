@@ -15,6 +15,7 @@ use codex_extension_api::TurnStopInput;
 use codex_extension_items::sleep::SleepItem;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_models_manager::ModelsManagerConfig;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::ModelsManager;
@@ -70,8 +71,12 @@ impl ModelsManager for GatedModelsManager {
         self.inner.auth_manager()
     }
 
-    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.inner.list_collaboration_modes()
+    fn list_collaboration_modes(
+        &self,
+        collaboration_modes_config: CollaborationModesConfig,
+    ) -> Vec<CollaborationModeMask> {
+        self.inner
+            .list_collaboration_modes(collaboration_modes_config)
     }
 
     fn refresh_if_new_etag(

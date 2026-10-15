@@ -118,6 +118,7 @@ async fn idle_mail_survives_eviction_and_preserves_followup_order() -> Result<()
                 model: Some(COMMITTED_MODEL.to_string()),
                 ..Default::default()
             },
+            usage_policy_update: None,
             reply: None,
         })
         .await?;

@@ -1066,7 +1066,7 @@ async fn restore_paused_team_with_queued_trigger_preserves_live_turn_until_conti
             text_elements: Vec::new(),
         }]))
         .await?;
-    let TurnInputSubmission::Started { turn_id } = submission else {
+    let TurnInputSubmission::Started { turn_id, .. } = submission else {
         panic!("initial model turn should start");
     };
     server.wait_for_request_count(1).await;
