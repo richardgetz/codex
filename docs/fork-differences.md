@@ -35,7 +35,11 @@ or behaves differently from upstream.
   `rust-v0.160.0` refresh preserves `0067` and omits upstream `0058`, whose SQL
   is byte-identical to that already-shipped migration. The `rust-v0.161.0` refresh
   also omits that duplicate `0058` migration; the shipped Daybreak migration keeps
-  version `0058`, and the archive-sort SQL remains at shipped version `0067`.
+  version `0058`, and the archive-sort SQL remains at shipped version `0067`. The
+  `rust-v0.162.1` refresh preserves all shipped filenames and checksums through
+  `0067`; its only new upstream SQL is appended as
+  `0068_upstream_thread_attachment_reverse_lookup.sql` after checking that the
+  reverse-lookup index is not already present.
 
 See [Fork npm releases](./fork-release.md) for the release workflow details.
 

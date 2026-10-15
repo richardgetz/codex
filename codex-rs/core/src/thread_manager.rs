@@ -3,6 +3,10 @@ mod shared_instructions;
 mod shutdown;
 
 pub use shutdown::AgentTreeShutdown;
+pub use shutdown::AgentTreeShutdownFailure;
+pub use shutdown::AgentTreeShutdownFailureReason;
+pub use shutdown::AgentTreeShutdownReport;
+pub(crate) use shutdown::thread_store_error_kind;
 
 use crate::CodexAppsToolsCache;
 use crate::agent::LocalAgentControl;
@@ -17,9 +21,9 @@ use crate::config::Config;
 use crate::config::ThreadStoreConfig;
 use crate::current_time::TimeProvider;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::environment_selection::default_thread_environment_selections;
 use crate::environment_selection::validate_environment_ids_and_cwds;
 use crate::exec_policy::ExecPolicyManager;
+use crate::environment_selection::default_thread_environment_requests;
 use crate::mcp::McpManager;
 use crate::rollout::truncation;
 use crate::session::ForkPersistence;
@@ -106,6 +110,7 @@ use codex_protocol::protocol::TokenUsageProjectionThread;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnEnvironmentRequest;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::turn_input::HandoffBlocker;
@@ -344,7 +349,7 @@ pub struct StartThreadOptions {
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
-    pub environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub environments: Option<Vec<TurnEnvironmentRequest>>,
     /// Existing environment bindings captured by an internal caller.
     pub inherited_environments: Option<TurnEnvironmentSnapshot>,
     /// Explicit instructions carried by an internal caller instead of loading them again.
@@ -952,12 +957,12 @@ impl ThreadManager {
         });
     }
 
-    pub fn default_environment_selections(
+    pub fn default_environment_requests(
         &self,
         cwd: &AbsolutePathBuf,
         workspace_roots: &[AbsolutePathBuf],
-    ) -> Vec<TurnEnvironmentSelection> {
-        default_thread_environment_selections(
+    ) -> Vec<TurnEnvironmentRequest> {
+        default_thread_environment_requests(
             self.state.environment_manager.as_ref(),
             cwd,
             workspace_roots,
@@ -1434,13 +1439,18 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         let _handoff_admission = self.begin_handoff_admission()?;
         let environments = options.environments.unwrap_or_else(|| {
-            default_thread_environment_selections(
+            default_thread_environment_requests(
                 self.state.environment_manager.as_ref(),
                 &options.config.cwd,
                 &options.config.workspace_roots,
             )
         });
-        validate_environment_ids_and_cwds(self.state.environment_manager.as_ref(), &environments)?;
+        validate_environment_ids_and_cwds(
+            self.state.environment_manager.as_ref(),
+            environments
+                .iter()
+                .map(|environment| (environment.environment_id.as_str(), &environment.cwd)),
+        )?;
         options.environments = Some(environments);
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
@@ -3226,6 +3236,7 @@ impl ThreadManagerState {
             self.session_source.clone(),
             /*initial_collaboration_mode*/ None,
             /*history_mode*/ None,
+            /*dynamic_tools*/ Vec::new(),
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
@@ -3245,6 +3256,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         initial_collaboration_mode: Option<CollaborationMode>,
         history_mode: Option<ThreadHistoryMode>,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
@@ -3259,6 +3271,7 @@ impl ThreadManagerState {
             session_source,
             initial_collaboration_mode,
             history_mode,
+            dynamic_tools,
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
@@ -3280,6 +3293,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         initial_collaboration_mode: Option<CollaborationMode>,
         history_mode: Option<ThreadHistoryMode>,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
@@ -3296,8 +3310,14 @@ impl ThreadManagerState {
             session_source: Some(session_source),
             thread_source,
             metrics_service_name,
-            environments,
+            environments: environments.map(|selections| {
+                selections
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect()
+            }),
             client_mcp_extensions,
+            dynamic_tools,
             ..StartThreadOptions::new(config)
         };
         let mut request =
@@ -3339,7 +3359,12 @@ impl ThreadManagerState {
             initial_history,
             session_source: Some(session_source),
             thread_source,
-            environments: environment_selections,
+            environments: environment_selections.map(|selections| {
+                selections
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect()
+            }),
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
@@ -3377,7 +3402,12 @@ impl ThreadManagerState {
             history_mode,
             session_source: Some(session_source),
             thread_source,
-            environments,
+            environments: environments.map(|selections| {
+                selections
+                    .into_iter()
+                    .map(TurnEnvironmentSelection::into_request)
+                    .collect()
+            }),
             thread_extension_init,
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
@@ -3451,7 +3481,7 @@ impl ThreadManagerState {
             dynamic_tools,
             metrics_service_name,
             parent_trace,
-            environments,
+            environments: environment_requests,
             inherited_environments: captured_environments,
             user_instructions: supplied_user_instructions,
             mut thread_extension_init,
@@ -3475,18 +3505,22 @@ impl ThreadManagerState {
                 }
             });
         thread_extension_init.insert(isolation);
-        let environments = environments
+        let environment_requests = environment_requests
             .or_else(|| {
                 let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) = &session_source
                 else {
                     return None;
                 };
-                inherited_environments
-                    .as_ref()
-                    .map(TurnEnvironmentSnapshot::inheritable_selections)
+                inherited_environments.as_ref().map(|snapshot| {
+                    snapshot
+                        .inheritable_selections()
+                        .into_iter()
+                        .map(TurnEnvironmentSelection::into_request)
+                        .collect()
+                })
             })
             .unwrap_or_else(|| {
-                default_thread_environment_selections(
+                default_thread_environment_requests(
                     self.environment_manager.as_ref(),
                     &config.cwd,
                     &config.workspace_roots,
@@ -3518,9 +3552,8 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
-                    let session_configured = thread
-                        .startup_metadata()
-                        .to_session_configured_event(initial_history.get_event_msgs());
+                    let session_configured =
+                        thread.startup_metadata().to_session_configured_event();
                     startup_state.release_membership();
                     if let Some(startup_guard) = startup_guard {
                         startup_guard.disarm();
@@ -3697,7 +3730,7 @@ impl ThreadManagerState {
             parent_rollout_thread_trace,
             user_shell_override,
             parent_trace,
-            environment_selections: environments,
+            environment_requests,
             thread_extension_init,
             turn_extension_init,
             client_mcp_extensions,
@@ -3723,7 +3756,10 @@ impl ThreadManagerState {
             Ok(spawned) => spawned,
             Err(error) => {
                 if let Some(startup_guard) = startup_guard {
-                    startup_guard.cleanup().await;
+                    let cleanup = tokio::spawn(startup_guard.cleanup());
+                    if let Err(cleanup_error) = cleanup.await {
+                        warn!(%cleanup_error, "failed to complete session startup cleanup");
+                    }
                 }
                 return Err(error);
             }
@@ -3771,7 +3807,10 @@ impl ThreadManagerState {
             Ok(new_thread) => new_thread,
             Err(error) => {
                 if let Some(startup_guard) = startup_guard {
-                    startup_guard.cleanup().await;
+                    let cleanup = tokio::spawn(startup_guard.cleanup());
+                    if let Err(cleanup_error) = cleanup.await {
+                        warn!(%cleanup_error, "failed to complete session startup cleanup");
+                    }
                 }
                 return Err(error);
             }
@@ -4272,6 +4311,7 @@ struct SnapshotTurnState {
     ends_mid_turn: bool,
     active_turn_id: Option<String>,
     active_turn_started_at: Option<i64>,
+    active_turn_root_id: Option<String>,
     active_turn_start_index: Option<usize>,
 }
 
@@ -4292,6 +4332,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
                 ends_mid_turn: false,
                 active_turn_id: None,
                 active_turn_started_at: None,
+                active_turn_root_id: None,
                 active_turn_start_index: None,
             };
         }
@@ -4299,7 +4340,10 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         return SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id,
-            active_turn_started_at: active_turn_snapshot.and_then(|turn| turn.started_at),
+            active_turn_started_at: active_turn_snapshot
+                .as_ref()
+                .and_then(|turn| turn.started_at),
+            active_turn_root_id: active_turn_snapshot.and_then(|turn| turn.root_turn_id),
             active_turn_start_index: builder.active_turn_start_index(),
         };
     }
@@ -4312,6 +4356,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
             active_turn_started_at: None,
+            active_turn_root_id: None,
             active_turn_start_index: None,
         };
     };
@@ -4328,6 +4373,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         }),
         active_turn_id: None,
         active_turn_started_at: None,
+        active_turn_root_id: None,
         active_turn_start_index: None,
     }
 }
@@ -4355,6 +4401,7 @@ fn fork_history_from_snapshot(
                 append_interrupted_boundary(
                     history,
                     snapshot_state.active_turn_id,
+                    snapshot_state.active_turn_root_id,
                     snapshot_state.active_turn_started_at,
                     interrupted_marker,
                 )
@@ -4371,10 +4418,12 @@ fn fork_history_from_snapshot(
 fn append_interrupted_boundary(
     history: InitialHistory,
     turn_id: Option<String>,
+    root_turn_id: Option<String>,
     started_at: Option<i64>,
     interrupted_marker: InterruptedTurnHistoryMarker,
 ) -> InitialHistory {
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+        root_turn_id,
         turn_id,
         reason: TurnAbortReason::Interrupted,
         error: None,

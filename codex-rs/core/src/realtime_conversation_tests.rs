@@ -36,6 +36,7 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
+use test_case::test_case;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -881,11 +882,17 @@ fn internal_continuation_suppression_keeps_final_realtime_output() {
     assert!(!state.suppresses_output(None));
 }
 
-#[test]
-fn streamed_handoff_preserves_a_bounded_final_tail() {
+#[test_case(None, true; "legacy")]
+#[test_case(Some(MessagePhase::FinalAnswer), true; "final_answer")]
+#[test_case(Some(MessagePhase::Commentary), false; "commentary")]
+#[test_case(Some(MessagePhase::PartialAnswer), false; "partial_answer")]
+fn streamed_handoff_preserves_a_bounded_final_tail(
+    phase: Option<MessagePhase>,
+    expect_final_prefix: bool,
+) {
     let mut item = RealtimeStreamedItem {
         handoff_id: "handoff_1".to_string(),
-        phase: Some(MessagePhase::FinalAnswer),
+        phase,
         bem_channel_parser: None,
         prefix_final_message: true,
         sent_bytes: 0,
@@ -906,7 +913,12 @@ fn streamed_handoff_preserves_a_bounded_final_tail() {
     let output = format!("{first}{final_chunk}");
 
     assert!(output.len() <= 4_000);
-    assert!(output.starts_with(&format!("{AGENT_FINAL_MESSAGE_PREFIX}HEAD")));
+    let prefix = if expect_final_prefix {
+        AGENT_FINAL_MESSAGE_PREFIX
+    } else {
+        ""
+    };
+    assert!(output.starts_with(&format!("{prefix}HEAD")));
     assert!(output.contains(HANDOFF_STREAM_TRUNCATION_MARKER));
     assert!(output.ends_with("TAIL"));
 }

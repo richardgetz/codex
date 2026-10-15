@@ -1,7 +1,7 @@
 //! Delivers terminal child results and completion activity to the agent tree.
 //!
 //! Sessions capture terminal state; the controller owns routing and queue-only delivery.
-//! Delivery remains best effort, with tracing recorded only after the parent accepts it.
+//! Delivery remains best effort; metrics distinguish queue acceptance from delivery failure.
 
 use super::LocalAgentControl;
 use crate::TurnStartOptions;
@@ -15,6 +15,7 @@ use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentActivityKind;
 use codex_protocol::protocol::SubAgentSource;
@@ -29,13 +30,13 @@ impl LocalAgentControl {
         outcome: AgentTurnOutcome,
         trace: &ThreadTraceContext,
     ) {
-        self.clear_worker_question(outcome.thread_id);
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             agent_path: Some(child_agent_path),
             ..
         }) = &outcome.source
         else {
+            self.clear_worker_question(outcome.thread_id);
             return;
         };
         let parent_thread_id = *parent_thread_id;
@@ -74,6 +75,8 @@ impl LocalAgentControl {
                         initiating_thread_id,
                         parent_turn_id,
                         SubAgentActivityItem {
+                            model: None,
+                            reasoning_effort: None,
                             id: format!("subagent-completed-{}", outcome.turn_id),
                             kind: SubAgentActivityKind::Completed,
                             agent_thread_id: outcome.thread_id,
@@ -87,6 +90,33 @@ impl LocalAgentControl {
                 );
             }
         }
+
+        if let AgentStatus::Completed(Some(answer)) = &status
+            && let Ok(state) = self.runtime.upgrade()
+            && let Ok(worker_thread) = state.get_thread(outcome.thread_id).await
+        {
+            let resume_config = worker_thread.session.get_config().await;
+            match self
+                .forward_worker_question_reply(
+                    outcome.thread_id,
+                    answer,
+                    worker_thread
+                        .multi_agent_version()
+                        .unwrap_or(MultiAgentVersion::V2),
+                    resume_config.as_ref().clone(),
+                    TurnStartOptions::default(),
+                )
+                .await
+            {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(err) => debug!(
+                    "failed to forward Worker question answer for {}: {err}",
+                    outcome.thread_id
+                ),
+            }
+        }
+        self.clear_worker_question(outcome.thread_id);
 
         let message = match (&status, outcome.error_info) {
             (AgentStatus::Errored(error), Some(CodexErrorInfo::TooManyDenials)) => {
@@ -108,7 +138,16 @@ impl LocalAgentControl {
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = trace.is_enabled().then(|| message.clone());
-        let parent_is_team_lead = self.parent_is_team_lead(parent_thread_id).await;
+        let (parent_is_loaded, parent_is_team_lead) =
+            match self.runtime.upgrade() {
+                Ok(state) => match state.get_thread(parent_thread_id).await {
+                    Ok(parent_thread) => (true, parent_thread.session.is_team_lead().await),
+                    Err(_) => (false, false),
+                },
+                Err(_) => (false, false),
+            };
+        let use_team_lead_completion = parent_is_team_lead
+            || (!parent_is_loaded && matches!(status, AgentStatus::Completed(_)));
         let communication = InterAgentCommunication::new(
             child_agent_path.clone(),
             parent_agent_path,
@@ -118,7 +157,7 @@ impl LocalAgentControl {
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
-        let result = if parent_is_team_lead {
+        let delivery = if use_team_lead_completion {
             self.send_team_lead_completion(
                 parent_thread_id,
                 communication,
@@ -136,7 +175,17 @@ impl LocalAgentControl {
             )
             .await
         };
-        if let Err(err) = result {
+        if let Some(metrics) = codex_otel::global() {
+            let _ = metrics.counter(
+                "codex.multi_agent.result_delivery",
+                /*inc*/ 1,
+                &[(
+                    "outcome",
+                    if delivery.is_ok() { "queued" } else { "failed" },
+                )],
+            );
+        }
+        if let Err(err) = delivery {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");
             return;
         }

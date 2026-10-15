@@ -85,7 +85,7 @@ impl HostSkillsSnapshot {
                     }
                     prompts.fragments.push(Box::new(SkillInstructions {
                         name: skill.name.clone(),
-                        path: skill.path_to_skills_md.to_string_lossy().into_owned(),
+                        path: skill.path_to_skills_md.inferred_native_path_string(),
                         contents,
                         resource_access: None,
                     }));
@@ -95,7 +95,7 @@ impl HostSkillsSnapshot {
                     prompts.warnings.push(format!(
                         "Failed to load skill {} at {}: {err:#}",
                         skill.name,
-                        skill.path_to_skills_md.display()
+                        skill.path_to_skills_md.inferred_native_path_string()
                     ));
                 }
             }

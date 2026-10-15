@@ -29,7 +29,6 @@ pub(crate) struct OrdinarySubmissionPermit {
 }
 
 #[derive(Debug)]
-#[expect(dead_code, reason = "Turn ancestry is retained in Debug diagnostics.")]
 pub(crate) struct Submission {
     pub id: String,
     pub op: Op,

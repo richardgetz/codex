@@ -15,12 +15,8 @@ use crate::thread_manager::ResumeThreadWithHistoryOptions;
 use crate::thread_manager::ThreadIdGenerator;
 use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
-use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_config::TeamLeadWorkPolicy;
-use codex_history::InitialHistory;
-use codex_history::ResumedHistory;
-use codex_history::RolloutItem;
 use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -77,6 +73,7 @@ mod handoff;
 mod inspection;
 mod interrupt;
 mod legacy;
+mod mailbox;
 mod residency;
 mod resume;
 mod root_handoff;
@@ -173,7 +170,7 @@ impl LocalAgentControl {
             )
             .await
         {
-            Ok(TurnInputSubmission::Started { turn_id }) => Ok(turn_id),
+            Ok(TurnInputSubmission::Started { turn_id, .. }) => Ok(turn_id),
             Ok(TurnInputSubmission::Steered { .. }) => {
                 // MAv1 exposes an opaque `submission_id` to the model. The legacy
                 // `Op::UserInput` path returned a fresh ID for every steer, while the
@@ -223,24 +220,33 @@ impl LocalAgentControl {
         start_options: TurnStartOptions,
         status: &AgentStatus,
     ) -> CodexResult<String> {
-        if matches!(status, AgentStatus::Completed(_))
-            && let Ok(state) = self.runtime.upgrade()
-            && let Ok(thread) = state.get_thread(agent_id).await
-        {
-            let config = thread.session.get_config().await;
-            if thread.session.is_team_lead().await
-                && config.effective_team_lead_work_policy() == TeamLeadWorkPolicy::ManagerOnly
-            {
-                communication.trigger_turn = false;
-                communication.content = crate::session::truncate_message(&communication.content);
+        let state = self.runtime.upgrade()?;
+        if matches!(status, AgentStatus::Completed(_)) {
+            // Both policies decide from the TeamLeadCompletion op: ManagerOnly batches it,
+            // while PromptGuided promotes it to an actionable wake. Keeping this false also
+            // makes an eviction between role lookup and submission safe.
+            communication.trigger_turn = false;
+            match state.get_thread(agent_id).await {
+                Ok(thread) => {
+                    let config = thread.session.get_config().await;
+                    if thread.session.is_team_lead().await
+                        && config.effective_team_lead_work_policy()
+                            == TeamLeadWorkPolicy::ManagerOnly
+                    {
+                        communication.content =
+                            crate::session::truncate_message(&communication.content);
+                    }
+                }
+                // The loaded Lead applies its current policy when this completion is replayed.
+                Err(_) => {}
             }
         }
-        let state = self.runtime.upgrade()?;
         if communication.trigger_turn {
-            let thread = state.get_thread(agent_id).await?;
-            thread
-                .ensure_execution_capacity_for_turn_start(self)
-                .await?;
+            if let Ok(thread) = state.get_thread(agent_id).await {
+                thread
+                    .ensure_execution_capacity_for_turn_start(self)
+                    .await?;
+            }
         }
         self.send_inter_agent_communication_with_delivery_kind(
             agent_id,
@@ -395,12 +401,17 @@ impl LocalAgentControl {
         };
         let state = self.runtime.upgrade()?;
         let _team_worker_lease = if communication.trigger_turn {
-            let thread = state.get_thread(agent_id).await?;
-            thread
-                .ensure_execution_capacity_for_turn_start(self)
-                .await?;
-            let config = thread.session.get_config().await;
-            self.reserve_team_worker_turn(&config, &thread.session_source, agent_id)?
+            match state.get_thread(agent_id).await {
+                Ok(thread) => {
+                    thread
+                        .ensure_execution_capacity_for_turn_start(self)
+                        .await?;
+                    let config = thread.session.get_config().await;
+                    self.reserve_team_worker_turn(&config, &thread.session_source, agent_id)?
+                }
+                Err(_) if team_lead_completion => None,
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
@@ -500,6 +511,62 @@ impl LocalAgentControl {
     ) -> CodexResult<String> {
         let communication_for_log =
             crate::agent_communication::logging_enabled().then(|| communication.clone());
+        {
+            // Keep unloaded delivery atomic with publication of a reloaded session.
+            let threads = state.threads.read().await;
+            if team_lead_completion && !threads.contains_key(&agent_id) {
+                let _membership = self.runtime.admit_start()?;
+                self.runtime.ensure_agent_known(agent_id)?;
+                let state_db = state.state_db().await.ok_or_else(|| {
+                    CodexErr::Fatal(
+                        "state database unavailable for unloaded Team Lead completion".to_string(),
+                    )
+                })?;
+                let submission_id = crate::session::persist_handoff_inter_agent_communication(
+                    &state_db,
+                    agent_id,
+                    Some(context.sender_thread_id()),
+                    &communication,
+                    &start_options,
+                    /*team_lead_completion*/ true,
+                )
+                .await
+                .map_err(|error| {
+                    CodexErr::Fatal(format!(
+                        "failed to persist unloaded Team Lead completion: {error}"
+                    ))
+                })?;
+                if let Some(communication) = communication_for_log {
+                    crate::agent_communication::emit_agent_communication_send(
+                        &submission_id,
+                        &context,
+                        &communication,
+                        agent_id,
+                    );
+                }
+                return Ok(submission_id);
+            }
+            if !communication.trigger_turn && !threads.contains_key(&agent_id) {
+                let _membership = self.runtime.admit_start()?;
+                self.runtime.ensure_agent_known(agent_id)?;
+                let submission_id = uuid::Uuid::now_v7().to_string();
+                self.runtime.mailboxes.enqueue(
+                    agent_id,
+                    Some(submission_id.clone()),
+                    vec![communication],
+                )?;
+                if let Some(communication) = communication_for_log {
+                    crate::agent_communication::emit_agent_communication_send(
+                        &submission_id,
+                        &context,
+                        &communication,
+                        agent_id,
+                    );
+                }
+                return Ok(submission_id);
+            }
+        }
+        // Loaded recipients retain submission ordering with follow-ups and interrupts.
         let (parent_turn_id, root_turn_id) = if communication.trigger_turn {
             (
                 start_options.parent_turn_id.clone(),

@@ -840,6 +840,27 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    let enabled = self.chat_widget.daybreak_enabled
+                        && !self.chat_widget.side_conversation_active()
+                        && !self.side_threads.contains_key(&thread_id);
+                    let eligible_account = self.chat_widget.daybreak_turn_eligible(enabled);
+                    let cyber_access_program = match crate::daybreak::program_for_turn(
+                        &self.chat_widget.model_catalog().models,
+                        model,
+                        eligible_account,
+                        enabled,
+                    ) {
+                        Ok(program) => program,
+                        Err(message) => {
+                            if !self
+                                .chat_widget
+                                .handle_turn_start_rejection(message.clone())
+                            {
+                                self.chat_widget.add_error_message(message);
+                            }
+                            return Ok(true);
+                        }
+                    };
                     let config = self.chat_widget.config_ref();
                     let selected_profile = self.pending_server_profiles.get(&thread_id);
                     let selected_active = selected_profile

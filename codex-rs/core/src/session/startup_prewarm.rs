@@ -352,17 +352,15 @@ async fn schedule_startup_prewarm_inner(
             .and_then(|auth| auth.account_plan_type());
         crate::session::get_service_tier(
             session.services.agent_control.service_tier(),
+            &session.features(),
+            &preconnect_model_info,
             startup_turn_context
                 .config
                 .notices
                 .fast_default_opt_out
                 .unwrap_or(false),
             account_plan_type,
-            session.features().enabled(Feature::FastMode),
         )
-        .filter(|service_tier| {
-            super::service_tier_supported_by_model(service_tier, &preconnect_model_info)
-        })
     } else {
         startup_turn_context.initial_settings.service_tier.clone()
     };
@@ -431,6 +429,9 @@ async fn schedule_startup_prewarm_inner(
             text: base_instructions,
             provenance: None,
         },
+        session
+            .current_window_uses_incremental_tools(&step_context)
+            .await,
     );
     startup_turn_context.session_telemetry.record_startup_phase(
         "startup_prewarm_build_prompt",

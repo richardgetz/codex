@@ -20,6 +20,12 @@ release or merge rules.
 
 ## Unreleased
 
+- Stable refresh `rust-v0.162.1` preserves every shipped migration filename
+  and checksum through `0067`; its only new upstream SQL object, the thread
+  attachment reverse-lookup index, is appended as
+  `0068_upstream_thread_attachment_reverse_lookup.sql`. Upstream-renumbered or
+  already-applied migration bodies are not added again.
+
 - The TUI composer tracks overall turn activity separately from slash-command
   availability. Normal turn state updates both; background status work can gate
   unavailable slash commands without changing the task-running footer state.
@@ -1319,6 +1325,10 @@ release or merge rules.
   byte-identical to stable `0067` and is not added again.
   For `rust-v0.161.0`, preserve every filename/checksum through `0067` and
   omit the byte-identical incoming archive-sort migration at `0058`.
+  For `rust-v0.162.1`, preserve those same filenames/checksums and append only
+  the unique thread-attachment reverse-lookup index as `0068`; verify the index
+  object is not duplicated and renumbered incoming bodies are already
+  represented by shipped migrations.
 - Verify plain-name skill mentions preserve executor, cloud, custom-resource,
   and host priority after upstream changes the source kind from Orchestrator to
   Cloud; executor-owned skills must still win host-name collisions.
@@ -1733,6 +1743,10 @@ release or merge rules.
   managed policy precedence remains intact, and an unset default keeps the root
   auth fallback. Existing `/account` switching and daemon launcher propagation
   must remain intact; do not infer a restart of an already-running daemon.
+- Verify the fork-only `/agents-prune` command remains registered and routed to
+  current-session pruning after TUI command-table refreshes. Keep `/archive` and
+  `/delete` descriptions, confirmation choices, and snapshots aligned with the
+  actual embedded versus connected-session navigation behavior.
 - Verify `/orchestrator-memory-forget <needle>` still prunes and reconsolidates
   orchestrator memory, including bucket mirror files.
 - Verify `/orchestrator-memory-consolidate` still triggers a manual

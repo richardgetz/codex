@@ -10,6 +10,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TruncationPolicy;
 
 use crate::ComposedContext;
+use crate::composition::SectionContent;
 use crate::composition::SectionDelivery;
 use crate::composition::SectionOutput;
 
@@ -154,7 +155,14 @@ impl ComposedContext {
                 SectionDelivery::UserContent(content) => content
                     .iter()
                     .map(|item| &item.content)
-                    .fold(SectionCost::default(), SectionCost::add_content),
+                    .fold(SectionCost::default(), |mut cost, item| match item {
+                        SectionContent::Transcript(text) => {
+                            cost.text_bytes =
+                                cost.text_bytes.saturating_add(text.rendered().text_bytes);
+                            cost
+                        }
+                        SectionContent::Other(item) => cost.add_content(item),
+                    }),
                 SectionDelivery::Message(message) => match &message.content.item {
                     ResponseItem::Message { content, .. } => content
                         .iter()
@@ -192,6 +200,13 @@ pub fn estimate_input_tokens(item: &ResponseItem) -> usize {
     adjusted_tokens(ByteCount::item(item), content)
 }
 
+pub(super) fn section_content_tokens(item: &SectionContent) -> usize {
+    match item {
+        SectionContent::Transcript(record) => record.rendered().tokens,
+        SectionContent::Other(item) => content_tokens(item),
+    }
+}
+
 pub(super) fn content_tokens(item: &ContentItem) -> usize {
     let mut bytes = ByteCount::measure(|counter| serde_json::to_writer(counter, item));
     if let ContentItem::InputText { text } = item {
@@ -215,7 +230,7 @@ pub(super) fn section_tokens(section: &SectionOutput) -> usize {
     match &section.delivery {
         SectionDelivery::UserContent(content) => content
             .iter()
-            .map(|item| content_tokens(&item.content))
+            .map(|item| section_content_tokens(&item.content))
             .fold(content_framing_tokens(content.len()), usize::saturating_add),
         SectionDelivery::Message(message) => estimate_input_tokens(&message.content.item),
     }
