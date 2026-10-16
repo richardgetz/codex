@@ -20,6 +20,13 @@ release or merge rules.
 
 ## Unreleased
 
+- Fork Actions remove the daily stale-contributor-PR schedule while preserving
+  manual dispatch and its existing canonical-only execution guard. The upstream
+  Rust, V8, and zsh tag-release roots are guarded to `openai/codex`, preventing
+  fork tag pushes from allocating their build, signing, or publishing jobs.
+  The fork's automatic `stable` release, required pull-request checks, and
+  reusable/manual CI workflows remain available.
+
 - Stable refresh `rust-v0.162.1` preserves every shipped migration filename
   and checksum through `0067`; its only new upstream SQL object, the thread
   attachment reverse-lookup index, is appended as
@@ -1192,6 +1199,13 @@ release or merge rules.
   enablement model.
 
 ## Merge Checklist
+
+- On stable refresh, keep `close-stale-contributor-prs.yml` free of its daily
+  schedule while retaining its manual trigger and canonical-only job guard; keep
+  `github.repository == 'openai/codex'` on the root jobs of
+  `rust-release.yml`, `rusty-v8-release.yml`, and `rust-release-zsh.yml`.
+  Preserve `fork-release.yml` on pushes to fork `stable`, required PR checks,
+  and reusable/manual CI entry points.
 
 - Verify direct Playwright remains disabled by default and requires the local
   Unix path, one plain `playwright-cli` command, an existing canonical
