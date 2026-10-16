@@ -155,6 +155,7 @@ impl Handler {
             )
             .await;
 
+        let wait_started = Instant::now();
         if let (Some(active_workers), Some(deadline)) = (active_workers, lead_deadline)
             && session.lead_idle_notifications_enabled().await
         {
@@ -175,6 +176,7 @@ impl Handler {
         } else {
             Instant::now() + Duration::from_millis(timeout_ms as u64)
         };
+        let has_pending_activity = pending_activity.is_some();
         let wait_outcome = async {
             let mut pending_activity = pending_activity;
             let mut policy_changed_at_entry = lead_policy_changed;
@@ -196,7 +198,13 @@ impl Handler {
                 } else if lead_wait_requires_assessment {
                     WaitOutcome::LeadReviewRequired
                 } else {
-                    wait_for_activity(&mut activity_rx, None, Some(wait_deadline), None).await
+                    wait_for_activity(
+                        &mut activity_rx,
+                        None,
+                        Some(wait_deadline),
+                        Some(&cancellation_token),
+                    )
+                    .await
                 };
                 if outcome != WaitOutcome::TeamPolicyChanged
                     || !is_team_lead
@@ -211,7 +219,7 @@ impl Handler {
         tokio::pin!(wait_outcome);
         let handoff = session.maybe_handoff_dependency_free_wait(
             &turn.sub_id,
-            pending_activity.is_some(),
+            has_pending_activity,
             &cancellation_token,
         );
         tokio::pin!(handoff);
@@ -219,6 +227,24 @@ impl Handler {
             _ = &mut handoff => wait_outcome.await,
             outcome = &mut wait_outcome => outcome,
         };
+        turn.session_telemetry.record_duration(
+            "codex.multi_agent.wait.duration_ms",
+            wait_started.elapsed(),
+            &[(
+                "outcome",
+                match outcome {
+                    WaitOutcome::MailboxActivity => "mailbox",
+                    WaitOutcome::Steered => "steered",
+                    WaitOutcome::TimedOut => "timed_out",
+                    WaitOutcome::NoActiveWorkers => "no_active_workers",
+                    WaitOutcome::LeadReviewRequired => "lead_review_required",
+                    WaitOutcome::TeamPolicyChanged => "team_policy_changed",
+                    WaitOutcome::Paused => "paused",
+                    WaitOutcome::Cancelled => "cancelled",
+                    WaitOutcome::SubstantiveWork => "substantive_work",
+                },
+            )],
+        );
         let result = WaitAgentResult::from_outcome(outcome, requested_timeout_ms, timeout_ms);
 
         session

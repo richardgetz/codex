@@ -527,6 +527,11 @@ impl Session {
             provisional_turn_state
         } else {
             let mut active = self.active_turn.lock().await;
+            self.record_started_turn(
+                &turn_context.sub_id,
+                (task_kind == TaskKind::Regular).then(|| turn_context.attribution()),
+            )
+            .await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
             Arc::clone(&turn.turn_state)
         };
@@ -834,7 +839,7 @@ impl Session {
         if self.is_activity_paused() {
             return;
         }
-        let (turn_state, team_worker_lease, admission) = loop {
+        let (turn_state, previous_options, team_worker_lease, admission) = loop {
             if !self.input_queue.has_pending_mailbox_items().await
                 || (!self.input_queue.has_trigger_turn_mailbox_items().await
                     && !self.has_outstanding_durable_sleep())
@@ -884,13 +889,9 @@ impl Session {
                     }
                 },
             };
-            let turn_state = {
-                let mut active_turn = self.active_turn.lock().await;
-                if active_turn.is_some() {
-                    return;
-                }
-                let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-                Arc::clone(&active_turn.turn_state)
+            let Some((turn_state, previous_options)) = self.reserve_pending_work_turn().await
+            else {
+                return;
             };
             let config = self.get_config().await;
             let session_source = self.session_source().await;
@@ -899,7 +900,9 @@ impl Session {
                 .local_agent_control()
                 .reserve_team_worker_turn(&config, &session_source, self.thread_id)
             {
-                Ok(team_worker_lease) => break (turn_state, team_worker_lease, admission),
+                Ok(team_worker_lease) => {
+                    break (turn_state, previous_options, team_worker_lease, admission);
+                }
                 Err(_) => {
                     self.clear_reserved_idle_turn(&turn_state).await;
                     drop(admission);
@@ -913,6 +916,21 @@ impl Session {
         };
         if self.shutdown_requested() {
             self.clear_reserved_idle_turn(&turn_state).await;
+            return;
+        }
+
+        self.services
+            .models_manager
+            .refresh_after_auth_change(self.get_config().await.http_client_factory())
+            .await;
+        // A completion-triggered wakeup can be interrupted while model discovery waits.
+        if self
+            .active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, &turn_state))
+        {
             return;
         }
 
@@ -957,6 +975,7 @@ impl Session {
         drop(team_lead_turn_admission);
         if !has_trigger_turn {
             // Queue-only mail wakes durable sleep without selecting a new task's settings.
+            start_options = previous_options;
             start_options.cyber_access_program = self
                 .reference_context_item()
                 .await
@@ -972,15 +991,22 @@ impl Session {
                 },
             )
             .await;
+        if let Some(trigger) = start_options.turn_trigger.clone() {
+            turn_context.turn_metadata_state.set_turn_trigger(trigger);
+        }
         if let Some(id) = start_options.parent_turn_id {
-            if let Some(initiating_agent_path) = input.iter().find_map(|item| {
-                let TurnInput::InterAgentCommunication(communication) = item else {
-                    return None;
-                };
-                communication
-                    .trigger_turn
-                    .then(|| communication.author.clone())
-            }) {
+            if let Some(initiating_agent_path) = input
+                .iter()
+                .find_map(|item| {
+                    let TurnInput::InterAgentCommunication(communication) = item else {
+                        return None;
+                    };
+                    communication
+                        .trigger_turn
+                        .then(|| communication.author.clone())
+                })
+                .or(start_options.initiating_agent_path)
+            {
                 turn_context
                     .turn_metadata_state
                     .set_initiating_agent_path(initiating_agent_path);
@@ -998,6 +1024,17 @@ impl Session {
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), input)
             .await;
+        // Context construction can outlive an interrupt or replacement. Do not let
+        // start_task recreate a turn whose reservation is no longer ours.
+        if self
+            .active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, &turn_state))
+        {
+            return;
+        }
         let _ = self
             .start_task_with_active_turn_mode(
                 turn_context,
@@ -1417,6 +1454,7 @@ impl Session {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
             EventMsg::TurnAborted(TurnAbortedEvent {
+                root_turn_id: Some(turn_context.root_turn_id()),
                 turn_id: Some(turn_context.sub_id.clone()),
                 reason,
                 error: None,
@@ -1433,6 +1471,7 @@ impl Session {
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
                 .await;
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: Some(turn_context.root_turn_id()),
                 turn_id: turn_context.sub_id.clone(),
                 last_agent_message,
                 error,
@@ -1607,6 +1646,7 @@ impl Session {
         self.emit_turn_abort_lifecycle(reason.clone(), task.turn_context.extension_data.as_ref())
             .await;
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
+            root_turn_id: Some(task.turn_context.root_turn_id()),
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
             error,

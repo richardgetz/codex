@@ -246,7 +246,59 @@ declare const tools: { editor__apply_patch(input: string): Promise<unknown>; };
 }
 
 #[test]
-fn tool_spec_to_code_mode_tool_definition_skips_unsupported_variants() {
+fn tool_search_spec_converts_to_a_callable_code_mode_definition() {
+    let definition = tool_spec_to_code_mode_tool_definition(&ToolSpec::ToolSearch {
+        execution: "client".to_string(),
+        description: "Native tool discovery".to_string(),
+        parameters: JsonSchema::object(
+            BTreeMap::from([(
+                "query".to_string(),
+                JsonSchema::string(/*description*/ None),
+            )]),
+            Some(vec!["query".to_string()]),
+            Some(AdditionalProperties::Boolean(false)),
+        ),
+    })
+    .expect("tool search should be callable from Code Mode");
+    assert_eq!(
+        (
+            &definition.name,
+            &definition.tool_name,
+            &definition.input_schema,
+            definition.input_schema_max_bytes,
+            &definition.output_schema,
+        ),
+        (
+            &"tool_search".to_string(),
+            &ToolName::plain("tool_search"),
+            &Some(json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                },
+                "required": ["query"],
+                "additionalProperties": false,
+            })),
+            Some(codex_code_mode::DEFAULT_INPUT_SCHEMA_MAX_BYTES),
+            &Some(json!({
+                "type": "object",
+                "properties": {
+                    "tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string" },
+                                "description": { "type": "string" }
+                            },
+                            "required": ["name", "description"]
+                        }
+                    }
+                },
+                "required": ["tools"]
+            })),
+        ),
+    );
     assert_eq!(
         tool_spec_to_code_mode_tool_definition(&ToolSpec::WebSearch {
             external_web_access: None,
@@ -258,4 +310,15 @@ fn tool_spec_to_code_mode_tool_definition_skips_unsupported_variants() {
         }),
         None
     );
+    assert!(
+        definition
+            .description
+            .contains("tool_search(args: { query: string; })")
+    );
+    assert!(
+        definition
+            .description
+            .contains("tools[result.name](arguments)")
+    );
+    assert!(!definition.description.contains("Native tool discovery"));
 }

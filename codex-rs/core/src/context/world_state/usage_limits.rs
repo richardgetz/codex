@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::UsageLimitsContext;
 use chrono::TimeZone;
@@ -196,11 +197,11 @@ impl WorldStateSection for UsageLimitsState {
         if current_should_persist
             && matches!(&previous, PreviousSectionState::Known(previous) if !materially_differs(&current, previous))
         {
-            return (None, None);
+            return (None, Vec::new());
         }
         let previous_had_status = !matches!(&previous, PreviousSectionState::Absent);
         if !current_should_persist && !previous_had_status {
-            return (None, None);
+            return (None, Vec::new());
         }
         let body = if !current_should_persist {
             REMOVAL_NOTICE.to_string()
@@ -209,7 +210,12 @@ impl WorldStateSection for UsageLimitsState {
         } else {
             self.body.clone()
         };
-        (Some(current), Some(Box::new(UsageLimitsContext::new(body))))
+        (
+            Some(current),
+            WorldStateUpdate::optional_boxed_fragment(Some(
+                Box::new(UsageLimitsContext::new(body)) as Box<dyn ContextualUserFragment>,
+            )),
+        )
     }
 }
 

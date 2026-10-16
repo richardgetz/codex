@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::UsageLimitsState;
 use super::WorldStateSection;
+use crate::context::world_state::test_support::FragmentSectionTestExt as _;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ThreadUsagePolicy;
@@ -38,7 +39,7 @@ fn usage_limits_fragment_describes_provider_windows_and_policy() {
     );
 
     let fragment = state
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
         .1
         .expect("usage status should be rendered");
 
@@ -81,7 +82,7 @@ fn usage_limits_fragment_is_not_repeated_when_snapshot_is_unchanged() {
 
     assert!(
         state
-            .render_diff(PreviousSectionState::Known(&snapshot))
+            .render_fragment_diff(PreviousSectionState::Known(&snapshot))
             .1
             .is_none()
     );
@@ -115,7 +116,8 @@ fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(68.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) = minor_change.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) =
+        minor_change.render_fragment_diff(PreviousSectionState::Known(&previous));
 
     assert!(
         fragment.is_none(),
@@ -130,7 +132,8 @@ fn usage_limits_fragment_is_suppressed_until_the_material_bucket_changes() {
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(73.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) = material_change.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) =
+        material_change.render_fragment_diff(PreviousSectionState::Known(&previous));
     assert!(snapshot.is_some());
     assert!(
         fragment
@@ -173,7 +176,7 @@ fn usage_limits_fragment_emits_for_policy_changes_and_a_new_window() {
     );
     assert!(
         policy_change
-            .render_diff(PreviousSectionState::Known(&previous))
+            .render_fragment_diff(PreviousSectionState::Known(&previous))
             .1
             .is_some(),
         "a continuation-floor policy change should be reported immediately"
@@ -185,7 +188,7 @@ fn usage_limits_fragment_emits_for_policy_changes_and_a_new_window() {
     );
     assert!(
         new_window
-            .render_diff(PreviousSectionState::Known(&previous))
+            .render_fragment_diff(PreviousSectionState::Known(&previous))
             .1
             .is_some(),
         "a reset timestamp advanced by one window should be reported immediately"
@@ -220,7 +223,8 @@ fn usage_limits_fragment_suppresses_small_boundary_jitter_against_last_notice() 
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(70.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) = boundary_jitter.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) =
+        boundary_jitter.render_fragment_diff(PreviousSectionState::Known(&previous));
 
     assert!(
         fragment.is_none(),
@@ -235,7 +239,8 @@ fn usage_limits_fragment_suppresses_small_boundary_jitter_against_last_notice() 
         ThreadUsagePolicy::default(),
         std::slice::from_ref(&rate_limits(75.1, 1_700_000_001)),
     );
-    let (snapshot, fragment) = material_change.render_diff(PreviousSectionState::Known(&previous));
+    let (snapshot, fragment) =
+        material_change.render_fragment_diff(PreviousSectionState::Known(&previous));
     assert!(snapshot.is_some());
     assert!(
         fragment
@@ -274,7 +279,7 @@ fn usage_limits_fragment_emits_after_cumulative_subthreshold_changes() {
         std::slice::from_ref(&rate_limits(68.1)),
     );
     let (snapshot, fragment) =
-        first_small_change.render_diff(PreviousSectionState::Known(&last_emitted));
+        first_small_change.render_fragment_diff(PreviousSectionState::Known(&last_emitted));
     assert!(fragment.is_none());
     assert!(snapshot.is_none());
 
@@ -283,7 +288,7 @@ fn usage_limits_fragment_emits_after_cumulative_subthreshold_changes() {
         std::slice::from_ref(&rate_limits(73.0)),
     );
     let (snapshot, fragment) =
-        cumulative_change.render_diff(PreviousSectionState::Known(&last_emitted));
+        cumulative_change.render_fragment_diff(PreviousSectionState::Known(&last_emitted));
     assert!(snapshot.is_some());
     assert!(fragment.is_some());
 }
@@ -318,7 +323,7 @@ fn usage_limits_fragment_emits_when_window_duration_changes() {
 
     assert!(
         current
-            .render_diff(PreviousSectionState::Known(&previous))
+            .render_fragment_diff(PreviousSectionState::Known(&previous))
             .1
             .is_some(),
         "a provider window duration change should be reported immediately"
@@ -356,7 +361,7 @@ fn usage_limits_fragment_emits_when_reset_timestamp_availability_changes() {
         std::slice::from_ref(&rate_limits(Some(1_700_000_000))),
     );
     let fragment = with_reset
-        .render_diff(PreviousSectionState::Known(&without_reset))
+        .render_fragment_diff(PreviousSectionState::Known(&without_reset))
         .1
         .expect("newly available reset time should be reported");
     assert!(
@@ -375,7 +380,7 @@ fn usage_limits_fragment_emits_when_reset_timestamp_availability_changes() {
         std::slice::from_ref(&rate_limits(None)),
     );
     let fragment = without_reset
-        .render_diff(PreviousSectionState::Known(&with_reset))
+        .render_fragment_diff(PreviousSectionState::Known(&with_reset))
         .1
         .expect("no longer available reset time should be reported");
     assert!(fragment.body().contains("resets at unknown"));
@@ -394,7 +399,7 @@ fn usage_limits_fragment_reports_when_previous_status_is_retired() {
     let current = UsageLimitsState::new(ThreadUsagePolicy::default(), &[]);
 
     let fragment = current
-        .render_diff(PreviousSectionState::Known(&previous))
+        .render_fragment_diff(PreviousSectionState::Known(&previous))
         .1
         .expect("retiring usage status should be rendered");
 
@@ -424,7 +429,7 @@ fn usage_limits_removal_is_not_rediscovered_from_legacy_history() {
     );
     let mut previous_world_state = crate::context::world_state::WorldState::default();
     previous_world_state.add_section(previous_state);
-    let (previous, previous_fragments) = previous_world_state.render_full();
+    let (previous, previous_fragments) = previous_world_state.render_full_fragments();
     let previous_history = previous_fragments
         .into_iter()
         .map(crate::context::ContextualUserFragment::into_boxed_response_item)
@@ -433,12 +438,13 @@ fn usage_limits_removal_is_not_rediscovered_from_legacy_history() {
     let current = UsageLimitsState::new(ThreadUsagePolicy::default(), &[]);
     let mut world_state = crate::context::world_state::WorldState::default();
     world_state.add_section(current);
-    let (_, mut removals) = world_state.render_history_diff(Some(&previous), &previous_history);
+    let (_, mut removals) =
+        world_state.render_history_fragment_diff(Some(&previous), &previous_history);
     let removal = removals.pop().expect("first removal should be rendered");
     let removal = crate::context::ContextualUserFragment::into_boxed_response_item(removal);
     assert!(
         world_state
-            .render_history_diff(Some(&previous), std::slice::from_ref(&removal))
+            .render_history_fragment_diff(Some(&previous), std::slice::from_ref(&removal))
             .1
             .is_empty(),
         "a removal tombstone must not count as retained usage status"
@@ -497,7 +503,7 @@ fn usage_limits_context_has_a_token_bound_for_multibyte_limit_ids() {
         })
         .collect::<Vec<_>>();
     let fragment = UsageLimitsState::new(ThreadUsagePolicy::default(), &rate_limits)
-        .render_diff(PreviousSectionState::Absent)
+        .render_fragment_diff(PreviousSectionState::Absent)
         .1
         .expect("usage status should be rendered");
 

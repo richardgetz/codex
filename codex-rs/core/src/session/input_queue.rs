@@ -1,11 +1,13 @@
 use crate::PendingMailboxBlockerDetail;
 use crate::PendingMailboxBlockerSource;
+use crate::agent::api::AgentControl;
+use crate::agent_communication::PENDING_MAILBOX_MESSAGES;
 use crate::state::ActiveTurn;
 use crate::state::MailboxDeliveryPhase;
 use crate::state::TurnState;
-use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_history::ResponseItemEnvelope;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::turn_input::TurnStartOptions;
@@ -22,12 +24,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
-static PENDING_MAILBOX_MESSAGES: Gauge = Gauge::new("core.mailbox.pending");
-
 pub(crate) const TEAM_LEAD_PROGRESS_SUMMARY_MAX_BYTES: usize = 8 * 1024;
 const TEAM_LEAD_PROGRESS_MAX_ITEMS: usize = 32;
 const TEAM_LEAD_PROGRESS_ITEM_MAX_BYTES: usize = 512;
-
 /// Host capture metadata belonging to one input, including steers within another turn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserInputMetadata {
@@ -114,13 +113,14 @@ pub(crate) struct TurnInputQueue {
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     activity_tx: watch::Sender<InputQueueActivity>,
+    controller: Option<(ThreadId, Arc<dyn AgentControl>, watch::Receiver<bool>)>,
     mailbox_pending_mails: Mutex<VecDeque<PendingMailboxCommunication>>,
     team_lead_progress: Mutex<TeamLeadProgressBuffer>,
     dependency_free_wait_handoff_turn: Mutex<Option<String>>,
 }
 
-struct PendingMailboxCommunication {
-    communication: InterAgentCommunication,
+pub(crate) struct PendingMailboxCommunication {
+    pub(crate) communication: InterAgentCommunication,
     start_options: TurnStartOptions,
     enqueued_at: Instant,
     /// Marks synthetic deadline wakeups so cancellation can remove a wake that
@@ -186,6 +186,7 @@ impl InputQueue {
         let (activity_tx, _) = watch::channel(InputQueueActivity::Mailbox);
         Self {
             activity_tx,
+            controller: None,
             mailbox_pending_mails: Mutex::new(VecDeque::new()),
             team_lead_progress: Mutex::new(TeamLeadProgressBuffer::default()),
             dependency_free_wait_handoff_turn: Mutex::new(None),
@@ -430,6 +431,43 @@ impl InputQueue {
         progress.completion_pending_since = None;
     }
 
+    pub(crate) fn with_controller(thread_id: ThreadId, control: Arc<dyn AgentControl>) -> Self {
+        let updates = control.watch_mailbox(thread_id);
+        Self {
+            controller: Some((thread_id, control, updates)),
+            ..Self::new()
+        }
+    }
+
+    pub(crate) fn mailbox_updates(&self) -> Option<watch::Receiver<bool>> {
+        self.controller
+            .as_ref()
+            .map(|(_, _, updates)| updates.clone())
+    }
+
+    pub(crate) fn notify_mailbox(&self) {
+        self.activity_tx.send_replace(InputQueueActivity::Mailbox);
+    }
+
+    fn read_mailbox(&self, pending: &mut VecDeque<PendingMailboxCommunication>) {
+        if let Some((thread_id, control, _)) = &self.controller {
+            pending.extend(
+                control
+                    .take_mailbox(*thread_id)
+                    .into_iter()
+                    .map(|communication| PendingMailboxCommunication {
+                        communication,
+                        start_options: TurnStartOptions::default(),
+                        enqueued_at: Instant::now(),
+                        lead_oversight: false,
+                        lead_progress_summary: false,
+                        team_lead_trigger: false,
+                        _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+                    }),
+            );
+        }
+    }
+
     pub(crate) async fn subscribe_activity(
         &self,
         turn_state: Option<&Mutex<TurnState>>,
@@ -551,18 +589,18 @@ impl InputQueue {
         if communication.trigger_turn {
             self.reset_dependency_free_wait_handoff().await;
         }
-        self.mailbox_pending_mails
-            .lock()
-            .await
-            .push_back(PendingMailboxCommunication {
-                communication,
-                start_options,
-                enqueued_at: Instant::now(),
-                lead_oversight: false,
-                lead_progress_summary,
-                team_lead_trigger,
-                _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
-            });
+        let mut pending = self.mailbox_pending_mails.lock().await;
+        // Mail retained while unloaded precedes new submissions to the loaded session.
+        self.read_mailbox(&mut pending);
+        pending.push_back(PendingMailboxCommunication {
+            communication,
+            start_options,
+            enqueued_at: Instant::now(),
+            lead_oversight: false,
+            lead_progress_summary,
+            team_lead_trigger,
+            _diagnostics_guard: PENDING_MAILBOX_MESSAGES.track(),
+        });
         self.activity_tx.send_replace(InputQueueActivity::Mailbox);
     }
 
@@ -622,6 +660,10 @@ impl InputQueue {
 
     pub(crate) async fn has_pending_mailbox_items(&self) -> bool {
         !self.mailbox_pending_mails.lock().await.is_empty()
+            || self
+                .controller
+                .as_ref()
+                .is_some_and(|(_, _, updates)| *updates.borrow())
     }
 
     pub(crate) async fn has_trigger_turn_mailbox_items(&self) -> bool {
@@ -630,6 +672,12 @@ impl InputQueue {
             .await
             .iter()
             .any(|mail| mail.communication.trigger_turn)
+    }
+
+    pub(crate) async fn drain_mailbox(&self) -> Vec<PendingMailboxCommunication> {
+        let mut pending = self.mailbox_pending_mails.lock().await;
+        self.read_mailbox(&mut pending);
+        pending.drain(..).collect()
     }
 
     pub(crate) async fn drain_mailbox_input_items(&self) -> (Vec<TurnInput>, TurnStartOptions) {
@@ -643,12 +691,7 @@ impl InputQueue {
     pub(crate) async fn drain_mailbox_input_items_with_team_lead_marker(
         &self,
     ) -> DrainedMailboxInput {
-        let pending_mails = self
-            .mailbox_pending_mails
-            .lock()
-            .await
-            .drain(..)
-            .collect::<Vec<_>>();
+        let pending_mails = self.drain_mailbox().await;
         let team_lead_trigger = pending_mails
             .iter()
             .any(|mail| mail.team_lead_trigger && mail.communication.trigger_turn);

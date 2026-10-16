@@ -36,6 +36,7 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
+use test_case::test_case;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -134,6 +135,7 @@ async fn misalignment_retirement_stays_on_originating_session_and_shutdown_retir
                 stop_token: CancellationToken::new(),
             }),
             mode_instructions: None,
+            context_active: true,
         }),
         realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
@@ -626,6 +628,7 @@ async fn handoff_complete_preserves_pending_streamed_final_output() {
                 stop_token: CancellationToken::new(),
             }),
             mode_instructions: None,
+            context_active: true,
         }),
         realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
@@ -690,6 +693,7 @@ async fn disabled_preambles_suppress_commentary_and_defer_unphased_output_until_
                 stop_token: CancellationToken::new(),
             }),
             mode_instructions: None,
+            context_active: true,
         }),
         realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
@@ -795,6 +799,7 @@ async fn disabled_preambles_drop_phase_less_bridge_before_preserving_final_outpu
                 stop_token: CancellationToken::new(),
             }),
             mode_instructions: None,
+            context_active: true,
         }),
         realtime_submission_sender: Mutex::new(None),
         starting_stop_token: std::sync::Mutex::new(None),
@@ -881,11 +886,17 @@ fn internal_continuation_suppression_keeps_final_realtime_output() {
     assert!(!state.suppresses_output(None));
 }
 
-#[test]
-fn streamed_handoff_preserves_a_bounded_final_tail() {
+#[test_case(None, true; "legacy")]
+#[test_case(Some(MessagePhase::FinalAnswer), true; "final_answer")]
+#[test_case(Some(MessagePhase::Commentary), false; "commentary")]
+#[test_case(Some(MessagePhase::PartialAnswer), false; "partial_answer")]
+fn streamed_handoff_preserves_a_bounded_final_tail(
+    phase: Option<MessagePhase>,
+    expect_final_prefix: bool,
+) {
     let mut item = RealtimeStreamedItem {
         handoff_id: "handoff_1".to_string(),
-        phase: Some(MessagePhase::FinalAnswer),
+        phase,
         bem_channel_parser: None,
         prefix_final_message: true,
         sent_bytes: 0,
@@ -906,7 +917,12 @@ fn streamed_handoff_preserves_a_bounded_final_tail() {
     let output = format!("{first}{final_chunk}");
 
     assert!(output.len() <= 4_000);
-    assert!(output.starts_with(&format!("{AGENT_FINAL_MESSAGE_PREFIX}HEAD")));
+    let prefix = if expect_final_prefix {
+        AGENT_FINAL_MESSAGE_PREFIX
+    } else {
+        ""
+    };
+    assert!(output.starts_with(&format!("{prefix}HEAD")));
     assert!(output.contains(HANDOFF_STREAM_TRUNCATION_MARKER));
     assert!(output.ends_with("TAIL"));
 }

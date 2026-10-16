@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::RealtimeEndInstructions;
 use crate::context::RealtimeStartInstructions;
@@ -125,7 +126,7 @@ impl WorldStateSection for RealtimeState {
     ) -> SectionTransition<Self::Snapshot> {
         let fragment = match previous {
             PreviousSectionState::Known(previous) if previous == &self.snapshot => {
-                return (None, None);
+                return (None, Vec::new());
             }
             PreviousSectionState::Known(previous) => self.render_transition(previous),
             PreviousSectionState::Absent | PreviousSectionState::Unknown
@@ -135,7 +136,10 @@ impl WorldStateSection for RealtimeState {
             }
             PreviousSectionState::Absent | PreviousSectionState::Unknown => None,
         };
-        (Some(self.snapshot.clone()), fragment)
+        (
+            Some(self.snapshot.clone()),
+            WorldStateUpdate::optional_boxed_fragment(fragment),
+        )
     }
 }
 

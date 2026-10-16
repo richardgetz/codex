@@ -604,6 +604,7 @@ pub(crate) struct ChatWidget {
     model_popup_request_id: Option<uuid::Uuid>,
     model_popup_target: ModelPopupTarget,
     permission_popup_request_id: Option<uuid::Uuid>,
+    permission_discovery: Option<crate::permission_discovery::PermissionDiscovery>,
     worktree_popup_request_id: Option<uuid::Uuid>,
     permission_profiles_menu_opened: bool,
     model_popup_model_ids: Vec<String>,
@@ -671,6 +672,8 @@ pub(crate) struct ChatWidget {
     pending_stream_consolidations: usize,
     /// Copy feedback is discarded with its originating conversation.
     pending_clipboard: Option<clipboard::PendingCopy>,
+    /// Legacy terminals report auto-repeat as new presses; suppress the burst after a slow paste.
+    suppress_image_paste_until: Instant,
     copy_last_response_binding: Vec<KeyBinding>,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, AgentMetadata>,
@@ -678,7 +681,7 @@ pub(crate) struct ChatWidget {
     active_collab_wait_calls: HashSet<String>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<SkillMetadata>,
-    skills_initial_state: Option<HashMap<AbsolutePathBuf, bool>>,
+    skills_initial_state: Option<HashMap<PathUri, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     turn_lifecycle: TurnLifecycleState,
@@ -1291,7 +1294,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
-            ..SelectionViewParams::picker()
+            ..SelectionViewParams::confirmation()
         });
     }
 
@@ -1908,6 +1911,10 @@ impl ChatWidget {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty() && !self.bottom_pane.is_in_paste_burst()
+    }
+
+    pub(crate) fn composer_is_vim_enabled(&self) -> bool {
+        self.bottom_pane.composer_is_vim_enabled()
     }
 
     #[cfg(test)]

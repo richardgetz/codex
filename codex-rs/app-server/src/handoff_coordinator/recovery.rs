@@ -464,7 +464,10 @@ impl HandoffCoordinator {
                 })
                 .await;
             match submission {
-                Ok(StartIfIdleSubmission::Started { turn_id }) if turn_id == expected_turn_id => {
+                Ok(StartIfIdleSubmission::Started {
+                    turn_id,
+                    root_turn_id: _,
+                }) if turn_id == expected_turn_id => {
                     journal.update_node(
                         &node.thread_id,
                         if node.was_paused {

@@ -52,6 +52,7 @@ mod global_find_tests;
 pub(crate) use bindings::KeymapActionId;
 pub(crate) use bindings::KeymapContext;
 pub(crate) use bindings::bindings_for_action;
+pub(crate) use bindings::configured_binding_for_action;
 pub(crate) use bindings::keymap_action_id;
 pub(crate) use bindings::keymap_action_ids;
 use bindings::runtime_action_bindings;
@@ -432,6 +433,7 @@ pub(crate) struct AgentsKeymap {
     pub(crate) archive: Vec<KeyBinding>,
     pub(crate) delete: Vec<KeyBinding>,
     pub(crate) hide: Vec<KeyBinding>,
+    pub(crate) toggle_pin: Vec<KeyBinding>,
     pub(crate) toggle_grouping: Vec<KeyBinding>,
     chord_hints: Arc<RuntimeChordKeymap>,
 }
@@ -1359,6 +1361,7 @@ impl RuntimeKeymap {
             archive: resolve_local!(keymap, defaults, agents, archive),
             delete: resolve_local!(keymap, defaults, agents, delete),
             hide: resolve_local!(keymap, defaults, agents, hide),
+            toggle_pin: resolve_local!(keymap, defaults, agents, toggle_pin),
             toggle_grouping: resolve_local!(keymap, defaults, agents, toggle_grouping),
             chord_hints: Arc::clone(&chords),
         };
@@ -1378,6 +1381,7 @@ impl RuntimeKeymap {
             (keymap.agents.archive.as_ref(), &mut agents.archive),
             (keymap.agents.delete.as_ref(), &mut agents.delete),
             (keymap.agents.hide.as_ref(), &mut agents.hide),
+            (keymap.agents.toggle_pin.as_ref(), &mut agents.toggle_pin),
             (
                 keymap.agents.toggle_grouping.as_ref(),
                 &mut agents.toggle_grouping,
@@ -1544,6 +1548,7 @@ impl RuntimeKeymap {
             (keymap.agents.archive.as_ref(), &mut agents.archive),
             (keymap.agents.delete.as_ref(), &mut agents.delete),
             (keymap.agents.hide.as_ref(), &mut agents.hide),
+            (keymap.agents.toggle_pin.as_ref(), &mut agents.toggle_pin),
             (
                 keymap.agents.toggle_grouping.as_ref(),
                 &mut agents.toggle_grouping,
@@ -1918,6 +1923,7 @@ impl RuntimeKeymap {
                 archive: default_bindings![plain(KeyCode::Char('a'))],
                 delete: default_bindings![plain(KeyCode::Backspace)],
                 hide: default_bindings![plain(KeyCode::Char('h'))],
+                toggle_pin: default_bindings![plain(KeyCode::Char('p'))],
                 toggle_grouping: default_bindings![plain(KeyCode::Char('g'))],
                 chord_hints: Arc::default(),
             },

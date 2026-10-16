@@ -5,6 +5,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -64,7 +65,7 @@ fn session_flags_can_reenable_user_disabled_path() {
         )),
         SkillConfigRules {
             entries: vec![SkillConfigRule {
-                selector: SkillConfigRuleSelector::Path(skill_path.abs()),
+                selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&skill_path.abs())),
                 enabled: true,
             }],
         }
@@ -85,7 +86,7 @@ fn session_flags_can_disable_user_enabled_path() {
         )),
         SkillConfigRules {
             entries: vec![SkillConfigRule {
-                selector: SkillConfigRuleSelector::Path(skill_path.abs()),
+                selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(&skill_path.abs())),
                 enabled: false,
             }],
         }
@@ -134,7 +135,9 @@ enabled = true
         SkillConfigRules {
             entries: vec![
                 SkillConfigRule {
-                    selector: SkillConfigRuleSelector::Path(skill_path.abs()),
+                    selector: SkillConfigRuleSelector::Path(PathUri::from_abs_path(
+                        &skill_path.abs(),
+                    )),
                     enabled: false,
                 },
                 SkillConfigRule {

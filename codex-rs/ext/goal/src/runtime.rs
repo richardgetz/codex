@@ -784,7 +784,7 @@ impl GoalRuntimeHandle {
             )
             .await;
         let started = match submission {
-            Ok(StartIfIdleSubmission::Started { turn_id }) => {
+            Ok(StartIfIdleSubmission::Started { turn_id, .. }) => {
                 // Turn-stop evaluation takes the same permit, so even a fast response
                 // cannot finish before this host-admitted continuation is identified.
                 self.inner.accounting_state.mark_goal_continuation(turn_id);

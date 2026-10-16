@@ -188,6 +188,10 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
                 app.app_event_tx.clone(),
                 app.dynamic_tool_status_updates.clone(),
                 /*managed_requirement*/ None,
+                crate::dynamic_tools_mcp::ToolServices {
+                    task_tools: true,
+                    worktrees: None,
+                },
             )
             .await?,
         ));
@@ -351,8 +355,9 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
         );
         assert!(app.agent_navigation.begin_picker_refresh(id).is_some());
         assert!(
-            !app.agent_navigation
+            app.agent_navigation
                 .finish_picker_refresh(id, stale_picker_refresh)
+                .is_none()
         );
         // Let the rebound timer become due without depending on machine uptime.
         tokio::time::pause();
@@ -651,9 +656,15 @@ async fn reconnect_exhaustion_and_unknown_initial_thread_stay_offline() -> Resul
     assert_eq!(start.elapsed().as_secs(), 120);
     app.begin_reconnect();
     app.chat_widget.reconnect_failed();
+    let elapsed = regex_lite::Regex::new(r"\(\d+s\)").unwrap();
     assert_snapshot!(
         "reconnect_failed",
-        render_bottom_popup(&app.chat_widget, /*width*/ 80)
+        elapsed
+            .replace_all(
+                &render_bottom_popup(&app.chat_widget, /*width*/ 80),
+                "(<elapsed>)"
+            )
+            .into_owned()
     );
     tokio::time::resume();
     Ok(())

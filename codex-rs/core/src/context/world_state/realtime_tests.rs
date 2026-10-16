@@ -1,3 +1,4 @@
+use super::super::test_support::FragmentSectionTestExt as _;
 use super::super::test_support::render_section_cases;
 use super::*;
 
@@ -72,7 +73,7 @@ fn preamble_transition_emits_the_current_policy() {
     let suppressed = enabled.clone().suppress_preambles();
 
     let suppressed_fragment = suppressed
-        .render_diff(PreviousSectionState::Known(&enabled.snapshot))
+        .render_fragment_diff(PreviousSectionState::Known(&enabled.snapshot))
         .1
         .expect("suppression transition should update realtime instructions");
     assert!(
@@ -82,7 +83,7 @@ fn preamble_transition_emits_the_current_policy() {
     );
 
     let reenabled_fragment = enabled
-        .render_diff(PreviousSectionState::Known(&suppressed.snapshot))
+        .render_fragment_diff(PreviousSectionState::Known(&suppressed.snapshot))
         .1
         .expect("re-enable transition should update realtime instructions");
     assert!(

@@ -9,6 +9,7 @@ use crate::agent::control::HandoffAdmissionGuard;
 use crate::config::ConstraintResult;
 use codex_config::TeamLeadWorkPolicy;
 use codex_history::RolloutItem;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -48,7 +49,7 @@ pub(super) async fn update(
     handoff_admission: Option<&HandoffAdmissionGuard>,
     reply: Option<oneshot::Sender<CodexResult<()>>>,
 ) {
-    let mut updates = prepare_update(overrides);
+    let mut updates = prepare_update(overrides, &session.services.selected_capability_roots);
     updates.usage_policy_update = usage_policy_update;
     if let Err(error) = apply_update_with_policy(
         session,
@@ -76,13 +77,14 @@ pub(super) async fn update(
 /// Converts protocol overrides into the internal settings update shape.
 pub(super) fn prepare_update(
     overrides: impl Into<WithTurnExtensionData<ThreadSettingsOverrides>>,
+    roots: &[SelectedCapabilityRoot],
 ) -> SessionSettingsUpdate {
     let WithTurnExtensionData {
         request: overrides,
         turn_extension_init,
     } = overrides.into();
     let ThreadSettingsOverrides {
-        environments,
+        environments: environment_requests,
         runtime_workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -113,7 +115,7 @@ pub(super) fn prepare_update(
             approval_policy,
             approvals_reviewer,
         },
-        environments,
+        environments: environment_requests.map(|requests| requests.select(roots)),
         runtime_workspace_roots,
         profile_workspace_roots,
         sandbox_policy,

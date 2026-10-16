@@ -214,7 +214,12 @@ pub(crate) fn merge_skill_root_snapshots(snapshots: Vec<SkillRootSnapshot>) -> S
         scope_rank(a.scope)
             .cmp(&scope_rank(b.scope))
             .then_with(|| a.name.cmp(&b.name))
-            .then_with(|| a.path_to_skills_md.cmp(&b.path_to_skills_md))
+            .then_with(|| {
+                a.path_to_skills_md
+                    .to_abs_path()
+                    .ok()
+                    .cmp(&b.path_to_skills_md.to_abs_path().ok())
+            })
     });
 
     outcome

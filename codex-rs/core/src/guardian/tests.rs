@@ -1,3 +1,4 @@
+use super::prompt::GuardianTranscriptHistory;
 use super::*;
 use crate::config::Config;
 use crate::config::ConfigOverrides;
@@ -41,6 +42,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_prompts::GuardianPolicyInstructions;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
+use codex_protocol::TranscriptFormat;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ReasoningSummary;
@@ -400,7 +402,7 @@ async fn build_guardian_prompt_prefers_retry_reason_over_approval_reason() -> an
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        session.conversation_history_snapshot().await.as_ref(),
+        GuardianTranscriptHistory::Retained(session.conversation_history_snapshot().await.as_ref()),
         Some(&context),
         ApprovalRequestReasons {
             approval: Some("A policy rule requires approval.".to_string()),
@@ -442,7 +444,7 @@ async fn build_guardian_prompt_truncates_oversized_approval_reason() -> anyhow::
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        session.conversation_history_snapshot().await.as_ref(),
+        GuardianTranscriptHistory::Retained(session.conversation_history_snapshot().await.as_ref()),
         Some(&context),
         ApprovalRequestReasons {
             approval: Some(approval_reason),
@@ -537,7 +539,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        session.conversation_history_snapshot().await.as_ref(),
+        GuardianTranscriptHistory::Retained(session.conversation_history_snapshot().await.as_ref()),
         Some(&context),
         ApprovalRequestReasons {
             approval: None,
@@ -674,7 +676,9 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
         let is_windows = request.target_environment_id() == Some("windows");
         let prompt = build_guardian_prompt_items_with_parent_turn(
             &session,
-            session.conversation_history_snapshot().await.as_ref(),
+            GuardianTranscriptHistory::Retained(
+                session.conversation_history_snapshot().await.as_ref(),
+            ),
             Some(&context),
             ApprovalRequestReasons::default(),
             request,
@@ -747,6 +751,7 @@ async fn guardian_mcp_uses_thread_permissions_for_an_unavailable_captured_enviro
     selection.config = codex_protocol::protocol::EnvironmentConfigState::Failed("offline".into());
     let captured = crate::environment_selection::TurnEnvironmentSnapshot {
         environments: vec![TurnEnvironmentState::Failed {
+            required_skills: Vec::new(),
             selection,
             error: "offline".into(),
         }],
@@ -759,7 +764,7 @@ async fn guardian_mcp_uses_thread_permissions_for_an_unavailable_captured_enviro
     );
     let prompt = build_guardian_prompt_items_with_parent_turn(
         &session,
-        session.conversation_history_snapshot().await.as_ref(),
+        GuardianTranscriptHistory::Retained(session.conversation_history_snapshot().await.as_ref()),
         Some(&context),
         ApprovalRequestReasons::default(),
         guardian_mcp_request("server", "tool"),
@@ -1292,7 +1297,7 @@ async fn build_guardian_prompt_items_keeps_required_node_repl_reviews_generic() 
 
     let prompt = build_guardian_prompt_items_with_parent_turn(
         session.as_ref(),
-        session.conversation_history_snapshot().await.as_ref(),
+        GuardianTranscriptHistory::Retained(session.conversation_history_snapshot().await.as_ref()),
         Some(&context),
         ApprovalRequestReasons {
             approval: None,
@@ -1331,7 +1336,9 @@ async fn build_guardian_prompt_items_keeps_other_requests_generic() -> anyhow::R
     ] {
         let prompt = build_guardian_prompt_items_with_parent_turn(
             session.as_ref(),
-            session.conversation_history_snapshot().await.as_ref(),
+            GuardianTranscriptHistory::Retained(
+                session.conversation_history_snapshot().await.as_ref(),
+            ),
             Some(&context),
             ApprovalRequestReasons::default(),
             request,
@@ -1884,7 +1891,7 @@ enum GuardianTestCatalog {
 #[test_case::test_case(None; "captured_policy")]
 #[test_case::test_case(Some("configured policy wins"); "configured_policy")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_reuse_respects_effective_policy_and_personality(
+async fn guardian_reuse_respects_effective_policy_and_personality_opt_out(
     configured_policy: Option<&str>,
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -1892,7 +1899,7 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
-        (0..3)
+        (0..4)
             .map(|index| {
                 sse(vec![
                     ev_response_created(&format!("review-{index}")),
@@ -1953,9 +1960,24 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
     });
     let mut different_personality = GuardianReviewContext::from(&pragmatic_turn);
     different_personality.model_info = Arc::clone(&captured.model_info);
-    for (index, context) in [captured, changed_policy, different_personality]
-        .into_iter()
-        .enumerate()
+    let mut no_personality_turn = session.new_default_turn().await;
+    let no_personality_turn_mut = Arc::get_mut(&mut no_personality_turn).expect("unshared turn");
+    no_personality_turn_mut.config = Arc::clone(&turn.config);
+    update_turn_settings_for_test(no_personality_turn_mut, |settings| {
+        update_selected_settings_for_test(settings, |selected| {
+            selected.personality = Some(codex_protocol::config_types::Personality::None);
+        })
+    });
+    let mut omit_personality = GuardianReviewContext::from(&no_personality_turn);
+    omit_personality.model_info = Arc::clone(&captured.model_info);
+    for (index, context) in [
+        captured,
+        changed_policy,
+        different_personality,
+        omit_personality,
+    ]
+    .into_iter()
+    .enumerate()
     {
         let (outcome, _) = run_guardian_review_session_for_test(
             Arc::clone(&session),
@@ -1969,7 +1991,7 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
         assert!(matches!(outcome, GuardianReviewOutcome::Completed(_)));
     }
     let requests = responses.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     let contract = guardian_output_contract_prompt();
     for (request, policy) in requests
         .iter()
@@ -1987,6 +2009,7 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
         .collect::<Vec<_>>();
     assert_eq!(thread_ids[0] == thread_ids[1], configured_policy.is_some());
     assert_ne!(thread_ids[1], thread_ids[2]);
+    assert_ne!(thread_ids[2], thread_ids[3]);
     Ok(())
 }
 
@@ -2673,8 +2696,8 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             .into_iter()
             .map(codex_history::ResponseItemEnvelope::new)
             .collect(),
-            /*reference_context_item*/ None,
-            /*world_state_baseline*/ None,
+            turn.to_turn_context_item(),
+            crate::context::world_state::WorldStateSnapshot::default(),
             crate::compact::CompactedHistoryMetadata {
                 input_goal_ids: Default::default(),
                 message: String::new(),
@@ -2976,6 +2999,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
         .send_trunk_event_raw_for_test(Event {
             id: "stale-turn".to_string(),
             msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: "stale-turn".to_string(),
                 started_at: None,
                 last_agent_message: Some(
@@ -4078,6 +4102,7 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
         guardian_config.base_instructions,
         Some(
             GuardianPolicyInstructions::new(
+                TranscriptFormat::Line,
                 defaults.policy,
                 "",
                 defaults.policy_template,
@@ -4198,6 +4223,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         guardian_config.base_instructions,
         Some(
             GuardianPolicyInstructions::new(
+                TranscriptFormat::Line,
                 "Use the workspace-managed guardian policy.",
                 "",
                 ResolvedModelMessages::bundled()

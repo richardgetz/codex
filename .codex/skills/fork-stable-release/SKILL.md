@@ -98,7 +98,10 @@ As of the current branch, the fork contract includes at least:
   Conventional Commits and Git intent-note guidance
 - orchestrator-memory compatibility, user-preferences memory, memory helper
   naming, cleanup/consolidation, migration, and slash commands
-- named exec-policy rulesets and session-scoped agent pruning
+- named exec-policy rulesets and session-scoped agent pruning; retain the
+  fork-only `/agents-prune` registration/routing while keeping `/archive` and
+  `/delete` prompts and snapshots aligned with embedded versus
+  connected-session navigation behavior
 - built-in scratchpad, built-in schedule, compaction recovery, and
   resume/fast-resume integration
 - MCP behavior with mode enablement filters, startup-cancellation retry,
@@ -148,11 +151,23 @@ thread originator, Daybreak enablement, attachments, creator identity, and
 Guardian metadata cleanup already match shipped stable migrations and must not
 be applied a second time.
 
-The `rust-v0.160.0` refresh preserves every shipped filename and checksum
-through `0067`; incoming `0058_threads_archive_sort_indexes.sql` is byte-identical
-to stable's `0067_upstream_threads_archive_sort_indexes.sql` and is not applied
-again. The `rust-v0.161.0` refresh keeps the same sequence and also omits the
-duplicate `0058` archive-sort migration.
+The `rust-v0.160.0` and `rust-v0.161.0` refreshes preserve every shipped
+filename and checksum through `0067`; incoming
+`0058_threads_archive_sort_indexes.sql` is byte-identical to stable's
+`0067_upstream_threads_archive_sort_indexes.sql` and is not applied again. The
+`rust-v0.162.1` refresh also preserves `0001`–`0067`; its only new SQL is
+`0059_thread_attachment_reverse_lookup.sql`, appended as
+`0068_upstream_thread_attachment_reverse_lookup.sql` after checking for
+duplicate index objects.
+
+For `rust-v0.162.1`, keep the fork's managed-daemon apply/recovery and launcher
+reconciliation behavior while adopting upstream `remote-control start|stop`,
+`--no-daemon`, CLI-override compatibility checks, and release-identity
+reconciliation. Retain the stable-signed macOS Keychain ACL policy for both
+direct MCP OAuth credentials and the `McpOAuth` encrypted-file passphrase, with
+its `core-foundation` dependency. Preserve fork release identity, Apple Silicon
+target selection, and trusted publishing while adopting upstream's monotonic
+stable pointers and serialized publication.
 
 ## Conflict Policy
 

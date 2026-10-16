@@ -3,8 +3,11 @@
 use super::AgentTreeMembership;
 use crate::agent::control::HandoffAdmissionGuard;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_manager::thread_store_error_kind;
+use codex_agent_graph_store::AgentGraphStoreError;
 use codex_agent_graph_store::ThreadSpawnEdgeStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErrKind;
 use codex_thread_store::ThreadStoreError;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -96,19 +99,22 @@ fn spawn_pending_spawn_cleanup(
     membership: AgentTreeMembership,
     handoff_admission: Option<HandoffAdmissionGuard>,
 ) -> JoinHandle<()> {
-    let teardown = membership.into_teardown_guard();
+    let teardown = membership.into_teardown_guard("child_spawn_cleanup", Some(child));
     tokio::spawn(async move {
         let _handoff_admission = handoff_admission;
         if let Some(thread) = state.remove_thread(&child).await {
             if let Err(error) = thread.shutdown_and_wait().await {
-                teardown.record_shutdown_failure();
+                teardown.record_shutdown_failure("stop_child", CodexErrKind::from(&error).into());
                 warn!("failed to stop cancelled child spawn: {error}");
             }
             if let Some(live_thread) = thread.session.live_thread() {
                 match live_thread.discard().await {
                     Ok(()) | Err(ThreadStoreError::ThreadNotFound { .. }) => {}
                     Err(error) => {
-                        teardown.record_shutdown_failure();
+                        teardown.record_shutdown_failure(
+                            "discard_child_persistence",
+                            thread_store_error_kind(&error),
+                        );
                         warn!("failed to discard cancelled child spawn: {error}");
                     }
                 }
@@ -123,7 +129,11 @@ fn spawn_pending_spawn_cleanup(
                 .set_thread_spawn_edge_status(child, ThreadSpawnEdgeStatus::Closed)
                 .await
         {
-            teardown.record_shutdown_failure();
+            let error_kind = match &error {
+                AgentGraphStoreError::InvalidRequest { .. } => "agent_graph_store_invalid_request",
+                AgentGraphStoreError::Internal { .. } => "agent_graph_store_internal",
+            };
+            teardown.record_shutdown_failure("close_spawn_edge", error_kind);
             warn!("failed to close cancelled child spawn edge: {error}");
         }
         teardown.complete();

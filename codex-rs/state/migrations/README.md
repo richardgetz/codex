@@ -139,3 +139,20 @@ The `rust-v0.160.0` refresh keeps all shipped migrations and checksums through
 `0067` unchanged. Its incoming archive-sort index migration is byte-identical
 to `0067_upstream_threads_archive_sort_indexes.sql`, so do not add it again as
 `0058` or create a new migration number.
+
+The `rust-v0.161.0` refresh keeps the same shipped filenames and checksums
+through `0067`; its incoming archive-sort migration is already represented by
+`0067_upstream_threads_archive_sort_indexes.sql` and is not applied again.
+
+The `rust-v0.162.1` refresh preserves every shipped migration filename and
+checksum through `0067`. Upstream migrations that were renumbered or already
+applied by stable are not duplicated. The only new SQL object is the thread
+attachment reverse-lookup index, appended as:
+
+```text
+0068_upstream_thread_attachment_reverse_lookup.sql
+```
+
+The index is `idx_thread_attachments_identity_thread` on
+`thread_attachments(attachment_type, identity_key, thread_id)`; verify that no
+other migration creates the same index.

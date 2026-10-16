@@ -46,7 +46,7 @@ pub(crate) fn skill_allowed_in_mode(
         if filter.items.is_empty() {
             return true;
         }
-        let path = skill.path_to_skills_md.as_path().to_string_lossy();
+        let path = skill.path_to_skills_md.inferred_native_path_string();
         let matches = filter.items.iter().any(|selector| {
             let selector = selector.trim();
             !selector.is_empty()
@@ -66,7 +66,7 @@ pub(crate) fn skill_allowed_in_mode(
         return true;
     }
 
-    let path = skill.path_to_skills_md.as_path().to_string_lossy();
+    let path = skill.path_to_skills_md.inferred_native_path_string();
     let matches = filter.skills.iter().any(|selector| {
         let selector = selector.trim();
         !selector.is_empty()
@@ -265,7 +265,7 @@ pub(crate) async fn emit_explicit_skill_invocations(
         .extension_data
         .get::<InjectedHostSkillPrompts>();
     for skill in injected_skills {
-        let skill_resource = skill.path_to_skills_md.to_string_lossy();
+        let skill_resource = skill.path_to_skills_md.inferred_native_path_string();
         if injected_host_skill_prompts
             .as_ref()
             .is_some_and(|prompts| prompts.is_superseded_path(&skill_resource))
@@ -300,7 +300,7 @@ pub(crate) async fn emit_explicit_skill_invocations(
         .map(|skill| SkillInvocation {
             skill_name: skill.name.clone(),
             location: SkillInvocationLocation::Host {
-                path: skill.path_to_skills_md.to_path_buf(),
+                path: skill.path_to_skills_md.clone(),
                 scope: skill.scope,
             },
             plugin_id: skill.plugin_id.clone(),
@@ -339,7 +339,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
                 SkillScope::System => "system",
                 SkillScope::Admin => "admin",
             };
-            let skill_path = path.to_string_lossy().into_owned();
+            let skill_path = path.inferred_native_path_string();
             let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
             (skill_path, seen_key)
         }

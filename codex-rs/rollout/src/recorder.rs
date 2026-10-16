@@ -426,7 +426,7 @@ impl RolloutRecorder {
         default_provider: &str,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
-        Self::list_threads_with_db_fallback(
+        let mut page = Self::list_threads_with_db_fallback(
             state_db_ctx,
             config,
             page_size,
@@ -441,7 +441,14 @@ impl RolloutRecorder {
             ThreadListRepairMode::ScanAndRepair,
             search_term,
         )
-        .await
+        .await?;
+        // Continuation may fall back to filesystem pagination, which only honors timestamps.
+        if sort_key == ThreadSortKey::CreatedAt
+            && let Some(cursor) = page.next_cursor.as_mut()
+        {
+            *cursor = Cursor::new(cursor.timestamp());
+        }
+        Ok(page)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -491,7 +498,7 @@ impl RolloutRecorder {
         default_provider: &str,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
-        Self::list_threads_with_db_fallback(
+        let mut page = Self::list_threads_with_db_fallback(
             state_db_ctx,
             config,
             page_size,
@@ -506,7 +513,14 @@ impl RolloutRecorder {
             ThreadListRepairMode::ScanAndRepair,
             search_term,
         )
-        .await
+        .await?;
+        // Continuation may fall back to filesystem pagination, which only honors timestamps.
+        if sort_key == ThreadSortKey::CreatedAt
+            && let Some(cursor) = page.next_cursor.as_mut()
+        {
+            *cursor = Cursor::new(cursor.timestamp());
+        }
+        Ok(page)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -568,7 +582,7 @@ impl RolloutRecorder {
         }
 
         if matches!(repair_mode, ThreadListRepairMode::StateDbOnly) {
-            return Ok(state_db::list_threads_db(
+            return state_db::list_threads_db(
                 state_db_ctx.as_deref(),
                 sqlite,
                 page_size,
@@ -586,7 +600,7 @@ impl RolloutRecorder {
             )
             .await
             .map(Into::into)
-            .unwrap_or_default());
+            .ok_or_else(|| std::io::Error::other("failed to list threads from state database"));
         }
 
         let listing_has_metadata_filters = !allowed_sources.is_empty()
@@ -1145,64 +1159,64 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutLine>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        let mut lines: Vec<RolloutLine> = Vec::new();
-        let mut thread_id: Option<ThreadId> = None;
-        let mut parse_errors = 0usize;
-        let mut reader = compression::open_rollout_line_reader(path).await?;
-        let mut saw_non_empty_line = false;
-        while let Some(line) = reader.next_line().await? {
-            if line.trim().is_empty() {
-                continue;
-            }
-            saw_non_empty_line = true;
-            let mut value: Value = match serde_json::from_str(&line) {
-                Ok(value) => value,
-                Err(e) => {
-                    warn!("failed to parse line as JSON: {line:?}, error: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
+        compression::read_rollout_lines(path, |reader| {
+            let mut lines: Vec<RolloutLine> = Vec::new();
+            let mut thread_id: Option<ThreadId> = None;
+            let mut parse_errors = 0usize;
+            let mut saw_non_empty_line = false;
+            for line in reader {
+                let line = line?;
+                if line.trim().is_empty() {
                     continue;
                 }
-            };
-            if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
-                trace!("skipping legacy ghost_snapshot rollout line");
-                continue;
-            }
-            if thread_id.is_none() {
-                // The first SessionMeta belongs to this rollout. Later SessionMeta lines
-                // can be copied from fork history, so only validate unknown history modes
-                // before we have parsed the rollout's own SessionMeta.
-                reject_unknown_thread_history_mode(&value)?;
-            }
-
-            let rollout_line = match crate::decode_rollout_line(value) {
-                Ok(rollout_line) => rollout_line,
-                Err(e) => {
-                    trace!("failed to parse rollout line: {e}");
-                    parse_errors = parse_errors.saturating_add(1);
+                saw_non_empty_line = true;
+                let mut value: Value = match serde_json::from_str(&line) {
+                    Ok(value) => value,
+                    Err(e) => {
+                        warn!("failed to parse line as JSON: {line:?}, error: {e}");
+                        parse_errors = parse_errors.saturating_add(1);
+                        continue;
+                    }
+                };
+                if strip_legacy_ghost_snapshot_rollout_line(&mut value) {
+                    trace!("skipping legacy ghost_snapshot rollout line");
                     continue;
                 }
-            };
+                if thread_id.is_none() {
+                    // The first SessionMeta belongs to this rollout. Later SessionMeta lines
+                    // can be copied from fork history, so only validate unknown history modes
+                    // before we have parsed the rollout's own SessionMeta.
+                    reject_unknown_thread_history_mode(&value)?;
+                }
 
-            // Use the FIRST SessionMeta encountered in the file as the canonical
-            // thread id and main session information. Keep all items intact.
-            if thread_id.is_none()
-                && let RolloutItem::SessionMeta(session_meta_line) = &rollout_line.item
-            {
-                thread_id = Some(session_meta_line.meta.id);
+                let rollout_line = match crate::decode_rollout_line(value) {
+                    Ok(rollout_line) => rollout_line,
+                    Err(e) => {
+                        trace!("failed to parse rollout line: {e}");
+                        parse_errors = parse_errors.saturating_add(1);
+                        continue;
+                    }
+                };
+                if thread_id.is_none()
+                    && let RolloutItem::SessionMeta(session_meta_line) = &rollout_line.item
+                {
+                    thread_id = Some(session_meta_line.meta.id);
+                }
+                lines.push(rollout_line);
             }
-            lines.push(rollout_line);
-        }
-        if !saw_non_empty_line {
-            return Err(IoError::other("empty session file"));
-        }
+            if !saw_non_empty_line {
+                return Err(IoError::other("empty session file"));
+            }
 
-        tracing::debug!(
-            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
-            lines.len(),
-            thread_id,
-            parse_errors,
-        );
-        Ok((lines, thread_id, parse_errors))
+            tracing::debug!(
+                "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
+                lines.len(),
+                thread_id,
+                parse_errors,
+            );
+            Ok((lines, thread_id, parse_errors))
+        })
+        .await
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
