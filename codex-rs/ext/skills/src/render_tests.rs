@@ -66,7 +66,7 @@ async fn host_skill_prompts_bound_non_plugin_skill_contents()
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: skill_path,
+        path_to_skills_md: skill_path.into(),
         scope: SkillScope::User,
         plugin_id: None,
         remote_plugin_id: None,

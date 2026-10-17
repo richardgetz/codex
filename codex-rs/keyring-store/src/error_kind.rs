@@ -24,10 +24,26 @@ pub(super) fn classify(error: &CredentialStoreError) -> ErrorKind {
             };
         }
         #[cfg(target_os = "linux")]
-        if let Some(error) = error.downcast_ref::<secret_service::Error>() {
+        if let Some(error) = error.downcast_ref::<dbus_secret_service::Error>() {
             match error {
-                secret_service::Error::Locked => return ErrorKind::WouldBlock,
-                secret_service::Error::Unavailable => return ErrorKind::NotConnected,
+                dbus_secret_service::Error::Locked => return ErrorKind::WouldBlock,
+                dbus_secret_service::Error::Unavailable => return ErrorKind::NotConnected,
+                dbus_secret_service::Error::Dbus(error) => match error.name() {
+                    Some("org.freedesktop.DBus.Error.AccessDenied")
+                    | Some("org.freedesktop.DBus.Error.AuthFailed") => {
+                        return ErrorKind::PermissionDenied;
+                    }
+                    Some("org.freedesktop.DBus.Error.NoReply")
+                    | Some("org.freedesktop.DBus.Error.Timeout") => {
+                        return ErrorKind::TimedOut;
+                    }
+                    Some("org.freedesktop.DBus.Error.Disconnected")
+                    | Some("org.freedesktop.DBus.Error.NameHasNoOwner")
+                    | Some("org.freedesktop.DBus.Error.ServiceUnknown") => {
+                        return ErrorKind::NotConnected;
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }

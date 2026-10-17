@@ -51,7 +51,7 @@ fn classifies_native_backend_errors() {
         security_framework::base::Error::from_code(/*code*/ -25291),
     );
     #[cfg(target_os = "linux")]
-    let native: Box<dyn Error + Send + Sync> = Box::new(secret_service::Error::Locked);
+    let native: Box<dyn Error + Send + Sync> = Box::new(dbus_secret_service::Error::Locked);
     #[cfg(target_os = "windows")]
     let native: Box<dyn Error + Send + Sync> = Box::new(keyring::windows::Error(1312));
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
@@ -71,22 +71,34 @@ fn classifies_native_backend_errors() {
 #[test]
 fn unavailable_secret_service_is_not_connected() {
     let error = CredentialStoreError::new(keyring::Error::PlatformFailure(Box::new(
-        secret_service::Error::Unavailable,
+        dbus_secret_service::Error::Unavailable,
     )));
     assert_eq!(std::io::Error::from(error).kind(), ErrorKind::NotConnected);
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn secret_service_dbus_io_error_preserves_its_kind() {
-    let error = secret_service::Error::Zbus(
-        std::io::Error::new(ErrorKind::PermissionDenied, "private D-Bus socket").into(),
-    );
+fn secret_service_dbus_permission_error_is_permission_denied() {
+    let error = dbus_secret_service::Error::Dbus(dbus::Error::new_custom(
+        "org.freedesktop.DBus.Error.AccessDenied",
+        "private D-Bus socket",
+    ));
     let error = CredentialStoreError::new(keyring::Error::PlatformFailure(Box::new(error)));
     assert_eq!(
         std::io::Error::from(error).kind(),
         ErrorKind::PermissionDenied
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secret_service_dbus_no_reply_is_timed_out() {
+    let error = dbus_secret_service::Error::Dbus(dbus::Error::new_custom(
+        "org.freedesktop.DBus.Error.NoReply",
+        "private D-Bus timeout",
+    ));
+    let error = CredentialStoreError::new(keyring::Error::PlatformFailure(Box::new(error)));
+    assert_eq!(std::io::Error::from(error).kind(), ErrorKind::TimedOut);
 }
 
 #[cfg(target_os = "macos")]

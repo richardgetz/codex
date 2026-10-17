@@ -12,8 +12,8 @@ keyring = { workspace = true, features = ["crypto-rust"] }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-secret-service = "4"
-keyring = { workspace = true, features = ["linux-native-async-persistent"] }
+dbus-secret-service = "4"
+keyring = { workspace = true, features = ["linux-native-sync-persistent", "vendored"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
@@ -28,6 +28,9 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+dbus = "0.9"
 
 [lib]
 doctest = false

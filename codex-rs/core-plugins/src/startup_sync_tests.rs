@@ -8,6 +8,8 @@ use codex_http_client::RouteAwareRequestError::Policy;
 use pretty_assertions::assert_eq;
 use std::ffi::OsStr;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -23,6 +25,38 @@ use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
 
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[cfg(unix)]
+#[test]
+fn curated_plugin_zip_extraction_strips_privileged_permission_bits() {
+    let destination = tempdir().expect("destination");
+    let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    writer
+        .start_file(
+            "repo/privileged",
+            SimpleFileOptions::default().unix_permissions(0o755),
+        )
+        .expect("start privileged file");
+    writer.write_all(b"plugin").expect("write plugin");
+    let mut bytes = writer.finish().expect("finish archive").into_inner();
+
+    let central_directory = bytes
+        .windows(4)
+        .position(|window| window == b"PK\x01\x02")
+        .expect("central directory entry");
+    let external_attributes = central_directory + 38;
+    bytes[external_attributes..external_attributes + 4]
+        .copy_from_slice(&(0o106755u32 << 16).to_le_bytes());
+
+    extract_zipball_to_dir(&bytes, destination.path()).expect("extract archive");
+
+    let mode = std::fs::metadata(destination.path().join("privileged"))
+        .expect("extracted plugin metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755);
+    assert_eq!(mode & 0o7000, 0);
+}
 
 #[cfg(unix)]
 #[test]
