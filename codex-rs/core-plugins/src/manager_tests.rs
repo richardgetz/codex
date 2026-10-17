@@ -983,6 +983,8 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
                     enabled: true,
                     required: false,
                     startup_readiness: Default::default(),
+                    startup: Default::default(),
+                    sharing: Default::default(),
                     supports_parallel_tool_calls: false,
                     tool_input_schema_max_bytes: None,
                     omit_tools_from: None,
