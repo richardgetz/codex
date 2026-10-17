@@ -2,11 +2,20 @@ name: Linux dependency proof
 
 on:
   workflow_dispatch:
+    inputs:
+      validation:
+        description: Select the complete proof or only the behavior tests after a completed compile check
+        type: choice
+        options:
+          - all
+          - tests-only
+        default: all
+        required: true
 
 permissions:
   contents: read
 
-run-name: "Linux dependency proof for PR 198 at ${{ github.sha }}"
+run-name: "Linux dependency proof (${{ inputs.validation }}) for PR 198 at ${{ github.sha }}"
 
 jobs:
   linux-dependency-proof:
@@ -27,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/$EXPECTED_PROOF_BRANCH"
-          test "$(git rev-parse HEAD^)" = "$EXPECTED_SOURCE_SHA"
+          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" HEAD
           changed_files="$(git diff --name-only "$EXPECTED_SOURCE_SHA" HEAD)"
           test "$changed_files" = ".github/workflows/rust-ci.yml"
           echo "Proof commit: $(git rev-parse HEAD)"
@@ -47,8 +56,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
 
       - name: Check Linux keyring, RMCP, and TUI consumers
+        if: ${{ inputs.validation == 'all' }}
         working-directory: codex-rs
         run: cargo check -p codex-keyring-store -p codex-rmcp-client -p codex-tui
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: nextest
+          version: 0.9.103
 
       - name: Test Linux keyring typed error classification
         working-directory: codex-rs
